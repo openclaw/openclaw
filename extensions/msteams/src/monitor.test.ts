@@ -37,6 +37,21 @@ async function waitForSlowBodySocketClose(port: number, timeoutMs: number): Prom
 }
 
 describe("msteams monitor webhook hardening", () => {
+  it("applies default timeouts and header clamp", async () => {
+    const app = express();
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      applyMSTeamsWebhookTimeouts(server);
+
+      expect(server.timeout).toBe(30_000);
+      expect(server.requestTimeout).toBe(30_000);
+      expect(server.headersTimeout).toBe(15_000);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("applies explicit webhook timeout values", async () => {
     const app = express();
     const server = app.listen(0, "127.0.0.1");
@@ -51,6 +66,25 @@ describe("msteams monitor webhook hardening", () => {
       expect(server.timeout).toBe(3210);
       expect(server.requestTimeout).toBe(6543);
       expect(server.headersTimeout).toBe(6543);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("clamps headers timeout when explicit value exceeds request timeout", async () => {
+    const app = express();
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      applyMSTeamsWebhookTimeouts(server, {
+        inactivityTimeoutMs: 12_000,
+        requestTimeoutMs: 9_000,
+        headersTimeoutMs: 15_000,
+      });
+
+      expect(server.timeout).toBe(12_000);
+      expect(server.requestTimeout).toBe(9_000);
+      expect(server.headersTimeout).toBe(9_000);
     } finally {
       await closeServer(server);
     }

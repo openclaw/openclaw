@@ -5,13 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
-LINUX_VM="Ubuntu 25.10"
+LINUX_VM="Ubuntu 24.04.3 ARM64"
 OPENAI_API_KEY_ENV="OPENAI_API_KEY"
 PACKAGE_SPEC=""
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
+WINDOWS_UPDATE_SCRIPT_PATH=""
 SERVER_PID=""
 HOST_IP=""
 HOST_PORT=""
@@ -66,6 +67,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --package-spec)
       PACKAGE_SPEC="$2"
       shift 2
@@ -90,6 +94,37 @@ done
 
 OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
 [[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+
+resolve_linux_vm_name() {
+  local json requested
+  json="$(prlctl list --all --json)"
+  requested="$LINUX_VM"
+  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" python3 - <<'PY'
+import difflib
+import json
+import os
+import sys
+
+payload = json.loads(os.environ["PRL_VM_JSON"])
+requested = os.environ["REQUESTED_VM_NAME"].strip()
+requested_lower = requested.lower()
+names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+if requested in names:
+    print(requested)
+    raise SystemExit(0)
+
+ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
+if not ubuntu_names:
+    sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+best_name = max(
+    ubuntu_names,
+    key=lambda name: difflib.SequenceMatcher(None, requested_lower, name.lower()).ratio(),
+)
+print(best_name)
+PY
+}
 
 resolve_latest_version() {
   npm view openclaw version --userconfig "$(mktemp)"
@@ -131,6 +166,108 @@ pack_main_tgz() {
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
 }
 
+write_windows_update_script() {
+  WINDOWS_UPDATE_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-main-update.ps1"
+  cat >"$WINDOWS_UPDATE_SCRIPT_PATH" <<'EOF'
+param(
+  [Parameter(Mandatory = $true)][string]$TgzUrl,
+  [Parameter(Mandatory = $true)][string]$HeadShort,
+  [Parameter(Mandatory = $true)][string]$SessionId,
+  [Parameter(Mandatory = $true)][string]$LogPath,
+  [Parameter(Mandatory = $true)][string]$DonePath
+)
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
+
+function Invoke-Logged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][scriptblock]$Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    & $Command *>> $LogPath
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Label failed with exit code $exitCode"
+  }
+}
+
+function Invoke-CaptureLogged {
+  param(
+    [Parameter(Mandatory = $true)][string]$Label,
+    [Parameter(Mandatory = $true)][scriptblock]$Command
+  )
+
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    $output = & $Command 2>&1
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
+
+  if ($null -ne $output) {
+    $output | Tee-Object -FilePath $LogPath -Append | Out-Null
+  }
+
+  if ($exitCode -ne 0) {
+    throw "$Label failed with exit code $exitCode"
+  }
+
+  return ($output | Out-String).Trim()
+}
+
+try {
+  $env:PATH = "$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;$env:PATH"
+  $tgz = Join-Path $env:TEMP 'openclaw-main-update.tgz'
+  Remove-Item $tgz, $LogPath, $DonePath -Force -ErrorAction SilentlyContinue
+  Invoke-Logged 'download current tgz' { curl.exe -fsSL $TgzUrl -o $tgz }
+  Invoke-Logged 'npm install current tgz' { npm.cmd install -g $tgz --no-fund --no-audit }
+  $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
+  if ($version -notmatch [regex]::Escape($HeadShort)) {
+    throw "version mismatch: expected substring $HeadShort"
+  }
+  Invoke-Logged 'openclaw models set' { & $openclaw models set openai/gpt-5.4 }
+  # Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
+  # Restart the gateway/service before verifying status or the next agent turn.
+  Invoke-Logged 'openclaw gateway restart' { & $openclaw gateway restart }
+  Start-Sleep -Seconds 5
+  Invoke-Logged 'openclaw gateway status' { & $openclaw gateway status --deep --require-rpc }
+  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
+  $exitCode = $LASTEXITCODE
+  if ($null -eq $exitCode) {
+    $exitCode = 0
+  }
+  Set-Content -Path $DonePath -Value ([string]$exitCode)
+  exit $exitCode
+} catch {
+  if (Test-Path $LogPath) {
+    Add-Content -Path $LogPath -Value ($_ | Out-String)
+  } else {
+    ($_ | Out-String) | Set-Content -Path $LogPath
+  }
+  Set-Content -Path $DonePath -Value '1'
+  exit 1
+}
+EOF
+}
+
 start_server() {
   HOST_IP="$(resolve_host_ip)"
   HOST_PORT="$(allocate_host_port)"
@@ -163,6 +300,7 @@ import sys
 
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 matches = re.findall(r"OpenClaw [^\r\n]+", text)
+matches = [match for match in matches if re.search(r"OpenClaw \d", match)]
 print(matches[-1] if matches else "")
 PY
 }
@@ -181,6 +319,69 @@ print(base64.b64encode(payload).decode("ascii"))
 PY
   )"
   prlctl exec "$WINDOWS_VM" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
+run_windows_script_via_log() {
+  local script_url="$1"
+  local tgz_url="$2"
+  local head_short="$3"
+  local session_id="$4"
+  local runner_name log_name done_name done_status launcher_state
+  local start_seconds poll_deadline startup_checked
+  runner_name="openclaw-update-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-update-$RANDOM-$RANDOM.log"
+  done_name="openclaw-update-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + 900))
+  startup_checked=0
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+curl.exe -fsSL '$script_url' -o \$runner
+Start-Process powershell.exe -ArgumentList @(
+  '-NoProfile',
+  '-ExecutionPolicy', 'Bypass',
+  '-File', \$runner,
+  '-TgzUrl', '$tgz_url',
+  '-HeadShort', '$head_short',
+  '-SessionId', '$session_id',
+  '-LogPath', \$log,
+  '-DonePath', \$done
+) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  while :; do
+    done_status="$(
+      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    done_status="${done_status//$'\r'/}"
+    if [[ -n "$done_status" ]]; then
+      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      launcher_state="$(
+        guest_powershell "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows update helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      warn "windows update helper timed out waiting for done file"
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 run_macos_update() {
@@ -203,8 +404,8 @@ case "\$version" in
     ;;
 esac
 /opt/homebrew/bin/openclaw models set openai/gpt-5.4
-/opt/homebrew/bin/node /opt/homebrew/lib/node_modules/openclaw/openclaw.mjs gateway status --deep --require-rpc
-/opt/homebrew/bin/node /opt/homebrew/lib/node_modules/openclaw/openclaw.mjs agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
+/opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+/opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$MACOS_VM" --current-user /bin/bash /tmp/openclaw-main-update.sh
 }
@@ -212,26 +413,8 @@ EOF
 run_windows_update() {
   local tgz_url="$1"
   local head_short="$2"
-  guest_powershell "$(cat <<EOF
-\$env:PATH = "\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\cmd;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\mingw64\bin;\$env:LOCALAPPDATA\OpenClaw\deps\portable-git\usr\bin;\$env:PATH"
-\$tgz = Join-Path \$env:TEMP 'openclaw-main-update.tgz'
-curl.exe -fsSL '$tgz_url' -o \$tgz
-npm.cmd install -g \$tgz --no-fund --no-audit
-\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-\$version = & \$openclaw --version
-\$version
-if (\$version -notmatch '$head_short') {
-  throw 'version mismatch: expected substring $head_short'
-}
-& \$openclaw models set openai/gpt-5.4
-# Windows can keep the old hashed dist modules alive across in-place global npm upgrades.
-# Restart the gateway/service before verifying status or the next agent turn.
-& \$openclaw gateway restart
-Start-Sleep -Seconds 5
-& \$openclaw gateway status --deep --require-rpc
-& \$openclaw agent --agent main --session-id parallels-npm-update-windows-$head_short --message 'Reply with exact ASCII text OK only.' --json
-EOF
-)"
+  local script_url="$3"
+  run_windows_script_via_log "$script_url" "$tgz_url" "$head_short" "parallels-npm-update-windows-$head_short"
 }
 
 run_linux_update() {
@@ -302,6 +485,12 @@ if [[ -z "$PACKAGE_SPEC" ]]; then
   PACKAGE_SPEC="openclaw@$LATEST_VERSION"
 fi
 
+RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
+if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
+  warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
+  LINUX_VM="$RESOLVED_LINUX_VM"
+fi
+
 say "Run fresh npm baseline: $PACKAGE_SPEC"
 bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
   --mode fresh \
@@ -330,14 +519,16 @@ wait_job "Linux fresh" "$linux_fresh_pid" && LINUX_FRESH_STATUS="pass" || LINUX_
 [[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
 
 pack_main_tgz
+write_windows_update_script
 start_server
 
 tgz_url="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
 
 say "Run same-guest update to current main"
 run_macos_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/macos-update.log" 2>&1 &
 macos_update_pid=$!
-run_windows_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/windows-update.log" 2>&1 &
+run_windows_update "$tgz_url" "$CURRENT_HEAD_SHORT" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
 windows_update_pid=$!
 run_linux_update "$tgz_url" "$CURRENT_HEAD_SHORT" >"$RUN_DIR/linux-update.log" 2>&1 &
 linux_update_pid=$!

@@ -25,9 +25,13 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveGatewayStartupPluginIds,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", () => ({
-  primeConfiguredBindingRegistry,
-}));
+vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/binding-registry.js")>();
+  return {
+    ...actual,
+    primeConfiguredBindingRegistry,
+  };
+});
 
 vi.mock("./server-methods.js", () => ({
   handleGatewayRequest,
@@ -68,11 +72,13 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
 });
 
 type ServerPluginsModule = typeof import("./server-plugins.js");
+type ServerPluginBootstrapModule = typeof import("./server-plugin-bootstrap.js");
 type PluginRuntimeModule = typeof import("../plugins/runtime/index.js");
 type GatewayRequestScopeModule = typeof import("../plugins/runtime/gateway-request-scope.js");
 type MethodScopesModule = typeof import("./method-scopes.js");
 
 let serverPluginsModule: ServerPluginsModule;
+let serverPluginBootstrapModule: ServerPluginBootstrapModule;
 let runtimeModule: PluginRuntimeModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
@@ -99,13 +105,14 @@ function getLastDispatchedClientScopes(): string[] {
 
 async function loadTestModules() {
   serverPluginsModule = await import("./server-plugins.js");
+  serverPluginBootstrapModule = await import("./server-plugin-bootstrap.js");
   runtimeModule = await import("../plugins/runtime/index.js");
   gatewayRequestScopeModule = await import("../plugins/runtime/gateway-request-scope.js");
   methodScopesModule = await import("./method-scopes.js");
 }
 
 async function createSubagentRuntime(
-  serverPlugins: ServerPluginsModule,
+  _serverPlugins: ServerPluginsModule,
   cfg: Record<string, unknown> = {},
 ): Promise<PluginRuntime["subagent"]> {
   const log = {
@@ -115,7 +122,7 @@ async function createSubagentRuntime(
     debug: vi.fn(),
   };
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-  serverPlugins.loadGatewayPlugins({
+  serverPluginBootstrapModule.loadGatewayStartupPlugins({
     cfg,
     workspaceDir: "/tmp",
     log,
@@ -173,7 +180,7 @@ afterEach(() => {
 
 describe("loadGatewayPlugins", () => {
   test("logs plugin errors with details", async () => {
-    const { loadGatewayPlugins } = serverPluginsModule;
+    const { loadGatewayStartupPlugins } = serverPluginBootstrapModule;
     const diagnostics: PluginDiagnostic[] = [
       {
         level: "error",
@@ -191,7 +198,7 @@ describe("loadGatewayPlugins", () => {
       debug: vi.fn(),
     };
 
-    loadGatewayPlugins({
+    loadGatewayStartupPlugins({
       cfg: {},
       workspaceDir: "/tmp",
       log,
@@ -515,7 +522,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("primes configured bindings during gateway startup", async () => {
-    const { loadGatewayPlugins } = serverPluginsModule;
+    const { loadGatewayStartupPlugins } = serverPluginBootstrapModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
 
     const log = {
@@ -526,7 +533,7 @@ describe("loadGatewayPlugins", () => {
     };
 
     const cfg = {};
-    loadGatewayPlugins({
+    loadGatewayStartupPlugins({
       cfg,
       workspaceDir: "/tmp",
       log,
@@ -538,7 +545,7 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
-    const { loadGatewayPlugins } = serverPluginsModule;
+    const { reloadDeferredGatewayPlugins } = serverPluginBootstrapModule;
     const diagnostics: PluginDiagnostic[] = [
       {
         level: "error",
@@ -556,7 +563,7 @@ describe("loadGatewayPlugins", () => {
       debug: vi.fn(),
     };
 
-    loadGatewayPlugins({
+    reloadDeferredGatewayPlugins({
       cfg: {},
       workspaceDir: "/tmp",
       log,
@@ -568,6 +575,37 @@ describe("loadGatewayPlugins", () => {
     expect(log.error).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
   });
+
+  test("runs registry hook before priming configured bindings", async () => {
+    const { prepareGatewayPluginLoad } = serverPluginBootstrapModule;
+    const order: string[] = [];
+    const pluginRegistry = createRegistry([]);
+    loadOpenClawPlugins.mockReturnValue(pluginRegistry);
+    primeConfiguredBindingRegistry.mockImplementation(() => {
+      order.push("prime");
+      return { bindingCount: 0, channelCount: 0 };
+    });
+
+    prepareGatewayPluginLoad({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+      beforePrimeRegistry: (loadedRegistry) => {
+        expect(loadedRegistry).toBe(pluginRegistry);
+        order.push("hook");
+      },
+    });
+
+    expect(order).toEqual(["hook", "prime"]);
+  });
+
   test("shares fallback context across module reloads for existing runtimes", async () => {
     const first = serverPluginsModule;
     const runtime = await createSubagentRuntime(first);

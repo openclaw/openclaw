@@ -7,19 +7,30 @@ import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
+const shellEnvMocks = vi.hoisted(() => ({
+  getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
+  resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+}));
 
 vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
   return {
     ...mod,
-    getShellPathFromLoginShell: vi.fn(() => "/custom/bin:/opt/bin"),
-    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
+    getShellPathFromLoginShell: shellEnvMocks.getShellPathFromLoginShell,
+    resolveShellEnvFallbackTimeoutMs: shellEnvMocks.resolveShellEnvFallbackTimeoutMs,
   };
 });
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  const approvals: ExecApprovalsResolved = {
+  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+});
+
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+
+function createExecApprovals(): ExecApprovalsResolved {
+  return {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
@@ -51,11 +62,27 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       agents: {},
     },
   };
-  return { ...mod, resolveExecApprovals: () => approvals };
-});
+}
 
-const { createExecTool } = await import("./bash-tools.exec.js");
-const { getShellPathFromLoginShell } = await import("../infra/shell-env.js");
+async function loadFreshBashExecPathModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../infra/shell-env.js", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+    return {
+      ...mod,
+      getShellPathFromLoginShell: shellEnvMocks.getShellPathFromLoginShell,
+      resolveShellEnvFallbackTimeoutMs: shellEnvMocks.resolveShellEnvFallbackTimeoutMs,
+    };
+  });
+  vi.doMock("../infra/exec-approvals.js", async (importOriginal) => {
+    const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+    return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  });
+  const bashExec = await import("./bash-tools.exec.js");
+  return {
+    createExecTool: bashExec.createExecTool,
+  };
+}
 
 const normalizeText = (value?: string) =>
   sanitizeBinaryOutput(value ?? "")
@@ -72,8 +99,13 @@ const normalizePathEntries = (value?: string) =>
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     envSnapshot = captureEnv(["PATH", "SHELL"]);
+    shellEnvMocks.getShellPathFromLoginShell.mockReset();
+    shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
+    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
+    shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
+    ({ createExecTool } = await loadFreshBashExecPathModulesForTest());
   });
 
   afterEach(() => {
@@ -86,7 +118,7 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
     shellPathMock.mockClear();
     shellPathMock.mockReturnValue("/custom/bin:/opt/bin");
 
@@ -118,7 +150,7 @@ describe("exec PATH login shell merge", () => {
     }
     process.env.PATH = "/usr/bin";
 
-    const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+    const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
     shellPathMock.mockClear();
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
@@ -163,7 +195,7 @@ describe("exec PATH login shell merge", () => {
     process.env.SHELL = unregisteredShellPath;
 
     try {
-      const shellPathMock = vi.mocked(getShellPathFromLoginShell);
+      const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
       shellPathMock.mockClear();
       shellPathMock.mockImplementation((opts) =>
         opts.env.SHELL?.trim() === unregisteredShellPath ? null : "/custom/bin:/opt/bin",

@@ -50,6 +50,7 @@ describe("ensureConfigReady", () => {
     runtime: RuntimeEnv;
     commandPath?: string[];
     suppressDoctorStdout?: boolean;
+    allowInvalid?: boolean;
   }) => Promise<void>;
   let resetConfigGuardStateForTests: () => void;
 
@@ -142,6 +143,17 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("allows an explicit invalid-config override", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("runs doctor migration flow only once per module instance", async () => {
