@@ -511,6 +511,14 @@ function computeNextProfileUsageStats(params: {
         params.existing.cooldownModel !== params.modelId
       ) {
         updatedStats.cooldownModel = undefined;
+      } else if (
+        params.reason === "rate_limit" &&
+        !params.modelId &&
+        params.existing.cooldownModel
+      ) {
+        // Unknown originating model during an active model-scoped cooldown:
+        // widen scope conservatively so no model can bypass on stale metadata.
+        updatedStats.cooldownModel = undefined;
       } else if (params.reason !== "rate_limit") {
         // Non-rate-limit failures are profile-wide — clear model scope even
         // when the same model fails, so that no model can bypass.

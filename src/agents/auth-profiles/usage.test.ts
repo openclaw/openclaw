@@ -812,6 +812,23 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
   });
 
+  it("widens cooldownModel when rate_limit failure during active cooldown has no modelId", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "claude-sonnet-4.6",
+        errorCount: 1,
+        lastFailureAt: now - 1000,
+      },
+    });
+    await markFailure({ store, now, modelId: undefined });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownReason).toBe("rate_limit");
+    expect(stats?.cooldownModel).toBeUndefined();
+  });
+
   it("updates cooldownReason when auth failure occurs during active rate_limit window", async () => {
     const now = 1_000_000;
     const store = makeStoreWithCopilot({

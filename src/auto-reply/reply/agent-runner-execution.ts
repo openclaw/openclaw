@@ -83,13 +83,14 @@ export type AgentRunLoopResult =
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
  * Includes a countdown when the soonest cooldown expiry is known.
  */
-function buildCopilotCooldownMessage(err: unknown): string {
+function buildRateLimitCooldownMessage(err: unknown): string {
   if (!isFallbackSummaryError(err)) {
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
   const expiry = err.soonestCooldownExpiry;
-  if (typeof expiry === "number" && expiry > Date.now()) {
-    const secsLeft = Math.ceil((expiry - Date.now()) / 1000);
+  const now = Date.now();
+  if (typeof expiry === "number" && expiry > now) {
+    const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
     if (secsLeft <= 60) {
       return `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`;
     }
@@ -702,7 +703,7 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
         : isRateLimit
-          ? buildCopilotCooldownMessage(err)
+          ? buildRateLimitCooldownMessage(err)
           : isContextOverflow
             ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : isRoleOrderingError
