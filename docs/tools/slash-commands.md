@@ -75,6 +75,7 @@ Text + native (when enabled):
 
 - `/help`
 - `/commands`
+- `/tools [compact|verbose]` (show what the current agent can use right now; `verbose` adds descriptions)
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)

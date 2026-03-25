@@ -57,8 +57,8 @@ describe("parseSlashCommand", () => {
   it("parses slash aliases through the shared registry", () => {
     const exportCommand = SLASH_COMMANDS.find((entry) => entry.key === "export-session");
     expect(exportCommand).toMatchObject({
-      name: "export",
-      aliases: ["export-session"],
+      name: "export-session",
+      aliases: ["export"],
       executeLocal: true,
     });
     expect(parseSlashCommand("/export")).toMatchObject({
@@ -68,6 +68,17 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/export-session")).toMatchObject({
       command: { key: "export-session" },
       args: "",
+    });
+  });
+
+  it("keeps canonical long-form slash names as the primary menu command", () => {
+    expect(SLASH_COMMANDS.find((entry) => entry.key === "verbose")).toMatchObject({
+      name: "verbose",
+      aliases: ["v"],
+    });
+    expect(SLASH_COMMANDS.find((entry) => entry.key === "think")).toMatchObject({
+      name: "think",
+      aliases: expect.arrayContaining(["thinking", "t"]),
     });
   });
 

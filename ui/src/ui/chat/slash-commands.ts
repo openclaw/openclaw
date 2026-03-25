@@ -125,7 +125,7 @@ function getPrimarySlashName(command: ChatCommandDefinition): string | null {
   if (aliases.length === 0) {
     return null;
   }
-  return aliases.toSorted((a, b) => a.length - b.length || a.localeCompare(b))[0] ?? null;
+  return aliases[0] ?? null;
 }
 
 function formatArgs(command: ChatCommandDefinition): string | undefined {
