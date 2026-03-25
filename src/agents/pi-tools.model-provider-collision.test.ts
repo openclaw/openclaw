@@ -18,7 +18,9 @@ function toolNames(tools: AnyAgentTool[]): string[] {
 
 describe("applyModelProviderToolPolicy", () => {
   it("keeps web_search for non-xAI models", () => {
-    const filtered = __testing.applyModelProviderToolPolicy(baseTools);
+    const filtered = __testing.applyModelProviderToolPolicy(baseTools, {
+      modelCompat: {},
+    });
 
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });

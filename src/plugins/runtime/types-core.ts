@@ -1,5 +1,6 @@
 import type { LogLevel } from "../../logging/levels.js";
 
+/** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -7,6 +8,7 @@ export type RuntimeLogger = {
   error: (message: string, meta?: Record<string, unknown>) => void;
 };
 
+/** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
   config: {
@@ -39,7 +41,7 @@ export type PluginRuntimeCore = {
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
   media: {
-    loadWebMedia: typeof import("../../../extensions/whatsapp/runtime-api.js").loadWebMedia;
+    loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
     detectMime: typeof import("../../media/mime.js").detectMime;
     mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;

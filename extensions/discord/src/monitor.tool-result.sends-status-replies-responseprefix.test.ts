@@ -1,20 +1,30 @@
 import type { Client } from "@buape/carbon";
-import { ChannelType, MessageType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MessageType } from "@buape/carbon";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   dispatchMock,
+  loadConfigMock,
   readAllowFromStoreMock,
   sendMock,
   updateLastRouteMock,
   upsertPairingRequestMock,
 } from "./monitor.tool-result.test-harness.js";
-import { createDiscordMessageHandler } from "./monitor/message-handler.js";
-import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
-import { createNoopThreadBindingManager } from "./monitor/thread-bindings.js";
 
 type Config = ReturnType<typeof import("../../../src/config/config.js").loadConfig>;
+let ChannelType: typeof import("@buape/carbon").ChannelType;
+let createDiscordMessageHandler: typeof import("./monitor/message-handler.js").createDiscordMessageHandler;
+let __resetDiscordChannelInfoCacheForTest: typeof import("./monitor/message-utils.js").__resetDiscordChannelInfoCacheForTest;
+let createNoopThreadBindingManager: typeof import("./monitor/thread-bindings.js").createNoopThreadBindingManager;
 
-beforeEach(() => {
+beforeAll(async () => {
+  ({ ChannelType } = await import("@buape/carbon"));
+  ({ createDiscordMessageHandler } = await import("./monitor/message-handler.js"));
+  ({ __resetDiscordChannelInfoCacheForTest } = await import("./monitor/message-utils.js"));
+  ({ createNoopThreadBindingManager } = await import("./monitor/thread-bindings.js"));
+});
+
+beforeEach(async () => {
   __resetDiscordChannelInfoCacheForTest();
   sendMock.mockClear().mockResolvedValue(undefined);
   updateLastRouteMock.mockClear();
@@ -24,6 +34,7 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockClear().mockResolvedValue([]);
   upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+  loadConfigMock.mockClear().mockReturnValue(BASE_CFG);
 });
 
 const BASE_CFG: Config = {
@@ -32,6 +43,9 @@ const BASE_CFG: Config = {
       model: { primary: "anthropic/claude-opus-4-5" },
       workspace: "/tmp/openclaw",
     },
+  },
+  messages: {
+    inbound: { debounceMs: 0 },
   },
   session: { store: "/tmp/openclaw-sessions.json" },
 };
@@ -80,6 +94,7 @@ function createHandlerBaseConfig(
 }
 
 async function createDmHandler(opts: { cfg: Config; runtimeError?: (err: unknown) => void }) {
+  loadConfigMock.mockReturnValue(opts.cfg);
   return createDiscordMessageHandler(createHandlerBaseConfig(opts.cfg, opts.runtimeError));
 }
 
@@ -92,9 +107,10 @@ function createDmClient() {
   } as unknown as Client;
 }
 
-async function createCategoryGuildHandler() {
+async function createCategoryGuildHandler(runtimeError?: (err: unknown) => void) {
+  loadConfigMock.mockReturnValue(CATEGORY_GUILD_CFG);
   return createDiscordMessageHandler({
-    ...createHandlerBaseConfig(CATEGORY_GUILD_CFG),
+    ...createHandlerBaseConfig(CATEGORY_GUILD_CFG, runtimeError),
     guildEntries: {
       "*": { requireMention: false, channels: { c1: { allow: true } } },
     },
@@ -221,7 +237,10 @@ describe("discord tool result dispatch", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Discord user id: u2");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "discord",
+      idLine: "Your Discord user id: u2",
+      code: "PAIRCODE",
+    });
   }, 10000);
 });

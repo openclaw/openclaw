@@ -13,7 +13,7 @@ import {
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
 
@@ -60,21 +60,6 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
-function stringifyToolPayload(payload: unknown): string {
-  if (typeof payload === "string") {
-    return payload;
-  }
-  try {
-    const encoded = JSON.stringify(payload, null, 2);
-    if (typeof encoded === "string") {
-      return encoded;
-    }
-  } catch {
-    // Fall through to String(payload) for non-serializable values.
-  }
-  return String(payload);
-}
-
 function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
@@ -88,26 +73,21 @@ function normalizeToolExecutionResult(params: {
     logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
     const details = "details" in record ? record.details : record;
     const safeDetails = details ?? { status: "ok", tool: toolName };
-    return {
-      content: [
-        {
-          type: "text",
-          text: stringifyToolPayload(safeDetails),
-        },
-      ],
-      details: safeDetails,
-    };
+    return payloadTextResult(safeDetails);
   }
   const safeDetails = result ?? { status: "ok", tool: toolName };
-  return {
-    content: [
-      {
-        type: "text",
-        text: stringifyToolPayload(safeDetails),
-      },
-    ],
-    details: safeDetails,
-  };
+  return payloadTextResult(safeDetails);
+}
+
+function buildToolExecutionErrorResult(params: {
+  toolName: string;
+  message: string;
+}): AgentToolResult<unknown> {
+  return jsonResult({
+    status: "error",
+    tool: params.toolName,
+    error: params.message,
+  });
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
@@ -182,10 +162,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
 
-          return jsonResult({
-            status: "error",
-            tool: normalizedName,
-            error: described.message,
+          return buildToolExecutionErrorResult({
+            toolName: normalizedName,
+            message: described.message,
           });
         }
       },

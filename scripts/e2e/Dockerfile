@@ -18,7 +18,7 @@ ENV NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 USER appuser
 WORKDIR /app
 
-COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=appuser:appuser package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc openclaw.mjs ./
 COPY --chown=appuser:appuser ui/package.json ./ui/package.json
 COPY --chown=appuser:appuser extensions ./extensions
 COPY --chown=appuser:appuser patches ./patches
@@ -26,7 +26,7 @@ COPY --chown=appuser:appuser patches ./patches
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/home/appuser/.local/share/pnpm/store,sharing=locked \
     pnpm install --frozen-lockfile
 
-COPY --chown=appuser:appuser tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts vitest.e2e.config.ts openclaw.mjs ./
+COPY --chown=appuser:appuser tsconfig.json tsconfig.plugin-sdk.dts.json tsdown.config.ts vitest.config.ts vitest.e2e.config.ts vitest.performance-config.ts ./
 COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser test ./test
 COPY --chown=appuser:appuser scripts ./scripts
