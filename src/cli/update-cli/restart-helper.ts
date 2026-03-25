@@ -170,16 +170,31 @@ del "%~f0"
 export async function runRestartScript(scriptPath: string): Promise<void> {
   if (process.platform === "win32") {
     // Write a VBScript wrapper that runs the batch script fully hidden.
+    // VBScript does not use \ as an escape character, so only quotes need doubling.
     const vbsPath = scriptPath.replace(/\.bat$/i, ".vbs");
-    const quotedBat = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '""');
+    const quotedBat = scriptPath.replace(/"/g, '""');
+    // Quote scheme: 4 quotes before + 5 after the path.
+    // VBScript decodes "" → " so ws.Run receives: cmd.exe /d /s /c ""<path>""
+    // cmd.exe /s /c strips the outer pair, leaving "<path>" as the argument.
     const vbsContent = [
       'Set ws = CreateObject("WScript.Shell")',
-      `ws.Run "cmd.exe /d /s /c """"${quotedBat}""""""", 0, False`,
+      `ws.Run "cmd.exe /d /s /c """"${quotedBat}""""", 0, False`,
       // Self-cleanup: delete the VBScript wrapper.
       'Set fso = CreateObject("Scripting.FileSystemObject")',
       "fso.DeleteFile WScript.ScriptFullName",
     ].join("\r\n");
-    await fs.writeFile(vbsPath, vbsContent, "utf8");
+    try {
+      await fs.writeFile(vbsPath, vbsContent, "utf8");
+    } catch {
+      // Fall back: run the bat directly (console flash may be visible but restart succeeds).
+      const child = spawn("cmd.exe", ["/d", "/s", "/c", scriptPath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref();
+      return;
+    }
     const child = spawn("wscript.exe", [vbsPath], {
       detached: true,
       stdio: "ignore",
