@@ -94,10 +94,17 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const started = await startServerWithClient("secret");
     const paired = await pairReadScopedOperator("silent-scope-upgrade-reconnect-poc");
 
+    let watcherWs: WebSocket | undefined;
     let sharedAuthReconnectWs: WebSocket | undefined;
     let postAttemptDeviceTokenWs: WebSocket | undefined;
 
     try {
+      watcherWs = await openTrackedWs(started.port);
+      await connectOk(watcherWs, { scopes: ["operator.admin"] });
+      const requestedEvent = onceMessage(
+        watcherWs,
+        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
+      );
       sharedAuthReconnectWs = await openTrackedWs(started.port);
       const sharedAuthUpgradeAttempt = await connectReq(sharedAuthReconnectWs, {
         token: "secret",
@@ -113,6 +120,12 @@ describe("gateway silent scope-upgrade reconnect", () => {
         (sharedAuthUpgradeAttempt.error?.details as { requestId?: unknown; code?: string })
           ?.requestId,
       ).toBe(pending.pending[0]?.requestId);
+      const requested = (await requestedEvent) as {
+        payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
+      };
+      expect(requested.payload?.requestId).toBe(pending.pending[0]?.requestId);
+      expect(requested.payload?.deviceId).toBe(paired.deviceId);
+      expect(requested.payload?.scopes).toEqual(["operator.admin"]);
 
       const afterUpgradeAttempt = await getPairedDevice(paired.deviceId);
       expect(afterUpgradeAttempt?.approvedScopes).toEqual(["operator.read"]);
@@ -128,6 +141,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
       expect(afterUpgrade.ok).toBe(false);
     } finally {
+      watcherWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
       started.ws.close();
@@ -154,16 +168,14 @@ describe("gateway silent scope-upgrade reconnect", () => {
     };
     const approveSpy = vi
       .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(
-        async (requestId: string, optionsOrBaseDir?: unknown, _maybeBaseDir?: unknown) => {
-          if (simulatedRace) {
-            return await forwardApprove(requestId, optionsOrBaseDir);
-          }
-          simulatedRace = true;
-          await forwardApprove(requestId, optionsOrBaseDir);
-          return null;
-        },
-      );
+      .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown) => {
+        if (simulatedRace) {
+          return await forwardApprove(requestId, optionsOrBaseDir);
+        }
+        simulatedRace = true;
+        await forwardApprove(requestId, optionsOrBaseDir);
+        return null;
+      });
 
     try {
       ws = await openTrackedWs(started.port);
