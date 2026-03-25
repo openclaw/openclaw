@@ -521,11 +521,15 @@ describe("plugin sdk alias helpers", () => {
     // real openclaw repo root in the test runner environment.
     const loaderModuleUrl = pathToFileURL(path.join(fixture.root, "openclaw.mjs")).href;
 
+    // NOTE: passing `undefined` as argv1 activates the default STARTUP_ARGV1 = process.argv[1],
+    // which in test runners resolves to the real openclaw root via the test runner binary path.
+    // Pass externalPluginEntry as argv1 instead — it has no openclaw ancestor, so the argv1
+    // hint returns null and the test exercises the moduleUrl resolution path.
     const aliases = withCwd(fixture.root, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
           externalPluginEntry,
-          undefined, // no argv1
+          externalPluginEntry, // argv1 with no openclaw ancestor; forces fallthrough to moduleUrl hint
           loaderModuleUrl,
         ),
       ),
