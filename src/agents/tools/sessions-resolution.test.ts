@@ -190,6 +190,33 @@ describe("resolved session visibility checks", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: Array.from({ length: 500 }, (_, index) => ({
+              key: `agent:main:subagent:worker-${index}`,
+            })),
+          };
+        }
+        return {};
+      },
+    );
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:worker-999",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+  });
 });
 
 describe("resolveSessionReference", () => {
