@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 // WhatsApp-specific imports from local extension code (moved from src/web/ and src/channels/plugins/)
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
+import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
   listWhatsAppDirectoryGroupsFromConfig,
@@ -90,7 +91,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         isConfigured: async (account) =>
           await getWhatsAppRuntime().channel.whatsapp.webAuthExists(account.authDir),
       }),
-      agentTools: () => [getWhatsAppRuntime().channel.whatsapp.createLoginTool()],
+      agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
