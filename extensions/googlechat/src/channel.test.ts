@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
@@ -7,6 +7,8 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
+const resolveGoogleChatAccountMock = vi.hoisted(() => vi.fn());
+const resolveGoogleChatOutboundSpaceMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api.js")>();
@@ -17,8 +19,38 @@ vi.mock("./api.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    resolveGoogleChatAccount: resolveGoogleChatAccountMock,
+  };
+});
+
+vi.mock("./targets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./targets.js")>();
+  return {
+    ...actual,
+    resolveGoogleChatOutboundSpace: resolveGoogleChatOutboundSpaceMock,
+  };
+});
+
+const accountsActual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
+const targetsActual = await vi.importActual<typeof import("./targets.js")>("./targets.js");
+
+resolveGoogleChatAccountMock.mockImplementation(accountsActual.resolveGoogleChatAccount);
+resolveGoogleChatOutboundSpaceMock.mockImplementation(targetsActual.resolveGoogleChatOutboundSpace);
+
 import { googlechatPlugin } from "./channel.js";
 import { setGoogleChatRuntime } from "./runtime.js";
+
+afterEach(() => {
+  vi.clearAllMocks();
+  resolveGoogleChatAccountMock.mockImplementation(accountsActual.resolveGoogleChatAccount);
+  resolveGoogleChatOutboundSpaceMock.mockImplementation(
+    targetsActual.resolveGoogleChatOutboundSpace,
+  );
+});
 
 function createGoogleChatCfg(): OpenClawConfig {
   return {
@@ -159,6 +191,188 @@ describe("googlechatPlugin outbound sendMedia", () => {
       messageId: "spaces/AAA/messages/msg-2",
       chatId: "spaces/AAA",
     });
+  });
+});
+
+const resolveTarget = googlechatPlugin.outbound?.resolveTarget;
+
+describe("googlechatPlugin outbound resolveTarget", () => {
+  it("resolves valid chat targets", () => {
+    if (!resolveTarget) {
+      throw new Error("Expected googlechatPlugin.outbound.resolveTarget to be defined");
+    }
+
+    const result = resolveTarget({
+      to: "spaces/AAA",
+      mode: "explicit",
+      allowFrom: [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.to).toBe("spaces/AAA");
+  });
+
+  it("resolves email targets", () => {
+    if (!resolveTarget) {
+      throw new Error("Expected googlechatPlugin.outbound.resolveTarget to be defined");
+    }
+
+    const result = resolveTarget({
+      to: "user@example.com",
+      mode: "explicit",
+      allowFrom: [],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
+    expect(result.to).toBe("users/user@example.com");
+  });
+
+  it("errors on invalid targets", () => {
+    if (!resolveTarget) {
+      throw new Error("Expected googlechatPlugin.outbound.resolveTarget to be defined");
+    }
+
+    const result = resolveTarget({
+      to: "   ",
+      mode: "explicit",
+      allowFrom: [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected invalid target to fail");
+    }
+    expect(result.error).toBeDefined();
+  });
+
+  it("errors when no target is provided", () => {
+    if (!resolveTarget) {
+      throw new Error("Expected googlechatPlugin.outbound.resolveTarget to be defined");
+    }
+
+    const result = resolveTarget({
+      to: undefined,
+      mode: "explicit",
+      allowFrom: [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected missing target to fail");
+    }
+    expect(result.error).toBeDefined();
+  });
+});
+
+describe("googlechatPlugin outbound cfg threading", () => {
+  it("threads resolved cfg into sendText account resolution", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            type: "service_account",
+          },
+        },
+      },
+    };
+    const account = {
+      accountId: "default",
+      config: {},
+      credentialSource: "inline",
+    };
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-1",
+    });
+
+    await googlechatPlugin.outbound?.sendText?.({
+      cfg: cfg as never,
+      to: "users/123",
+      text: "hello",
+      accountId: "default",
+    });
+
+    expect(resolveGoogleChatAccountMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "default",
+    });
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+      }),
+    );
+  });
+
+  it("threads resolved cfg into sendMedia account and media loading path", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: {
+            type: "service_account",
+          },
+          mediaMaxMb: 8,
+        },
+      },
+    };
+    const account = {
+      accountId: "default",
+      config: { mediaMaxMb: 20 },
+      credentialSource: "inline",
+    };
+    const { fetchRemoteMedia } = setupRuntimeMediaMocks({
+      loadFileName: "unused.png",
+      loadBytes: "should-not-be-used",
+    });
+
+    resolveGoogleChatAccountMock.mockReturnValue(account);
+    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
+    uploadGoogleChatAttachmentMock.mockResolvedValue({
+      attachmentUploadToken: "token-1",
+    });
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/msg-2",
+    });
+
+    await googlechatPlugin.outbound?.sendMedia?.({
+      cfg: cfg as never,
+      to: "users/123",
+      text: "photo",
+      mediaUrl: "https://example.com/file.png",
+      accountId: "default",
+    });
+
+    expect(resolveGoogleChatAccountMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "default",
+    });
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/file.png",
+        maxBytes: 8 * 1024 * 1024,
+      }),
+    );
+    expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        space: "spaces/AAA",
+        filename: "remote.png",
+      }),
+    );
+    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account,
+        attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
+      }),
+    );
   });
 });
 
