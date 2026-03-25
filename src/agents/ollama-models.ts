@@ -100,9 +100,16 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
-/** Heuristic: treat models with "r1", "reasoning", or "think" in the name as reasoning models. */
+/**
+ * Heuristic: treat common open-source reasoning model families as reasoning-capable.
+ *
+ * This intentionally stays name-based because Ollama tags rarely expose a richer
+ * reasoning capability contract during discovery.
+ */
 export function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
+  return /r1|reasoning|think|reason|qwen3|qwq|glm-?5(?:[:\-_.]|$)|kimi-?k2|marco-o|skywork-o/i.test(
+    modelId,
+  );
 }
 
 /** Build a ModelDefinitionConfig for an Ollama model with default values. */
