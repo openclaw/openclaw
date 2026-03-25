@@ -44,6 +44,7 @@ import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../d
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   getApiKeyForModel,
   resolveModelAuthMode,
@@ -328,6 +329,7 @@ export async function compactEmbeddedPiSessionDirect(
   }
   let runtimeModel = model;
   let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null = null;
+  let hasRuntimeAuthExchange = false;
   try {
     apiKeyInfo = await getApiKeyForModel({
       model: runtimeModel,
@@ -365,6 +367,7 @@ export async function compactEmbeddedPiSessionDirect(
         runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
       }
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
+      hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
       if (!runtimeApiKey) {
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
@@ -439,11 +442,18 @@ export async function compactEmbeddedPiSessionDirect(
       modelContextWindow: runtimeModel.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
-    const effectiveModel = applyLocalNoAuthHeaderOverride(
-      ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
-        ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
-        : runtimeModel,
-      apiKeyInfo,
+    const effectiveModel = applyAuthHeaderOverride(
+      applyLocalNoAuthHeaderOverride(
+        ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
+          : runtimeModel,
+        apiKeyInfo,
+      ),
+      // Skip header injection when runtime auth exchange produced a
+      // different credential — the SDK reads the exchanged token from
+      // authStorage automatically.
+      hasRuntimeAuthExchange ? null : apiKeyInfo,
+      params.config,
     );
 
     const runAbortController = new AbortController();
