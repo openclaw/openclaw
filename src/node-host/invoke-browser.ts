@@ -239,7 +239,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   if (allowedProfiles.length > 0) {
     if (isPersistentBrowserProfileMutation(method, path)) {
       throw new Error(
-        "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
+        "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
       );
     }
     if (path !== "/profiles") {

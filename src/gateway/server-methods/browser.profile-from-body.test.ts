@@ -122,6 +122,16 @@ describe("browser.request profile selection", () => {
       path: "profiles/poc",
       body: undefined,
     },
+    {
+      method: "POST",
+      path: "/reset-profile",
+      body: { profile: "poc", name: "poc" },
+    },
+    {
+      method: "POST",
+      path: "reset-profile",
+      body: { profile: "poc", name: "poc" },
+    },
   ])("blocks persistent profile mutations for $method $path", async ({ method, path, body }) => {
     const { respond, nodeRegistry } = await runBrowserRequest({
       method,
@@ -134,8 +144,27 @@ describe("browser.request profile selection", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: "browser.request cannot create or delete persistent browser profiles",
+        message: "browser.request cannot mutate persistent browser profiles",
       }),
     );
+  });
+
+  it("allows non-mutating profile reads", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "GET",
+      path: "/profiles",
+    });
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/profiles",
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
   });
 });
