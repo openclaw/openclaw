@@ -82,8 +82,8 @@ apps/ios/*.mobileprovision
 .local/
 docs/.local/
 tmp/
-IDENTITY.md
-USER.md
+/IDENTITY.md
+/USER.md
 .tgz
 .idea
 
