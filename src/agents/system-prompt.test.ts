@@ -356,6 +356,16 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("points to clawhub.ai (not clawhub.com) for skills discovery", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+    });
+
+    expect(prompt).toContain("https://clawhub.ai");
+    expect(prompt).not.toContain("https://clawhub.com");
+  });
+
   it("includes workspace notes when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
