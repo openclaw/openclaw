@@ -149,9 +149,15 @@
 
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
+  All of the following must pass before committing:
+
+1. **Compiles clean** — `pnpm build` (or equivalent) with no errors
+2. **Linter passes** — run `pnpm check` and fix all issues
+3. **Relevant tests pass** — run automated tests related to the changed code; fix failures before proceeding
+4. **User confirms it works** — describe clearly what to test and how, then wait for explicit user confirmation. Do not commit until the user says it works. This avoids stacking commits that may need to be reverted.
+
 - Commit messages must be in **English**.
 - Never add yourself as co-author (no `Co-Authored-By` lines).
-- **Do not commit until the user has explicitly confirmed the feature/fix works** — describe what to test and how before committing. This avoids stacking commits that may need to be reverted.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
 - PR submission template (canonical): `.github/pull_request_template.md`
