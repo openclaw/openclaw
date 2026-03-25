@@ -352,6 +352,8 @@ async function callTool(
     }
     return result;
   }
+  // Unreachable in practice: each attempt either returns or throws, but keep
+  // this fallback so TypeScript accepts the bounded retry loop as exhaustive.
   throw new Error(`Chrome MCP tool "${name}" failed after reconnect.`);
 }
 
