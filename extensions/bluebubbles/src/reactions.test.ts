@@ -1,6 +1,6 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesReaction } from "./reactions.js";
-import { _setFetchGuardForTesting } from "./types.js";
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
 vi.mock("./accounts.js", async () => {
   const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
@@ -8,41 +8,16 @@ vi.mock("./accounts.js", async () => {
 });
 
 const mockFetch = vi.fn();
+const noopPrivateApiStatusMock = {
+  mockReturnValue: () => {},
+};
+
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: noopPrivateApiStatusMock,
+});
 
 describe("reactions", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    _setFetchGuardForTesting(async (p) => {
-      const raw = await globalThis.fetch(p.url, p.init);
-      let body: ArrayBuffer;
-      if (typeof raw.arrayBuffer === "function") {
-        body = await raw.arrayBuffer();
-      } else {
-        const text =
-          typeof (raw as { text?: () => Promise<string> }).text === "function"
-            ? await (raw as { text: () => Promise<string> }).text()
-            : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
-              ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
-              : "";
-        body = new TextEncoder().encode(text).buffer;
-      }
-      return {
-        response: new Response(body, {
-          status: (raw as { status?: number }).status ?? 200,
-          headers: (raw as { headers?: HeadersInit }).headers,
-        }),
-        release: async () => {},
-        finalUrl: p.url,
-      };
-    });
-    mockFetch.mockReset();
-  });
-
-  afterEach(() => {
-    _setFetchGuardForTesting(null);
-    vi.unstubAllGlobals();
-  });
-
   describe("sendBlueBubblesReaction", () => {
     async function expectRemovedReaction(emoji: string, expectedReaction = "-love") {
       mockFetch.mockResolvedValueOnce({

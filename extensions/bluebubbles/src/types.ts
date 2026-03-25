@@ -153,10 +153,17 @@ export async function blueBubblesFetchWithTimeout(
       auditContext: "bluebubbles-api",
     });
     // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
-    const isNullBody = response.status === 204 || response.status === 304;
-    const bodyBytes = isNullBody ? null : await response.arrayBuffer();
-    await release();
-    return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    const isNullBody =
+      response.status === 101 ||
+      response.status === 204 ||
+      response.status === 205 ||
+      response.status === 304;
+    try {
+      const bodyBytes = isNullBody ? null : await response.arrayBuffer();
+      return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    } finally {
+      await release();
+    }
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

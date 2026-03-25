@@ -107,9 +107,14 @@ export function createMattermostClient(params: {
       init,
       auditContext: "mattermost-api",
     });
-    const bodyBytes = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
-    await release();
-    return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    try {
+      const bodyBytes = NULL_BODY_STATUSES.has(response.status)
+        ? null
+        : await response.arrayBuffer();
+      return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    } finally {
+      await release();
+    }
   };
 
   const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
