@@ -16,7 +16,7 @@ import {
   redactConfigSnapshot,
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
-import { loadRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
@@ -237,9 +237,10 @@ async function tryWriteRestartSentinelPayload(
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   // Note: We can't easily cache this, as there are no callback that can invalidate
-  // our cache. However, both loadConfig() and loadOpenClawPlugins() already cache
-  // their results, and buildConfigSchema() is just a cheap transformation.
-  return loadRuntimeConfigSchema();
+  // our cache. However, loadConfig() and loadOpenClawPlugins() (called inside
+  // loadGatewayRuntimeConfigSchema) already cache their results, and buildConfigSchema()
+  // is just a cheap transformation.
+  return loadGatewayRuntimeConfigSchema();
 }
 
 export const configHandlers: GatewayRequestHandlers = {

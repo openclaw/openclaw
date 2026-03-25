@@ -12,15 +12,20 @@ const silentSchemaLogger = {
   debug: () => {},
 };
 
-function mapPluginSchemaMetadata(
+function loadPluginSchemaRegistry(
   config: OpenClawConfig,
-  opts?: { activate?: boolean; cache?: boolean },
+  opts?: {
+    activate?: boolean;
+    cache?: boolean;
+    includeSetupOnlyChannelPlugins?: boolean;
+  },
 ) {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   return loadOpenClawPlugins({
     config,
     cache: opts?.cache,
     activate: opts?.activate,
+    includeSetupOnlyChannelPlugins: opts?.includeSetupOnlyChannelPlugins,
     workspaceDir,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
@@ -53,36 +58,65 @@ function mapChannelSchemaMetadataFromEntries(
   }));
 }
 
-function mapChannelSchemaMetadataFromRegistry(
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>,
-) {
-  if (pluginRegistry.channels.length > 0) {
-    return mapChannelSchemaMetadataFromEntries(
-      pluginRegistry.channels.map((entry) => entry.plugin),
-    );
-  }
+function mapActiveChannelSchemaMetadata(): ChannelUiMetadata[] {
   return mapChannelSchemaMetadataFromEntries(listChannelPlugins());
 }
 
-export function loadRuntimeConfigSchema(): ConfigSchemaResponse {
+function mapChannelSchemaMetadataFromRegistry(
+  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>,
+) {
+  const entries = [
+    ...pluginRegistry.channelSetups.map((entry) => entry.plugin),
+    ...pluginRegistry.channels.map((entry) => entry.plugin),
+  ];
+  if (entries.length > 0) {
+    const deduped = new Map<string, Pick<ChannelPlugin, "id" | "meta" | "configSchema">>();
+    for (const entry of entries) {
+      deduped.set(entry.id, entry);
+    }
+    return mapChannelSchemaMetadataFromEntries([...deduped.values()]);
+  }
+  return mapActiveChannelSchemaMetadata();
+}
+
+export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
   const cfg = loadConfig();
-  const pluginRegistry = mapPluginSchemaMetadata(cfg, { activate: true, cache: true });
+  const pluginRegistry = loadPluginSchemaRegistry(cfg, { cache: true });
   return buildConfigSchema({
     plugins: mapPluginSchemaMetadataFromRegistry(pluginRegistry),
-    channels: mapChannelSchemaMetadataFromRegistry(pluginRegistry),
+    channels: mapActiveChannelSchemaMetadata(),
   });
+}
+
+function readFallbackChannelSchemaMetadata(): ChannelUiMetadata[] {
+  try {
+    const pluginRegistry = loadPluginSchemaRegistry(
+      {
+        plugins: {
+          enabled: true,
+        },
+      },
+      {
+        activate: false,
+        cache: false,
+        includeSetupOnlyChannelPlugins: true,
+      },
+    );
+    return mapChannelSchemaMetadataFromRegistry(pluginRegistry);
+  } catch {
+    return [];
+  }
 }
 
 export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
   const snapshot = await readConfigFileSnapshot();
-  const fallbackChannels = mapChannelSchemaMetadataFromEntries(listChannelPlugins());
 
   if (!snapshot.valid) {
-    return buildConfigSchema({ channels: fallbackChannels });
+    return buildConfigSchema({ channels: readFallbackChannelSchemaMetadata() });
   }
 
   try {
-    const pluginRegistry = mapPluginSchemaMetadata(snapshot.config, {
+    const pluginRegistry = loadPluginSchemaRegistry(snapshot.config, {
       activate: false,
       cache: false,
     });
@@ -91,6 +125,6 @@ export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaR
       channels: mapChannelSchemaMetadataFromRegistry(pluginRegistry),
     });
   } catch {
-    return buildConfigSchema({ channels: fallbackChannels });
+    return buildConfigSchema({ channels: readFallbackChannelSchemaMetadata() });
   }
 }
