@@ -82,4 +82,33 @@ describe("resolveProviderCapabilities", () => {
       }),
     ).toBe(true);
   });
+
+  it("inherits dropThinkingBlocks for custom providers using anthropic-messages API", () => {
+    // Custom providers like Together or Vercel AI Gateway configured with
+    // api: "anthropic-messages" should inherit Anthropic's hints
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "together",
+        modelId: "claude-3.7-sonnet",
+        modelApi: "anthropic-messages",
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "vercel-ai-gateway",
+        modelId: "claude-3.7-sonnet",
+        modelApi: "anthropic-messages",
+      }),
+    ).toBe(true);
+
+    // Should NOT inherit when using a different API
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "together",
+        modelId: "claude-3.7-sonnet",
+        modelApi: "openai-completions",
+      }),
+    ).toBe(false);
+  });
 });

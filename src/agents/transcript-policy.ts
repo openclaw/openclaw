@@ -83,7 +83,7 @@ export function resolveTranscriptPolicy(params: {
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
   // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
+  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId, modelApi: params.modelApi });
 
   const needsNonImageSanitize =
     isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;

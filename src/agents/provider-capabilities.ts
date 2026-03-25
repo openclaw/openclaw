@@ -127,11 +127,21 @@ export function isAnthropicProviderFamily(provider?: string | null): boolean {
 export function shouldDropThinkingBlocksForModel(params: {
   provider?: string | null;
   modelId?: string | null;
+  modelApi?: string | null;
 }): boolean {
-  return modelIncludesAnyHint(
-    params.modelId,
-    resolveProviderCapabilities(params.provider).dropThinkingBlockModelHints,
-  );
+  const providerHints =
+    resolveProviderCapabilities(params.provider).dropThinkingBlockModelHints;
+
+  // Custom providers using the anthropic-messages API should inherit Anthropic's
+  // dropThinkingBlockModelHints so that extended thinking blocks are dropped
+  // even when the provider name is not "anthropic" (e.g. Together, Vercel AI Gateway).
+  const apiHints =
+    params.modelApi === "anthropic-messages"
+      ? (PROVIDER_CAPABILITIES.anthropic?.dropThinkingBlockModelHints ?? [])
+      : [];
+
+  const mergedHints = [...new Set([...providerHints, ...apiHints])];
+  return modelIncludesAnyHint(params.modelId, mergedHints);
 }
 
 export function shouldSanitizeGeminiThoughtSignaturesForModel(params: {
