@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { sendMessageTelegram, sendPollTelegram } from "../../extensions/telegram/src/send.js";
+import {
+  sendMessageTelegram,
+  sendPollTelegram,
+  type TelegramApiOverride,
+} from "../../extensions/telegram/src/send.js";
 import {
   clearConfigCache,
   loadConfig,
@@ -22,6 +26,10 @@ import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+type TelegramGetChat = NonNullable<TelegramApiOverride["getChat"]>;
+type TelegramSendMessage = NonNullable<TelegramApiOverride["sendMessage"]>;
+type TelegramSendPoll = NonNullable<TelegramApiOverride["sendPoll"]>;
 
 function createCronStore(): CronStoreFile {
   const now = Date.now();
@@ -52,25 +60,39 @@ function createCronStore(): CronStoreFile {
 async function withTelegramGatewayWritebackFixture(
   run: (params: {
     cronStorePath: string;
-    getChat: ReturnType<typeof vi.fn>;
-    sendMessage: ReturnType<typeof vi.fn>;
-    sendPoll: ReturnType<typeof vi.fn>;
+    getChatMock: ReturnType<typeof vi.fn>;
+    sendMessageMock: ReturnType<typeof vi.fn>;
+    sendPollMock: ReturnType<typeof vi.fn>;
     installTelegramTestPlugin: () => void;
   }) => Promise<void>,
 ): Promise<void> {
   const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-writeback-"));
   const cronStorePath = path.join(tempDir, "cron", "jobs.json");
-  const getChat = vi.fn(async () => ({ id: -100321 }));
-  const sendMessage = vi.fn(async () => ({
-    message_id: 17,
-    chat: { id: "-100321" },
-  }));
-  const sendPoll = vi.fn(async () => ({
-    message_id: 19,
-    chat: { id: "-100321" },
-    poll: { id: "poll-1" },
-  }));
+  const getChatMock = vi.fn();
+  const sendMessageMock = vi.fn();
+  const sendPollMock = vi.fn();
+  const getChat: TelegramGetChat = async (...args) => {
+    getChatMock(...args);
+    return { id: -100321 } as unknown as Awaited<ReturnType<TelegramGetChat>>;
+  };
+  const sendMessage: TelegramSendMessage = async (...args) => {
+    sendMessageMock(...args);
+    return {
+      message_id: 17,
+      date: 1,
+      chat: { id: "-100321" },
+    } as unknown as Awaited<ReturnType<TelegramSendMessage>>;
+  };
+  const sendPoll: TelegramSendPoll = async (...args) => {
+    sendPollMock(...args);
+    return {
+      message_id: 19,
+      date: 1,
+      chat: { id: "-100321" },
+      poll: { id: "poll-1" },
+    } as unknown as Awaited<ReturnType<TelegramSendPoll>>;
+  };
 
   const installTelegramTestPlugin = () => {
     setActivePluginRegistry(
@@ -82,31 +104,38 @@ async function withTelegramGatewayWritebackFixture(
             id: "telegram",
             label: "Telegram",
             outbound: {
+              deliveryMode: "direct",
               sendText: async ({ cfg, to, text, accountId, gatewayClientScopes }) =>
-                await sendMessageTelegram(to, text, {
-                  cfg,
-                  accountId: accountId ?? undefined,
-                  gatewayClientScopes,
-                  token: "123:abc",
-                  api: {
-                    getChat,
-                    sendMessage,
-                  },
+                ({
+                  channel: "telegram",
+                  ...(await sendMessageTelegram(to, text, {
+                    cfg,
+                    accountId: accountId ?? undefined,
+                    gatewayClientScopes,
+                    token: "123:abc",
+                    api: {
+                      getChat,
+                      sendMessage,
+                    },
+                  })),
                 }),
               sendPoll: async ({ cfg, to, poll, accountId, gatewayClientScopes, threadId }) =>
-                await sendPollTelegram(to, poll, {
-                  cfg,
-                  accountId: accountId ?? undefined,
-                  gatewayClientScopes,
-                  messageThreadId:
-                    typeof threadId === "number" && Number.isFinite(threadId)
-                      ? Math.trunc(threadId)
-                      : undefined,
-                  token: "123:abc",
-                  api: {
-                    getChat,
-                    sendPoll,
-                  },
+                ({
+                  channel: "telegram",
+                  ...(await sendPollTelegram(to, poll, {
+                    cfg,
+                    accountId: accountId ?? undefined,
+                    gatewayClientScopes,
+                    messageThreadId:
+                      typeof threadId === "number" && Number.isFinite(threadId)
+                        ? Math.trunc(threadId)
+                        : undefined,
+                    token: "123:abc",
+                    api: {
+                      getChat,
+                      sendPoll,
+                    },
+                  })),
                 }),
             },
           }),
@@ -142,9 +171,9 @@ async function withTelegramGatewayWritebackFixture(
 
     await run({
       cronStorePath,
-      getChat,
-      sendMessage,
-      sendPoll,
+      getChatMock,
+      sendMessageMock,
+      sendPollMock,
       installTelegramTestPlugin,
     });
   } finally {
@@ -156,13 +185,12 @@ async function withTelegramGatewayWritebackFixture(
 
 describe("gateway Telegram target writeback scope enforcement", () => {
   it("allows operator.write delivery but skips config and cron persistence", async () => {
-    await withTelegramGatewayWritebackFixture(async ({ cronStorePath, getChat, sendMessage }) => {
+    await withTelegramGatewayWritebackFixture(async (params) => {
+      const { cronStorePath, getChatMock, sendMessageMock } = params;
       await withServer(async (ws) => {
         await connectOk(ws, { token: "secret", scopes: ["operator.write"] });
 
-        const current = await rpcReq<{
-          hash?: string;
-        }>(ws, "config.get", {});
+        const current = await rpcReq<{ hash?: string }>(ws, "config.get", {});
         expect(current.ok).toBe(true);
         expect(typeof current.payload?.hash).toBe("string");
 
@@ -194,8 +222,8 @@ describe("gateway Telegram target writeback scope enforcement", () => {
 
         expect(stored.channels?.telegram?.defaultTo).toBe("https://t.me/mychannel");
         expect(cronStore.jobs[0]?.delivery?.to).toBe("@mychannel");
-        expect(getChat).toHaveBeenCalledWith("@mychannel");
-        expect(sendMessage).toHaveBeenCalledWith("-100321", "hello from send scope test", {
+        expect(getChatMock).toHaveBeenCalledWith("@mychannel");
+        expect(sendMessageMock).toHaveBeenCalledWith("-100321", "hello from send scope test", {
           parse_mode: "HTML",
         });
       });
@@ -203,7 +231,8 @@ describe("gateway Telegram target writeback scope enforcement", () => {
   });
 
   it("persists config and cron rewrites for operator.admin delivery", async () => {
-    await withTelegramGatewayWritebackFixture(async ({ cronStorePath, getChat, sendMessage }) => {
+    await withTelegramGatewayWritebackFixture(async (params) => {
+      const { cronStorePath, getChatMock, sendMessageMock } = params;
       await withServer(async (ws) => {
         await connectOk(ws, { token: "secret", scopes: ["operator.write", "operator.admin"] });
 
@@ -222,8 +251,8 @@ describe("gateway Telegram target writeback scope enforcement", () => {
 
         expect(stored.channels?.telegram?.defaultTo).toBe("-100321");
         expect(cronStore.jobs[0]?.delivery?.to).toBe("-100321");
-        expect(getChat).toHaveBeenCalledWith("@mychannel");
-        expect(sendMessage).toHaveBeenCalledWith("-100321", "hello from admin scope test", {
+        expect(getChatMock).toHaveBeenCalledWith("@mychannel");
+        expect(sendMessageMock).toHaveBeenCalledWith("-100321", "hello from admin scope test", {
           parse_mode: "HTML",
         });
       });
@@ -231,38 +260,37 @@ describe("gateway Telegram target writeback scope enforcement", () => {
   });
 
   it("allows operator.write poll delivery but skips config and cron persistence", async () => {
-    await withTelegramGatewayWritebackFixture(
-      async ({ cronStorePath, getChat, sendPoll, installTelegramTestPlugin }) => {
-        await withServer(async (ws) => {
-          releasePinnedPluginChannelRegistry();
-          installTelegramTestPlugin();
-          await connectOk(ws, { token: "secret", scopes: ["operator.write"] });
+    await withTelegramGatewayWritebackFixture(async (params) => {
+      const { cronStorePath, getChatMock, sendPollMock, installTelegramTestPlugin } = params;
+      await withServer(async (ws) => {
+        releasePinnedPluginChannelRegistry();
+        installTelegramTestPlugin();
+        await connectOk(ws, { token: "secret", scopes: ["operator.write"] });
 
-          const viaPoll = await rpcReq(ws, "poll", {
-            to: "https://t.me/mychannel",
-            question: "Which one?",
-            options: ["A", "B"],
-            channel: "telegram",
-            idempotencyKey: "idem-poll-telegram-target-writeback-operator-write",
-          });
-          if (!viaPoll.ok) {
-            throw new Error(`poll failed: ${viaPoll.error?.message ?? "unknown error"}`);
-          }
-          expect(viaPoll.ok).toBe(true);
-
-          clearConfigCache();
-          const stored = loadConfig();
-          const cronStore = await loadCronStore(cronStorePath);
-
-          expect(stored.channels?.telegram?.defaultTo).toBe("https://t.me/mychannel");
-          expect(cronStore.jobs[0]?.delivery?.to).toBe("@mychannel");
-          expect(getChat).toHaveBeenCalledWith("@mychannel");
-          expect(sendPoll).toHaveBeenCalledWith("-100321", "Which one?", ["A", "B"], {
-            allows_multiple_answers: false,
-            is_anonymous: true,
-          });
+        const viaPoll = await rpcReq(ws, "poll", {
+          to: "https://t.me/mychannel",
+          question: "Which one?",
+          options: ["A", "B"],
+          channel: "telegram",
+          idempotencyKey: "idem-poll-telegram-target-writeback-operator-write",
         });
-      },
-    );
+        if (!viaPoll.ok) {
+          throw new Error(`poll failed: ${viaPoll.error?.message ?? "unknown error"}`);
+        }
+        expect(viaPoll.ok).toBe(true);
+
+        clearConfigCache();
+        const stored = loadConfig();
+        const cronStore = await loadCronStore(cronStorePath);
+
+        expect(stored.channels?.telegram?.defaultTo).toBe("https://t.me/mychannel");
+        expect(cronStore.jobs[0]?.delivery?.to).toBe("@mychannel");
+        expect(getChatMock).toHaveBeenCalledWith("@mychannel");
+        expect(sendPollMock).toHaveBeenCalledWith("-100321", "Which one?", ["A", "B"], {
+          allows_multiple_answers: false,
+          is_anonymous: true,
+        });
+      });
+    });
   });
 });

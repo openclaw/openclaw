@@ -144,6 +144,7 @@ export async function enqueueDelivery(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mirror: params.mirror,
+    gatewayClientScopes: params.gatewayClientScopes,
     retryCount: 0,
   });
   return id;
