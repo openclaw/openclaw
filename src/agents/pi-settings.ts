@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 
-export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
+export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 1_000;
 
 type PiSettingsManagerLike = {
   getCompactionReserveTokens: () => number;

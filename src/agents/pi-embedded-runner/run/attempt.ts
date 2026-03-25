@@ -2861,41 +2861,6 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          if (hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
-                  imagesCount: imageResult.images.length,
-                },
-                {
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
-                  trigger: params.trigger,
-                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-                },
-              )
-              .catch((err) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
-          }
-
-          const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
-          updateActiveEmbeddedRunSnapshot(params.sessionId, {
-            transcriptLeafId,
-            messages: btwSnapshotMessages,
-            inFlightPrompt: effectivePrompt,
-          });
-
           // Proactive context guard for warn/error modes
           const currentCompactionMode = resolveCompactionMode(params.config);
           let skipPromptForCompactionGuard = false;
@@ -2941,8 +2906,17 @@ export async function runEmbeddedAttempt(
 
             if (!skipPromptForCompactionGuard) {
               const reserveTokens = settingsManager.getCompactionReserveTokens();
-              const contextWindow = params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
-              const threshold = Math.max(0, contextWindow - reserveTokens);
+              const contextWindow = Math.max(
+                1,
+                Math.floor(
+                  params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+                ),
+              );
+
+              // We warn if we cross the reserve tokens OR if we use more than 95% of the window
+              const fixedThreshold = Math.max(0, contextWindow - reserveTokens);
+              const percentageThreshold = Math.floor(contextWindow * 0.95);
+              const threshold = Math.min(fixedThreshold, percentageThreshold);
 
               if (totalTokens > threshold) {
                 if (currentCompactionMode === "warn") {
@@ -2963,6 +2937,41 @@ export async function runEmbeddedAttempt(
           }
 
           if (!skipPromptForCompactionGuard) {
+            if (hookRunner?.hasHooks("llm_input")) {
+              hookRunner
+                .runLlmInput(
+                  {
+                    runId: params.runId,
+                    sessionId: params.sessionId,
+                    provider: params.provider,
+                    model: params.modelId,
+                    systemPrompt: systemPromptText,
+                    prompt: effectivePrompt,
+                    historyMessages: activeSession.messages,
+                    imagesCount: imageResult.images.length,
+                  },
+                  {
+                    agentId: hookAgentId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    workspaceDir: params.workspaceDir,
+                    messageProvider: params.messageProvider ?? undefined,
+                    trigger: params.trigger,
+                    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                  },
+                )
+                .catch((err) => {
+                  log.warn(`llm_input hook failed: ${String(err)}`);
+                });
+            }
+
+            const btwSnapshotMessages = activeSession.messages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+            updateActiveEmbeddedRunSnapshot(params.sessionId, {
+              transcriptLeafId,
+              messages: btwSnapshotMessages,
+              inFlightPrompt: effectivePrompt,
+            });
+
             // Only pass images option if there are actually images to pass
             // This avoids potential issues with models that don't expect the images parameter
             if (imageResult.images.length > 0) {
