@@ -118,16 +118,34 @@ export function createMSTeamsConversationStoreFs(params?: {
     if (!target) {
       return null;
     }
+
+    const matches: MSTeamsConversationStoreEntry[] = [];
     for (const entry of await list()) {
       const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target) {
-        return { conversationId, reference };
-      }
-      if (reference.user?.id === target) {
-        return { conversationId, reference };
+      if (reference.user?.aadObjectId === target || reference.user?.id === target) {
+        matches.push({ conversationId, reference });
       }
     }
-    return null;
+
+    if (matches.length === 0) {
+      return null;
+    }
+
+    matches.sort((a, b) => {
+      const aType = a.reference.conversation?.conversationType?.toLowerCase() ?? "";
+      const bType = b.reference.conversation?.conversationType?.toLowerCase() ?? "";
+      const aPersonal = aType === "personal" ? 1 : 0;
+      const bPersonal = bType === "personal" ? 1 : 0;
+      if (aPersonal !== bPersonal) {
+        return bPersonal - aPersonal;
+      }
+      return (
+        (parseTimestamp(b.reference.lastSeenAt) ?? 0) -
+        (parseTimestamp(a.reference.lastSeenAt) ?? 0)
+      );
+    });
+
+    return matches[0] ?? null;
   };
 
   const upsert = async (
