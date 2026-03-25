@@ -5,6 +5,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveSignalReactionLevel } from "openclaw/plugin-sdk/signal";
@@ -104,6 +105,7 @@ import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-tt
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+import { resolveCompactionMode } from "../extensions.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -1830,6 +1832,7 @@ export async function runEmbeddedAttempt(
       applyPiAutoCompactionGuard({
         settingsManager,
         contextEngineInfo: params.contextEngine?.info,
+        cfg: params.config,
       });
 
       // Sets compaction/pruning runtime state and returns extension factories
@@ -2574,6 +2577,61 @@ export async function runEmbeddedAttempt(
             messages: btwSnapshotMessages,
             inFlightPrompt: effectivePrompt,
           });
+
+          // Proactive context guard for warn/error/none modes
+          const currentCompactionMode = resolveCompactionMode(params.config);
+          if (currentCompactionMode === "warn" || currentCompactionMode === "error") {
+            let totalTokens = 0;
+            try {
+              totalTokens = activeSession.messages.reduce(
+                (sum, msg) => sum + estimateTokens(msg as unknown as AgentMessage),
+                0,
+              );
+              // Account for system prompt and current prompt
+              totalTokens += estimateTokens({
+                role: "system",
+                content: systemPromptText,
+              } as unknown as AgentMessage);
+              totalTokens += estimateTokens({
+                role: "user",
+                content: effectivePrompt,
+              } as unknown as AgentMessage);
+            } catch (err) {
+              log.warn(`[compaction-guard] token estimation failed: ${String(err)}`);
+            }
+
+            const reserveTokens = settingsManager.getCompactionReserveTokens();
+            const contextWindow = params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+
+            if (totalTokens > contextWindow - reserveTokens) {
+              if (currentCompactionMode === "warn") {
+                log.warn(
+                  `[compaction-guard] context near limit (mode=warn): tokens=${totalTokens} limit=${contextWindow} reserve=${reserveTokens}`,
+                );
+                return {
+                  aborted: false,
+                  timedOut: false,
+                  timedOutDuringCompaction: false,
+                  promptError: null,
+                  sessionIdUsed: activeSession.sessionId,
+                  messagesSnapshot: activeSession.messages.slice(),
+                  assistantTexts: ["🧹 Context near limit, use /compact"],
+                  toolMetas: [],
+                  lastAssistant: undefined,
+                  didSendViaMessagingTool: false,
+                  messagingToolSentTexts: [],
+                  messagingToolSentMediaUrls: [],
+                  messagingToolSentTargets: [],
+                  cloudCodeAssistFormatError: false,
+                };
+              } else if (currentCompactionMode === "error") {
+                log.error(
+                  `[compaction-guard] context exceeded (mode=error): tokens=${totalTokens} limit=${contextWindow} reserve=${reserveTokens}`,
+                );
+                throw new Error("Context exceeded, cannot proceed");
+              }
+            }
+          }
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter

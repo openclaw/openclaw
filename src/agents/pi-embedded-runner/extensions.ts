@@ -1,6 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentCompactionMode, OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -57,8 +57,12 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+export function resolveCompactionMode(cfg?: OpenClawConfig): AgentCompactionMode {
+  const mode = cfg?.agents?.defaults?.compaction?.mode;
+  if (mode === "safeguard" || mode === "warn" || mode === "error" || mode === "none") {
+    return mode;
+  }
+  return "default";
 }
 
 export function buildEmbeddedExtensionFactories(params: {
