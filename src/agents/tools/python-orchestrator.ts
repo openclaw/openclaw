@@ -4,7 +4,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { tmpdir, cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -15,7 +15,7 @@ const PythonOrchestratorSchema = Type.Object({
   }),
   timeout_seconds: Type.Optional(
     Type.Number({
-      default: 60,
+      default: 180,
       description: "Maximum execution time in seconds",
     }),
   ),
@@ -26,7 +26,139 @@ interface ToolCallRecord {
   params: unknown;
   result: unknown;
   durationMs: number;
+  cached?: boolean;
 }
+
+// LRU Cache for tool call results
+interface CacheEntry {
+  result: unknown;
+  timestamp: number;
+  hits: number;
+}
+
+class ToolCallCache {
+  private cache = new Map<string, CacheEntry>();
+  private maxEntries: number;
+  private ttlMs: number;
+
+  constructor(maxEntries = 200, ttlSeconds = 300) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlSeconds * 1000;
+  }
+
+  private makeKey(tool: string, params: unknown): string {
+    return `${tool}:${JSON.stringify(params)}`;
+  }
+
+  get(tool: string, params: unknown): { result: unknown; cached: boolean } | null {
+    const key = this.makeKey(tool, params);
+    const entry = this.cache.get(key);
+
+    if (!entry) {
+      return null;
+    }
+
+    // Evict expired entries
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    // LRU: increment hits, move to end (most recently used)
+    entry.hits++;
+    return { result: entry.result, cached: true };
+  }
+
+  set(tool: string, params: unknown, result: unknown): void {
+    const key = this.makeKey(tool, params);
+
+    // Evict if at capacity (LRU - remove least hits)
+    if (this.cache.size >= this.maxEntries && !this.cache.has(key)) {
+      let minHits = Infinity;
+      let minKey = "";
+      for (const [k, v] of this.cache) {
+        if (v.hits < minHits) {
+          minHits = v.hits;
+          minKey = k;
+        }
+      }
+      if (minKey) {
+        this.cache.delete(minKey);
+      }
+    }
+
+    this.cache.set(key, { result, timestamp: Date.now(), hits: 1 });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  get stats() {
+    return {
+      size: this.cache.size,
+      maxEntries: this.maxEntries,
+      ttlSeconds: this.ttlMs / 1000,
+    };
+  }
+}
+
+// RAM-aware concurrency limiter
+class ConcurrencyLimiter {
+  private running = 0;
+  private readonly maxConcurrent: number;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.running >= this.maxConcurrent) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.running++;
+    try {
+      return await fn();
+    } finally {
+      this.running--;
+      const next = this.queue.shift();
+      if (next) {
+        next();
+      }
+    }
+  }
+
+  get status() {
+    return {
+      running: this.running,
+      maxConcurrent: this.maxConcurrent,
+      queued: this.queue.length,
+    };
+  }
+}
+
+// Calculate max concurrent Python processes based on available RAM
+// With 64GB total, keep ~16GB for system + agent overhead (~48GB for Python processes)
+// Each Python orchestrator typically uses 50-200MB baseline, assume 256MB max per process
+function calculateMaxConcurrent(): number {
+  const total = totalmem();
+  const cpuCount = cpus().length;
+  const reservedBytes = 16 * 1024 * 1024 * 1024; // 16GB reserved
+
+  const availableBytes = total > reservedBytes ? total - reservedBytes : total * 0.5;
+  const bytesPerProcess = 256 * 1024 * 1024; // 256MB per process
+  const ramBased = Math.floor(availableBytes / bytesPerProcess);
+
+  // Also cap by CPU count (I/O bound, but don't oversubscribe too much)
+  const cpuBased = cpuCount * 2;
+
+  // Return the minimum to avoid memory or CPU saturation
+  return Math.max(1, Math.min(ramBased, cpuBased));
+}
+
+// Global concurrency limiter (shared across all Python orchestrator instances)
+const globalLimiter = new ConcurrencyLimiter(calculateMaxConcurrent());
 
 async function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -40,9 +172,17 @@ async function readBody(req: IncomingMessage): Promise<string> {
 async function startToolBridgeServer(
   availableTools: AnyAgentTool[],
   maxCalls: number = 100,
+  allowedTools?: string[],
+  sessionCache?: ToolCallCache,
 ): Promise<{ port: number; toolCalls: ToolCallRecord[]; stop: () => void }> {
   const toolCalls: ToolCallRecord[] = [];
   let callCount = 0;
+
+  // Normalize allowedTools to a Set for O(1) lookup
+  const allowedSet =
+    allowedTools && allowedTools.length > 0
+      ? new Set(allowedTools.map((t) => t.toLowerCase()))
+      : null;
 
   const server = createServer(async (req, res) => {
     // Enable CORS for local requests
@@ -61,6 +201,13 @@ async function startToolBridgeServer(
         const body = await readBody(req);
         const { tool: toolName, params } = JSON.parse(body);
 
+        // Security: Check if tool is in allowed list (if specified)
+        if (allowedSet && !allowedSet.has(toolName.toLowerCase())) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Tool '${toolName}' not in allowed tools list` }));
+          return;
+        }
+
         // Security: Check if tool exists
         const toolDef = availableTools.find((t) => t.name === toolName);
         if (!toolDef) {
@@ -77,12 +224,35 @@ async function startToolBridgeServer(
           return;
         }
 
+        // Check cache first
+        if (sessionCache) {
+          const cached = sessionCache.get(toolName, params);
+          if (cached) {
+            toolCalls.push({
+              tool: toolName,
+              params,
+              result: cached.result,
+              durationMs: 0,
+              cached: true,
+            });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(cached.result));
+            return;
+          }
+        }
+
         // Execute tool
         const start = Date.now();
         const result = await toolDef.execute(`bridge-${callCount}`, params);
         const durationMs = Date.now() - start;
 
-        toolCalls.push({ tool: toolName, params, result, durationMs });
+        const record: ToolCallRecord = { tool: toolName, params, result, durationMs };
+        toolCalls.push(record);
+
+        // Cache the result
+        if (sessionCache) {
+          sessionCache.set(toolName, params, result);
+        }
 
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
@@ -95,7 +265,14 @@ async function startToolBridgeServer(
 
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "ok", calls: callCount }));
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          calls: callCount,
+          cache: sessionCache?.stats ?? null,
+          limiter: globalLimiter.status,
+        }),
+      );
       return;
     }
 
@@ -236,6 +413,8 @@ if __name__ == "__main__":
 export function createPythonOrchestratorTool(opts?: {
   availableTools?: AnyAgentTool[];
   maxToolCalls?: number;
+  timeoutSeconds?: number;
+  allowedTools?: string[];
 }): AnyAgentTool {
   return {
     label: "Python Orchestrator",
@@ -281,7 +460,7 @@ print(f"\\nTotal files processed: {len(results)}")
     execute: async (_toolCallId, args): Promise<AgentToolResult<unknown>> => {
       const params = args as Record<string, unknown>;
       const userCode = readStringParam(params, "code", { required: true });
-      const timeoutSeconds = (params.timeout_seconds as number) ?? 60;
+      const timeoutSeconds = (params.timeout_seconds as number) ?? opts?.timeoutSeconds ?? 60;
 
       if (!userCode) {
         return {
@@ -291,96 +470,108 @@ print(f"\\nTotal files processed: {len(results)}")
       }
 
       const tempDir = await mkdtemp(join(tmpdir(), "openclaw-ptc-"));
+      const sessionCache = new ToolCallCache(200, 300);
       let bridgeServer: { stop: () => void; port: number; toolCalls: ToolCallRecord[] } | null =
         null;
 
       try {
-        // Start the tool bridge server
-        bridgeServer = await startToolBridgeServer(
-          opts?.availableTools ?? [],
-          opts?.maxToolCalls ?? 100,
-        );
+        // Helper that runs inside concurrency limiter so TypeScript can track bridgeServer assignment
+        const runPython = async () => {
+          bridgeServer = await startToolBridgeServer(
+            opts?.availableTools ?? [],
+            opts?.maxToolCalls ?? 100,
+            opts?.allowedTools,
+            sessionCache,
+          );
 
-        // Create the Python script
-        const scriptPath = await createPythonScript(tempDir, userCode, bridgeServer.port);
+          // Capture port immediately after assignment so closure sees it as non-null
+          const bridgePort = bridgeServer.port;
+          const bridgeToolCalls = bridgeServer.toolCalls;
 
-        // Execute Python
-        const { stdout, stderr, exitCode } = await new Promise<{
-          stdout: string;
-          stderr: string;
-          exitCode: number;
-        }>((resolve, reject) => {
-          const pythonProcess = spawn("python3", [scriptPath], {
-            cwd: tempDir,
-            env: {
-              ...process.env,
-              OPENCLAW_BRIDGE_PORT: String(bridgeServer!.port),
-              PYTHONUNBUFFERED: "1",
-            },
-            timeout: timeoutSeconds * 1000,
+          const scriptPath = await createPythonScript(tempDir, userCode, bridgePort);
+
+          const { stdout, stderr, exitCode } = await new Promise<{
+            stdout: string;
+            stderr: string;
+            exitCode: number;
+          }>((resolve, reject) => {
+            const pythonProcess = spawn("python3", [scriptPath], {
+              cwd: tempDir,
+              env: {
+                ...process.env,
+                OPENCLAW_BRIDGE_PORT: String(bridgePort),
+                PYTHONUNBUFFERED: "1",
+              },
+            });
+
+            let output = "";
+            let errorOutput = "";
+
+            pythonProcess.stdout?.on("data", (data) => {
+              output += data.toString();
+            });
+
+            pythonProcess.stderr?.on("data", (data) => {
+              errorOutput += data.toString();
+            });
+
+            pythonProcess.on("close", (procExitCode) => {
+              resolve({ stdout: output, stderr: errorOutput, exitCode: procExitCode ?? 0 });
+            });
+
+            pythonProcess.on("error", (error) => {
+              reject(error);
+            });
+
+            setTimeout(() => {
+              pythonProcess.kill("SIGTERM");
+              reject(new Error(`Timeout after ${timeoutSeconds}s`));
+            }, timeoutSeconds * 1000);
           });
 
-          let output = "";
-          let errorOutput = "";
-
-          pythonProcess.stdout?.on("data", (data) => {
-            output += data.toString();
-          });
-
-          pythonProcess.stderr?.on("data", (data) => {
-            errorOutput += data.toString();
-          });
-
-          pythonProcess.on("close", (procExitCode) => {
-            resolve({ stdout: output, stderr: errorOutput, exitCode: procExitCode ?? 0 });
-          });
-
-          pythonProcess.on("error", (error) => {
-            reject(error);
-          });
-
-          // Timeout handler
-          setTimeout(() => {
-            pythonProcess.kill("SIGTERM");
-            reject(new Error(`Timeout after ${timeoutSeconds}s`));
-          }, timeoutSeconds * 1000);
-        });
-
-        // Build result
-        const details: Record<string, unknown> = {
-          exit_code: exitCode,
-          tool_calls_count: bridgeServer.toolCalls.length,
-          tool_calls: bridgeServer.toolCalls.map((tc) => ({
-            tool: tc.tool,
-            duration_ms: tc.durationMs,
-          })),
-        };
-
-        if (stderr) {
-          details.stderr = stderr;
-        }
-
-        if (exitCode !== 0) {
-          return {
-            content: [
-              { type: "text", text: `Execution failed (exit ${exitCode}):\n${stderr || stdout}` },
-            ],
-            details,
+          const details: Record<string, unknown> = {
+            exit_code: exitCode,
+            tool_calls_count: bridgeToolCalls.length,
+            tool_calls: bridgeToolCalls.map((tc) => ({
+              tool: tc.tool,
+              duration_ms: tc.durationMs,
+              cached: tc.cached ?? false,
+            })),
+            cache_stats: sessionCache.stats,
+            limiter_status: globalLimiter.status,
           };
-        }
 
-        return {
-          content: [{ type: "text", text: stdout || "(no output)" }],
-          details,
+          if (stderr) {
+            details.stderr = stderr;
+          }
+
+          if (exitCode !== 0) {
+            return {
+              content: [
+                { type: "text", text: `Execution failed (exit ${exitCode}):\n${stderr || stdout}` },
+              ],
+              details,
+            } as AgentToolResult<unknown>;
+          }
+
+          return {
+            content: [{ type: "text", text: stdout || "(no output)" }],
+            details,
+          } as AgentToolResult<unknown>;
         };
+
+        return await globalLimiter.run(runPython);
       } catch (error) {
         return {
           content: [{ type: "text", text: `Error: ${String(error)}` }],
-          details: { error: String(error) },
+          details: { error: String(error), limiter_status: globalLimiter.status },
         };
       } finally {
-        // Cleanup
-        bridgeServer?.stop();
+        const server = bridgeServer as { stop: () => void } | null;
+        if (server) {
+          server.stop();
+        }
+        sessionCache.clear();
         try {
           await rm(tempDir, { recursive: true, force: true });
         } catch {
@@ -390,3 +581,10 @@ print(f"\\nTotal files processed: {len(results)}")
     },
   };
 }
+
+// Export for testing
+export const __testing = {
+  ToolCallCache,
+  ConcurrencyLimiter,
+  calculateMaxConcurrent,
+};

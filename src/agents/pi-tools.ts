@@ -367,9 +367,12 @@ export function createOpenClawCodingTools(options?: {
 
   // Add Python Orchestrator after all other tools are built
   // It needs access to the filtered tool list for the bridge server
+  const pythonOrchestratorConfig = options?.config?.tools?.pythonOrchestrator;
   const pythonOrchestratorTool = createPythonOrchestratorTool({
     availableTools: tools,
-    maxToolCalls: options?.config?.tools?.pythonOrchestrator?.maxToolCalls ?? 100,
+    maxToolCalls: pythonOrchestratorConfig?.maxToolCalls ?? 100,
+    timeoutSeconds: pythonOrchestratorConfig?.timeoutSeconds ?? 180,
+    allowedTools: pythonOrchestratorConfig?.allowedTools,
   }) as unknown as AnyAgentTool;
   tools.push(pythonOrchestratorTool);
 
