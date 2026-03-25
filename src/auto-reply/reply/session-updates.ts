@@ -124,16 +124,18 @@ export async function ensureSkillSnapshot(params: {
   }
 
   // Use nextEntry?.skillsSnapshot if Block 1 already built it (avoids double build on first turn)
-  const skillsSnapshot = nextEntry?.skillsSnapshot
-    ? nextEntry.skillsSnapshot
-    : shouldRefreshSnapshot
-      ? buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          skillFilter,
-          eligibility: { remote: remoteEligibility },
-          snapshotVersion,
-        })
-      : undefined;
+  // For subsequent turns, respect shouldRefreshSnapshot to allow watcher-triggered refreshes
+  const skillsSnapshot =
+    isFirstTurnInSession && nextEntry?.skillsSnapshot
+      ? nextEntry.skillsSnapshot
+      : shouldRefreshSnapshot
+        ? buildWorkspaceSkillSnapshot(workspaceDir, {
+            config: cfg,
+            skillFilter,
+            eligibility: { remote: remoteEligibility },
+            snapshotVersion,
+          })
+        : nextEntry?.skillsSnapshot;
   if (
     skillsSnapshot &&
     sessionStore &&
