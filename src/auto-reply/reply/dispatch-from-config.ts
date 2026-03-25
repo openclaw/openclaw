@@ -510,24 +510,64 @@ export async function dispatchReplyFromConfig(params: {
       return { queuedFinal: false, counts };
     }
 
+    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+    const sendFinalPayload = async (
+      payload: ReplyPayload,
+    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      const ttsPayload = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: ttsChannel,
+        kind: "final",
+        inboundAudio,
+        ttsAuto: sessionTtsAuto,
+      });
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReplyRuntime.routeReply({
+          payload: ttsPayload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: routeThreadId,
+          cfg,
+          isGroup,
+          groupId,
+        });
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        return {
+          queuedFinal: result.ok,
+          routedFinalCount: result.ok ? 1 : 0,
+        };
+      }
+      return {
+        queuedFinal: dispatcher.sendFinalReply(ttsPayload),
+        routedFinalCount: 0,
+      };
+    };
+
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await hookRunner.runBeforeDispatch(
         {
-          content: ctx.Body ?? "",
-          body: ctx.BodyForAgent ?? ctx.Body,
-          channel: ctx.Surface ?? ctx.Provider,
+          content: hookContext.content,
+          body: hookContext.bodyForAgent ?? hookContext.body,
+          channel: hookContext.channelId,
           sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-          senderId: ctx.From,
-          isGroup: ctx.ChatType === "group",
-          timestamp,
+          senderId: hookContext.senderId,
+          isGroup: hookContext.isGroup,
+          timestamp: hookContext.timestamp,
         },
         {
           channelId: hookContext.channelId,
           accountId: hookContext.accountId,
           conversationId: hookContext.conversationId,
           sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-          senderId: ctx.From,
+          senderId: hookContext.senderId,
         },
       );
       if (beforeDispatchResult?.handled) {
@@ -535,26 +575,9 @@ export async function dispatchReplyFromConfig(params: {
         let queuedFinal = false;
         let routedFinalCount = 0;
         if (text) {
-          const payload = { text } satisfies ReplyPayload;
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReplyRuntime.routeReply({
-              payload,
-              channel: originatingChannel,
-              to: originatingTo,
-              sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              threadId: routeThreadId,
-              cfg,
-              isGroup,
-              groupId,
-            });
-            queuedFinal = result.ok;
-            if (result.ok) {
-              routedFinalCount += 1;
-            }
-          } else {
-            queuedFinal = dispatcher.sendFinalReply(payload);
-          }
+          const handledReply = await sendFinalPayload({ text });
+          queuedFinal = handledReply.queuedFinal;
+          routedFinalCount += handledReply.routedFinalCount;
         }
         const counts = dispatcher.getQueuedCounts();
         counts.final += routedFinalCount;
@@ -592,7 +615,6 @@ export async function dispatchReplyFromConfig(params: {
     // TTS audio separately from the accumulated block content.
     let accumulatedBlockText = "";
     let blockCount = 0;
-    const { maybeApplyTtsToPayload } = await loadTtsRuntime();
 
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
@@ -737,39 +759,9 @@ export async function dispatchReplyFromConfig(params: {
       if (reply.isReasoning === true) {
         continue;
       }
-      const ttsReply = await maybeApplyTtsToPayload({
-        payload: reply,
-        cfg,
-        channel: ttsChannel,
-        kind: "final",
-        inboundAudio,
-        ttsAuto: sessionTtsAuto,
-      });
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        // Route final reply to originating channel.
-        const result = await routeReplyRuntime.routeReply({
-          payload: ttsReply,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
-        queuedFinal = result.ok || queuedFinal;
-        if (result.ok) {
-          routedFinalCount += 1;
-        }
-      } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
-      }
+      const finalReply = await sendFinalPayload(reply);
+      queuedFinal = finalReply.queuedFinal || queuedFinal;
+      routedFinalCount += finalReply.routedFinalCount;
     }
 
     const ttsMode = resolveConfiguredTtsMode(cfg);

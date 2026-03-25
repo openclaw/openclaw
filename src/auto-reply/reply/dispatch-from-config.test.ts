@@ -2733,16 +2733,29 @@ describe("dispatchReplyFromConfig", () => {
 });
 
 describe("before_dispatch hook", () => {
-  const hookCtx = {
-    Body: "hello",
-    BodyForAgent: "hello",
-    From: "user1",
-    Surface: "telegram",
-    ChatType: "private",
-  } as DispatchReplyArgs["ctx"];
+  const createHookCtx = (overrides: Partial<MsgContext> = {}) =>
+    buildTestCtx({
+      Body: "hello",
+      BodyForAgent: "hello",
+      BodyForCommands: "hello",
+      From: "user1",
+      Surface: "telegram",
+      ChatType: "private",
+      ...overrides,
+    });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+    ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+    resetInboundDedupe();
+    mocks.routeReply.mockReset();
+    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    ttsMocks.state.synthesizeFinalAudio = false;
+    ttsMocks.maybeApplyTtsToPayload.mockClear();
     setNoAbort();
+    hookMocks.runner.runBeforeDispatch.mockClear();
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "before_dispatch",
     );
@@ -2751,7 +2764,11 @@ describe("before_dispatch hook", () => {
   it("skips model dispatch when hook returns handled", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
     const dispatcher = createDispatcher();
-    const result = await dispatchReplyFromConfig({ ctx: hookCtx, cfg: emptyConfig, dispatcher });
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Blocked" });
     expect(result.queuedFinal).toBe(true);
   });
@@ -2759,16 +2776,70 @@ describe("before_dispatch hook", () => {
   it("silently short-circuits when hook returns handled without text", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
     const dispatcher = createDispatcher();
-    const result = await dispatchReplyFromConfig({ ctx: hookCtx, cfg: emptyConfig, dispatcher });
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+    });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
+  });
+
+  it("uses canonical hook metadata and shared routed final delivery", async () => {
+    ttsMocks.state.synthesizeFinalAudio = true;
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true, text: "Blocked" });
+    const dispatcher = createDispatcher();
+    const ctx = createHookCtx({
+      Body: "raw body",
+      BodyForAgent: "agent body",
+      BodyForCommands: "command body",
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      From: "signal:group:ops-room",
+      SenderId: "signal:user:alice",
+      GroupChannel: "ops-room",
+      ChatType: "direct",
+      Timestamp: 123,
+    });
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher });
+
+    expect(hookMocks.runner.runBeforeDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "command body",
+        body: "agent body",
+        channel: "telegram",
+        senderId: "signal:user:alice",
+        isGroup: true,
+        timestamp: 123,
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        senderId: "signal:user:alice",
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        payload: expect.objectContaining({
+          text: "Blocked",
+          mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+        }),
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
   });
 
   it("continues default dispatch when hook returns not handled", async () => {
     hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: false });
     const dispatcher = createDispatcher();
     await dispatchReplyFromConfig({
-      ctx: hookCtx,
+      ctx: createHookCtx(),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "model reply" }),
