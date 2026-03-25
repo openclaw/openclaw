@@ -2146,6 +2146,68 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Status: done");
   });
 
+  it("does not resolve moved child rows from a stale older parent", async () => {
+    const now = Date.now();
+    const oldParentKey = "agent:main:subagent:cmd-old-parent";
+    const newParentKey = "agent:main:subagent:cmd-new-parent";
+    const childSessionKey = "agent:main:subagent:cmd-shared-child";
+    addSubagentRunForTests({
+      runId: "run-old-parent",
+      childSessionKey: oldParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent",
+      cleanup: "keep",
+      createdAt: now - 60_000,
+      startedAt: now - 60_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent",
+      childSessionKey: newParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent",
+      cleanup: "keep",
+      createdAt: now - 50_000,
+      startedAt: now - 50_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-stale-old-parent",
+      childSessionKey,
+      requesterSessionKey: oldParentKey,
+      requesterDisplayKey: oldParentKey,
+      controllerSessionKey: oldParentKey,
+      task: "stale old parent child",
+      cleanup: "keep",
+      createdAt: now - 40_000,
+      startedAt: now - 40_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-current-new-parent",
+      childSessionKey,
+      requesterSessionKey: newParentKey,
+      requesterDisplayKey: newParentKey,
+      controllerSessionKey: newParentKey,
+      task: "current new parent child",
+      cleanup: "keep",
+      createdAt: now - 30_000,
+      startedAt: now - 30_000,
+    });
+
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as OpenClawConfig;
+    const params = buildParams("/subagents info 1", cfg);
+    params.sessionKey = oldParentKey;
+    params.ctx.SessionKey = oldParentKey;
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Invalid subagent index: 1");
+  });
+
   it("kills subagents via /kill alias without a confirmation reply", async () => {
     addSubagentRunForTests({
       runId: "run-1",

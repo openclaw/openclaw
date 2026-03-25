@@ -159,7 +159,21 @@ export function resolveSubagentController(params: {
 }
 
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
-  return sortSubagentRuns(listSubagentRunsForController(controllerSessionKey));
+  const filtered: SubagentRunRecord[] = [];
+  for (const entry of sortSubagentRuns(listSubagentRunsForController(controllerSessionKey))) {
+    const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (
+      !latest ||
+      latest.runId !== entry.runId ||
+      latestControllerSessionKey !== controllerSessionKey
+    ) {
+      continue;
+    }
+    filtered.push(entry);
+  }
+  return filtered;
 }
 
 export function createPendingDescendantCounter() {
