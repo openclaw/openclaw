@@ -17,13 +17,16 @@ import {
 } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "./exec-approvals.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import {
+  approvalDecisionLabel,
+  buildPluginApprovalExpiredMessage,
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "./plugin-approvals.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
 export type { ExecApprovalRequest, ExecApprovalResolved };
@@ -185,15 +188,7 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   return lines.join("\n");
 }
 
-function decisionLabel(decision: ExecApprovalDecision): string {
-  if (decision === "allow-once") {
-    return "allowed once";
-  }
-  if (decision === "allow-always") {
-    return "allowed always";
-  }
-  return "denied";
-}
+const decisionLabel = approvalDecisionLabel;
 
 function buildResolvedMessage(resolved: ExecApprovalResolved) {
   const base = `✅ Exec approval ${decisionLabel(resolved.decision)}.`;
@@ -353,39 +348,6 @@ function resolveForwardTargets(params: {
   return targets;
 }
 
-function buildPluginApprovalRequestMessage(request: PluginApprovalRequest, nowMsValue: number) {
-  const lines: string[] = [];
-  const severity = request.request.severity ?? "warning";
-  const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
-  lines.push(`${icon} Plugin approval required`);
-  lines.push(`Title: ${request.request.title}`);
-  lines.push(`Description: ${request.request.description}`);
-  if (request.request.toolName) {
-    lines.push(`Tool: ${request.request.toolName}`);
-  }
-  if (request.request.pluginId) {
-    lines.push(`Plugin: ${request.request.pluginId}`);
-  }
-  if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
-  }
-  lines.push(`ID: ${request.id}`);
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
-  lines.push(`Expires in: ${expiresIn}s`);
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
-  return lines.join("\n");
-}
-
-function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved) {
-  const base = `✅ Plugin approval ${decisionLabel(resolved.decision)}.`;
-  const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
-  return `${base}${by} ID: ${resolved.id}`;
-}
-
-function buildPluginApprovalExpiredMessage(request: PluginApprovalRequest) {
-  return `⏱️ Plugin approval expired. ID: ${request.id}`;
-}
-
 export function createExecApprovalForwarder(
   deps: ExecApprovalForwarderDeps = {},
 ): ExecApprovalForwarder {
@@ -517,8 +479,7 @@ export function createExecApprovalForwarder(
     request: PluginApprovalRequest,
   ): Promise<boolean> => {
     const cfg = getConfig();
-    const config = cfg.approvals?.exec;
-    // Reuse exec approval forwarding config to decide targets.
+    const config = cfg.approvals?.plugin;
     // Build a synthetic ExecApprovalRequest for target resolution.
     const syntheticExecRequest: ExecApprovalRequest = {
       id: request.id,
@@ -578,13 +539,32 @@ export function createExecApprovalForwarder(
     };
     pluginPending.set(request.id, pendingEntry);
 
-    if (pluginPending.get(request.id) !== pendingEntry) {
-      return false;
-    }
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
-      buildPayload: () => ({ text: buildPluginApprovalRequestMessage(request, nowMs()) }),
+      buildPayload: (target) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        const adapterPayload = channel
+          ? getChannelPlugin(channel)?.execApprovals?.buildPluginPendingPayload?.({
+              cfg,
+              request,
+              target,
+              nowMs: nowMs(),
+            })
+          : null;
+        return adapterPayload ?? { text: buildPluginApprovalRequestMessage(request, nowMs()) };
+      },
+      beforeDeliver: async (target, payload) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        if (!channel) {
+          return;
+        }
+        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
+          cfg,
+          target,
+          payload,
+        });
+      },
       deliver,
       shouldSend: () => pluginPending.get(request.id) === pendingEntry,
     }).catch((err) => {
@@ -606,11 +586,20 @@ export function createExecApprovalForwarder(
       return;
     }
     const cfg = getConfig();
-    const resolvedText = buildPluginApprovalResolvedMessage(resolved);
     await deliverToTargets({
       cfg,
       targets,
-      buildPayload: () => ({ text: resolvedText }),
+      buildPayload: (target) => {
+        const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+        const adapterPayload = channel
+          ? getChannelPlugin(channel)?.execApprovals?.buildPluginResolvedPayload?.({
+              cfg,
+              resolved,
+              target,
+            })
+          : null;
+        return adapterPayload ?? { text: buildPluginApprovalResolvedMessage(resolved) };
+      },
       deliver,
     });
   };
