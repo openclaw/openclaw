@@ -70,6 +70,34 @@ vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   handleWhatsAppAction,
 }));
 
+const runMessageActionSpy = vi.hoisted(() =>
+  vi.fn(async () => ({
+    kind: "send" as const,
+    channel: "telegram",
+    action: "send" as const,
+    to: "123456",
+    handledBy: "plugin" as const,
+    payload: { ok: true },
+    dryRun: false,
+  })),
+);
+
+// Lazy-ref so we can swap between spy and real implementation per test.
+let useRunMessageActionSpy = false;
+vi.mock("../infra/outbound/message-action-runner.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../infra/outbound/message-action-runner.js")>();
+  return {
+    ...actual,
+    runMessageAction: (...args: unknown[]) => {
+      if (useRunMessageActionSpy) {
+        return (runMessageActionSpy as (...a: unknown[]) => unknown)(...args);
+      }
+      return (actual.runMessageAction as (...a: unknown[]) => unknown)(...args);
+    },
+  };
+});
+
 import { messageCommand } from "./message.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -80,6 +108,7 @@ beforeEach(() => {
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
   testConfig = {};
+  useRunMessageActionSpy = false;
   setActivePluginRegistry(EMPTY_TEST_REGISTRY);
   callGatewayMock.mockClear();
   webAuthExists.mockClear().mockResolvedValue(false);
@@ -87,6 +116,7 @@ beforeEach(() => {
   handleSlackAction.mockClear();
   handleTelegramAction.mockClear();
   handleWhatsAppAction.mockClear();
+  runMessageActionSpy.mockClear();
   resolveCommandSecretRefsViaGateway.mockClear();
 });
 
@@ -507,5 +537,65 @@ describe("messageCommand", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("passes default agentId to runMessageAction for transcript writes", async () => {
+    useRunMessageActionSpy = true;
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+    expect(runMessageActionSpy).toHaveBeenCalledTimes(1);
+    // Default agent id is "main" when no agents config is present.
+    expect(runMessageActionSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+  });
+
+  it("passes explicit --agent to runMessageAction", async () => {
+    useRunMessageActionSpy = true;
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+        agent: "custom-agent",
+      },
+      deps,
+      runtime,
+    );
+    expect(runMessageActionSpy).toHaveBeenCalledTimes(1);
+    expect(runMessageActionSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "custom-agent" }),
+    );
+  });
+
+  it("resolves agentId from agents config when no explicit --agent", async () => {
+    useRunMessageActionSpy = true;
+    testConfig = {
+      agents: {
+        list: [{ id: "mybot", default: true }],
+      },
+    };
+    const deps = makeDeps();
+    await messageCommand(
+      {
+        action: "send",
+        channel: "telegram",
+        target: "123456",
+        message: "hi",
+      },
+      deps,
+      runtime,
+    );
+    expect(runMessageActionSpy).toHaveBeenCalledTimes(1);
+    expect(runMessageActionSpy).toHaveBeenCalledWith(expect.objectContaining({ agentId: "mybot" }));
   });
 });

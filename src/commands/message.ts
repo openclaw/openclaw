@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -10,6 +11,7 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
@@ -52,12 +54,18 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  // Resolve agentId so the outbound runner can find the active session and
+  // write to the JSONL transcript (mirrors the agent tool code path).
+  const agentId =
+    typeof opts.agent === "string" ? normalizeAgentId(opts.agent) : resolveDefaultAgentId(cfg);
+
   const run = async () =>
     await runMessageAction({
       cfg,
       action,
       params: opts,
       deps: outboundDeps,
+      agentId,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
