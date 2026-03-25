@@ -45,7 +45,7 @@ Client → Gateway:
       "id": "cli",
       "version": "1.2.3",
       "platform": "macos",
-      "mode": "operator"
+      "mode": "cli"
     },
     "role": "operator",
     "scopes": ["operator.read", "operator.write"],
