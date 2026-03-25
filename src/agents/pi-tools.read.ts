@@ -50,6 +50,7 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  workspaceRoot?: string;
 };
 
 type ReadTruncationDetails = {
@@ -646,10 +647,19 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+
+      let safeArgs = (normalized ?? params ?? {}) as Record<string, unknown>;
+      if (options?.workspaceRoot && typeof safeArgs.path === "string" && path.isAbsolute(safeArgs.path)) {
+        safeArgs = {
+          ...safeArgs,
+          path: path.relative(options.workspaceRoot, safeArgs.path) || ".",
+        };
+      }
+
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
-        args: (normalized ?? params ?? {}) as Record<string, unknown>,
+        args: safeArgs,
         signal,
         maxBytes: resolveAdaptiveReadMaxBytes(options),
       });
