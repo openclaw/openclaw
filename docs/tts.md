@@ -4,13 +4,13 @@ read_when:
   - Enabling text-to-speech for replies
   - Configuring TTS providers or limits
   - Using /tts commands
-title: "Text-to-Speech"
+title: "Text-to-Speech (legacy path)"
 ---
 
 # Text-to-speech (TTS)
 
 OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
-It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
+It works anywhere OpenClaw can send audio.
 
 ## Supported services
 
@@ -170,7 +170,7 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
-### Only reply with audio after an inbound voice note
+### Only reply with audio after an inbound voice message
 
 ```json5
 {
@@ -203,7 +203,7 @@ Then run:
 ### Notes on fields
 
 - `auto`: auto‑TTS mode (`off`, `always`, `inbound`, `tagged`).
-  - `inbound` only sends audio after an inbound voice note.
+  - `inbound` only sends audio after an inbound voice message.
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
@@ -319,18 +319,18 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Telegram**: Opus voice note (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
-  - 48kHz / 64kbps is a good voice-note tradeoff and required for the round bubble.
+- **Feishu / Matrix / Telegram / WhatsApp**: Opus voice message (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+  - 48kHz / 64kbps is a good voice message tradeoff.
 - **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
-    guaranteed Opus voice notes. citeturn1search1
+    guaranteed Opus voice messages.
   - If the configured Microsoft output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs formats are fixed; Telegram expects Opus for voice-note UX.
+OpenAI/ElevenLabs output formats are fixed per channel (see above).
 
 ## Auto-TTS behavior
 
@@ -391,8 +391,8 @@ Notes:
 ## Agent tool
 
 The `tts` tool converts text to speech and returns an audio attachment for
-reply delivery. When the result is Telegram-compatible, OpenClaw marks it for
-voice-bubble delivery.
+reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
+the audio is delivered as a voice message rather than a file attachment.
 
 ## Gateway RPC
 

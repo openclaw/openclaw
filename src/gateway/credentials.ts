@@ -80,14 +80,12 @@ export function resolveGatewayCredentialsFromValues(params: {
   configToken?: unknown;
   configPassword?: unknown;
   env?: NodeJS.ProcessEnv;
-  includeLegacyEnv?: boolean;
   tokenPrecedence?: GatewayCredentialPrecedence;
   passwordPrecedence?: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
-  const includeLegacyEnv = params.includeLegacyEnv ?? true;
-  const envToken = readGatewayTokenEnv(env, includeLegacyEnv);
-  const envPassword = readGatewayPasswordEnv(env, includeLegacyEnv);
+  const envToken = readGatewayTokenEnv(env);
+  const envPassword = readGatewayPasswordEnv(env);
   const configToken = trimCredentialToUndefined(params.configToken);
   const configPassword = trimCredentialToUndefined(params.configPassword);
   const tokenPrecedence = params.tokenPrecedence ?? "env-first";
@@ -108,7 +106,6 @@ export function resolveGatewayCredentialsFromValues(params: {
 function resolveLocalGatewayCredentials(params: {
   plan: GatewayCredentialPlan;
   env: NodeJS.ProcessEnv;
-  includeLegacyEnv: boolean;
   localTokenPrecedence: GatewayCredentialPrecedence;
   localPasswordPrecedence: GatewayCredentialPrecedence;
 }): ResolvedGatewayCredentials {
@@ -122,7 +119,6 @@ function resolveLocalGatewayCredentials(params: {
     configToken: fallbackToken,
     configPassword: fallbackPassword,
     env: params.env,
-    includeLegacyEnv: params.includeLegacyEnv,
     tokenPrecedence: params.localTokenPrecedence,
     passwordPrecedence: params.localPasswordPrecedence,
   });
@@ -257,7 +253,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
   modeOverride?: GatewayCredentialMode;
-  includeLegacyEnv?: boolean;
   localTokenPrecedence?: GatewayCredentialPrecedence;
   localPasswordPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
@@ -266,7 +261,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 }): ResolvedGatewayCredentials {
   const env = params.env ?? process.env;
-  const includeLegacyEnv = params.includeLegacyEnv ?? true;
   const explicitToken = trimToUndefined(params.explicitAuth?.token);
   const explicitPassword = trimToUndefined(params.explicitAuth?.password);
   if (explicitToken || explicitPassword) {
@@ -280,7 +274,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
       configToken: undefined,
       configPassword: undefined,
       env,
-      includeLegacyEnv,
       tokenPrecedence: "env-first",
       passwordPrecedence: "env-first", // pragma: allowlist secret
     });
@@ -289,7 +282,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
   const plan = createGatewayCredentialPlan({
     config: params.cfg,
     env,
-    includeLegacyEnv,
   });
   const mode: GatewayCredentialMode = params.modeOverride ?? plan.configuredMode;
 
@@ -302,7 +294,6 @@ export function resolveGatewayCredentialsFromConfig(params: {
     return resolveLocalGatewayCredentials({
       plan,
       env,
-      includeLegacyEnv,
       localTokenPrecedence,
       localPasswordPrecedence,
     });
@@ -333,7 +324,6 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
     env: params.env,
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
-    includeLegacyEnv: false,
     remoteTokenFallback: "remote-only",
   });
 }

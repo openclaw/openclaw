@@ -8,6 +8,11 @@ import {
 } from "../../../../extensions/discord/runtime-api.js";
 import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
 import {
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+  listLineAccountIds,
+} from "../../../../extensions/line/runtime-api.js";
+import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
 } from "../../../../extensions/matrix/api.js";
@@ -19,11 +24,6 @@ import {
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import {
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-  listLineAccountIds,
-} from "../../../line/accounts.js";
 import {
   bundledChannelPlugins,
   bundledChannelRuntimeSetters,

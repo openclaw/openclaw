@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
@@ -52,12 +52,11 @@ function makeTempDir() {
 }
 
 function withCwd<T>(cwd: string, run: () => T): T {
-  const previousCwd = process.cwd();
-  process.chdir(cwd);
+  const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
   try {
     return run();
   } finally {
-    process.chdir(previousCwd);
+    cwdSpy.mockRestore();
   }
 }
 
@@ -246,7 +245,12 @@ describe("plugin sdk alias helpers", () => {
     },
     {
       name: "resolves plugin-sdk alias from package root when loader runs from transpiler cache path",
-      buildFixture: () => createPluginSdkAliasFixture(),
+      buildFixture: () =>
+        createPluginSdkAliasFixture({
+          packageExports: {
+            "./plugin-sdk/index": { default: "./dist/plugin-sdk/index.js" },
+          },
+        }),
       modulePath: () => "/tmp/tsx-cache/openclaw-loader.js",
       argv1: (root: string) => path.join(root, "openclaw.mjs"),
       srcFile: "index.ts",
@@ -327,6 +331,9 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/compat": { default: "./dist/plugin-sdk/compat.js" },
         "./plugin-sdk/telegram": { default: "./dist/plugin-sdk/telegram.js" },
         "./plugin-sdk/nested/value": { default: "./dist/plugin-sdk/nested/value.js" },
+        "./plugin-sdk/..\\..\\evil": { default: "./dist/plugin-sdk/evil.js" },
+        "./plugin-sdk/C:temp": { default: "./dist/plugin-sdk/drive.js" },
+        "./plugin-sdk/.hidden": { default: "./dist/plugin-sdk/hidden.js" },
       },
     });
     const subpaths = listPluginSdkExportedSubpaths({
@@ -459,6 +466,35 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
+    );
+  });
+
+  it("resolves plugin-sdk aliases for user-installed plugins via the running openclaw argv hint", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
+    const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
+    mkdirSafe(externalPluginRoot);
+    fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+
+    const aliases = withCwd(externalPluginRoot, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(externalPluginEntry, path.join(fixture.root, "openclaw.mjs")),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
     );
   });
 

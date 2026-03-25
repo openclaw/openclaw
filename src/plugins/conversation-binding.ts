@@ -118,13 +118,17 @@ type PluginBindingGlobalState = {
 };
 
 const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
-
-function getPluginBindingGlobalState(): PluginBindingGlobalState {
-  return resolveGlobalSingleton<PluginBindingGlobalState>(pluginBindingGlobalStateKey, () => ({
+const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState>(
+  pluginBindingGlobalStateKey,
+  () => ({
     fallbackNoticeBindingIds: new Set<string>(),
     approvalsCache: null,
     approvalsLoaded: false,
-  }));
+  }),
+);
+
+function getPluginBindingGlobalState(): PluginBindingGlobalState {
+  return pluginBindingGlobalState;
 }
 
 function resolveApprovalsPath(): string {

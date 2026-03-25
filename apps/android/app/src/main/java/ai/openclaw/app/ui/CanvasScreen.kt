@@ -22,6 +22,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.app.MainViewModel
+import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -29,6 +30,7 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
   val context = LocalContext.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
   val webViewRef = remember { mutableStateOf<WebView?>(null) }
+  val currentPageUrlRef = remember { AtomicReference<String?>(null) }
 
   DisposableEffect(viewModel) {
     onDispose {
@@ -68,6 +70,14 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
         isHorizontalScrollBarEnabled = true
         webViewClient =
           object : WebViewClient() {
+            override fun onPageStarted(
+              view: WebView,
+              url: String?,
+              favicon: android.graphics.Bitmap?,
+            ) {
+              currentPageUrlRef.set(url)
+            }
+
             override fun onReceivedError(
               view: WebView,
               request: WebResourceRequest,
@@ -90,6 +100,7 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
+              currentPageUrlRef.set(url)
               if (isDebuggable) {
                 Log.d("OpenClawWebView", "onPageFinished: $url")
               }
@@ -122,7 +133,12 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
             }
           }
 
-        val bridge = CanvasA2UIActionBridge { payload -> viewModel.handleCanvasA2UIActionFromWebView(payload) }
+        val bridge =
+          CanvasA2UIActionBridge(
+            isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },
+          ) { payload ->
+            viewModel.handleCanvasA2UIActionFromWebView(payload)
+          }
         addJavascriptInterface(bridge, CanvasA2UIActionBridge.interfaceName)
         viewModel.canvas.attach(this)
         webViewRef.value = this
@@ -147,11 +163,15 @@ private fun disableForceDarkIfSupported(settings: WebSettings) {
   WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
 }
 
-private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
+private class CanvasA2UIActionBridge(
+  private val isTrustedPage: () -> Boolean,
+  private val onMessage: (String) -> Unit,
+) {
   @JavascriptInterface
   fun postMessage(payload: String?) {
     val msg = payload?.trim().orEmpty()
     if (msg.isEmpty()) return
+    if (!isTrustedPage()) return
     onMessage(msg)
   }
 

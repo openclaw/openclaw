@@ -18,6 +18,19 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+function mergeInstallInvocationEnv(params: {
+  env: NodeJS.ProcessEnv;
+  existingServiceEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
+    return params.env;
+  }
+  return {
+    ...params.existingServiceEnv,
+    ...params.env,
+  };
+}
+
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
@@ -43,6 +56,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
+  let existingServiceEnv: Record<string, string> | undefined;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -53,6 +67,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
+  if (loaded) {
+    existingServiceEnv = (await service.readCommand(process.env).catch(() => null))?.environment;
+  }
+  const installEnv = mergeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
+  });
   if (loaded) {
     if (!opts.force) {
       if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
@@ -82,7 +103,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
-    env: process.env,
+    env: installEnv,
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
@@ -100,7 +121,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: installEnv,
     port,
     runtime: runtimeRaw,
     warn: (message) => {
@@ -121,7 +142,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail,
     install: async () => {
       await service.install({
-        env: process.env,
+        env: installEnv,
         stdout,
         programArguments,
         workingDirectory,

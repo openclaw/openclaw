@@ -6,9 +6,11 @@ import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diag
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { clearPluginDiscoveryCache } from "./discovery.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -472,7 +474,6 @@ function createEnvResolvedPluginFixture(pluginId: string) {
     OPENCLAW_HOME: openclawHome,
     HOME: ignoredHome,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
   return { plugin, env };
@@ -522,6 +523,8 @@ function expectEscapingEntryRejected(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -1021,6 +1024,30 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     clearPluginCommands();
   });
 
+  it("can scope bundled provider loads to deepseek without hanging", () => {
+    if (prevBundledDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+    }
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["deepseek"],
+        },
+      },
+      onlyPluginIds: ["deepseek"],
+    });
+
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
+    expect(scoped.plugins[0]?.status).toBe("loaded");
+    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
+  });
+
   it("does not replace the active memory prompt section during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryPromptSection(() => ["active memory section"]);
@@ -1298,7 +1325,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: openclawHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -1310,7 +1336,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: secondHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -2301,7 +2326,7 @@ module.exports = {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({
     prependContext: "legacy",
-    modelOverride: "gpt-4o",
+    modelOverride: "gpt-5.4",
     providerOverride: "anthropic",
   }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
@@ -2330,7 +2355,7 @@ module.exports = {
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
-      modelOverride: "gpt-4o",
+      modelOverride: "gpt-5.4",
       providerOverride: "anthropic",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
@@ -2593,7 +2618,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "feishu");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2635,7 +2660,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "zalouser");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2934,7 +2959,7 @@ module.exports = {
         label: "warns when loaded non-bundled plugin has no install/load-path provenance",
         loadRegistry: () => {
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
             mkdirSafe(globalDir);
             writePlugin({

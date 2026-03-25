@@ -156,7 +156,7 @@ type RunPreparedReplyParams = {
   sessionCfg: OpenClawConfig["session"];
   commandAuthorized: boolean;
   command: ReturnType<typeof buildCommandContext>;
-  commandSource: string;
+  commandSource?: string;
   allowTextCommands: boolean;
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
@@ -214,7 +214,6 @@ export async function runPreparedReply(
     sessionCfg,
     commandAuthorized,
     command,
-    commandSource,
     allowTextCommands,
     directives,
     defaultActivation,
@@ -300,11 +299,13 @@ export async function runPreparedReply(
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  const isWholeMessageCommand = command.commandBodyNormalized.trim() === rawBodyTrimmed;
+  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(rawBodyTrimmed);
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
-    !baseBodyTrimmedRaw &&
-    hasControlCommand(commandSource, cfg)
+    isWholeMessageCommand &&
+    (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand)
   ) {
     typing.cleanup();
     return undefined;
@@ -389,18 +390,27 @@ export async function runPreparedReply(
     : threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
-  const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-  const skillResult = await ensureSkillSnapshot({
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    sessionId,
-    isFirstTurnInSession,
-    workspaceDir,
-    cfg,
-    skillFilter: opts?.skillFilter,
-  });
+  const skillResult =
+    process.env.OPENCLAW_TEST_FAST === "1"
+      ? {
+          sessionEntry,
+          skillsSnapshot: sessionEntry?.skillsSnapshot,
+          systemSent: currentSystemSent,
+        }
+      : await (async () => {
+          const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
+          return ensureSkillSnapshot({
+            sessionEntry,
+            sessionStore,
+            sessionKey,
+            storePath,
+            sessionId,
+            isFirstTurnInSession,
+            workspaceDir,
+            cfg,
+            skillFilter: opts?.skillFilter,
+          });
+        })();
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
@@ -575,6 +585,7 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
+    isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
     isStreaming,
     opts,
     typing,

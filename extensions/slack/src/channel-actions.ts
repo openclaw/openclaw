@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import {
   type ChannelMessageActionAdapter,
   type ChannelMessageToolDiscovery,
@@ -40,7 +41,7 @@ export function createSlackActions(
       schema: actions.includes("send")
         ? {
             properties: {
-              blocks: createSlackMessageToolBlocksSchema(),
+              blocks: Type.Optional(createSlackMessageToolBlocksSchema()),
             },
           }
         : null,

@@ -599,8 +599,8 @@ describe("models-config", () => {
     await expectMoonshotTokenLimits({
       contextWindow: 0,
       maxTokens: -1,
-      expectedContextWindow: 256000,
-      expectedMaxTokens: 8192,
+      expectedContextWindow: 262144,
+      expectedMaxTokens: 262144,
     });
   });
 });

@@ -13,6 +13,7 @@ import * as timeoutModule from "../../../../src/utils/with-timeout.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
+import { replyWithDiscordModelPickerProviders } from "./native-command-ui.js";
 import {
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
@@ -29,8 +30,8 @@ type PickerSelectData = Parameters<PickerSelect["run"]>[1];
 
 type MockInteraction = {
   user: { id: string; username: string; globalName: string };
-  channel: { type: ChannelType; id: string };
-  guild: null;
+  channel: { type: ChannelType; id: string; name?: string; parentId?: string };
+  guild: { id: string } | null;
   rawData: { id: string; member: { roles: string[] } };
   values?: string[];
   reply: ReturnType<typeof vi.fn>;
@@ -458,5 +459,39 @@ describe("Discord model picker interactions", () => {
       String(call[0] ?? "").includes("model picker override mismatch"),
     )?.[0];
     expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+  });
+
+  it("loads model picker data from the effective bound route", async () => {
+    const context = createModelPickerContext();
+    context.threadBindings = createBoundThreadBindingManager({
+      accountId: "default",
+      threadId: "thread-bound",
+      targetSessionKey: "agent:worker:subagent:bound",
+      agentId: "worker",
+    });
+    const loadSpy = vi
+      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
+      .mockResolvedValue(createDefaultModelPickerData());
+    const interaction = createInteraction({ userId: "owner" });
+    interaction.guild = { id: "guild-1" };
+    interaction.channel = {
+      type: ChannelType.PublicThread,
+      id: "thread-bound",
+      name: "bound-thread",
+      parentId: "parent-1",
+    };
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: context.cfg,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith(context.cfg, "worker");
   });
 });

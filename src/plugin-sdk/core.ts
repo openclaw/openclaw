@@ -86,6 +86,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { definePluginEntry } from "./plugin-entry.js";
+export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -119,6 +120,7 @@ export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secre
 
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
+export { resolveGatewayPort } from "../config/paths.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -188,7 +190,7 @@ export function buildChannelOutboundSessionRoute(params: {
 }
 
 /** Options for a channel plugin entry that should register a channel capability. */
-type DefineChannelPluginEntryOptions<TPlugin extends ChannelPlugin = ChannelPlugin> = {
+type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
@@ -241,7 +243,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
  * optionally exposes extra full-runtime registration such as tools or gateway
  * handlers that only make sense outside setup-only registration modes.
  */
-export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
+export function defineChannelPluginEntry<TPlugin>({
   id,
   name,
   description,
@@ -257,7 +259,7 @@ export function defineChannelPluginEntry<TPlugin extends ChannelPlugin>({
     configSchema,
     register(api: OpenClawPluginApi) {
       setRuntime?.(api.runtime);
-      api.registerChannel({ plugin });
+      api.registerChannel({ plugin: plugin as ChannelPlugin });
       if (api.registrationMode !== "full") {
         return;
       }

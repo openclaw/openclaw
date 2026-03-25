@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -71,6 +71,9 @@ jobs:
 
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
+
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'

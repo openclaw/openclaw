@@ -104,7 +104,7 @@ const ttsMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./route-reply.js", () => ({
+vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
       channel &&
@@ -122,7 +122,15 @@ vi.mock("./route-reply.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./abort.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    routeReply: mocks.routeReply,
+  };
+});
+
+vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -138,13 +146,19 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
+vi.mock("../../config/sessions/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
   return {
     ...actual,
     loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
     resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  };
+});
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
+  return {
+    ...actual,
+    resolveStorePath: sessionStoreMocks.resolveStorePath,
   };
 });
 
@@ -191,6 +205,13 @@ vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+}));
+vi.mock("../../tts/tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+vi.mock("../../tts/tts-config.js", () => ({
+  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
+  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
 }));
 
 const noAbortResult = { handled: false, aborted: false } as const;
@@ -2605,6 +2626,58 @@ describe("dispatchReplyFromConfig", () => {
         reason: "duplicate",
       }),
     );
+  });
+
+  it("passes configOverride to replyResolver when provided", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
+
+    const overrideCfg = {
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    } as OpenClawConfig;
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      configOverride: overrideCfg,
+    });
+
+    expect(receivedCfg).toBe(overrideCfg);
+  });
+
+  it("does not pass cfg as implicit configOverride when configOverride is not provided", async () => {
+    setNoAbort();
+    const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+
+    let receivedCfg: OpenClawConfig | undefined;
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      cfgArg?: OpenClawConfig,
+    ) => {
+      receivedCfg = cfgArg;
+      return { text: "hi" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(receivedCfg).toBeUndefined();
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {

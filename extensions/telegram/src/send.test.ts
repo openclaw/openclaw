@@ -47,6 +47,29 @@ async function expectChatNotFoundWithChatId(
   }
 }
 
+async function expectTelegramMembershipErrorWithChatId(
+  action: Promise<unknown>,
+  expectedChatId: string,
+  expectedDetail: RegExp,
+): Promise<void> {
+  try {
+    await action;
+    throw new Error("Expected action to reject with membership error context");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Expected action to reject with membership error context"
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toMatch(/not a member of the chat, was blocked, or was kicked/i);
+    expect(message).toMatch(expectedDetail);
+    expect(message).toMatch(/Fix: Add the bot to the channel\/group/i);
+    expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+  }
+}
+
 function mockLoadedMedia({
   buffer = Buffer.from("media"),
   contentType,
@@ -379,10 +402,12 @@ describe("sendMessageTelegram", () => {
           parse_mode: "HTML",
           message_thread_id: 271,
           reply_to_message_id: 100,
+          allow_sending_without_reply: true,
         },
         secondCall: {
           message_thread_id: 271,
           reply_to_message_id: 100,
+          allow_sending_without_reply: true,
         },
       },
     ] as const;
@@ -820,10 +845,11 @@ describe("sendMessageTelegram", () => {
         options: {
           replyToMessageId: 999,
         },
-        expectedVideoNote: { reply_to_message_id: 999 },
+        expectedVideoNote: { reply_to_message_id: 999, allow_sending_without_reply: true },
         expectedMessage: {
           parse_mode: "HTML",
           reply_to_message_id: 999,
+          allow_sending_without_reply: true,
         },
       },
     ];
@@ -1094,6 +1120,7 @@ describe("sendMessageTelegram", () => {
           parse_mode: "HTML",
           message_thread_id: 271,
           reply_to_message_id: 500,
+          allow_sending_without_reply: true,
         },
       },
       {
@@ -1779,6 +1806,7 @@ describe("shared send behaviors", () => {
           expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
             parse_mode: "HTML",
             reply_to_message_id: 100,
+            allow_sending_without_reply: true,
           });
         },
       },
@@ -1801,6 +1829,7 @@ describe("shared send behaviors", () => {
           });
           expect(sendSticker).toHaveBeenCalledWith(chatId, fileId, {
             reply_to_message_id: 500,
+            allow_sending_without_reply: true,
           });
         },
       },
@@ -1847,6 +1876,45 @@ describe("shared send behaviors", () => {
 
     for (const testCase of cases) {
       await testCase.run();
+    }
+  });
+
+  it("wraps membership-related 403 errors with actionable context and original detail", async () => {
+    const cases = [
+      {
+        name: "message send",
+        errorText: "403: Forbidden: bot is not a member of the channel chat",
+        run: async (chatId: string, err: Error) => {
+          const sendMessage = vi.fn().mockRejectedValue(err);
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await expectTelegramMembershipErrorWithChatId(
+            sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+            chatId,
+            /bot is not a member of the channel chat/i,
+          );
+        },
+      },
+      {
+        name: "sticker send",
+        errorText: "403: Forbidden: bot was kicked from the group chat",
+        run: async (chatId: string, err: Error) => {
+          const sendSticker = vi.fn().mockRejectedValue(err);
+          const api = { sendSticker } as unknown as {
+            sendSticker: typeof sendSticker;
+          };
+          await expectTelegramMembershipErrorWithChatId(
+            sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+            chatId,
+            /bot was kicked from the group chat/i,
+          );
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run("123", new Error(testCase.errorText));
     }
   });
 });
