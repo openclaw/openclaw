@@ -121,6 +121,32 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
+    const msg = makeAssistantError(
+      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("4381 min");
+    expect(result).toContain("go plan");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("surfaces provider-specific rate limit message from JSON payload (#54433)", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached. Try again in 30 seconds."}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("30 seconds");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("returns generic rate limit message when no specific details are present", () => {
+    const msg = makeAssistantError("429 Too Many Requests");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");

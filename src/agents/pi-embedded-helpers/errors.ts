@@ -5,6 +5,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 export {
@@ -55,9 +56,38 @@ const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 
+/**
+ * Check whether the raw rate-limit error contains provider-specific details
+ * worth surfacing (e.g. reset times, plan names, quota info).  Bare status
+ * codes like "429" or generic phrases like "rate limit exceeded" are not
+ * considered specific enough.
+ */
+const RATE_LIMIT_SPECIFIC_HINT_RE =
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
+
+function extractProviderRateLimitMessage(raw: string): string | undefined {
+  // Try to pull a human-readable message out of a JSON error payload first.
+  const info = parseApiErrorInfo(raw);
+  const candidate = info?.message ?? raw;
+
+  if (!candidate || !RATE_LIMIT_SPECIFIC_HINT_RE.test(candidate)) {
+    return undefined;
+  }
+
+  // Avoid surfacing very long or clearly non-human-readable blobs.
+  const trimmed = candidate.trim();
+  if (trimmed.length > 300 || trimmed.startsWith("{")) {
+    return undefined;
+  }
+
+  return `⚠️ ${trimmed}`;
+}
+
 function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   if (isRateLimitErrorMessage(raw)) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
+    // Surface the provider's specific message when it contains actionable
+    // details (reset time, plan name, quota info) instead of the generic copy.
+    return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
   }
   if (isOverloadedErrorMessage(raw)) {
     return OVERLOADED_ERROR_USER_MESSAGE;
