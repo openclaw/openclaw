@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
@@ -61,7 +61,7 @@ function firstWsClientOptions(): { agent?: unknown } {
   return calls[0]?.[0] ?? {};
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
@@ -85,7 +85,9 @@ beforeEach(async () => {
     FEISHU_HTTP_TIMEOUT_MAX_MS,
     FEISHU_HTTP_TIMEOUT_ENV_VAR,
   } = await import("./client.js"));
+});
 
+beforeEach(() => {
   priorProxyEnv = {};
   priorFeishuTimeoutEnv = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
   delete process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
@@ -94,6 +96,7 @@ beforeEach(async () => {
     delete process.env[key];
   }
   vi.clearAllMocks();
+  clearClientCache();
   setFeishuClientRuntimeForTest({
     sdk: {
       AppType: { SelfBuild: "self" } as never,
@@ -129,10 +132,6 @@ afterEach(() => {
 });
 
 describe("createFeishuClient HTTP timeout", () => {
-  beforeEach(() => {
-    clearClientCache();
-  });
-
   const getLastClientHttpInstance = () => {
     const calls = clientCtorMock.mock.calls as unknown as Array<[options: unknown]>;
     const lastCall = calls[calls.length - 1]?.[0] as

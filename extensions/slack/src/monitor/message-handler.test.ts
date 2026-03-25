@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
@@ -70,12 +70,15 @@ async function handleDirectMessage(
 }
 
 describe("createSlackMessageHandler", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
+    ({ createSlackMessageHandler } = await import("./message-handler.js"));
+  });
+
+  beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     resolveThreadTsMock.mockClear();
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
   });
 
   it("does not track invalid non-message events from the message stream", async () => {

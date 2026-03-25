@@ -564,6 +564,35 @@ describe("subagent registry steer restarts", () => {
     );
   });
 
+  it("treats a child session as inactive when only a stale older row is still unended", async () => {
+    const childSessionKey = "agent:main:subagent:stale-active-older-row";
+
+    mod.addSubagentRunForTests({
+      runId: "run-stale-older",
+      childSessionKey,
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
+      task: "older stale row",
+      startedAt: 100,
+      createdAt: 100,
+      cleanup: "keep",
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-current-ended",
+      childSessionKey,
+      requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+      requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
+      task: "current ended row",
+      startedAt: 200,
+      createdAt: 200,
+      endedAt: 250,
+      outcome: { status: "ok" },
+      cleanup: "keep",
+    });
+
+    expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+  });
+
   it("recovers announce cleanup when completion arrives after a kill marker", async () => {
     const childSessionKey = "agent:main:subagent:kill-race";
     registerRun({

@@ -89,6 +89,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
 
 const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
+type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -200,12 +201,47 @@ function mockVisibleTextTurn(text = "visible") {
   );
 }
 
+function mockRoutedTextTurn(text: string) {
+  managerMocks.runTurn.mockImplementation(
+    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+      await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+      await onEvent({ type: "done" });
+    },
+  );
+}
+
 async function dispatchVisibleTurn(onReplyStart: () => void) {
   await runDispatch({
     bodyForAgent: "visible",
     dispatcher: createDispatcher().dispatcher,
     onReplyStart,
   });
+}
+
+function queueTtsReplies(...replies: MockTtsReply[]) {
+  for (const reply of replies) {
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(reply);
+  }
+}
+
+async function runRoutedAcpTextTurn(text: string) {
+  mockRoutedTextTurn(text);
+  const { dispatcher } = createDispatcher();
+  const result = await runDispatch({
+    bodyForAgent: "run acp",
+    dispatcher,
+    shouldRouteToOriginating: true,
+  });
+  return { result };
+}
+
+function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
+  expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      payload: expect.objectContaining(payload),
+    }),
+  );
 }
 
 describe("tryDispatchAcpReply", () => {
@@ -236,12 +272,7 @@ describe("tryDispatchAcpReply", () => {
 
   it("routes ACP block output to originating channel", async () => {
     setReadyAcpResolution();
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-        await onEvent({ type: "text_delta", text: "hello", tag: "agent_message_chunk" });
-        await onEvent({ type: "done" });
-      },
-    );
+    mockRoutedTextTurn("hello");
 
     const { dispatcher } = createDispatcher();
     const result = await runDispatch({
@@ -434,5 +465,68 @@ describe("tryDispatchAcpReply", () => {
         text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
       }),
     );
+  });
+
+  it("delivers final fallback text even when routed block text already existed", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    const { result } = await runRoutedAcpTextTurn("CODEX_OK");
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expectSecondRoutedPayload({ text: "CODEX_OK" });
+  });
+
+  it("does not add text fallback when final TTS already delivered audio", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "Task completed" }, {
+      mediaUrl: "https://example.com/final.mp3",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    const { result } = await runRoutedAcpTextTurn("Task completed");
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expectSecondRoutedPayload({
+      mediaUrl: "https://example.com/final.mp3",
+      audioAsVoice: true,
+    });
+  });
+
+  it("skips fallback when TTS mode is all (blocks already processed with TTS)", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "all" });
+    const { result } = await runRoutedAcpTextTurn("Response");
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips final TTS and fallback when no block text was accumulated", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
   });
 });

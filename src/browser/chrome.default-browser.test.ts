@@ -6,17 +6,18 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", () => {
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
+  const module = { existsSync, readFileSync };
   return {
-    existsSync,
-    readFileSync,
-    default: { existsSync, readFileSync },
+    ...module,
+    default: module,
   };
 });
 vi.mock("node:os", () => {
   const homedir = vi.fn();
+  const module = { homedir };
   return {
-    homedir,
-    default: { homedir },
+    ...module,
+    default: module,
   };
 });
 import { execFileSync } from "node:child_process";
@@ -31,6 +32,9 @@ async function loadResolveBrowserExecutableForPlatform() {
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  let resolveBrowserExecutableForPlatform: Awaited<
+    ReturnType<typeof loadResolveBrowserExecutableForPlatform>
+  >;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -58,16 +62,16 @@ describe("browser default executable detection", () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
+    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
   });
 
   it("prefers default Chromium browser on macOS", async () => {
     mockMacDefaultBrowser("com.google.Chrome", "/Applications/Google Chrome.app");
     mockChromeExecutableExists();
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
 
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
@@ -81,7 +85,6 @@ describe("browser default executable detection", () => {
   it("falls back when default browser is non-Chromium on macOS", async () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
 
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
