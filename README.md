@@ -399,30 +399,9 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 
 ### WeChat
 
-WeChat support is provided by the official Tencent plugin [`@tencent-weixin/openclaw-weixin`](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin), which uses the WeChat iLink Bot API. Requires WeChat 8.0.70+ with the ClawBot plugin enabled (WeChat > Me > Settings > Plugins). The ClawBot plugin is being rolled out gradually by Tencent — QR code login will fail if the plugin is not yet available on your WeChat account.
-
-**Version compatibility:** v2.x requires OpenClaw `>=2026.3.22`. For older hosts, install the legacy branch: `openclaw plugins install @tencent-weixin/openclaw-weixin@legacy`.
-
-**Setup:**
-
-```bash
-# Install the plugin (v2.x for OpenClaw >= 2026.3.22)
-openclaw plugins install "@tencent-weixin/openclaw-weixin"
-
-# Log in by scanning a QR code with your phone (WeChat mobile app)
-openclaw channels login --channel openclaw-weixin
-
-# Restart the gateway
-openclaw gateway restart
-```
-
-- **Private chats only** — group chats are not supported.
-- **Media support** — send and receive images, voice messages, video, and files (up to 100 MB).
-- **Multi-account** — connect additional WeChat identities with `openclaw channels login --channel openclaw-weixin --account <id>` (each `--account` value creates a separate login).
-- **Authorization** — uses [pairing](https://docs.openclaw.ai/channels#pairing) to authorize senders; the first message from a new user triggers a challenge that the gateway owner approves. No desktop client required.
-- **Typing indicators** — the bot shows "typing..." while generating a reply.
-- **Config path** — `channels.openclaw-weixin`; credentials (bot token) are stored separately in `~/.openclaw/openclaw-weixin/accounts/` and managed by the login flow.
-- **Context tokens** — in-process only; a gateway restart requires users to send a new message before the bot can reply.
+- Official Tencent plugin via [`@tencent-weixin/openclaw-weixin`](https://www.npmjs.com/package/@tencent-weixin/openclaw-weixin) (iLink Bot API). Private chats only; v2.x requires OpenClaw `>=2026.3.22`.
+- Install: `openclaw plugins install "@tencent-weixin/openclaw-weixin"`, then `openclaw channels login --channel openclaw-weixin` to scan the QR code.
+- Requires the WeChat ClawBot plugin (WeChat > Me > Settings > Plugins); gradual rollout by Tencent.
 
 ### [WebChat](https://docs.openclaw.ai/web/webchat)
 
