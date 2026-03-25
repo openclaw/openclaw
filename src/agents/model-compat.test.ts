@@ -345,7 +345,7 @@ describe("normalizeModelCompat", () => {
       provider: "mistral",
       baseUrl: "https://api.mistral.ai/v1",
     },
-  ])("keeps supportsUsageInStreaming off for %s", ({ provider, baseUrl }) => {
+  ])("keeps supportsUsageInStreaming off for $label", ({ provider, baseUrl }) => {
     expectSupportsUsageInStreamingForcedOff({ provider, baseUrl });
   });
 
