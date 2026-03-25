@@ -6,15 +6,15 @@ import {
   type RuntimeEnv,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
   WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-} from "openclaw/plugin-sdk/feishu";
+} from "../runtime-api.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
 
-export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
 type WebhookRateLimitDefaults = {
   windowMs: number;

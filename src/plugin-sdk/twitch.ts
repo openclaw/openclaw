@@ -1,5 +1,7 @@
-// Narrow plugin-sdk surface for the bundled twitch plugin.
+// Private helper surface for the bundled twitch plugin.
 // Keep this list additive and scoped to symbols used under extensions/twitch.
+
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -22,7 +24,7 @@ export type {
   ChannelStatusIssue,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
@@ -33,4 +35,12 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { twitchSetupAdapter, twitchSetupWizard } from "../../extensions/twitch/api.js";
+
+const twitchSetup = createOptionalChannelSetupSurface({
+  channel: "twitch",
+  label: "Twitch",
+  npmSpec: "@openclaw/twitch",
+});
+
+export const twitchSetupAdapter = twitchSetup.setupAdapter;
+export const twitchSetupWizard = twitchSetup.setupWizard;

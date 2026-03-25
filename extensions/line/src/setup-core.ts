@@ -1,7 +1,12 @@
 import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { normalizeAccountId, resolveLineAccount } from "../../../src/line/accounts.js";
-import type { LineConfig } from "../../../src/line/types.js";
+import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  listLineAccountIds,
+  normalizeAccountId,
+  resolveLineAccount,
+  type LineConfig,
+} from "./setup-runtime-api.js";
 
 const channel = "line" as const;
 
@@ -62,17 +67,10 @@ export function patchLineAccountConfig(params: {
 }
 
 export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  const resolved = resolveLineAccount({ cfg, accountId });
-  return Boolean(resolved.channelAccessToken.trim() && resolved.channelSecret.trim());
+  return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
 }
 
-export function parseLineAllowFromId(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
-  if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
-    return null;
-  }
-  return trimmed;
-}
+export { parseLineAllowFromId };
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
@@ -154,4 +152,4 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
-export { listLineAccountIds } from "../../../src/line/accounts.js";
+export { listLineAccountIds };

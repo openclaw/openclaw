@@ -32,6 +32,7 @@ apps/android/.gradle/
 apps/android/app/build/
 apps/android/.cxx/
 apps/android/.kotlin/
+apps/android/benchmark/results/
 
 # Bun build artifacts
 *.bun-build
@@ -101,8 +102,6 @@ USER.md
 /local/
 package-lock.json
 .claude/
-.agents/
-.agents
 .agent/
 skills-lock.json
 
@@ -136,3 +135,6 @@ ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 docs/superpowers
+
+# Deprecated changelog fragment workflow
+changelog/fragments/

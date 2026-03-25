@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { bluebubblesMessageActions } from "./actions.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
@@ -6,6 +5,7 @@ import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 
 vi.mock("./accounts.js", async () => {
@@ -46,7 +46,7 @@ vi.mock("./probe.js", () => ({
 }));
 
 describe("bluebubblesMessageActions", () => {
-  const listActions = bluebubblesMessageActions.listActions!;
+  const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;
   const supportsAction = bluebubblesMessageActions.supportsAction!;
   const extractToolSend = bluebubblesMessageActions.extractToolSend!;
   const handleAction = bluebubblesMessageActions.handleAction!;
@@ -74,12 +74,12 @@ describe("bluebubblesMessageActions", () => {
     vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReturnValue(null);
   });
 
-  describe("listActions", () => {
+  describe("describeMessageTool", () => {
     it("returns empty array when account is not enabled", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: false } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -87,7 +87,7 @@ describe("bluebubblesMessageActions", () => {
       const cfg: OpenClawConfig = {
         channels: { bluebubbles: { enabled: true } },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toEqual([]);
     });
 
@@ -101,7 +101,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toContain("react");
     });
 
@@ -116,7 +116,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).not.toContain("react");
       // Other actions should still be present
       expect(actions).toContain("edit");
@@ -134,7 +134,7 @@ describe("bluebubblesMessageActions", () => {
           },
         },
       };
-      const actions = listActions({ cfg });
+      const actions = describeMessageTool({ cfg })?.actions ?? [];
       expect(actions).toContain("sendAttachment");
       expect(actions).not.toContain("react");
       expect(actions).not.toContain("reply");

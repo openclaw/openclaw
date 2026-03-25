@@ -18,10 +18,11 @@ import {
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
   secretRefKey,
@@ -50,6 +51,7 @@ import {
   type ConfigSetOptions,
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type PathSegment = string;
 type ConfigSetParseOpts = {
@@ -68,6 +70,7 @@ type ConfigSetOperation = {
 
 const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
 const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
+const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
   "openclaw config set gateway.port 19001 --strict-json",
@@ -157,9 +160,9 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   const trimmed = raw.trim();
   if (opts.strictJson) {
     try {
-      return JSON5.parse(trimmed);
+      return JSON.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
+      throw new Error(`Failed to parse JSON value: ${String(err)}`, { cause: err });
     }
   }
 
@@ -349,6 +352,48 @@ function ensureValidOllamaProviderForApiKeySet(
     api: "ollama",
     models: [],
   });
+}
+
+function pruneInactiveGatewayAuthCredentials(params: {
+  root: Record<string, unknown>;
+  operations: ConfigSetOperation[];
+}): string[] {
+  const touchedGatewayAuthMode = params.operations.some((operation) =>
+    pathEquals(operation.requestedPath, GATEWAY_AUTH_MODE_PATH),
+  );
+  if (!touchedGatewayAuthMode) {
+    return [];
+  }
+
+  const gatewayRaw = params.root.gateway;
+  if (!gatewayRaw || typeof gatewayRaw !== "object" || Array.isArray(gatewayRaw)) {
+    return [];
+  }
+  const gateway = gatewayRaw as Record<string, unknown>;
+  const authRaw = gateway.auth;
+  if (!authRaw || typeof authRaw !== "object" || Array.isArray(authRaw)) {
+    return [];
+  }
+  const auth = authRaw as Record<string, unknown>;
+  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+
+  const removedPaths: string[] = [];
+  const remove = (key: "token" | "password") => {
+    if (Object.hasOwn(auth, key)) {
+      delete auth[key];
+      removedPaths.push(`gateway.auth.${key}`);
+    }
+  };
+
+  if (mode === "token") {
+    remove("password");
+  } else if (mode === "password") {
+    remove("token");
+  } else if (mode === "trusted-proxy") {
+    remove("token");
+    remove("password");
+  }
+  return removedPaths;
 }
 
 function toDotPath(path: PathSegment[]): string {
@@ -815,6 +860,66 @@ async function collectDryRunResolvabilityErrors(params: {
   return failures;
 }
 
+function collectDryRunStaticErrorsForSkippedExecRefs(params: {
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): ConfigSetDryRunError[] {
+  const failures: ConfigSetDryRunError[] = [];
+  for (const ref of params.refs) {
+    const id = ref.id.trim();
+    const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    if (!id) {
+      failures.push({
+        kind: "resolvability",
+        message: "Error: Secret reference id is empty.",
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (!isValidExecSecretRefId(id)) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    const providerConfig = params.config.secrets?.providers?.[ref.provider];
+    if (!providerConfig) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (providerConfig.source !== ref.source) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+        ref: refLabel,
+      });
+    }
+  }
+  return failures;
+}
+
+function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
+  refsToResolve: SecretRef[];
+  skippedExecRefs: SecretRef[];
+} {
+  const refsToResolve: SecretRef[] = [];
+  const skippedExecRefs: SecretRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.source === "exec" && !params.allowExecInDryRun) {
+      skippedExecRefs.push(ref);
+      continue;
+    }
+    refsToResolve.push(ref);
+  }
+  return { refsToResolve, skippedExecRefs };
+}
+
 function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(config);
   if (validated.ok) {
@@ -826,7 +931,11 @@ function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError
   }));
 }
 
-function formatDryRunFailureMessage(errors: ConfigSetDryRunError[]): string {
+function formatDryRunFailureMessage(params: {
+  errors: ConfigSetDryRunError[];
+  skippedExecRefs: number;
+}): string {
+  const { errors, skippedExecRefs } = params;
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
   const lines: string[] = [];
@@ -846,6 +955,11 @@ function formatDryRunFailureMessage(errors: ConfigSetDryRunError[]): string {
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
     }
+  }
+  if (skippedExecRefs > 0) {
+    lines.push(
+      `Dry run note: skipped ${skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+    );
   }
   return lines.join("\n");
 }
@@ -867,6 +981,9 @@ export async function runConfigSet(opts: {
     });
     if (!modeResolution.ok) {
       throw modeError(modeResolution.error);
+    }
+    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
+      throw modeError("--allow-exec requires --dry-run.");
     }
 
     const batchEntries = parseBatchSource(opts.cliOptions);
@@ -891,6 +1008,10 @@ export async function runConfigSet(opts: {
       ensureValidOllamaProviderForApiKeySet(next, operation.setPath);
       setAtPath(next, operation.setPath, operation.value);
     }
+    const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
+      root: next,
+      operations,
+    });
     const nextConfig = next as OpenClawConfig;
 
     if (opts.cliOptions.dryRun) {
@@ -903,14 +1024,24 @@ export async function runConfigSet(opts: {
               operations,
             })
           : [];
+      const selectedDryRunRefs = selectDryRunRefsForResolution({
+        refs,
+        allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
+      });
       const errors: ConfigSetDryRunError[] = [];
       if (hasJsonMode) {
         errors.push(...collectDryRunSchemaErrors(nextConfig));
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
+          ...collectDryRunStaticErrorsForSkippedExecRefs({
+            refs: selectedDryRunRefs.skippedExecRefs,
+            config: nextConfig,
+          }),
+        );
+        errors.push(
           ...(await collectDryRunResolvabilityErrors({
-            refs,
+            refs: selectedDryRunRefs.refsToResolve,
             config: nextConfig,
           })),
         );
@@ -923,23 +1054,38 @@ export async function runConfigSet(opts: {
         checks: {
           schema: hasJsonMode,
           resolvability: hasJsonMode || hasBuilderMode,
+          resolvabilityComplete:
+            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
         },
-        refsChecked: refs.length,
+        refsChecked: selectedDryRunRefs.refsToResolve.length,
+        skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
         ...(errors.length > 0 ? { errors } : {}),
       };
       if (errors.length > 0) {
         if (opts.cliOptions.json) {
           throw new ConfigSetDryRunValidationError(dryRunResult);
         }
-        throw new Error(formatDryRunFailureMessage(errors));
+        throw new Error(
+          formatDryRunFailureMessage({
+            errors,
+            skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+          }),
+        );
       }
       if (opts.cliOptions.json) {
-        runtime.log(JSON.stringify(dryRunResult, null, 2));
+        writeRuntimeJson(runtime, dryRunResult);
       } else {
         if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
           runtime.log(
             info(
               "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
+            ),
+          );
+        }
+        if (dryRunResult.skippedExecRefs > 0) {
+          runtime.log(
+            info(
+              `Dry run note: skipped ${dryRunResult.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
             ),
           );
         }
@@ -953,6 +1099,13 @@ export async function runConfigSet(opts: {
     }
 
     await writeConfigFile(next);
+    if (removedGatewayAuthPaths.length > 0) {
+      runtime.log(
+        info(
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+        ),
+      );
+    }
     if (operations.length === 1) {
       runtime.log(
         info(
@@ -968,7 +1121,7 @@ export async function runConfigSet(opts: {
       opts.cliOptions.json &&
       err instanceof ConfigSetDryRunValidationError
     ) {
-      runtime.log(JSON.stringify(err.result, null, 2));
+      writeRuntimeJson(runtime, err.result);
       runtime.exit(1);
       return;
     }
@@ -990,7 +1143,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       return;
     }
     if (opts.json) {
-      runtime.log(JSON.stringify(res.value ?? null, null, 2));
+      writeRuntimeJson(runtime, res.value ?? null);
       return;
     }
     if (
@@ -1001,7 +1154,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.log(String(res.value));
       return;
     }
-    runtime.log(JSON.stringify(res.value ?? null, null, 2));
+    writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -1053,7 +1206,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
 
     if (!snapshot.exists) {
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, error: "file not found" }));
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
       }
@@ -1065,7 +1218,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       const issues = normalizeConfigIssues(snapshot.issues);
 
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
         for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
@@ -1079,13 +1232,13 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     }
 
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: true, path: outputPath }));
+      writeRuntimeJson(runtime, { valid: true, path: outputPath }, 0);
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
     }
   } catch (err) {
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: false, path: outputPath, error: String(err) }));
+      writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
     } else {
       runtime.error(danger(`Config validation error: ${String(err)}`));
     }
@@ -1124,16 +1277,20 @@ export function registerConfigCli(program: Command) {
       await runConfigGet({ path, json: Boolean(opts.json) });
     });
 
-  cmd
-    .command("set")
+  setCommandJsonMode(cmd.command("set"), "parse-only")
     .description(CONFIG_SET_DESCRIPTION)
     .argument("[path]", "Config path (dot or bracket notation)")
-    .argument("[value]", "Value (JSON5 or raw string)")
-    .option("--strict-json", "Strict JSON5 parsing (error instead of raw string fallback)", false)
+    .argument("[value]", "Value (JSON/JSON5 or raw string)")
+    .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
     .option(
       "--dry-run",
-      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes)",
+      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
+      false,
+    )
+    .option(
+      "--allow-exec",
+      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
       false,
     )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")

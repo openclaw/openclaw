@@ -5,7 +5,7 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/plugin-entry";
 import { OLLAMA_DEFAULT_BASE_URL, resolveOllamaApiBase } from "openclaw/plugin-sdk/provider-models";
 
 const PROVIDER_ID = "ollama";
@@ -49,7 +49,6 @@ export default definePluginEntry({
                 },
               ],
               configPatch: result.config,
-              defaultModel: `ollama/${result.defaultModelId}`,
             };
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
@@ -118,7 +117,7 @@ export default definePluginEntry({
           return;
         }
         const providerSetup = await loadProviderSetup();
-        await providerSetup.ensureOllamaModelPulled({ config, prompter });
+        await providerSetup.ensureOllamaModelPulled({ config, model, prompter });
       },
     });
   },
