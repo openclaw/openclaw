@@ -276,7 +276,9 @@ function normalizeWindowsSearchScope(input: string): string {
 
   const filePrefix = raw.match(/^file:(\/\/\/|\/\/)?/i);
   let rest = raw;
+  let hadAuthority = false;
   if (filePrefix) {
+    hadAuthority = filePrefix[1] === "//";
     rest = raw.slice(filePrefix[0].length);
   }
 
@@ -295,6 +297,12 @@ function normalizeWindowsSearchScope(input: string): string {
     const tail = drive[2].replace(/\\/g, "/");
     const path = `${letter}:/${tail}`.replace(/\/+$/g, "") + "/";
     return `file:${path}`;
+  }
+
+  if (hadAuthority) {
+    const forward = rest.replace(/\\/g, "/");
+    const cleaned = forward.replace(/^\/+/, "").replace(/\/+$/g, "") + "/";
+    return `file://${cleaned}`;
   }
 
   const forward = rest.replace(/\\/g, "/");
