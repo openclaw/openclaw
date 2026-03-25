@@ -51,6 +51,7 @@ import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-for
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
+const POST_ROTATION_STARTUP_WINDOW_MS = 30_000;
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -423,12 +424,20 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const postRotationStartupUntilMs =
+    resetTriggered && isThread
+      ? now + POST_ROTATION_STARTUP_WINDOW_MS
+      : typeof baseEntry?.postRotationStartupUntilMs === "number" &&
+          baseEntry.postRotationStartupUntilMs > now
+        ? baseEntry.postRotationStartupUntilMs
+        : undefined;
   sessionEntry = {
     ...baseEntry,
     sessionId,
     updatedAt: Date.now(),
     systemSent,
     abortedLastRun,
+    postRotationStartupUntilMs,
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,

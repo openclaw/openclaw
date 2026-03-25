@@ -431,6 +431,29 @@ describe("initSessionState RawBody", () => {
     expect(resetResult.bodyStripped).toBe("");
   });
 
+  it("marks explicit thread resets with a short post-rotation startup window", async () => {
+    vi.setSystemTime(new Date("2026-03-17T09:25:31Z"));
+    const root = await makeCaseDir("openclaw-thread-reset-startup-window-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: "agent:main:discord:channel:c1:thread:123",
+        ThreadLabel: "Discord thread #ops",
+        MessageThreadId: "123",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.postRotationStartupUntilMs).toBe(Date.now() + 30_000);
+  });
+
   it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-case-");
     const storePath = path.join(root, "sessions.json");

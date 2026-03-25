@@ -65,6 +65,63 @@ import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
+function shouldApplyPostRotationStartupSteer(params: {
+  sessionEntry?: SessionEntry;
+  followupRun: FollowupRun;
+  sessionCtx: TemplateContext;
+  now?: number;
+}): boolean {
+  const now = params.now ?? Date.now();
+  return Boolean(
+    params.followupRun.run.senderIsOwner &&
+    params.sessionCtx.Provider === "discord" &&
+    typeof params.sessionCtx.MessageThreadId !== "undefined" &&
+    typeof params.sessionEntry?.postRotationStartupUntilMs === "number" &&
+    params.sessionEntry.postRotationStartupUntilMs > now,
+  );
+}
+
+function buildPostRotationStartupSteerPrompt(text: string): string {
+  const trimmed = text.trim();
+  const ownerMessage = trimmed.length > 0 ? trimmed : text;
+  return [
+    "System: This is the first owner message after /new or /reset in a Discord thread-bound session.",
+    "It arrived while Session Startup preload reads were still running.",
+    "Treat it as implicit-mention-equivalent for this turn. Prioritize the owner message now.",
+    "If any Session Startup preload reads were interrupted or skipped because this message was queued, continue and finish them before you end the turn.",
+    "Do not re-greet or explain the startup mechanics unless the owner asks.",
+    "Owner message:",
+    ownerMessage,
+  ].join("\n\n");
+}
+
+async function clearPostRotationStartupWindow(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<void> {
+  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
+  if (!sessionKey || !sessionEntry?.postRotationStartupUntilMs) {
+    return;
+  }
+  sessionEntry.postRotationStartupUntilMs = undefined;
+  if (sessionStore) {
+    sessionStore[sessionKey] = {
+      ...sessionStore[sessionKey],
+      ...sessionEntry,
+      postRotationStartupUntilMs: undefined,
+    };
+  }
+  if (storePath) {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => ({ postRotationStartupUntilMs: undefined }),
+    });
+  }
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -202,7 +259,14 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
-    const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
+    const steerPrompt = shouldApplyPostRotationStartupSteer({
+      sessionEntry: activeSessionEntry,
+      followupRun,
+      sessionCtx,
+    })
+      ? buildPostRotationStartupSteerPrompt(followupRun.prompt)
+      : followupRun.prompt;
+    const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, steerPrompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
@@ -253,6 +317,7 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
+  let startedRun = false;
   await typingSignals.signalRunStart();
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
@@ -320,6 +385,7 @@ export async function runReplyAgent(params: {
       cacheWrite: undefined,
       contextTokens: undefined,
       systemPromptReport: undefined,
+      postRotationStartupUntilMs: undefined,
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
@@ -388,6 +454,7 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
+    startedRun = true;
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -770,6 +837,14 @@ export async function runReplyAgent(params: {
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     throw error;
   } finally {
+    if (startedRun) {
+      await clearPostRotationStartupWindow({
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Safety net: the dispatcher's onIdle callback normally fires
