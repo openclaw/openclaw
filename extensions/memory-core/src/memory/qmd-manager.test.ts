@@ -1682,11 +1682,7 @@ describe("QmdMemoryManager", () => {
   });
 
   it("falls back to QMD v1 tool names when query tool is not found", async () => {
-    // Reset the global mcporter state so version detection starts fresh
-    const globalState = (globalThis as Record<symbol, unknown>)[MCPORTER_STATE_KEY];
-    if (globalState && typeof globalState === "object") {
-      (globalState as Record<string, unknown>).daemonStart = null;
-    }
+    // qmdMcpToolVersion is an instance field — each createManager() starts fresh.
 
     cfg = {
       ...cfg,
@@ -1741,6 +1737,9 @@ describe("QmdMemoryManager", () => {
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("falling back to v1 tool names"),
     );
+
+    // One v2 attempt (fails) + one v1 retry (succeeds) per collection
+    expect(callCount).toBe(2);
 
     await manager.close();
   });

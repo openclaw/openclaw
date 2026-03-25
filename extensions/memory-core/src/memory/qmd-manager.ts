@@ -1351,9 +1351,17 @@ export class QmdMemoryManager implements MemorySearchManager {
   }): Promise<QmdQueryResult[]> {
     await this.ensureMcporterDaemonStarted(params.mcporter);
 
-    const selector = `${params.mcporter.serverName}.${params.tool}`;
+    // If the version is already known as v1 but we received a stale "query" tool name
+    // (e.g. from runMcporterAcrossCollections iterating after the first collection
+    // triggered the fallback), resolve the correct v1 tool name immediately.
+    const effectiveTool =
+      params.tool === "query" && this.qmdMcpToolVersion === "v1"
+        ? this.resolveQmdMcpTool(params.searchCommand ?? "query")
+        : params.tool;
+
+    const selector = `${params.mcporter.serverName}.${effectiveTool}`;
     const callArgs: Record<string, unknown> =
-      params.tool === "query"
+      effectiveTool === "query"
         ? {
             // QMD 2.0 "query" tool accepts typed sub-queries via `searches` array.
             searches: [
@@ -1389,13 +1397,13 @@ export class QmdMemoryManager implements MemorySearchManager {
         { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
-      if (params.tool === "query" && this.qmdMcpToolVersion === null) {
+      if (effectiveTool === "query" && this.qmdMcpToolVersion === null) {
         this.markQmdV2();
       }
     } catch (err) {
       // If the v2 "query" tool is not found, fall back to v1 tool names.
       if (
-        params.tool === "query" &&
+        effectiveTool === "query" &&
         this.qmdMcpToolVersion !== "v1" &&
         this.isToolNotFoundError(err)
       ) {
