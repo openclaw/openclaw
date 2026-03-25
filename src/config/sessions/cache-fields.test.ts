@@ -65,4 +65,37 @@ describe("SessionEntry cache fields", () => {
     expect(merged.cacheRead).toBeUndefined();
     expect(merged.cacheWrite).toBeUndefined();
   });
+
+  it("clears stale sessionFile when sessionId changes without a new transcript path", () => {
+    const existing: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: Date.now(),
+      sessionFile: "/tmp/old-session.jsonl",
+      totalTokens: 5000,
+    };
+
+    const merged = mergeSessionEntry(existing, {
+      sessionId: "new-session",
+    });
+
+    expect(merged.sessionId).toBe("new-session");
+    expect(merged.sessionFile).toBeUndefined();
+    expect(merged.totalTokens).toBe(5000);
+  });
+
+  it("preserves explicit sessionFile when callers rotate sessionId and transcript together", () => {
+    const existing: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: Date.now(),
+      sessionFile: "/tmp/old-session.jsonl",
+    };
+
+    const merged = mergeSessionEntry(existing, {
+      sessionId: "new-session",
+      sessionFile: "/tmp/new-session.jsonl",
+    });
+
+    expect(merged.sessionId).toBe("new-session");
+    expect(merged.sessionFile).toBe("/tmp/new-session.jsonl");
+  });
 });

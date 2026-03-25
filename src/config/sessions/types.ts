@@ -266,6 +266,14 @@ export function mergeSessionEntryWithPolicy(
     return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
   }
   const next = { ...existing, ...patch, sessionId, updatedAt };
+  if (
+    Object.hasOwn(patch, "sessionId") &&
+    patch.sessionId !== undefined &&
+    patch.sessionId !== existing.sessionId &&
+    !Object.hasOwn(patch, "sessionFile")
+  ) {
+    delete next.sessionFile;
+  }
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
