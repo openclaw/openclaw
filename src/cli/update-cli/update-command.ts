@@ -987,6 +987,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (
     result.status === "ok" &&
     result.root &&
+    !switchToPackage &&
     (result.mode === "npm" || result.mode === "pnpm" || result.mode === "bun")
   ) {
     try {
@@ -999,12 +1000,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (opts.json) {
     // Emit a single JSON document. Merge shadowInstallWarning into the result
     // object so callers never have to parse two top-level objects from stdout.
-    defaultRuntime.log(
-      JSON.stringify(
-        shadowWarning ? { ...result, shadowInstallWarning: shadowWarning } : result,
-        null,
-        2,
-      ),
+    defaultRuntime.writeJson(
+      shadowWarning ? { ...result, shadowInstallWarning: shadowWarning } : result,
     );
   } else {
     printResult(result, { ...opts, hideSteps: showProgress });
