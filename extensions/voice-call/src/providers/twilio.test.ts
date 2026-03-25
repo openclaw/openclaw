@@ -363,4 +363,44 @@ describe("TwilioProvider", () => {
     expect(sendAudio).toHaveBeenCalled();
     expect(sendMark).toHaveBeenCalledTimes(1);
   });
+
+  it("surfaces streaming failures after partial audio delivery without replaying fallback audio", async () => {
+    const provider = createProvider();
+    provider.registerCallStream("CA-partial", "MZ-partial");
+
+    const sendAudio = vi.fn(() => ({ sent: true }));
+    const sendMark = vi.fn();
+    const mediaStreamHandler = {
+      queueTts: async (
+        _streamSid: string,
+        playFn: (signal: AbortSignal) => Promise<void>,
+      ): Promise<void> => {
+        await playFn(new AbortController().signal);
+      },
+      sendAudio,
+      sendMark,
+    };
+
+    const synthesizeForTelephony = vi.fn(async () => Buffer.alloc(640));
+
+    provider.setMediaStreamHandler(mediaStreamHandler as never);
+    provider.setTTSProvider({
+      synthesizeForTelephony,
+      streamForTelephony: async function* () {
+        yield Buffer.alloc(640, 0xaa);
+        throw new Error("socket closed");
+      },
+    });
+
+    await expect(
+      provider.playTts({
+        callId: "call-partial",
+        providerCallId: "CA-partial",
+        text: "Partial audio",
+      }),
+    ).rejects.toThrow("Telephony stream playback interrupted after partial audio delivery");
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+    expect(sendMark).not.toHaveBeenCalled();
+    expect(synthesizeForTelephony).not.toHaveBeenCalled();
+  });
 });

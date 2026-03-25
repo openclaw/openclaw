@@ -763,7 +763,11 @@ export class TwilioProvider implements VoiceCallProvider {
             console.log(
               `[voice-call] TTS bytes sent to Twilio for stream ${streamSid}: ${totalBytesSent}`,
             );
-            return;
+            throw new Error(
+              `Telephony stream playback interrupted after partial audio delivery: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
           }
           if (streamTimedOut) {
             throw new Error(
