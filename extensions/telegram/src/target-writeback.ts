@@ -160,12 +160,11 @@ export async function maybePersistResolvedTelegramTarget(params: {
     Array.isArray(params.gatewayClientScopes) &&
     !params.gatewayClientScopes.includes(TELEGRAM_ADMIN_SCOPE)
   ) {
-    if (params.verbose) {
-      writebackLogger.warn(
-        `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
-      );
-    }
+    writebackLogger.warn(
+      `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
+    );
     return;
+  }
   }
 
   try {
