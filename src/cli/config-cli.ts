@@ -7,6 +7,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -1195,6 +1196,30 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
+async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
+  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+
+  schema.properties = {
+    $schema: { type: "string" },
+    ...schema.properties,
+  };
+
+  return schema;
+}
+
+export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
+  } catch (err) {
+    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -1250,7 +1275,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -1368,6 +1393,13 @@ export function registerConfigCli(program: Command) {
     .description("Print the active config file path")
     .action(async () => {
       await runConfigFile({});
+    });
+
+  cmd
+    .command("schema")
+    .description("Print the JSON schema for openclaw.json")
+    .action(async () => {
+      await runConfigSchema({});
     });
 
   cmd

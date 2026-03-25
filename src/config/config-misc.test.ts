@@ -29,6 +29,14 @@ describe("$schema key in config (#14998)", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
   });
+
+  it("accepts $schema during full config validation", () => {
+    const result = validateConfigObject({
+      $schema: "./schema.json",
+      gateway: { port: 18789 },
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {
