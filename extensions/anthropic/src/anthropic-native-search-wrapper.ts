@@ -24,8 +24,8 @@ export function createAnthropicNativeSearchStreamWrapper(
   const serverTool = buildAnthropicWebSearchServerTool(searchConfig);
 
   return (model, context, options) => {
-    // Only apply to anthropic-messages API
-    if (model.api !== "anthropic-messages") {
+    // Only apply to direct Anthropic API models (not third-party providers using the same API format)
+    if (model.api !== "anthropic-messages" || (model.provider && model.provider !== "anthropic")) {
       return underlying(model, context, options);
     }
 

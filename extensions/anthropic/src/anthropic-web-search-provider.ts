@@ -137,7 +137,7 @@ export function createAnthropicWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://console.anthropic.com/",
     docsUrl: "https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/web-search",
     autoDetectOrder: 50, // Lower priority than dedicated search providers
-    credentialPath: "plugins.entries.anthropic.config.webSearch.enabled",
+    credentialPath: "plugins.entries.anthropic.config.webSearch.apiKey",
     inactiveSecretPaths: [],
     getCredentialValue: (_searchConfig) => {
       // Uses the main Anthropic API key — no separate credential needed

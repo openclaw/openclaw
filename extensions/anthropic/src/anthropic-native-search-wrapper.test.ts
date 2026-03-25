@@ -43,11 +43,12 @@ describe("createAnthropicNativeSearchStreamWrapper", () => {
   it("passes through non-anthropic API calls unchanged", () => {
     const fakeStream = vi.fn(() => ({ type: "stream" }) as any);
     const wrapped = createAnthropicNativeSearchStreamWrapper(fakeStream as any);
+    const originalOnPayload = vi.fn();
 
-    wrapped({ api: "openai-chat" } as any, {} as any, { onPayload: vi.fn() } as any);
+    wrapped({ api: "openai-chat" } as any, {} as any, { onPayload: originalOnPayload } as any);
 
-    // onPayload should be the original, not our wrapper
+    // onPayload should be the original reference, not our wrapper
     const passedOptions = fakeStream.mock.calls[0][2];
-    expect(passedOptions.onPayload).toBeDefined();
+    expect(passedOptions.onPayload).toBe(originalOnPayload);
   });
 });

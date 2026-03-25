@@ -29,6 +29,7 @@ import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { createAnthropicWebSearchProvider } from "./src/anthropic-web-search-provider.js";
+import { createAnthropicNativeSearchStreamWrapper } from "./src/anthropic-native-search-wrapper.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -389,6 +390,11 @@ export default definePluginEntry({
       fetchUsageSnapshot: async (ctx) =>
         await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
+      wrapStreamFn: (ctx) => {
+        // Wire the native web search stream wrapper for Anthropic models
+        const wrapped = createAnthropicNativeSearchStreamWrapper(ctx.streamFn);
+        return wrapped;
+      },
       buildAuthDoctorHint: (ctx) =>
         buildAnthropicAuthDoctorHint({
           config: ctx.config,
