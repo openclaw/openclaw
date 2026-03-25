@@ -1,7 +1,7 @@
 import {
   AllowFromEntrySchema,
   buildCatchallMultiAccountChannelSchema,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/zalouser";
 import { z } from "zod";
 

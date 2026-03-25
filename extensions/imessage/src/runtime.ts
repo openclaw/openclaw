@@ -1,4 +1,4 @@
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/compat";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/imessage";
 
 const { setRuntime: setIMessageRuntime, getRuntime: getIMessageRuntime } =

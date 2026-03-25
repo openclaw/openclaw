@@ -2,7 +2,7 @@ import { MarkdownConfigSchema, ToolPolicySchema } from "openclaw/plugin-sdk/blue
 import {
   AllowFromEntrySchema,
   buildCatchallMultiAccountChannelSchema,
-} from "openclaw/plugin-sdk/compat";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 

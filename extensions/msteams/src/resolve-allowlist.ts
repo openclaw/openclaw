@@ -1,4 +1,4 @@
-import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/compat";
+import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allowlist-resolution";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
