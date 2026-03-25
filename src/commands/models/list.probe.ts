@@ -431,12 +431,24 @@ async function probeTarget(params: {
       error: "No model available for probe",
     };
   }
+  const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
   const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
   await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
+  const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
+    provider: target.provider,
+    model: `${model.provider}/${model.model}`,
+    profileId: target.profileId,
+    label: target.label,
+    source: target.source,
+    mode: target.mode,
+    status,
+    ...(error ? { error } : {}),
+    latencyMs: Date.now() - start,
+  });
   try {
     await runEmbeddedPiAgent({
       sessionId,
@@ -458,29 +470,13 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
     });
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: "ok",
-      latencyMs: Date.now() - start,
-    };
+    return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);
-    return {
-      provider: target.provider,
-      model: `${target.model.provider}/${target.model.model}`,
-      profileId: target.profileId,
-      label: target.label,
-      source: target.source,
-      mode: target.mode,
-      status: mapFailoverReasonToProbeStatus(described.reason),
-      error: redactSecrets(described.message),
-      latencyMs: Date.now() - start,
-    };
+    return buildResult(
+      mapFailoverReasonToProbeStatus(described.reason),
+      redactSecrets(described.message),
+    );
   }
 }
 

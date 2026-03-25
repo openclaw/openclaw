@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on Oracle Cloud
   - Looking for low-cost VPS hosting for OpenClaw
   - Want 24/7 OpenClaw on a small server
-title: "Oracle Cloud"
+title: "Oracle Cloud (Platform)"
 ---
 
 # OpenClaw on Oracle Cloud (OCI)
@@ -180,7 +180,7 @@ With the VCN locked down (only UDP 41641 open) and the Gateway bound to loopback
 
 This setup often removes the _need_ for extra host-based firewall rules purely to stop Internet-wide SSH brute force — but you should still keep the OS updated, run `openclaw security audit`, and verify you aren’t accidentally listening on public interfaces.
 
-### What's Already Protected
+### Already protected
 
 | Traditional Step   | Needed?     | Why                                                                          |
 | ------------------ | ----------- | ---------------------------------------------------------------------------- |
@@ -236,7 +236,7 @@ Free tier ARM instances are popular. Try:
 - Retry during off-peak hours (early morning)
 - Use the "Always Free" filter when selecting shape
 
-### Tailscale won't connect
+### Tailscale will not connect
 
 ```bash
 # Check status
@@ -246,7 +246,7 @@ sudo tailscale status
 sudo tailscale up --ssh --hostname=openclaw --reset
 ```
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status
@@ -254,7 +254,7 @@ openclaw doctor --non-interactive
 journalctl --user -u openclaw-gateway -n 50
 ```
 
-### Can't reach Control UI
+### Cannot reach Control UI
 
 ```bash
 # Verify Tailscale Serve is running

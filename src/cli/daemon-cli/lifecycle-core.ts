@@ -3,6 +3,8 @@ import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/confi
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
+import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import { describeGatewayServiceRestart } from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
@@ -17,6 +19,7 @@ import {
   type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
+import { filterContainerGenericHints } from "./shared.js";
 
 type DaemonLifecycleOptions = {
   json?: boolean;
@@ -79,7 +82,9 @@ async function handleServiceNotLoaded(params: {
   json: boolean;
   emit: ReturnType<typeof createActionIO>["emit"];
 }) {
-  const hints = await maybeAugmentSystemdHints(params.renderStartHints());
+  const hints = filterContainerGenericHints(
+    await maybeAugmentSystemdHints(params.renderStartHints()),
+  );
   params.emit({
     ok: true,
     result: "not-loaded",
@@ -223,7 +228,20 @@ export async function runServiceStart(params: {
   }
 
   try {
-    await params.service.restart({ env: process.env, stdout });
+    const restartResult = await params.service.restart({ env: process.env, stdout });
+    const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+    if (restartStatus.scheduled) {
+      emit({
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, loaded),
+      });
+      if (!json) {
+        defaultRuntime.log(restartStatus.message);
+      }
+      return;
+    }
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
@@ -317,13 +335,29 @@ export async function runServiceRestart(params: {
   renderStartHints: () => string[];
   opts?: DaemonLifecycleOptions;
   checkTokenDrift?: boolean;
-  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<GatewayServiceRestartResult | void>;
   onNotLoaded?: (ctx: NotLoadedActionContext) => Promise<NotLoadedActionResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "restart", json });
   const warnings: string[] = [];
   let handledNotLoaded: NotLoadedActionResult | null = null;
+  const emitScheduledRestart = (
+    restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
+    serviceLoaded: boolean,
+  ) => {
+    emit({
+      ok: true,
+      result: restartStatus.daemonActionResult,
+      message: restartStatus.message,
+      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
+      warnings: warnings.length ? warnings : undefined,
+    });
+    if (!json) {
+      defaultRuntime.log(restartStatus.message);
+    }
+    return true;
+  };
 
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
@@ -402,11 +436,22 @@ export async function runServiceRestart(params: {
   }
 
   try {
+    let restartResult: GatewayServiceRestartResult = { outcome: "completed" };
     if (loaded) {
-      await params.service.restart({ env: process.env, stdout });
+      restartResult = await params.service.restart({ env: process.env, stdout });
+    }
+    let restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
+    if (restartStatus.scheduled) {
+      return emitScheduledRestart(restartStatus, loaded);
     }
     if (params.postRestartCheck) {
-      await params.postRestartCheck({ json, stdout, warnings, fail });
+      const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
+      if (postRestartResult) {
+        restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
+        if (restartStatus.scheduled) {
+          return emitScheduledRestart(restartStatus, loaded);
+        }
+      }
     }
     let restarted = loaded;
     if (loaded) {

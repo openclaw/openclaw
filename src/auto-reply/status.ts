@@ -70,6 +70,8 @@ type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
   agentId?: string;
+  runtimeContextTokens?: number;
+  explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -77,6 +79,7 @@ type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  resolvedFast?: boolean;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -444,16 +447,46 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+  const initialFallbackState = resolveActiveFallbackState({
+    selectedModelRef: modelRefs.selected.label || "unknown",
+    activeModelRef: modelRefs.active.label || "unknown",
+    state: entry,
+  });
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
-  let contextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      provider: activeProvider,
-      model: activeModel,
-      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
-      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    }) ?? DEFAULT_CONTEXT_TOKENS;
+  let contextLookupProvider: string | undefined = activeProvider;
+  let contextLookupModel = activeModel;
+  const runtimeModelRaw = typeof entry?.model === "string" ? entry.model.trim() : "";
+  const runtimeProviderRaw =
+    typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
+
+  if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
+    const slashIndex = runtimeModelRaw.indexOf("/");
+    const embeddedProvider = runtimeModelRaw.slice(0, slashIndex).trim().toLowerCase();
+    const fallbackMatchesRuntimeModel =
+      initialFallbackState.active &&
+      runtimeModelRaw.toLowerCase() ===
+        String(entry?.fallbackNoticeActiveModel ?? "")
+          .trim()
+          .toLowerCase();
+    const runtimeMatchesSelectedModel =
+      runtimeModelRaw.toLowerCase() === (modelRefs.selected.label || "unknown").toLowerCase();
+    // Legacy fallback sessions can persist provider-qualified runtime ids
+    // without a separate modelProvider field. Preserve provider-aware lookup
+    // when the stored slash id is the selected model or the active fallback
+    // target; otherwise keep the raw model-only lookup for OpenRouter-style
+    // slash ids.
+    if (
+      (fallbackMatchesRuntimeModel || runtimeMatchesSelectedModel) &&
+      embeddedProvider === activeProvider.toLowerCase()
+    ) {
+      contextLookupProvider = activeProvider;
+      contextLookupModel = activeModel;
+    } else {
+      contextLookupProvider = undefined;
+      contextLookupModel = runtimeModelRaw;
+    }
+  }
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -484,18 +517,20 @@ export function buildStatusMessage(args: StatusArgs): string {
           if (provider && model) {
             activeProvider = provider;
             activeModel = model;
+            // Preserve model-only lookup for transcript-derived provider/model IDs
+            // like "google/gemini-2.5-pro" that may come from a different upstream
+            // provider (for example OpenRouter).
+            contextLookupProvider = undefined;
+            contextLookupModel = logUsage.model;
           }
         } else {
           activeModel = logUsage.model;
+          // Bare transcript model IDs should keep provider-aware lookup when the
+          // active provider is already known so shared model names still resolve
+          // to the correct provider-specific window.
+          contextLookupProvider = activeProvider;
+          contextLookupModel = logUsage.model;
         }
-      }
-      if (!contextTokens && logUsage.model) {
-        contextTokens =
-          resolveContextTokensForModel({
-            cfg: contextConfig,
-            model: logUsage.model,
-            fallbackContextTokens: contextTokens ?? undefined,
-          }) ?? contextTokens;
       }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;
@@ -506,10 +541,92 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
+  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
+  const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const selectedContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    provider: selectedProvider,
+    model: selectedModel,
+  });
+  const activeContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    model: contextLookupModel,
+  });
+  const persistedContextTokens =
+    typeof entry?.contextTokens === "number" && entry.contextTokens > 0
+      ? entry.contextTokens
+      : undefined;
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  const explicitConfiguredContextTokens =
+    typeof args.explicitConfiguredContextTokens === "number" &&
+    args.explicitConfiguredContextTokens > 0
+      ? args.explicitConfiguredContextTokens
+      : undefined;
+  const cappedConfiguredContextTokens =
+    typeof explicitConfiguredContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
+        : explicitConfiguredContextTokens
+      : undefined;
+  // When a fallback model is active, the selected-model context limit that
+  // callers keep on the agent config is often stale. Prefer an explicit runtime
+  // snapshot when available. Separately, callers can pass an explicit configured
+  // cap that should still apply on fallback paths, but it cannot exceed the
+  // active runtime window when that window is known. Persisted runtime snapshots
+  // still take precedence over configured caps so historical fallback sessions
+  // keep their last known live limit even if the active model later becomes
+  // unresolvable.
+  const contextTokens = runtimeDiffersFromSelected
+    ? (explicitRuntimeContextTokens ??
+      (() => {
+        if (persistedContextTokens !== undefined) {
+          const persistedLooksSelectedWindow =
+            typeof selectedContextTokens === "number" &&
+            persistedContextTokens === selectedContextTokens;
+          const activeWindowDiffersFromSelected =
+            typeof selectedContextTokens === "number" &&
+            typeof activeContextTokens === "number" &&
+            activeContextTokens !== selectedContextTokens;
+          const explicitConfiguredMatchesPersisted =
+            typeof explicitConfiguredContextTokens === "number" &&
+            explicitConfiguredContextTokens === persistedContextTokens;
+          if (
+            persistedLooksSelectedWindow &&
+            activeWindowDiffersFromSelected &&
+            !explicitConfiguredMatchesPersisted
+          ) {
+            return activeContextTokens;
+          }
+          if (typeof activeContextTokens === "number") {
+            return Math.min(persistedContextTokens, activeContextTokens);
+          }
+          return persistedContextTokens;
+        }
+        if (cappedConfiguredContextTokens !== undefined) {
+          return cappedConfiguredContextTokens;
+        }
+        if (typeof activeContextTokens === "number") {
+          return activeContextTokens;
+        }
+        return DEFAULT_CONTEXT_TOKENS;
+      })())
+    : (resolveContextTokensForModel({
+        cfg: contextConfig,
+        ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+        model: contextLookupModel,
+        contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
+        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      }) ?? DEFAULT_CONTEXT_TOKENS);
+
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
+  const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const reasoningLevel = args.resolvedReasoning ?? args.sessionEntry?.reasoningLevel ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
@@ -556,6 +673,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
+    fastMode ? "Fast: on" : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,
@@ -578,7 +696,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.activeModelAuth ??
     (activeAuthMode && activeAuthMode !== "unknown" ? activeAuthMode : undefined);
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const fallbackState = resolveActiveFallbackState({
     selectedModelRef: selectedModelLabel,
     activeModelRef: activeModelLabel,
@@ -728,7 +845,7 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("  /new  |  /reset  |  /compact [instructions]  |  /stop");
   lines.push("");
 
-  const optionParts = ["/think <level>", "/model <id>", "/verbose on|off"];
+  const optionParts = ["/think <level>", "/model <id>", "/fast on|off", "/verbose on|off"];
   if (isCommandFlagEnabled(cfg, "config")) {
     optionParts.push("/config");
   }

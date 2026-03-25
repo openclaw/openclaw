@@ -53,6 +53,7 @@ import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
 const ACP_THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+const ACP_FAST_MODE_CONFIG_ID = "fast_mode";
 const ACP_VERBOSE_LEVEL_CONFIG_ID = "verbose_level";
 const ACP_REASONING_LEVEL_CONFIG_ID = "reasoning_level";
 const ACP_RESPONSE_USAGE_CONFIG_ID = "response_usage";
@@ -67,6 +68,8 @@ type PendingPrompt = {
   reject: (err: Error) => void;
   sentTextLength?: number;
   sentText?: string;
+  sentThoughtLength?: number;
+  sentThought?: string;
   toolCalls?: Map<string, PendingToolCall>;
 };
 
@@ -88,6 +91,7 @@ type GatewaySessionPresentationRow = Pick<
   | "derivedTitle"
   | "updatedAt"
   | "thinkingLevel"
+  | "fastMode"
   | "modelProvider"
   | "model"
   | "verboseLevel"
@@ -122,6 +126,17 @@ type SessionSnapshot = SessionPresentation & {
 type GatewayTranscriptMessage = {
   role?: unknown;
   content?: unknown;
+};
+
+type GatewayChatContentBlock = {
+  type?: string;
+  text?: string;
+  thinking?: string;
+};
+
+type ReplayChunk = {
+  sessionUpdate: "user_message_chunk" | "agent_message_chunk" | "agent_thought_chunk";
+  text: string;
 };
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;
@@ -210,6 +225,13 @@ function buildSessionPresentation(params: {
       values: availableLevelIds,
     }),
     buildSelectConfigOption({
+      id: ACP_FAST_MODE_CONFIG_ID,
+      name: "Fast mode",
+      description: "Controls whether OpenAI sessions use the Gateway fast-mode profile.",
+      currentValue: row.fastMode ? "on" : "off",
+      values: ["off", "on"],
+    }),
+    buildSelectConfigOption({
       id: ACP_VERBOSE_LEVEL_CONFIG_ID,
       name: "Tool verbosity",
       description:
@@ -244,25 +266,51 @@ function buildSessionPresentation(params: {
   return { configOptions, modes };
 }
 
-function extractReplayText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content.length > 0 ? content : undefined;
+function extractReplayChunks(message: GatewayTranscriptMessage): ReplayChunk[] {
+  const role = typeof message.role === "string" ? message.role : "";
+  if (role !== "user" && role !== "assistant") {
+    return [];
   }
-  if (!Array.isArray(content)) {
-    return undefined;
+  if (typeof message.content === "string") {
+    return message.content.length > 0
+      ? [
+          {
+            sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+            text: message.content,
+          },
+        ]
+      : [];
   }
-  const text = content
-    .map((block) => {
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
-        return "";
-      }
-      const typedBlock = block as { type?: unknown; text?: unknown };
-      return typedBlock.type === "text" && typeof typedBlock.text === "string"
-        ? typedBlock.text
-        : "";
-    })
-    .join("");
-  return text.length > 0 ? text : undefined;
+  if (!Array.isArray(message.content)) {
+    return [];
+  }
+
+  const replayChunks: ReplayChunk[] = [];
+  for (const block of message.content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      continue;
+    }
+    const typedBlock = block as GatewayChatContentBlock;
+    if (typedBlock.type === "text" && typeof typedBlock.text === "string" && typedBlock.text) {
+      replayChunks.push({
+        sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+        text: typedBlock.text,
+      });
+      continue;
+    }
+    if (
+      role === "assistant" &&
+      typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking
+    ) {
+      replayChunks.push({
+        sessionUpdate: "agent_thought_chunk",
+        text: typedBlock.thinking,
+      });
+    }
+  }
+  return replayChunks;
 }
 
 function buildSessionMetadata(params: {
@@ -791,9 +839,15 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    if (state === "delta" && messageData) {
+    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
+    if (shouldHandleMessageSnapshot) {
+      // Gateway chat events can carry the latest full assistant snapshot on both
+      // incremental updates and the terminal final event. Process the snapshot
+      // first so ACP clients never drop the last visible assistant text.
       await this.handleDeltaEvent(pending.sessionId, messageData);
-      return;
+      if (state === "delta") {
+        return;
+      }
     }
 
     if (state === "final") {
@@ -819,22 +873,44 @@ export class AcpGatewayAgent implements Agent {
     sessionId: string,
     messageData: Record<string, unknown>,
   ): Promise<void> {
-    const content = messageData.content as Array<{ type: string; text?: string }> | undefined;
-    const fullText = content?.find((c) => c.type === "text")?.text ?? "";
+    const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const pending = this.pendingPrompts.get(sessionId);
     if (!pending) {
       return;
     }
 
+    const fullThought = content
+      ?.filter((block) => block?.type === "thinking")
+      .map((block) => block.thinking ?? "")
+      .join("\n")
+      .trimEnd();
+    const sentThoughtSoFar = pending.sentThoughtLength ?? 0;
+    if (fullThought && fullThought.length > sentThoughtSoFar) {
+      const newThought = fullThought.slice(sentThoughtSoFar);
+      pending.sentThoughtLength = fullThought.length;
+      pending.sentThought = fullThought;
+      await this.connection.sessionUpdate({
+        sessionId,
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: newThought },
+        },
+      });
+    }
+
+    const fullText = content
+      ?.filter((block) => block?.type === "text")
+      .map((block) => block.text ?? "")
+      .join("\n")
+      .trimEnd();
     const sentSoFar = pending.sentTextLength ?? 0;
-    if (fullText.length <= sentSoFar) {
+    if (!fullText || fullText.length <= sentSoFar) {
       return;
     }
 
     const newText = fullText.slice(sentSoFar);
     pending.sentTextLength = fullText.length;
     pending.sentText = fullText;
-
     await this.connection.sessionUpdate({
       sessionId,
       update: {
@@ -925,6 +1001,7 @@ export class AcpGatewayAgent implements Agent {
       thinkingLevel: session.thinkingLevel,
       modelProvider: session.modelProvider,
       model: session.model,
+      fastMode: session.fastMode,
       verboseLevel: session.verboseLevel,
       reasoningLevel: session.reasoningLevel,
       responseUsage: session.responseUsage,
@@ -937,16 +1014,26 @@ export class AcpGatewayAgent implements Agent {
 
   private resolveSessionConfigPatch(
     configId: string,
-    value: string,
+    value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    patch: Record<string, string>;
+    patch: Record<string, string | boolean>;
   } {
+    if (typeof value !== "string") {
+      throw new Error(
+        `ACP bridge does not support non-string session config option values for "${configId}".`,
+      );
+    }
     switch (configId) {
       case ACP_THOUGHT_LEVEL_CONFIG_ID:
         return {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
+        };
+      case ACP_FAST_MODE_CONFIG_ID:
+        return {
+          patch: { fastMode: value === "on" },
+          overrides: { fastMode: value === "on" },
         };
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
@@ -989,21 +1076,16 @@ export class AcpGatewayAgent implements Agent {
     transcript: ReadonlyArray<GatewayTranscriptMessage>,
   ): Promise<void> {
     for (const message of transcript) {
-      const role = typeof message.role === "string" ? message.role : "";
-      if (role !== "user" && role !== "assistant") {
-        continue;
+      const replayChunks = extractReplayChunks(message);
+      for (const chunk of replayChunks) {
+        await this.connection.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: chunk.sessionUpdate,
+            content: { type: "text", text: chunk.text },
+          },
+        });
       }
-      const text = extractReplayText(message.content);
-      if (!text) {
-        continue;
-      }
-      await this.connection.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: role === "user" ? "user_message_chunk" : "agent_message_chunk",
-          content: { type: "text", text },
-        },
-      });
     }
   }
 

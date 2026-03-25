@@ -2,62 +2,27 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  behaviorManifestPath,
+  unitMemoryHotspotManifestPath,
+  unitTimingManifestPath,
+} from "./scripts/test-runner-manifest.mjs";
+import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const ciWorkers = isWindows ? 2 : 3;
-const pluginSdkSubpaths = [
-  "account-id",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "google-gemini-cli-auth",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "keyed-async-queue",
-] as const;
-
 export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
+      {
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
+      },
       ...pluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -72,20 +37,47 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
-    // This is especially important under `pool=vmForks` where env leaks cross-file.
+    // Keep env restoration automatic so shared-worker runs do not leak state.
     unstubEnvs: true,
-    // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
+    // Same rationale as unstubEnvs: avoid cross-test pollution from shared globals.
     unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
+    forceRerunTriggers: [
+      "package.json",
+      "pnpm-lock.yaml",
+      "test/setup.ts",
+      "scripts/test-parallel.mjs",
+      "scripts/test-runner-manifest.mjs",
+      "vitest.channel-paths.mjs",
+      "vitest.channels.config.ts",
+      "vitest.config.ts",
+      "vitest.e2e.config.ts",
+      "vitest.extensions.config.ts",
+      "vitest.gateway.config.ts",
+      "vitest.live.config.ts",
+      "vitest.performance-config.ts",
+      "vitest.scoped-config.ts",
+      "vitest.unit.config.ts",
+      "vitest.unit-paths.mjs",
+      behaviorManifestPath,
+      unitTimingManifestPath,
+      unitMemoryHotspotManifestPath,
+    ],
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
       "test/**/*.test.ts",
+      "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
+      "ui/src/ui/views/chat.test.ts",
+      "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/sessions.test.ts",
+      "ui/src/ui/views/sessions.test.ts",
+      "ui/src/ui/app-gateway.sessions.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
@@ -125,7 +117,6 @@ export default defineConfig({
         "src/index.ts",
         "src/runtime.ts",
         "src/channel-web.ts",
-        "src/extensionAPI.ts",
         "src/logging.ts",
         "src/cli/**",
         "src/commands/**",
@@ -181,16 +172,8 @@ export default defineConfig({
         "src/tui/**",
         "src/wizard/**",
         // Channel surfaces are largely integration-tested (or manually validated).
-        "src/discord/**",
-        "src/imessage/**",
-        "src/signal/**",
-        "src/slack/**",
         "src/browser/**",
         "src/channels/web/**",
-        "src/telegram/index.ts",
-        "src/telegram/proxy.ts",
-        "src/telegram/webhook-set.ts",
-        "src/telegram/**",
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
@@ -198,5 +181,6 @@ export default defineConfig({
         "src/infra/tailscale.ts",
       ],
     },
+    ...loadVitestExperimentalConfig(),
   },
 });

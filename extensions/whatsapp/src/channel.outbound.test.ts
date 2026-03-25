@@ -1,5 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/whatsapp";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createWhatsAppPollFixture,
+  expectWhatsAppPollSent,
+} from "../../../src/test-helpers/whatsapp-outbound.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" })),
@@ -18,29 +21,29 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { whatsappPlugin } from "./channel.js";
+let whatsappPlugin: typeof import("./channel.js").whatsappPlugin;
 
 describe("whatsappPlugin outbound sendPoll", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ whatsappPlugin } = await import("./channel.js"));
+  });
+
   it("threads cfg into runtime sendPollWhatsApp call", async () => {
-    const cfg = { marker: "resolved-cfg" } as OpenClawConfig;
-    const poll = {
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-    };
+    const { cfg, poll, to, accountId } = createWhatsAppPollFixture();
 
     const result = await whatsappPlugin.outbound!.sendPoll!({
       cfg,
-      to: "+1555",
+      to,
       poll,
-      accountId: "work",
+      accountId,
     });
 
-    expect(hoisted.sendPollWhatsApp).toHaveBeenCalledWith("+1555", poll, {
-      verbose: false,
-      accountId: "work",
-      cfg,
+    expectWhatsAppPollSent(hoisted.sendPollWhatsApp, { cfg, poll, to, accountId });
+    expect(result).toEqual({
+      channel: "whatsapp",
+      messageId: "wa-poll-1",
+      toJid: "1555@s.whatsapp.net",
     });
-    expect(result).toEqual({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" });
   });
 });

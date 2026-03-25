@@ -1,20 +1,13 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/twitch";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/twitch";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { twitchPlugin } from "./src/plugin.js";
 import { setTwitchRuntime } from "./src/runtime.js";
 
 export { monitorTwitchProvider } from "./src/monitor.js";
 
-const plugin = {
+export default defineChannelPluginEntry({
   id: "twitch",
   name: "Twitch",
-  description: "Twitch channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setTwitchRuntime(api.runtime);
-    // oxlint-disable-next-line typescript/no-explicit-any
-    api.registerChannel({ plugin: twitchPlugin as any });
-  },
-};
-
-export default plugin;
+  description: "Twitch chat channel plugin",
+  plugin: twitchPlugin,
+  setRuntime: setTwitchRuntime,
+});

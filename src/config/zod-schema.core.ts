@@ -6,6 +6,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
 } from "../secrets/ref-contract.js";
+import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -191,15 +192,36 @@ export const ModelCompatSchema = z
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])
       .optional(),
-    thinkingFormat: z.union([z.literal("openai"), z.literal("zai"), z.literal("qwen")]).optional(),
+    thinkingFormat: z
+      .union([
+        z.literal("openai"),
+        z.literal("openrouter"),
+        z.literal("zai"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
+      ])
+      .optional(),
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
+    toolSchemaProfile: z.literal("xai").optional(),
+    nativeWebSearchTool: z.boolean().optional(),
+    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
   .optional();
+
+type AssertAssignable<_T extends U, U> = true;
+type _ModelCompatSchemaAssignableToType = AssertAssignable<
+  z.infer<typeof ModelCompatSchema>,
+  ModelCompatConfig | undefined
+>;
+type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+  ModelCompatConfig | undefined,
+  z.infer<typeof ModelCompatSchema>
+>;
 
 export const ModelDefinitionSchema = z
   .object({
@@ -353,9 +375,24 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
+const TtsMicrosoftConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    voice: z.string().optional(),
+    lang: z.string().optional(),
+    outputFormat: z.string().optional(),
+    pitch: z.string().optional(),
+    rate: z.string().optional(),
+    volume: z.string().optional(),
+    saveSubtitles: z.boolean().optional(),
+    proxy: z.string().optional(),
+    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+  })
+  .strict()
+  .optional();
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -404,24 +441,13 @@ export const TtsConfigSchema = z
         baseUrl: z.string().optional(),
         model: z.string().optional(),
         voice: z.string().optional(),
+        speed: z.number().min(0.25).max(4).optional(),
+        instructions: z.string().optional(),
       })
       .strict()
       .optional(),
-    edge: z
-      .object({
-        enabled: z.boolean().optional(),
-        voice: z.string().optional(),
-        lang: z.string().optional(),
-        outputFormat: z.string().optional(),
-        pitch: z.string().optional(),
-        rate: z.string().optional(),
-        volume: z.string().optional(),
-        saveSubtitles: z.boolean().optional(),
-        proxy: z.string().optional(),
-        timeoutMs: z.number().int().min(1000).max(120000).optional(),
-      })
-      .strict()
-      .optional(),
+    edge: TtsMicrosoftConfigSchema,
+    microsoft: TtsMicrosoftConfigSchema,
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
