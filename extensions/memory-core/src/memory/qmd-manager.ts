@@ -1312,8 +1312,15 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isToolNotFoundError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
-    const lower = message.toLowerCase();
-    return lower.includes("not found") && lower.includes("tool");
+    // Match the specific MCP error pattern for missing tools.
+    // Be strict to avoid false-positives when user query text appears
+    // in the error (the full mcporter command + args is in the message).
+    // Known patterns from MCP servers:
+    //   "MCP error -32602: Tool query not found"
+    //   "Tool 'query' not found"
+    //   "tool not found: query"
+    // Require "Tool" near "not found" with no sentence boundary between them.
+    return /\bTool\b[^.!?\n]{0,40}\bnot found\b/i.test(message);
   }
 
   private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
@@ -1425,9 +1432,16 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     } catch (err) {
       // If the v2 "query" tool is not found, fall back to v1 tool names.
+      // No need to guard on qmdMcpToolVersion !== "v1" here — if the version
+      // were already "v1", effectiveTool would have been resolved to a v1 tool
+      // name at the top of this function (not "query"). The effectiveTool ===
+      // "query" check alone prevents infinite retry loops since the recursive
+      // call passes a v1 tool name. Removing the version guard also fixes a
+      // race condition where concurrent searches both probe with "query" while
+      // the version is null — the second call would otherwise fail after the
+      // first sets the version to "v1".
       if (
         effectiveTool === "query" &&
-        this.qmdMcpToolVersion !== "v1" &&
         this.isToolNotFoundError(err)
       ) {
         this.markQmdV1Fallback();
