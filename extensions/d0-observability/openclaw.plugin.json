@@ -1,0 +1,8 @@
+{
+  "id": "d0-observability",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
