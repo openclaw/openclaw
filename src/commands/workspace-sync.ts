@@ -24,7 +24,9 @@ export async function workspaceSyncPullCommand(opts: { json?: boolean; workspace
     process.exit(1);
   }
 
-  const result = await pullAndApplyWorkspaceSync(syncCfg, opts.workspace);
+  // Use CLI-provided workspace, then configured workspace, then default
+  const workspace = opts.workspace ?? config.agents?.defaults?.workspace;
+  const result = await pullAndApplyWorkspaceSync(syncCfg, workspace);
 
   if (opts.json) {
     console.log(JSON.stringify(result));
@@ -60,7 +62,9 @@ export async function workspaceSyncPushCommand(opts: { json?: boolean; workspace
     process.exit(1);
   }
 
-  const result = await pushWorkspaceToRemote(syncCfg, opts.workspace);
+  // Use CLI-provided workspace, then configured workspace, then default
+  const workspace = opts.workspace ?? config.agents?.defaults?.workspace;
+  const result = await pushWorkspaceToRemote(syncCfg, workspace);
 
   if (opts.json) {
     console.log(JSON.stringify(result));

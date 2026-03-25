@@ -92,7 +92,8 @@ export async function handleWorkspaceSyncWebhook(
     // 4. Trigger the sync
     logger.info("Received workspace sync webhook trigger. Pulling manifest...");
 
-    const result = await pullAndApplyWorkspaceSync(syncConfig);
+    const workspaceDir = config.agents?.defaults?.workspace;
+    const result = await pullAndApplyWorkspaceSync(syncConfig, workspaceDir);
 
     if (result.ok) {
       sendJson(res, 200, {
