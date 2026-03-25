@@ -382,6 +382,14 @@ async function mergeConfigFiles(existingPath: string, importedPath: string): Pro
     throw new Error(`Imported config file is not valid JSON/JSON5: ${String(err)}`, { cause: err });
   }
 
+  if (
+    typeof importedContent !== "object" ||
+    importedContent === null ||
+    Array.isArray(importedContent)
+  ) {
+    throw new Error("Imported config must be a JSON object, not an array or primitive.");
+  }
+
   const merged = applyMergePatch(existingContent, importedContent, {
     mergeObjectArraysById: true,
   });
