@@ -138,6 +138,14 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }
 
       const base64Images = data.data?.image_base64 ?? [];
+      const failedCount = data.metadata?.failed_count ?? 0;
+
+      if (base64Images.length === 0) {
+        const reason =
+          failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
+        throw new Error(`MiniMax image generation returned no images: ${reason}`);
+      }
+
       const images = base64Images
         .map((b64, index) => {
           if (!b64) {
