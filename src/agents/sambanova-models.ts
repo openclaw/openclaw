@@ -74,7 +74,7 @@ export const SAMBANOVA_MODEL_CATALOG: ModelDefinitionConfig[] = [
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0.63, output: 1.8, cacheRead: 0.63, cacheWrite: 0.63 },
-    contextWindow: 1131072,
+    contextWindow: 131072,
     maxTokens: 8192,
   },
   {
