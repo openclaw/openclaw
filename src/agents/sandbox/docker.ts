@@ -378,11 +378,11 @@ export function buildSandboxCreateArgs(params: {
   for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
     args.push("--env", `${key}=${value}`);
   }
-  for (const cap of params.cfg.capAdd) {
-    args.push("--cap-add", cap);
-  }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
+  }
+  for (const cap of params.cfg.capAdd) {
+    args.push("--cap-add", cap);
   }
   args.push("--security-opt", "no-new-privileges");
   if (params.cfg.seccompProfile) {
