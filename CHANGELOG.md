@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/supervision: stop lock conflicts from crash-looping under launchd and systemd by keeping the duplicate process in a retry wait instead of exiting as a failure while another healthy gateway still owns the lock. Fixes #52922. Thanks @vincentkoc.
 - Gateway/auth: require auth for canvas routes and admin scope for agent session reset, so anonymous canvas access and non-admin reset requests fail closed.
 - Release/install: keep previously released bundled plugins and Control UI assets in published openclaw npm installs, and fail release checks when those shipped artifacts are missing. Thanks @vincentkoc.
+- WhatsApp/outbound sends: keep the active Web listener on a direct process-global symbol so split runtime chunks keep sharing the connected Baileys session and `openclaw message send --channel whatsapp` stops failing after connect. Fixes #52574. Thanks @MonkeyLeeT.
 
 ## 2026.3.22
 
