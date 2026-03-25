@@ -127,6 +127,28 @@ describe("sessions view", () => {
     expect(fast?.value).toBe("on");
   });
 
+  it("builds the History link from the configured base path", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        basePath: "/openclaw",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const link = container.querySelector('a[href="/openclaw/history"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
   it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();

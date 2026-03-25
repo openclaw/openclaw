@@ -46,6 +46,7 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    agentId?: string;
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
@@ -54,6 +55,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
@@ -107,6 +109,31 @@ describe("handleControlUiHttpRequest", () => {
       return await params.fn({ root, sibling });
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+
+  async function withHistoryFixture<T>(params: {
+    agentId: string;
+    files: Record<string, string>;
+    fn: (paths: { stateDir: string; sessionsDir: string }) => Promise<T>;
+  }) {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-history-"));
+    const sessionsDir = path.join(stateDir, "agents", params.agentId, "sessions");
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      for (const [name, contents] of Object.entries(params.files)) {
+        await fs.writeFile(path.join(sessionsDir, name), contents);
+      }
+      return await params.fn({ stateDir, sessionsDir });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   }
 
@@ -223,6 +250,62 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("serves the session history viewer under basePath for the configured agent", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await withHistoryFixture({
+          agentId: "worker-42",
+          files: {
+            "session-1.jsonl":
+              [
+                JSON.stringify({
+                  type: "session",
+                  timestamp: "2026-03-25T00:00:00.000Z",
+                  id: "session-1",
+                }),
+                JSON.stringify({
+                  type: "message",
+                  timestamp: "2026-03-25T00:01:00.000Z",
+                  message: { role: "user", content: "Hello from history" },
+                  model: "openclaw/demo",
+                }),
+              ].join("\n") + "\n",
+          },
+          fn: async () => {
+            const { res, end, handled } = runControlUiRequest({
+              url: "/openclaw/history",
+              method: "GET",
+              rootPath: tmp,
+              basePath: "/openclaw",
+              agentId: "worker-42",
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+            const html = String(end.mock.calls[0]?.[0] ?? "");
+            expect(html).toContain('<html lang="en">');
+            expect(html).toContain("/openclaw/history.js");
+            expect(html).toContain("Select a session");
+
+            const { end: scriptEnd, handled: scriptHandled } = runControlUiRequest({
+              url: "/openclaw/history.js",
+              method: "GET",
+              rootPath: tmp,
+              basePath: "/openclaw",
+              agentId: "worker-42",
+            });
+
+            expect(scriptHandled).toBe(true);
+            const js = String(scriptEnd.mock.calls[0]?.[0] ?? "");
+            expect(js).toContain("session-1.jsonl");
+            expect(js).toContain("Hello from history");
+            expect(js).toContain("messages");
+          },
+        });
       },
     });
   });

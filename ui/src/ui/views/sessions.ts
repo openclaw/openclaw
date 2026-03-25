@@ -130,6 +130,10 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
+function historyUrl(basePath: string): string {
+  return basePath ? `${basePath}/history` : "/history";
+}
+
 function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
   const q = query.trim().toLowerCase();
   if (!q) {
@@ -215,11 +219,20 @@ export function renderSessions(props: SessionsProps) {
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
           <div class="card-title">Sessions</div>
-          <div class="card-sub">${props.result ? `Store: ${props.result.path}` : "Active session keys and per-session overrides."}</div>
+          <div class="card-sub">Inspect active sessions and adjust per-session defaults.</div>
         </div>
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
-        </button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a
+            href=${historyUrl(props.basePath)}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn"
+            title="View archived session history"
+          >&#128220; History</a>
+          <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+            ${props.loading ? "Loading…" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       <div class="filters" style="margin-bottom: 12px;">
