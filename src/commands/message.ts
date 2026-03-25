@@ -53,9 +53,7 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
-  const agentId = normalizeAgentId(
-    typeof opts.agent === "string" ? opts.agent : cfg.agent?.id,
-  );
+  const agentId = normalizeAgentId(typeof opts.agent === "string" ? opts.agent : cfg.agent?.id);
 
   const run = async () =>
     await runMessageAction({
