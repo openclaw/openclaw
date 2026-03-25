@@ -248,6 +248,23 @@ describe("resolveCronSession", () => {
       });
     });
 
+    it("reuses session when forceNew is explicitly false (freshSession opt-in)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "reusable-session-id",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+        },
+        fresh: true,
+        forceNew: false,
+      });
+
+      expect(result.sessionEntry.sessionId).toBe("reusable-session-id");
+      expect(result.isNewSession).toBe(false);
+      expect(result.systemSent).toBe(true);
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+    });
+
     it("creates new sessionId when entry exists but has no sessionId", () => {
       const result = resolveWithStoredEntry({
         entry: {
