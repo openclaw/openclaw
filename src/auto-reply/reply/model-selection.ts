@@ -79,10 +79,11 @@ function collectImageModelKeys(
   imageModelConfig: AgentModelConfig | undefined,
   aliasIndex?: ModelAliasIndex,
   defaultProvider?: string,
-): Set<string> {
+): { keys: Set<string>; imageModelDefaultProvider: string } {
   const keys = new Set<string>();
+  const noProviderValue = defaultProvider ?? "";
   if (!imageModelConfig) {
-    return keys;
+    return { keys, imageModelDefaultProvider: noProviderValue };
   }
 
   const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
@@ -90,7 +91,7 @@ function collectImageModelKeys(
   // Resolve the image model's primary to get its provider for fallback resolution.
   // Providerless fallbacks should resolve against the image model's provider,
   // not the agent's default provider (to handle mixed-provider configs correctly).
-  let imageModelDefaultProvider = defaultProvider;
+  let imageModelDefaultProvider = defaultProvider ?? "";
   if (imageModelPrimary && aliasIndex && defaultProvider) {
     const resolved = resolveModelRefFromString({
       raw: imageModelPrimary.trim(),
@@ -148,7 +149,7 @@ function collectImageModelKeys(
       }
     }
   }
-  return keys;
+  return { keys, imageModelDefaultProvider };
 }
 
 /**
@@ -565,7 +566,7 @@ export async function createModelSelectionState(params: {
   if (params.hasAppliedImageModelOverride && storedOverride?.model) {
     // Build alias index for resolving model aliases
     const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-    const imageModelKeys = collectImageModelKeys(
+    const { keys: imageModelKeys, imageModelDefaultProvider } = collectImageModelKeys(
       cfg.agents?.defaults?.imageModel,
       aliasIndex,
       defaultProvider,
@@ -588,6 +589,15 @@ export async function createModelSelectionState(params: {
         imageModelKeys.add(modelKey(storedProvider, storedModel));
       } else {
         // Stored override is not an image model, skip it for image requests
+        skipForImageSwitch = true;
+      }
+    } else if (storedProvider !== imageModelDefaultProvider) {
+      // Providerless imageModel entries match by pure name across providers (case 4 in
+      // isImageModel), but this can incorrectly keep a stored override from a different
+      // provider whose model may not support vision. Force catalog check to verify.
+      const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
+      if (!modelSupportsVision(catalogEntry)) {
         skipForImageSwitch = true;
       }
     }
