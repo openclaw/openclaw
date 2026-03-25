@@ -515,7 +515,7 @@ export async function handleOpenAiHttpRequest(
     // consumed the request body, causing IncomingMessage to auto-destroy and emit `close`
     // before we reach this point. ServerResponse stays alive until the response is written,
     // so its `close` event reliably fires on premature client disconnect.
-    res.on("cabortController.signal.abortedlose", () => {
+    res.on("close", () => {
       if (!abortController.signal.aborted) {
         abortController.abort();
       }
