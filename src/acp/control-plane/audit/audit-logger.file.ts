@@ -18,7 +18,6 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { logVerbose } from "../../../globals.js";
 import type {
-  AuditEventType,
   AuditLogEntry,
   AuditLogFilters,
   AuditLogStats,
