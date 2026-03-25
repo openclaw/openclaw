@@ -275,6 +275,68 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Session Patch Events
+
+Triggered when session properties are modified:
+
+- **`session:patch`**: When a session is updated
+
+#### Session Event Context
+
+Session events include rich context about the session and changes:
+
+```typescript
+{
+  sessionEntry: SessionEntry, // The complete updated session entry
+  patch: {                    // The patch object (only changed fields)
+    // Session identity & labeling
+    label?: string | null,           // Human-readable session label
+
+    // AI model configuration
+    model?: string | null,           // Model override (e.g., "claude-opus-4-5")
+    thinkingLevel?: string | null,   // Thinking level ("off"|"low"|"med"|"high")
+    verboseLevel?: string | null,    // Verbose output level
+    reasoningLevel?: string | null,  // Reasoning mode override
+    elevatedLevel?: string | null,   // Elevated mode override
+    responseUsage?: "off" | "tokens" | "full" | null, // Usage display mode
+
+    // Tool execution settings
+    execHost?: string | null,        // Exec host (sandbox|gateway|node)
+    execSecurity?: string | null,    // Security mode (deny|allowlist|full)
+    execAsk?: string | null,         // Approval mode (off|on-miss|always)
+    execNode?: string | null,        // Node ID for host=node
+
+    // Subagent coordination
+    spawnedBy?: string | null,       // Parent session key (for subagents)
+    spawnDepth?: number | null,      // Nesting depth (0 = root)
+
+    // Communication policies
+    sendPolicy?: "allow" | "deny" | null,          // Message send policy
+    groupActivation?: "mention" | "always" | null, // Group chat activation
+  },
+  cfg: OpenClawConfig            // Current gateway config
+}
+```
+
+**Security note:** Only privileged clients (including the Control UI) can trigger `session:patch` events. Standard WebChat clients are blocked from patching sessions (see PR #20800), so the hook will not fire from those connections.
+
+See `SessionsPatchParamsSchema` in `src/gateway/protocol/schema/sessions.ts` for the complete type definition.
+
+#### Example: Session Patch Logger Hook
+
+```typescript
+const handler = async (event) => {
+  if (event.type !== "session" || event.action !== "patch") {
+    return;
+  }
+  const { patch } = event.context;
+  console.log(`[session-patch] Session updated: ${event.sessionKey}`);
+  console.log(`[session-patch] Changes:`, patch);
+};
+
+export default handler;
+```
+
 ### Message Events
 
 Triggered when messages are received or sent:
