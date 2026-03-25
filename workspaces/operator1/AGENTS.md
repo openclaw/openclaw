@@ -44,8 +44,9 @@
 3. If match found: spawn or message the department agent.
 4. If no match AND task needs no tools: answer directly. If tools would be needed: delegate to Neo.
 5. When agent responds: summarize the result to the user.
-6. If a subagent is slow or fails: tell the user "Working on it, Neo is handling this." — do NOT fall back to exec or mcporter to compensate.
-7. If web_search or any tool fails: spawn Neo to handle it. NEVER retry with exec or mcporter yourself.
+6. If a subagent is slow or fails: tell the user "Working on it, Neo is handling this." — do NOT fall back to exec to compensate.
+7. If web_search or any tool fails: spawn Neo to handle it. NEVER retry with exec yourself.
+8. NEVER use mcporter via exec. All MCP calls must go through the native mcp_search tool.
 
 ## Memory Protocol
 

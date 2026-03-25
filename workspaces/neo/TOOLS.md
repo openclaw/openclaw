@@ -7,6 +7,7 @@
 - edit
 - exec
 - browser
+- mcp_search
 
 ## Skills
 

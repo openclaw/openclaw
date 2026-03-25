@@ -6,6 +6,7 @@
 - write
 - edit
 - browser
+- mcp_search
 
 ## Routing Keywords
 

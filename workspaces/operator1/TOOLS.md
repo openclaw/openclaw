@@ -30,8 +30,15 @@
 - dashboard.summary — Get dashboard summary
 - sidebar.badges — Get sidebar badge counts
 
+## MCP Tools
+
+- mcp_search — Search and call MCP server tools (gmail, ssh, dart, notebooklm, etc.)
+
 ## Tools You Should NOT Use Directly
 
 - exec — Delegate to the appropriate department agent
-- mcp_search — Delegate research to the appropriate department agent
 - web_search / web_fetch — Delegate to the appropriate department agent
+
+## Prohibited Tools
+
+- mcporter — NEVER use mcporter via exec. All MCP calls must go through the native mcp_search tool.
