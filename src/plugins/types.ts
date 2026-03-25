@@ -465,6 +465,17 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   extraParams?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
+  /**
+   * The active session key (e.g. `agent:main:telegram:direct:571820863`).
+   * Useful for spend attribution — providers can forward this as the `user`
+   * field so LiteLLM / downstream proxies can tag spend logs per session.
+   */
+  sessionKey?: string;
+  /**
+   * Ephemeral session UUID — regenerated on /new and /reset.
+   * Useful for per-conversation isolation in downstream proxies.
+   */
+  sessionId?: string;
 };
 
 /**
