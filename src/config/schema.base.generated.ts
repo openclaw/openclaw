@@ -744,6 +744,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 email: {
                   type: "string",
                 },
+                displayName: {
+                  type: "string",
+                },
               },
               required: ["provider", "mode"],
               additionalProperties: false,
