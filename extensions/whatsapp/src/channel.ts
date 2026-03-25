@@ -126,18 +126,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     outbound: {
       ...createWhatsAppOutboundBase({
         chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
-        sendMessageWhatsApp: async (to, text, opts) =>
-          withWhatsAppSendRetry(
-            () => getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(to, text, opts),
-            "sendMessage",
-            resolveWhatsAppRetryConfig(opts.cfg, opts.accountId),
-          ),
-        sendPollWhatsApp: async (to, poll, opts) =>
-          withWhatsAppSendRetry(
-            () => getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(to, poll, opts),
-            "sendPoll",
-            resolveWhatsAppRetryConfig(opts.cfg, opts.accountId),
-          ),
+        sendMessageWhatsApp: async (...args) =>
+          await getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(...args),
+        sendPollWhatsApp: async (...args) =>
+          await getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(...args),
+        wrapSend: (fn, label, cfg, accountId) =>
+          withWhatsAppSendRetry(fn, label, resolveWhatsAppRetryConfig(cfg, accountId)),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),

@@ -53,6 +53,13 @@ type CreateWhatsAppOutboundBaseParams = {
   resolveTarget: ChannelOutboundAdapter["resolveTarget"];
   normalizeText?: (text: string | undefined) => string;
   skipEmptyText?: boolean;
+  /** Optional wrapper applied to every send call after deps resolution (e.g. for retry). */
+  wrapSend?: <T>(
+    fn: () => Promise<T>,
+    label: string,
+    cfg: OpenClawConfig | undefined,
+    accountId: string | null | undefined,
+  ) => Promise<T>;
 };
 
 export function createWhatsAppOutboundBase({
@@ -63,6 +70,7 @@ export function createWhatsAppOutboundBase({
   resolveTarget,
   normalizeText = (text) => text ?? "",
   skipEmptyText = false,
+  wrapSend,
 }: CreateWhatsAppOutboundBaseParams): Pick<
   ChannelOutboundAdapter,
   | "deliveryMode"
@@ -91,12 +99,14 @@ export function createWhatsAppOutboundBase({
         }
         const send =
           resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-        return await send(to, normalizedText, {
-          verbose: false,
-          cfg,
-          accountId: accountId ?? undefined,
-          gifPlayback,
-        });
+        const doSend = () =>
+          send(to, normalizedText, {
+            verbose: false,
+            cfg,
+            accountId: accountId ?? undefined,
+            gifPlayback,
+          });
+        return wrapSend ? await wrapSend(doSend, "sendText", cfg, accountId) : await doSend();
       },
       sendMedia: async ({
         cfg,
@@ -112,23 +122,28 @@ export function createWhatsAppOutboundBase({
       }) => {
         const send =
           resolveOutboundSendDep<WhatsAppSendMessage>(deps, "whatsapp") ?? sendMessageWhatsApp;
-        return await send(to, normalizeText(text), {
-          verbose: false,
-          cfg,
-          mediaUrl,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          accountId: accountId ?? undefined,
-          gifPlayback,
-        });
+        const doSend = () =>
+          send(to, normalizeText(text), {
+            verbose: false,
+            cfg,
+            mediaUrl,
+            mediaAccess,
+            mediaLocalRoots,
+            mediaReadFile,
+            accountId: accountId ?? undefined,
+            gifPlayback,
+          });
+        return wrapSend ? await wrapSend(doSend, "sendMedia", cfg, accountId) : await doSend();
       },
-      sendPoll: async ({ cfg, to, poll, accountId }) =>
-        await sendPollWhatsApp(to, poll, {
-          verbose: shouldLogVerbose(),
-          accountId: accountId ?? undefined,
-          cfg,
-        }),
+      sendPoll: async ({ cfg, to, poll, accountId }) => {
+        const doSend = () =>
+          sendPollWhatsApp(to, poll, {
+            verbose: shouldLogVerbose(),
+            accountId: accountId ?? undefined,
+            cfg,
+          });
+        return wrapSend ? await wrapSend(doSend, "sendPoll", cfg, accountId) : await doSend();
+      },
     }),
   };
 }
