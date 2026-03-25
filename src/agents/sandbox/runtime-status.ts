@@ -55,6 +55,7 @@ export function resolveSandboxRuntimeStatus(params: {
   mode: SandboxConfig["mode"];
   sandboxed: boolean;
   toolPolicy: SandboxToolPolicyResolved;
+  dangerouslyAllowUnsandboxedSubagentSpawn?: boolean;
 } {
   const sessionKey = params.sessionKey?.trim() ?? "";
   const agentId = resolveSessionAgentId({
@@ -78,6 +79,8 @@ export function resolveSandboxRuntimeStatus(params: {
     mode: sandboxCfg.mode,
     sandboxed,
     toolPolicy: resolveSandboxToolPolicyForAgent(cfg, agentId),
+    dangerouslyAllowUnsandboxedSubagentSpawn:
+      sandboxCfg.dangerouslyAllowUnsandboxedSubagentSpawn,
   };
 }
 
