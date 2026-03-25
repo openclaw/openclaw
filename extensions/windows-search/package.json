@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/windows-search-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OpenClaw Windows File Search plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  }
+}
