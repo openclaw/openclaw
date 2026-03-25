@@ -11,19 +11,32 @@ type RegistryState = {
   version: number;
 };
 
+type GlobalRuntimeState = {
+  __openclaw_plugin_runtime_state?: { registry?: PluginRegistry | null };
+};
+
 const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
     [REGISTRY_STATE]?: RegistryState;
   };
+  const runtimeGlobal = globalThis as typeof globalThis & GlobalRuntimeState;
+
   if (!globalState[REGISTRY_STATE]) {
-    globalState[REGISTRY_STATE] = {
+    const initialState: RegistryState = {
       registry: createEmptyPluginRegistry(),
       httpRouteRegistry: null,
       httpRouteRegistryPinned: false,
       key: null,
       version: 0,
     };
+
+    globalState[REGISTRY_STATE] = initialState;
+
+    runtimeGlobal.__openclaw_plugin_runtime_state = {
+      registry: initialState.registry,
+    };
   }
+
   return globalState[REGISTRY_STATE];
 })();
 
@@ -34,6 +47,10 @@ export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: str
   }
   state.key = cacheKey ?? null;
   state.version += 1;
+
+  const runtimeGlobal = globalThis as typeof globalThis & GlobalRuntimeState;
+
+  runtimeGlobal.__openclaw_plugin_runtime_state = { registry };
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
