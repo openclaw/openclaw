@@ -123,6 +123,12 @@ describe("monitorDiscordProvider", () => {
 
   beforeAll(async () => {
     vi.doMock("../accounts.js", () => ({
+      forgetDiscordManagedBotIdentity: (
+        ...args: Parameters<typeof forgetDiscordManagedBotIdentityMock>
+      ) => forgetDiscordManagedBotIdentityMock(...args),
+      rememberDiscordManagedBotIdentity: (
+        ...args: Parameters<typeof rememberDiscordManagedBotIdentityMock>
+      ) => rememberDiscordManagedBotIdentityMock(...args),
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
     }));
