@@ -16,7 +16,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { QQBotAccountConfig } from "./types.js";
-import { getUpdateInfo } from "./update-checker.js";
 import { debugLog } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
 const require = createRequire(import.meta.url);
@@ -148,20 +147,10 @@ registerCommand({
 registerCommand({
   name: "bot-version",
   description: "查看框架版本号",
-  usage: [`/bot-version`, ``, `查看当前 OpenClaw 框架版本。`, `同时检查是否有新版本可用。`].join(
-    "\n",
-  ),
+  usage: [`/bot-version`, ``, `查看当前 OpenClaw 框架版本。`].join("\n"),
   handler: async () => {
     const frameworkVersion = resolveRuntimeServiceVersion();
     const lines = [`🦞OpenClaw 版本：${frameworkVersion}`];
-    const info = await getUpdateInfo();
-    if (info.checkedAt === 0) {
-      lines.push(`⏳ 版本检查中...`);
-    } else if (info.error) {
-      lines.push(`⚠️ 版本检查失败`);
-    } else if (info.hasUpdate && info.latest) {
-      lines.push(`🆕最新可用版本：v${info.latest}`);
-    }
     lines.push(`🌟官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`);
     return lines.join("\n");
   },

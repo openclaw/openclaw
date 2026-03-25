@@ -55,7 +55,6 @@ import type {
   GroupMessageEvent,
 } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
-import { triggerUpdateCheck } from "./update-checker.js";
 import { resolveTTSConfig } from "./utils/audio-convert.js";
 import { runDiagnostics } from "./utils/platform.js";
 import { parseFaceTags, parseRefIndices, buildAttachmentSummaries } from "./utils/text-parsing.js";
@@ -117,9 +116,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       log?.info(`[qqbot:${account.accountId}] ${w}`);
     }
   }
-
-  // 后台版本检查（供 /bot-version、/bot-upgrade 指令被动查询）
-  triggerUpdateCheck(log);
 
   // 初始化 API 配置（markdown 支持）
   initApiConfig(account.appId, {
