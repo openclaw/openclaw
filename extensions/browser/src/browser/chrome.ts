@@ -306,7 +306,7 @@ export async function launchOpenClawChrome(
   if (!exe) {
     throw new Error(
       "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows)." +
-        " Set `browser.executablePath` in your OpenClaw config to the path of a Chromium-based browser.",
+        ` Set \`browser.executablePath\` in ${CONFIG_DIR}/openclaw.json to the path of a Chromium-based browser.`,
     );
   }
 
