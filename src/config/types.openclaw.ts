@@ -23,6 +23,7 @@ import type {
   MessagesConfig,
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
+import type { MultiAgentGroupsConfig } from "./types.multi-agent.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
@@ -122,6 +123,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
   mcp?: McpConfig;
+  /** Multi-agent group transcript configuration for cross-agent visibility. */
+  multiAgentGroups?: MultiAgentGroupsConfig;
 };
 
 export type ConfigValidationIssue = {

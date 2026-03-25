@@ -14,6 +14,8 @@ import {
   MULTI_AGENT_DEFAULTS,
 } from "./types.multi-agent.js";
 
+export type { TranscriptEntry } from "./types.multi-agent.js";
+
 /**
  * Platforms where bots can see each other's messages natively.
  * - slack: OAuth scopes grant full channel history
@@ -21,12 +23,7 @@ import {
  * - mattermost: Similar to Slack
  * - irc: All clients see all messages (no bot isolation)
  */
-const PLATFORMS_WITH_NATIVE_BOT_VISIBILITY = new Set([
-  "slack",
-  "discord",
-  "mattermost",
-  "irc",
-]);
+const PLATFORMS_WITH_NATIVE_BOT_VISIBILITY = new Set(["slack", "discord", "mattermost", "irc"]);
 
 /**
  * Check if a platform needs the transcript feature.
@@ -53,10 +50,18 @@ function expandPath(path: string): string {
  * Resolve the multi-agent transcript config for a specific group.
  * Returns null if no config exists or the group is not configured.
  */
+/**
+ * Resolved configuration with all defaults applied.
+ */
+export type ResolvedMultiAgentGroupConfig = Required<Omit<MultiAgentGroupConfig, "agents">> & {
+  agents?: string[];
+  resolvedPath: string;
+};
+
 export function resolveMultiAgentTranscriptConfig(
   cfg: OpenClawConfig,
   groupId: string,
-): (MultiAgentGroupConfig & { resolvedPath: string }) | null {
+): ResolvedMultiAgentGroupConfig | null {
   const groups = cfg.multiAgentGroups;
   if (!groups || typeof groups !== "object") {
     return null;
@@ -122,7 +127,7 @@ export function shouldLogResponse(content: string): boolean {
 
 /**
  * Format a transcript entry for writing.
- * 
+ *
  * Note: Markdown format truncates content to 200 chars for readability in the
  * transcript file. Context injection reads full content from JSON format or
  * aggregates markdown entries. This is intentional — transcript file is for
@@ -144,9 +149,7 @@ export function formatTranscriptEntry(
   const dateStr = entry.timestamp.toISOString().replace("T", " ").slice(0, 19);
   // Summarize long content for transcript (first 200 chars)
   const summary =
-    entry.content.length > 200
-      ? entry.content.slice(0, 200).trim() + "..."
-      : entry.content;
+    entry.content.length > 200 ? entry.content.slice(0, 200).trim() + "..." : entry.content;
 
   return `### ${dateStr} - ${entry.agentId}\n${summary}`;
 }

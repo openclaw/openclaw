@@ -6,12 +6,12 @@
  */
 
 import { readFile, stat, writeFile } from "fs/promises";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveMultiAgentTranscriptConfig,
   platformNeedsTranscript,
   type TranscriptEntry,
 } from "../config/multi-agent-groups.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("multi-agent-transcript-context");
@@ -85,7 +85,7 @@ async function readTranscriptEntries(
     // Return most recent entries up to limit
     return entries.slice(-limit);
   } catch (err) {
-    log.error(`Failed to read transcript: ${err}`);
+    log.error(`Failed to read transcript: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
 }
@@ -150,9 +150,7 @@ export async function injectMultiAgentTranscript(
   }
 
   // Filter out current agent's entries (they see their own history)
-  const peerEntries = allEntries.filter(
-    (e) => e.agentId.toLowerCase() !== agentId.toLowerCase(),
-  );
+  const peerEntries = allEntries.filter((e) => e.agentId.toLowerCase() !== agentId.toLowerCase());
 
   if (peerEntries.length === 0) {
     return null;
@@ -160,9 +158,7 @@ export async function injectMultiAgentTranscript(
 
   // Filter out old entries based on pruneAfterHours
   const cutoffTime = Date.now() - config.pruneAfterHours * 60 * 60 * 1000;
-  const recentEntries = peerEntries.filter(
-    (e) => e.timestamp.getTime() > cutoffTime,
-  );
+  const recentEntries = peerEntries.filter((e) => e.timestamp.getTime() > cutoffTime);
 
   if (recentEntries.length === 0) {
     return null;
@@ -183,9 +179,7 @@ export async function pruneTranscript(
   const allEntries = await readTranscriptEntries(filePath, format, Infinity);
   const cutoffTime = Date.now() - pruneAfterHours * 60 * 60 * 1000;
 
-  const recentEntries = allEntries.filter(
-    (e) => e.timestamp.getTime() > cutoffTime,
-  );
+  const recentEntries = allEntries.filter((e) => e.timestamp.getTime() > cutoffTime);
 
   const removed = allEntries.length - recentEntries.length;
 

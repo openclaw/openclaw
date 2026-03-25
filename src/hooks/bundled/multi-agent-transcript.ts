@@ -11,19 +11,19 @@
 
 import { appendFile, mkdir } from "fs/promises";
 import { dirname } from "path";
-import {
-  registerInternalHook,
-  isMessageSentEvent,
-  type MessageSentHookEvent,
-} from "../internal-hooks.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveMultiAgentTranscriptConfig,
   platformNeedsTranscript,
   shouldLogResponse,
   formatTranscriptEntry,
 } from "../../config/multi-agent-groups.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  registerInternalHook,
+  isMessageSentEvent,
+  type MessageSentHookEvent,
+} from "../internal-hooks.js";
 
 const log = createSubsystemLogger("multi-agent-transcript");
 
@@ -107,7 +107,9 @@ async function handleMessageSent(event: MessageSentHookEvent): Promise<void> {
 
     log.debug(`Logged transcript entry for ${agentId} in group ${groupId}`);
   } catch (err) {
-    log.error(`Failed to write transcript entry: ${err}`);
+    log.error(
+      `Failed to write transcript entry: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

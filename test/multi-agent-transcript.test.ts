@@ -2,11 +2,11 @@
  * Tests for Multi-Agent Group Transcript Feature
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { OpenClawConfig } from "../src/config/config.js";
 import {
   resolveMultiAgentTranscriptConfig,
   platformNeedsTranscript,
@@ -19,7 +19,6 @@ import {
   injectMultiAgentTranscript,
   pruneTranscript,
 } from "../src/context-engine/multi-agent-transcript.js";
-import type { OpenClawConfig } from "../src/config/config.js";
 
 describe("Multi-Agent Group Transcript", () => {
   let tempDir: string;
@@ -52,7 +51,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("returns config with defaults for configured group", () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath: "/tmp/transcript.md",
           },
         },
@@ -69,7 +68,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("respects explicit config values", () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath: "/tmp/transcript.md",
             contextLimit: 50,
             pruneAfterHours: 24,
@@ -87,7 +86,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("returns null when group is explicitly disabled", () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath: "/tmp/transcript.md",
             enabled: false,
           },
@@ -100,7 +99,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("expands ~ in transcript path", () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath: "~/test/transcript.md",
           },
         },
@@ -204,7 +203,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("parses hyphenated agent IDs correctly", () => {
       const line = "### 2026-03-24 21:30:00 - my-agent-id";
       const result = parseTranscriptEntry(line, "markdown");
-      
+
       expect(result).not.toBeNull();
       expect(result?.agentId).toBe("my-agent-id");
     });
@@ -212,7 +211,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("handles underscores and numbers in agent IDs", () => {
       const line = "### 2026-03-24 21:30:00 - agent_v2_test";
       const result = parseTranscriptEntry(line, "markdown");
-      
+
       expect(result).not.toBeNull();
       expect(result?.agentId).toBe("agent_v2_test");
     });
@@ -227,8 +226,8 @@ describe("Multi-Agent Group Transcript", () => {
     it("returns configured group IDs", () => {
       const cfg = {
         multiAgentGroups: {
-          "group1": { transcriptPath: "/tmp/t1.md" },
-          "group2": { transcriptPath: "/tmp/t2.md" },
+          group1: { transcriptPath: "/tmp/t1.md" },
+          group2: { transcriptPath: "/tmp/t2.md" },
         },
       } as unknown as OpenClawConfig;
 
@@ -240,8 +239,8 @@ describe("Multi-Agent Group Transcript", () => {
     it("excludes disabled groups", () => {
       const cfg = {
         multiAgentGroups: {
-          "group1": { transcriptPath: "/tmp/t1.md" },
-          "group2": { transcriptPath: "/tmp/t2.md", enabled: false },
+          group1: { transcriptPath: "/tmp/t1.md" },
+          group2: { transcriptPath: "/tmp/t2.md", enabled: false },
         },
       } as unknown as OpenClawConfig;
 
@@ -255,7 +254,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("returns null when platform does not need transcript", async () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": { transcriptPath: join(tempDir, "transcript.md") },
+          group123: { transcriptPath: join(tempDir, "transcript.md") },
         },
       } as unknown as OpenClawConfig;
 
@@ -285,7 +284,7 @@ describe("Multi-Agent Group Transcript", () => {
     it("returns null when transcript file does not exist", async () => {
       const cfg = {
         multiAgentGroups: {
-          "group123": { transcriptPath: join(tempDir, "nonexistent.md") },
+          group123: { transcriptPath: join(tempDir, "nonexistent.md") },
         },
       } as unknown as OpenClawConfig;
 
@@ -313,7 +312,7 @@ Peer message
 
       const cfg = {
         multiAgentGroups: {
-          "group123": { transcriptPath, pruneAfterHours: 9999 },
+          group123: { transcriptPath, pruneAfterHours: 9999 },
         },
       } as unknown as OpenClawConfig;
 
@@ -340,7 +339,7 @@ Peer message
 
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath,
             contextLimit: 20,
             pruneAfterHours: 48,
@@ -377,7 +376,7 @@ Peer message
 
       const cfg = {
         multiAgentGroups: {
-          "group123": {
+          group123: {
             transcriptPath,
             format: "json",
             pruneAfterHours: 9999,
