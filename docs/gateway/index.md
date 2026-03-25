@@ -185,8 +185,8 @@ sudo loginctl enable-linger <user>
 Use a system unit for multi-user/always-on hosts.
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now openclaw-gateway[-<profile>].service
+systemctl --user daemon-reload
+systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
   </Tab>
