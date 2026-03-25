@@ -3,7 +3,12 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
-import { GatewayClient } from "./client.js";
+import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
+import {
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
+  MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
+} from "./handshake-timeouts.js";
 
 // Find a free localhost port for ad-hoc WS servers.
 async function getFreePort(): Promise<number> {
@@ -36,47 +41,22 @@ describe("GatewayClient", () => {
     }
   });
 
-  test("uses a 5s default connect-challenge timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const onConnectError = vi.fn();
-      const close = vi.fn();
-      const client = new GatewayClient({ onConnectError });
-      (
-        client as unknown as {
-          ws:
-            | WebSocket
-            | {
-                readyState: number;
-                send: () => void;
-                close: (code: number, reason: string) => void;
-              };
-          queueConnect: () => void;
-        }
-      ).ws = {
-        readyState: WebSocket.OPEN,
-        send: vi.fn(),
-        close,
-      };
-
-      (
-        client as unknown as {
-          queueConnect: () => void;
-        }
-      ).queueConnect();
-
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(onConnectError).not.toHaveBeenCalled();
-      expect(close).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(onConnectError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "gateway connect challenge timeout" }),
-      );
-      expect(close).toHaveBeenCalledWith(1008, "connect challenge timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+  test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
+      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+    );
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 0 })).toBe(
+      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 20_000 })).toBe(
+      MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        connectDelayMs: 2_000,
+        connectChallengeTimeoutMs: 5_000,
+      }),
+    ).toBe(5_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -112,7 +92,7 @@ describe("GatewayClient", () => {
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       const client = new GatewayClient({
         url: `ws://127.0.0.1:${port}`,
-        connectDelayMs: 0,
+        connectChallengeTimeoutMs: 0,
         tickWatchMinIntervalMs: 5,
         onClose: (code, reason) => resolve({ code, reason }),
       });
@@ -363,7 +343,7 @@ r1USnb+wUdA7Zoj/mQ==
       }, 2000);
       client = new GatewayClient({
         url: `wss://127.0.0.1:${port}`,
-        connectDelayMs: 0,
+        connectChallengeTimeoutMs: 0,
         tlsFingerprint: "deadbeef",
         onConnectError: (err) => {
           clearTimeout(timeout);

@@ -6,7 +6,7 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getHandshakeTimeoutMs,
+  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   NODE_CLIENT,
@@ -81,7 +81,7 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
         const ws = await openWs(port);
-        const handshakeTimeoutMs = getHandshakeTimeoutMs();
+        const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
         const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
         expect(closed).toBe(true);
       } finally {
@@ -99,9 +99,9 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        expect(getHandshakeTimeoutMs()).toBe(75);
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
         process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
-        expect(getHandshakeTimeoutMs()).toBe(20);
+        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
