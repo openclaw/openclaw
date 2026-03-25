@@ -75,6 +75,16 @@ function clearConversationTimers(store: TimerStore, key: string): void {
   }
 }
 
+/**
+ * Normalize a channelId to just the provider name (e.g. "telegram:7898601152" → "telegram").
+ * Some event contexts pass the full "provider:chatId" form instead of just "provider".
+ * routeReply expects the bare provider name and returns ok=false for unknown channels.
+ */
+function normalizeChannelForSend(channelId: string): string {
+  // Strip ":anything" suffix — keep only the provider prefix
+  return channelId.replace(/:.*$/, "");
+}
+
 async function sendCacheNotice(params: {
   channelId: string;
   to: string;
@@ -91,12 +101,19 @@ async function sendCacheNotice(params: {
   sendingSet.add(params.conversationKey);
   try {
     const cfg = loadConfig();
+    const normalizedChannel = normalizeChannelForSend(params.channelId);
     const result = await routeReply({
       payload: { text },
-      channel: params.channelId as Parameters<typeof routeReply>[0]["channel"],
+      channel: normalizedChannel as Parameters<typeof routeReply>[0]["channel"],
       to: params.to,
       cfg,
     });
+    if (!result.ok) {
+      log.warn(
+        `cache-ttl-warning: routeReply returned ok=false for ${params.kind} notice to ${params.to}: ${result.error ?? "unknown error"}`,
+      );
+      return {};
+    }
     log.info(`cache-ttl-warning: sent ${params.kind} notice to ${params.to}`);
     return { messageId: result.messageId };
   } catch (err) {
