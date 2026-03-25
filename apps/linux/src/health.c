@@ -315,12 +315,19 @@ static void on_health_probe_finished(GObject *source_object, GAsyncResult *res, 
         goto check_pending;
     }
     
+    if (!comm_ok) {
+        // Do not publish a zeroed health state if we couldn't communicate with the probe
+        g_free(stdout_buf);
+        g_free(stderr_buf);
+        goto check_pending;
+    }
+    
     HealthState hs = {0};
     
-    if (comm_ok && !error && g_subprocess_get_if_exited(subprocess) && g_subprocess_get_exit_status(subprocess) == 0) {
+    if (!error && g_subprocess_get_if_exited(subprocess) && g_subprocess_get_exit_status(subprocess) == 0) {
         hs.last_updated = g_get_real_time();
         parse_health_json(stdout_buf, &hs);
-    } else if (comm_ok) {
+    } else {
         // Subprocess ran but exited non-zero — still mark timestamp so stale data is cleared
         hs.last_updated = g_get_real_time();
     }

@@ -1,3 +1,17 @@
+/*
+ * systemd_helpers.c
+ *
+ * Helper functions for systemd integration in the OpenClaw Linux Companion App.
+ *
+ * Provides utilities for:
+ * - Identifying OpenClaw gateway unit files by name and content
+ * - Normalizing environment variable overrides and profile names
+ * - Parsing systemd service properties from D-Bus
+ * - Discovering systemd unit files across all standard search paths
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
 #include "systemd_helpers.h"
 #include "log.h"
 #include <string.h>
@@ -127,6 +141,30 @@ gchar* systemd_normalize_profile(const gchar *raw_profile) {
     }
     g_free(trimmed);
     return res;
+}
+
+GPtrArray* systemd_helpers_get_user_unit_paths(const gchar *home_dir) {
+    GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+    if (home_dir) {
+        g_ptr_array_add(paths, g_build_filename(home_dir, ".config", "systemd", "user", NULL));
+        g_ptr_array_add(paths, g_build_filename(home_dir, ".local", "share", "systemd", "user", NULL));
+    }
+    g_ptr_array_add(paths, g_strdup("/etc/systemd/user"));
+    g_ptr_array_add(paths, g_strdup("/etc/xdg/systemd/user"));
+    g_ptr_array_add(paths, g_strdup("/usr/lib/systemd/user"));
+    g_ptr_array_add(paths, g_strdup("/usr/local/lib/systemd/user"));
+    g_ptr_array_add(paths, g_strdup("/usr/share/systemd/user"));
+    g_ptr_array_add(paths, g_strdup("/lib/systemd/user"));
+    return paths;
+}
+
+GPtrArray* systemd_helpers_get_system_unit_paths(void) {
+    GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(paths, g_strdup("/etc/systemd/system"));
+    g_ptr_array_add(paths, g_strdup("/usr/lib/systemd/system"));
+    g_ptr_array_add(paths, g_strdup("/usr/local/lib/systemd/system"));
+    g_ptr_array_add(paths, g_strdup("/lib/systemd/system"));
+    return paths;
 }
 
 gboolean systemd_parse_service_properties(GVariant *props, const gchar *home_dir, gchar ***exec_start_argv_out, gchar **working_directory_out, gchar ***environment_out) {
