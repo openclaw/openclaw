@@ -114,11 +114,10 @@ describe("scripts/test-parallel memory trace parsing", () => {
 describe("scripts/test-parallel lane planning", () => {
   it("keeps serial profile on split unit lanes instead of one giant unit worker", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
       cwd: repoRoot,
       env: {
         ...process.env,
-        OPENCLAW_TEST_LIST_LANES: "1",
         OPENCLAW_TEST_PROFILE: "serial",
       },
       encoding: "utf8",
@@ -130,12 +129,11 @@ describe("scripts/test-parallel lane planning", () => {
 
   it("recycles default local unit-fast runs into bounded batches", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
       cwd: repoRoot,
       env: {
         ...process.env,
         CI: "",
-        OPENCLAW_TEST_LIST_LANES: "1",
         OPENCLAW_TEST_UNIT_FAST_LANES: "1",
         OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
       },
@@ -150,13 +148,15 @@ describe("scripts/test-parallel lane planning", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
     const output = execFileSync(
       "node",
-      ["scripts/test-parallel.mjs", "src/auto-reply/reply/followup-runner.test.ts"],
+      [
+        "scripts/test-parallel.mjs",
+        "--plan",
+        "--files",
+        "src/auto-reply/reply/followup-runner.test.ts",
+      ],
       {
         cwd: repoRoot,
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_LIST_LANES: "1",
-        },
+        env: process.env,
         encoding: "utf8",
       },
     );
@@ -167,20 +167,41 @@ describe("scripts/test-parallel lane planning", () => {
 
   it("auto-applies the macmini profile on mid-memory local macOS hosts", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        CI: "",
-        RUNNER_OS: "macOS",
-        OPENCLAW_TEST_LIST_LANES: "1",
-        OPENCLAW_TEST_HOST_CPU_COUNT: "10",
-        OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+    const output = execFileSync(
+      "node",
+      ["scripts/test-parallel.mjs", "--plan", "--surface", "unit", "--surface", "extensions"],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CI: "",
+          RUNNER_OS: "macOS",
+          OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+          OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+        },
+        encoding: "utf8",
       },
-      encoding: "utf8",
-    });
+    );
 
+    expect(output).toContain("runtimeProfile=macmini");
     expect(output).toContain("unit-fast filters=all maxWorkers=3");
     expect(output).toContain("extensions filters=all maxWorkers=1");
+  });
+
+  it("explains targeted file ownership and execution policy", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync(
+      "node",
+      ["scripts/test-parallel.mjs", "--explain", "src/auto-reply/reply/followup-runner.test.ts"],
+      {
+        cwd: repoRoot,
+        env: process.env,
+        encoding: "utf8",
+      },
+    );
+
+    expect(output).toContain("surface=base");
+    expect(output).toContain("reasons=base-surface,base-pinned-manifest");
+    expect(output).toContain("pool=forks");
   });
 });

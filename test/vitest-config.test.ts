@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveRuntimeProfile } from "../scripts/test-planner/runtime-profile.mjs";
 import { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
 
 describe("resolveLocalVitestMaxWorkers", () => {
@@ -30,5 +31,21 @@ describe("resolveLocalVitestMaxWorkers", () => {
         },
       ),
     ).toBe(2);
+  });
+
+  it("classifies mid-memory local macOS hosts as the macmini runtime profile", () => {
+    expect(
+      resolveRuntimeProfile(
+        {
+          RUNNER_OS: "macOS",
+        },
+        {
+          cpuCount: 10,
+          totalMemoryBytes: 64 * 1024 ** 3,
+          platform: "darwin",
+          mode: "local",
+        },
+      ).runtimeProfileName,
+    ).toBe("macmini");
   });
 });
