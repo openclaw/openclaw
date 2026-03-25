@@ -59,6 +59,7 @@ internal data class ProxyHandshake(
 
 internal data class ProxyNodeSelection(
   val node: ProxyNode?,
+  val handshake: ProxyHandshake? = null,
   val failureStatus: String,
 )
 
@@ -85,7 +86,7 @@ internal suspend fun selectReadyProxyNode(
       lastFailureStatus = handshake.statusText?.takeIf { it.isNotBlank() } ?: gatewayUnavailableStatus
       continue
     }
-    return ProxyNodeSelection(node = node, failureStatus = lastFailureStatus)
+    return ProxyNodeSelection(node = node, handshake = handshake, failureStatus = lastFailureStatus)
   }
   return ProxyNodeSelection(node = null, failureStatus = lastFailureStatus)
 }
@@ -348,9 +349,6 @@ class PhoneProxyClient internal constructor(
 
   private fun handlePong(sourceNodeId: String, data: String) {
     val handshake = parseProxyHandshake(data)
-    handshake.gatewayConfig?.let { syncedConfig ->
-      onGatewayConfigSynced(syncedConfig, handshake.tlsFingerprintSha256)
-    }
     val probe =
       synchronized(probeLock) {
         pendingProbe?.takeIf {
@@ -402,6 +400,9 @@ class PhoneProxyClient internal constructor(
           probePhoneNode(phone, generation)
         }
       selection.node?.let { readyNode ->
+        selection.handshake?.takeIf { it.ready }?.gatewayConfig?.let { syncedConfig ->
+          onGatewayConfigSynced(syncedConfig, selection.handshake.tlsFingerprintSha256)
+        }
         acceptConnectedPhoneNode(readyNode.id, generation)
         return
       }

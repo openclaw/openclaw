@@ -329,7 +329,7 @@ class PhoneProxyClientTest {
   }
 
   @Test
-  fun `proxy handshake syncs direct fallback config from phone`() = runTest {
+  fun `proxy handshake does not sync direct fallback config from a not ready phone`() = runTest {
     val scope = TestScope(StandardTestDispatcher(testScheduler))
     val messageTransport = FakeProxyMessageTransport()
     val syncedConfigs = mutableListOf<Pair<WearGatewayConfig, String?>>()
@@ -381,6 +381,64 @@ class PhoneProxyClientTest {
     )
     runCurrent()
 
+    assertTrue(syncedConfigs.isEmpty())
+    assertFalse(client.connected.value)
+    assertEquals("Gateway unavailable", client.statusText.value)
+    scope.cancel()
+  }
+
+  @Test
+  fun `proxy handshake syncs direct fallback config from the selected ready phone`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val syncedConfigs = mutableListOf<Pair<WearGatewayConfig, String?>>()
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "phone-node",
+            displayName = "Pixel",
+            isNearby = true,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+        onGatewayConfigSynced = { config, fingerprint ->
+          syncedConfigs += config to fingerprint
+        },
+      )
+
+    client.connect()
+    runCurrent()
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "phone-node",
+        data =
+          """
+          {
+            "ready": true,
+            "gatewayConfig": {
+              "host": "gateway.example",
+              "port": 443,
+              "useTls": true,
+              "token": "token-1",
+              "bootstrapToken": "bootstrap-1",
+              "password": "password-1",
+              "tlsFingerprintSha256": "sha256:abcd"
+            }
+          }
+          """.trimIndent().toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
     assertEquals(1, syncedConfigs.size)
     val (config, fingerprint) = syncedConfigs.single()
     assertEquals("gateway.example", config.host)
@@ -390,6 +448,101 @@ class PhoneProxyClientTest {
     assertEquals("password-1", config.password)
     assertTrue(config.useTls)
     assertEquals("sha256:abcd", fingerprint)
+    assertTrue(client.connected.value)
+    assertEquals("Connected via phone", client.statusText.value)
+    scope.cancel()
+  }
+
+  @Test
+  fun `proxy handshake syncs direct fallback config only from the selected ready phone`() = runTest {
+    val scope = TestScope(StandardTestDispatcher(testScheduler))
+    val messageTransport = FakeProxyMessageTransport()
+    val syncedConfigs = mutableListOf<Pair<WearGatewayConfig, String?>>()
+    val nodeFinder =
+      FakeProxyNodeFinder(
+        listOf(
+          ProxyNode(
+            id = "bad-node",
+            displayName = "Bad phone",
+            isNearby = true,
+          ),
+          ProxyNode(
+            id = "good-node",
+            displayName = "Good phone",
+            isNearby = false,
+          ),
+        ),
+      )
+    val client =
+      PhoneProxyClient(
+        stringResolver = ::testString,
+        formattedStringResolver = ::testFormattedString,
+        scope = scope,
+        messageTransport = messageTransport,
+        nodeFinder = nodeFinder,
+        onGatewayConfigSynced = { config, fingerprint ->
+          syncedConfigs += config to fingerprint
+        },
+      )
+
+    client.connect()
+    runCurrent()
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "bad-node",
+        data =
+          """
+          {
+            "ready": false,
+            "statusText": "Gateway unavailable",
+            "gatewayConfig": {
+              "host": "bad.example",
+              "port": 443,
+              "useTls": true,
+              "token": "bad-token",
+              "bootstrapToken": "bad-bootstrap",
+              "password": "bad-password",
+              "tlsFingerprintSha256": "sha256:bad"
+            }
+          }
+          """.trimIndent().toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    messageTransport.emit(
+      ProxyMessageEvent(
+        path = "/openclaw/pong",
+        sourceNodeId = "good-node",
+        data =
+          """
+          {
+            "ready": true,
+            "gatewayConfig": {
+              "host": "good.example",
+              "port": 443,
+              "useTls": true,
+              "token": "good-token",
+              "bootstrapToken": "good-bootstrap",
+              "password": "good-password",
+              "tlsFingerprintSha256": "sha256:good"
+            }
+          }
+          """.trimIndent().toByteArray(Charsets.UTF_8),
+      ),
+    )
+    runCurrent()
+
+    assertEquals(1, syncedConfigs.size)
+    val (config, fingerprint) = syncedConfigs.single()
+    assertEquals("good.example", config.host)
+    assertEquals("good-token", config.token)
+    assertEquals("good-bootstrap", config.bootstrapToken)
+    assertEquals("good-password", config.password)
+    assertEquals("sha256:good", fingerprint)
+    assertTrue(client.connected.value)
+    assertEquals("Connected via phone", client.statusText.value)
     scope.cancel()
   }
 
