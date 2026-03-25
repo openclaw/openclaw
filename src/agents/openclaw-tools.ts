@@ -14,6 +14,7 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createMctlAgentExternalTool } from "./tools/mctl-agent-external-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -177,6 +178,7 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createMctlAgentExternalTool(),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
