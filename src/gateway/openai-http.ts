@@ -487,8 +487,10 @@ export async function handleOpenAiHttpRequest(
   // Check if router is configured for this agent
   const routerConfig = getGlobalRouterConfig();
   let router: ModelRouter | undefined;
+  // Use router only when no explicit model override is provided by caller
+  const useRouter = routerConfig?.enabled && !modelOverride;
   let resolvedModel = modelOverride;
-  if (routerConfig?.enabled) {
+  if (useRouter) {
     router = new ModelRouter(routerConfig);
     const routerModel = router.getCurrentModel();
     // Validate router-selected model against allowlist
