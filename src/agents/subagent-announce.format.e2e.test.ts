@@ -94,6 +94,9 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
+    getLatestSubagentRunByChildSessionKey: vi.fn(
+      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+    ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
@@ -290,6 +293,9 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string, _runId: string) =>
         subagentRegistryMock.countPendingDescendantRuns(sessionKey),
       );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
+      .mockClear()
+      .mockReturnValue(undefined);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
@@ -2319,6 +2325,75 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("result from child b");
     expect(msg).not.toContain("stale result from child a");
     expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+  });
+
+  it("does not announce a direct child that moved to a newer parent", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:old-parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-old-parent-settled") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-old-parent",
+            childSessionKey: "agent:main:subagent:shared-child",
+            requesterSessionKey: "agent:main:subagent:old-parent",
+            requesterDisplayKey: "old-parent",
+            task: "shared child task",
+            label: "shared-child",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "stale old parent result",
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
+      (childSessionKey: string) => {
+        if (childSessionKey !== "agent:main:subagent:shared-child") {
+          return undefined;
+        }
+        return {
+          runId: "run-child-new-parent",
+          childSessionKey,
+          requesterSessionKey: "agent:main:subagent:new-parent",
+          requesterDisplayKey: "new-parent",
+          task: "shared child task",
+          label: "shared-child",
+          cleanup: "keep",
+          createdAt: 11,
+          endedAt: 22,
+          cleanupCompletedAt: 23,
+          frozenResultText: "current new parent result",
+          outcome: { status: "ok" },
+        };
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:old-parent",
+      childRunId: "run-old-parent-settled",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "old parent fallback reply",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).not.toContain("Child completion results:");
+    expect(msg).not.toContain("stale old parent result");
+    expect(msg).toContain("old parent fallback reply");
   });
 
   it("wakes an ended orchestrator run with settled child results before any upward announce", async () => {
