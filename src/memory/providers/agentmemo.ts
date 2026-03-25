@@ -169,7 +169,7 @@ export class AgentMemoSearchManager implements MemorySearchManager {
 
   status(): MemoryProviderStatus {
     return {
-      backend: "agentmemo" as MemoryProviderStatus["backend"],
+      backend: "agentmemo",
       provider: "agentmemo",
       model: "external",
       custom: {
