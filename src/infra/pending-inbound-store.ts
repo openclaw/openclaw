@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
-import { readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { writeJsonAtomic } from "./json-files.js";
 
 const STORE_FILENAME = "pending-inbound.json";
 
@@ -177,15 +177,19 @@ export async function readPendingInbound(stateDir: string): Promise<PendingInbou
  */
 export async function clearPendingInbound(stateDir: string): Promise<void> {
   const filePath = resolveStorePath(stateDir);
-  try {
-    await fs.unlink(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return;
-    }
-    throw err;
-  }
+  await withInProcessQueue(filePath, () =>
+    withFileLock(filePath, PENDING_INBOUND_LOCK_OPTIONS, async () => {
+      try {
+        await fs.unlink(filePath);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code === "ENOENT") {
+          return;
+        }
+        throw err;
+      }
+    }),
+  );
 }
 
 /**
@@ -321,8 +325,55 @@ export async function readActiveTurn(
 }
 
 async function readPendingInboundFile(filePath: string): Promise<PendingInboundFile> {
-  const data = await readJsonFile<PendingInboundFile>(filePath);
+  // Distinguish "file not found" (return empty store, normal startup) from
+  // "file exists but unreadable/corrupt" (log warning, backup, return empty
+  // but do NOT silently overwrite without a safety net).
+  let raw: string;
+  try {
+    const buf = await fs.readFile(filePath);
+    raw = buf.toString("utf8");
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return { version: 1, entries: {} };
+    }
+    // I/O error reading an existing file — surface it so callers can decide.
+    throw err;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    // File exists but is corrupt JSON. Write a .bak so data is preserved for
+    // debugging, then return an empty store rather than silently overwriting.
+    const bakPath = `${filePath}.bak`;
+    try {
+      await fs.writeFile(bakPath, raw, { encoding: "utf8", mode: 0o600 });
+    } catch {
+      // best-effort backup; ignore write failures
+    }
+    console.warn(
+      `pending-inbound-store: ${filePath} contains invalid JSON — returning empty store (backup written to ${bakPath})`,
+    );
+    return { version: 1, entries: {} };
+  }
+
+  const data = parsed as PendingInboundFile | null;
   if (data && data.version === 1 && typeof data.entries === "object" && data.entries !== null) {
+    // Validate activeTurns: must be a plain object or absent; default to {} on
+    // unexpected types to prevent downstream code from crashing on bad data.
+    if (
+      data.activeTurns !== undefined &&
+      (typeof data.activeTurns !== "object" ||
+        data.activeTurns === null ||
+        Array.isArray(data.activeTurns))
+    ) {
+      console.warn(
+        `pending-inbound-store: activeTurns has unexpected type (${typeof data.activeTurns}) — resetting to {}`,
+      );
+      data.activeTurns = {};
+    }
     // Enforce a hard cap on the number of entries processed to prevent unbounded
     // memory/CPU usage from a corrupted or oversized pending-inbound.json.
     const keys = Object.keys(data.entries);
@@ -334,7 +385,7 @@ async function readPendingInboundFile(filePath: string): Promise<PendingInboundF
           capped[k] = data.entries[k]!;
         }
       }
-      return { version: 1, entries: capped };
+      return { version: 1, entries: capped, activeTurns: data.activeTurns };
     }
     return data;
   }
