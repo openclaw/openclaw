@@ -108,7 +108,7 @@ export async function runCli(argv: string[] = process.argv) {
   }
   let normalizedArgv = parsedProfile.argv;
 
-  loadCliDotEnv();
+  loadCliDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
-import { loadDotEnv } from "./dotenv.js";
+import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -58,7 +58,7 @@ describe("loadDotEnv", () => {
         delete process.env.FOO;
         delete process.env.BAR;
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-cwd");
         expect(process.env.BAR).toBe("1");
@@ -76,7 +76,7 @@ describe("loadDotEnv", () => {
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
       });
@@ -90,7 +90,7 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
       });
@@ -120,7 +120,7 @@ describe("loadDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
@@ -129,6 +129,25 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+        );
+
+        delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       });
     });
   });
@@ -144,7 +163,7 @@ describe("loadDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
@@ -163,7 +182,7 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
 
-        loadDotEnv();
+        loadDotEnv({ quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.SAFE_KEY).toBe("trusted-global");
@@ -195,7 +214,7 @@ describe("loadCliDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.BAR;
 
-        loadCliDotEnv();
+        loadCliDotEnv({ quiet: true });
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");

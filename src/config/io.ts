@@ -1165,7 +1165,7 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   if (env !== process.env) {
     return;
   }
-  loadDotEnv();
+  loadDotEnv({ quiet: true });
 }
 
 export function parseConfigJson5(
