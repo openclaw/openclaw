@@ -149,8 +149,10 @@ describe("device pairing tokens", () => {
     expect(second.created).toBe(true);
     expect(second.request.requestId).not.toBe(first.request.requestId);
     expect(second.request.role).toBe("operator");
-    expect(second.request.roles).toEqual(["operator"]);
-    expect(second.request.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(second.request.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(second.request.scopes).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
 
     const list = await listDevicePairing(baseDir);
     expect(list.pending).toHaveLength(1);
@@ -158,13 +160,47 @@ describe("device pairing tokens", () => {
 
     await approveDevicePairing(second.request.requestId, baseDir);
     const paired = await getPairedDevice("device-1", baseDir);
-    expect(paired?.roles).toEqual(["operator"]);
-    expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
+  });
+
+  test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+        silent: false,
+      },
+      baseDir,
+    );
+    expect(first.request.silent).toBe(false);
+
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.silent).toBe(false);
   });
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    });
 
     await expect(
       verifyDeviceBootstrapToken({
@@ -258,7 +294,11 @@ describe("device pairing tokens", () => {
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.scopes).toEqual(["operator.admin"]);
     expect(paired?.approvedScopes).toEqual(["operator.admin"]);
-    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
   });
 
   test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {

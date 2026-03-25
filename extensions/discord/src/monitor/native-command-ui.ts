@@ -5,32 +5,32 @@ import {
   Row,
   StringSelectMenu,
   TextDisplay,
+  type AutocompleteInteraction,
   type ButtonInteraction,
   type CommandInteraction,
   type ComponentData,
   type StringSelectMenuInteraction,
 } from "@buape/carbon";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
   resolveCommandArgChoices,
+  resolveStoredModelOverride,
   serializeCommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/reply-runtime";
-import type {
-  ChatCommandDefinition,
-  CommandArgDefinition,
-  CommandArgValues,
-  CommandArgs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  type ChatCommandDefinition,
+  type CommandArgDefinition,
+  type CommandArgValues,
+  type CommandArgs,
+} from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeDiscordSlug } from "./allow-list.js";
+import { resolveDiscordChannelConfigWithFallback, resolveDiscordGuildEntry } from "./allow-list.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -47,7 +47,7 @@ import {
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
-import { resolveDiscordBoundConversationRoute } from "./route-resolution.js";
+import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
@@ -219,11 +219,16 @@ function buildDiscordModelPickerNoticePayload(message: string): { components: Co
   };
 }
 
-async function resolveDiscordModelPickerRoute(params: {
-  interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
+async function resolveDiscordModelPickerRouteState(params: {
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction
+    | AutocompleteInteraction;
   cfg: ReturnType<typeof loadConfig>;
   accountId: string;
   threadBindings: ThreadBindingManager;
+  enforceConfiguredBindingReadiness?: boolean;
 }) {
   const { interaction, cfg, accountId } = params;
   const channel = interaction.channel;
@@ -257,7 +262,7 @@ async function resolveDiscordModelPickerRoute(params: {
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
     : undefined;
-  return resolveDiscordBoundConversationRoute({
+  return await resolveDiscordNativeInteractionRouteState({
     cfg,
     accountId,
     guildId: interaction.guild?.id ?? undefined,
@@ -267,8 +272,70 @@ async function resolveDiscordModelPickerRoute(params: {
     directUserId: interaction.user?.id ?? rawChannelId,
     conversationId: rawChannelId,
     parentConversationId: threadParentId,
-    boundSessionKey: threadBinding?.targetSessionKey,
+    threadBinding,
+    enforceConfiguredBindingReadiness: params.enforceConfiguredBindingReadiness,
   });
+}
+
+async function resolveDiscordModelPickerRoute(params: {
+  interaction:
+    | CommandInteraction
+    | ButtonInteraction
+    | StringSelectMenuInteraction
+    | AutocompleteInteraction;
+  cfg: ReturnType<typeof loadConfig>;
+  accountId: string;
+  threadBindings: ThreadBindingManager;
+}) {
+  const resolved = await resolveDiscordModelPickerRouteState(params);
+  return resolved.effectiveRoute;
+}
+
+export async function resolveDiscordNativeChoiceContext(params: {
+  interaction: AutocompleteInteraction;
+  cfg: ReturnType<typeof loadConfig>;
+  accountId: string;
+  threadBindings: ThreadBindingManager;
+}): Promise<{ provider?: string; model?: string } | null> {
+  try {
+    const resolved = await resolveDiscordModelPickerRouteState({
+      interaction: params.interaction,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      threadBindings: params.threadBindings,
+      enforceConfiguredBindingReadiness: true,
+    });
+    if (resolved.bindingReadiness && !resolved.bindingReadiness.ok) {
+      return null;
+    }
+    const route = resolved.effectiveRoute;
+    const fallback = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: route.agentId,
+    });
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const sessionStore = loadSessionStore(storePath);
+    const sessionEntry = sessionStore[route.sessionKey];
+    const override = resolveStoredModelOverride({
+      sessionEntry,
+      sessionStore,
+      sessionKey: route.sessionKey,
+    });
+    if (!override?.model) {
+      return {
+        provider: fallback.provider,
+        model: fallback.model,
+      };
+    }
+    return {
+      provider: override.provider || fallback.provider,
+      model: override.model,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function resolveDiscordModelPickerCurrentModel(params: {

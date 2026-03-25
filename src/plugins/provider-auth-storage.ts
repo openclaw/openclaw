@@ -1,13 +1,13 @@
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
 import {
   buildApiKeyCredential,
   type ApiKeyStorageOptions,
   writeOAuthCredentials,
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
+import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 

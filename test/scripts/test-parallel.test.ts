@@ -1,5 +1,11 @@
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseCompletedTestFileLines } from "../../scripts/test-parallel-memory.mjs";
+import {
+  parseCompletedTestFileLines,
+  parseMemoryTraceSummaryLines,
+  parseMemoryValueKb,
+} from "../../scripts/test-parallel-memory.mjs";
 import {
   appendCapturedOutput,
   hasFatalTestRunOutput,
@@ -75,5 +81,68 @@ describe("scripts/test-parallel memory trace parsing", () => {
         ].join("\n"),
       ),
     ).toEqual([]);
+  });
+
+  it("parses memory trace summary lines and hotspot deltas", () => {
+    const summaries = parseMemoryTraceSummaryLines(
+      [
+        "2026-03-20T04:32:18.7721466Z [test-parallel][mem] summary unit-fast files=360 peak=13.22GiB totalDelta=6.69GiB peakAt=poll top=src/config/schema.help.quality.test.ts:1.06GiB, src/infra/update-runner.test.ts:+463.6MiB",
+      ].join("\n"),
+    );
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toEqual({
+      lane: "unit-fast",
+      files: 360,
+      peakRssKb: parseMemoryValueKb("13.22GiB"),
+      totalDeltaKb: parseMemoryValueKb("6.69GiB"),
+      peakAt: "poll",
+      top: [
+        {
+          file: "src/config/schema.help.quality.test.ts",
+          deltaKb: parseMemoryValueKb("1.06GiB"),
+        },
+        {
+          file: "src/infra/update-runner.test.ts",
+          deltaKb: parseMemoryValueKb("+463.6MiB"),
+        },
+      ],
+    });
+  });
+});
+
+describe("scripts/test-parallel lane planning", () => {
+  it("keeps serial profile on split unit lanes instead of one giant unit worker", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_PROFILE: "serial",
+      },
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("unit-fast");
+    expect(output).not.toContain("unit filters=all maxWorkers=1");
+  });
+
+  it("recycles default local unit-fast runs into bounded batches", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CI: "",
+        OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
+      },
+      encoding: "utf8",
+    });
+
+    expect(output).toContain("unit-fast-batch-");
+    expect(output).not.toContain("unit-fast filters=all maxWorkers=");
   });
 });

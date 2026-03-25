@@ -142,10 +142,12 @@ describe("plugin contract registry", () => {
 
   it("keeps bundled web search ownership explicit", () => {
     expect(findWebSearchIdsForPlugin("brave")).toEqual(["brave"]);
+    expect(findWebSearchIdsForPlugin("exa")).toEqual(["exa"]);
     expect(findWebSearchIdsForPlugin("firecrawl")).toEqual(["firecrawl"]);
     expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
     expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);
     expect(findWebSearchIdsForPlugin("perplexity")).toEqual(["perplexity"]);
+    expect(findWebSearchIdsForPlugin("tavily")).toEqual(["tavily"]);
     expect(findWebSearchIdsForPlugin("xai")).toEqual(["grok"]);
   });
 
@@ -175,6 +177,14 @@ describe("plugin contract registry", () => {
   });
 
   it("keeps bundled provider and web search tool ownership explicit", () => {
+    expect(findRegistrationForPlugin("exa")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webSearchProviderIds: ["exa"],
+      toolNames: [],
+    });
     expect(findRegistrationForPlugin("firecrawl")).toMatchObject({
       providerIds: [],
       speechProviderIds: [],
@@ -182,6 +192,14 @@ describe("plugin contract registry", () => {
       imageGenerationProviderIds: [],
       webSearchProviderIds: ["firecrawl"],
       toolNames: ["firecrawl_search", "firecrawl_scrape"],
+    });
+    expect(findRegistrationForPlugin("tavily")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webSearchProviderIds: ["tavily"],
+      toolNames: ["tavily_search", "tavily_extract"],
     });
   });
 
