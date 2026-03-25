@@ -919,9 +919,13 @@ final class NodeAppModel {
             }
             let json = try await self.screen.eval(javaScript: """
             (() => {
-              const host = globalThis.openclawA2UI;
-              if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
-              return JSON.stringify(host.reset());
+              try {
+                const host = globalThis.openclawA2UI;
+                if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
+                return JSON.stringify(host.reset());
+              } catch (e) {
+                return JSON.stringify({ ok: false, error: String(e?.message ?? e) });
+              }
             })()
             """)
             if let hostError = Self.extractA2UIHostError(from: json) {
@@ -3044,6 +3048,10 @@ extension NodeAppModel {
 
     static func _test_currentDeepLinkKey() -> String {
         self.expectedDeepLinkKey()
+    }
+
+    static func _test_extractA2UIHostError(from resultJSON: String) -> String? {
+        self.extractA2UIHostError(from: resultJSON)
     }
 }
 #endif

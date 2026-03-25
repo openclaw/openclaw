@@ -235,6 +235,20 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(pushRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
     }
 
+    @Test @MainActor func extractA2UIHostErrorParsesHostFailurePayload() {
+        let hostFail = #"{"ok":false,"error":"missing openclawA2UI"}"#
+        let parsed = NodeAppModel._test_extractA2UIHostError(from: hostFail)
+        #expect(parsed == "missing openclawA2UI")
+
+        let hostFailNoError = #"{"ok":false}"#
+        let parsedFallback = NodeAppModel._test_extractA2UIHostError(from: hostFailNoError)
+        #expect(parsedFallback == "host returned ok=false")
+
+        let hostSuccess = #"{"ok":true}"#
+        let parsedSuccess = NodeAppModel._test_extractA2UIHostError(from: hostSuccess)
+        #expect(parsedSuccess == nil)
+    }
+
     @Test @MainActor func handleInvokeUnknownCommandReturnsInvalidRequest() async {
         let appModel = NodeAppModel()
         let req = BridgeInvokeRequest(id: "unknown", command: "nope")
