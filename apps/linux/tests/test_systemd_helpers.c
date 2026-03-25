@@ -369,6 +369,66 @@ static void test_parse_service_props_invalid_signature(void) {
     g_variant_unref(props);
 }
 
+static void test_helpers_get_user_unit_paths_contains_all(void) {
+    GPtrArray *paths = systemd_helpers_get_user_unit_paths("/home/test");
+    
+    gboolean found_config = FALSE;
+    gboolean found_local_share = FALSE;
+    gboolean found_etc = FALSE;
+    gboolean found_xdg = FALSE;
+    gboolean found_usr_lib = FALSE;
+    gboolean found_usr_local_lib = FALSE;
+    gboolean found_usr_share = FALSE;
+    gboolean found_lib = FALSE;
+
+    for (guint i = 0; i < paths->len; i++) {
+        const gchar *path = g_ptr_array_index(paths, i);
+        if (g_strcmp0(path, "/home/test/.config/systemd/user") == 0) found_config = TRUE;
+        if (g_strcmp0(path, "/home/test/.local/share/systemd/user") == 0) found_local_share = TRUE;
+        if (g_strcmp0(path, "/etc/systemd/user") == 0) found_etc = TRUE;
+        if (g_strcmp0(path, "/etc/xdg/systemd/user") == 0) found_xdg = TRUE;
+        if (g_strcmp0(path, "/usr/lib/systemd/user") == 0) found_usr_lib = TRUE;
+        if (g_strcmp0(path, "/usr/local/lib/systemd/user") == 0) found_usr_local_lib = TRUE;
+        if (g_strcmp0(path, "/usr/share/systemd/user") == 0) found_usr_share = TRUE;
+        if (g_strcmp0(path, "/lib/systemd/user") == 0) found_lib = TRUE;
+    }
+    
+    g_assert_true(found_config);
+    g_assert_true(found_local_share);
+    g_assert_true(found_etc);
+    g_assert_true(found_xdg);
+    g_assert_true(found_usr_lib);
+    g_assert_true(found_usr_local_lib);
+    g_assert_true(found_usr_share);
+    g_assert_true(found_lib);
+    
+    g_ptr_array_free(paths, TRUE);
+}
+
+static void test_helpers_get_system_unit_paths_contains_all(void) {
+    GPtrArray *paths = systemd_helpers_get_system_unit_paths();
+    
+    gboolean found_etc = FALSE;
+    gboolean found_usr_lib = FALSE;
+    gboolean found_usr_local_lib = FALSE;
+    gboolean found_lib = FALSE;
+
+    for (guint i = 0; i < paths->len; i++) {
+        const gchar *path = g_ptr_array_index(paths, i);
+        if (g_strcmp0(path, "/etc/systemd/system") == 0) found_etc = TRUE;
+        if (g_strcmp0(path, "/usr/lib/systemd/system") == 0) found_usr_lib = TRUE;
+        if (g_strcmp0(path, "/usr/local/lib/systemd/system") == 0) found_usr_local_lib = TRUE;
+        if (g_strcmp0(path, "/lib/systemd/system") == 0) found_lib = TRUE;
+    }
+    
+    g_assert_true(found_etc);
+    g_assert_true(found_usr_lib);
+    g_assert_true(found_usr_local_lib);
+    g_assert_true(found_lib);
+    
+    g_ptr_array_free(paths, TRUE);
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
     
@@ -406,6 +466,9 @@ int main(int argc, char **argv) {
     g_test_add_func("/systemd/parse_service_props_working_directory_multiple_prefixes", test_parse_service_props_working_directory_multiple_prefixes);
     g_test_add_func("/systemd/parse_service_props_invalid_working_directory", test_parse_service_props_invalid_working_directory);
     g_test_add_func("/systemd/parse_service_props_invalid_signature", test_parse_service_props_invalid_signature);
+    
+    g_test_add_func("/systemd/helpers_get_user_unit_paths_contains_all", test_helpers_get_user_unit_paths_contains_all);
+    g_test_add_func("/systemd/helpers_get_system_unit_paths_contains_all", test_helpers_get_system_unit_paths_contains_all);
     
     return g_test_run();
 }

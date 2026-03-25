@@ -36,44 +36,36 @@ extern void systemd_refresh(void);
 static void clear_unit_subscription(const gchar *reason);
 
 static gboolean check_system_scope_units(void) {
-    const gchar *paths[] = {"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"};
-    for (size_t i = 0; i < G_N_ELEMENTS(paths); i++) {
-        GDir *dir = g_dir_open(paths[i], 0, NULL);
+    GPtrArray *paths = systemd_helpers_get_system_unit_paths();
+    gboolean found = FALSE;
+    for (guint i = 0; i < paths->len; i++) {
+        const gchar *path = g_ptr_array_index(paths, i);
+        GDir *dir = g_dir_open(path, 0, NULL);
         if (!dir) continue;
         const gchar *filename;
         while ((filename = g_dir_read_name(dir)) != NULL) {
             if (g_str_has_suffix(filename, ".service")) {
-                g_autofree gchar *filepath = g_build_filename(paths[i], filename, NULL);
+                g_autofree gchar *filepath = g_build_filename(path, filename, NULL);
                 gchar *contents = NULL;
                 if (g_file_get_contents(filepath, &contents, NULL, NULL)) {
                     if (systemd_is_gateway_unit(filename, contents)) {
+                        found = TRUE;
                         g_free(contents);
-                        g_dir_close(dir);
-                        return TRUE;
+                        break;
                     }
                     g_free(contents);
                 }
             }
         }
         g_dir_close(dir);
+        if (found) break;
     }
-    return FALSE;
+    g_ptr_array_free(paths, TRUE);
+    return found;
 }
 
 static gint sort_marked_units(gconstpointer a, gconstpointer b) {
     return g_strcmp0(*(const gchar **)a, *(const gchar **)b);
-}
-
-static GPtrArray* systemd_get_user_unit_paths(const gchar *home_dir) {
-    GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
-    if (home_dir) {
-        g_ptr_array_add(paths, g_build_filename(home_dir, ".config", "systemd", "user", NULL));
-        g_ptr_array_add(paths, g_build_filename(home_dir, ".local", "share", "systemd", "user", NULL));
-    }
-    g_ptr_array_add(paths, g_strdup("/etc/systemd/user"));
-    g_ptr_array_add(paths, g_strdup("/usr/lib/systemd/user"));
-    g_ptr_array_add(paths, g_strdup("/lib/systemd/user"));
-    return paths;
 }
 
 const gchar* systemd_get_canonical_unit_name(void) {
@@ -82,7 +74,7 @@ const gchar* systemd_get_canonical_unit_name(void) {
     const gchar *home_dir = g_get_home_dir();
 
     GPtrArray *marked_units = g_ptr_array_new_with_free_func(g_free);
-    GPtrArray *paths = systemd_get_user_unit_paths(home_dir);
+    GPtrArray *paths = systemd_helpers_get_user_unit_paths(home_dir);
 
     for (guint i = 0; i < paths->len; i++) {
         const gchar *path = g_ptr_array_index(paths, i);
@@ -141,7 +133,17 @@ const gchar* systemd_get_canonical_unit_name(void) {
         return cached_unit_name;
     }
 
-    if (marked_units->len >= 1) {
+    gboolean has_default = FALSE;
+    for (guint i = 0; i < marked_units->len; i++) {
+        if (g_strcmp0("openclaw-gateway.service", (const gchar *)g_ptr_array_index(marked_units, i)) == 0) {
+            has_default = TRUE;
+            break;
+        }
+    }
+
+    if (has_default) {
+        cached_unit_name = g_strdup("openclaw-gateway.service");
+    } else if (marked_units->len >= 1) {
         g_ptr_array_sort(marked_units, sort_marked_units);
         cached_unit_name = g_strdup(g_ptr_array_index(marked_units, 0));
     } else {
@@ -164,7 +166,7 @@ static void extract_service_config_from_file(gchar **exec_start_out, gchar ***en
     g_autoptr(GError) error = NULL;
     gchar *unit_path = NULL;
 
-    GPtrArray *paths = systemd_get_user_unit_paths(home_dir);
+    GPtrArray *paths = systemd_helpers_get_user_unit_paths(home_dir);
     for (guint i = 0; i < paths->len; i++) {
         gchar *test_path = g_build_filename(g_ptr_array_index(paths, i), unit_name, NULL);
         if (g_file_get_contents(test_path, &contents, NULL, &error)) {
@@ -464,14 +466,27 @@ static void on_get_service_properties_ready(GObject *source_object, GAsyncResult
     if (!config_loaded) {
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_service_properties_ready D-Bus Service props unavailable, falling back to file parse");
         gchar *fallback_exec = NULL;
-        extract_service_config_from_file(&fallback_exec, &cached_environment, &cached_working_directory);
-        if (fallback_exec) {
-            gint argcp;
-            gchar **argvp = NULL;
-            if (g_shell_parse_argv(fallback_exec, &argcp, &argvp, NULL)) {
-                cached_exec_start_argv = argvp;
+        gchar **fallback_env = NULL;
+        gchar *fallback_wd = NULL;
+        extract_service_config_from_file(&fallback_exec, &fallback_env, &fallback_wd);
+        if (fallback_exec || fallback_env || fallback_wd) {
+            if (fallback_exec) {
+                gint argcp;
+                gchar **argvp = NULL;
+                if (g_shell_parse_argv(fallback_exec, &argcp, &argvp, NULL)) {
+                    g_strfreev(cached_exec_start_argv);
+                    cached_exec_start_argv = argvp;
+                }
+                g_free(fallback_exec);
             }
-            g_free(fallback_exec);
+            if (fallback_env) {
+                g_strfreev(cached_environment);
+                cached_environment = fallback_env;
+            }
+            if (fallback_wd) {
+                g_free(cached_working_directory);
+                cached_working_directory = fallback_wd;
+            }
         }
     }
 
