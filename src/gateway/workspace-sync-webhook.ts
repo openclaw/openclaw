@@ -1,8 +1,8 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
-import { pullAndApplyWorkspaceSync } from "../agents/workspace-sync.js";
-import { loadConfig } from "../config/config.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { getChildLogger } from "../logging/logger.js";
+import { loadConfig } from "../config/config.js";
+import { pullAndApplyWorkspaceSync } from "../agents/workspace-sync.js";
 
 const logger = getChildLogger({ subsystem: "workspace-sync-webhook" });
 
