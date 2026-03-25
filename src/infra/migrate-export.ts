@@ -79,7 +79,7 @@ async function resolveOutputPath(params: {
 }
 
 function isLinkUnsupportedError(code: string | undefined): boolean {
-  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
+  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM" || code === "EXDEV";
 }
 
 async function publishTempArchive(params: {
