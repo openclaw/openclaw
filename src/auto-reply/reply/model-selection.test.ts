@@ -565,6 +565,50 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-4o");
   });
+
+  it("keeps stored override when providerless fallback resolves to image model provider", async () => {
+    // This tests the mixed-provider scenario from PR #52079 review feedback:
+    // imageModel.primary = openai/gpt-4o with providerless fallback "gpt-4.1"
+    // should resolve the fallback against openai (not the agent default anthropic)
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+            "openai/gpt-4.1": {},
+          },
+          imageModel: { primary: "openai/gpt-4o", fallbacks: ["gpt-4.1"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1", // Stored override matches providerless fallback resolved to openai
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // The stored override openai/gpt-4.1 should be kept because it matches
+    // the providerless fallback "gpt-4.1" resolved to openai/gpt-4.1
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4.1");
+  });
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {

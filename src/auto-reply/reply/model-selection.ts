@@ -20,6 +20,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -70,8 +71,9 @@ function loadSessionStoreRuntime() {
 
 /**
  * Collect all configured image models (primary + fallbacks) into a Set of model keys.
- * Resolves aliases using aliasIndex and defaultProvider.
+ * Resolves aliases using aliasIndex and the image model's own provider context.
  * Returns a Set of both raw strings and resolved "provider/model" keys.
+ * Also adds providerless model names so isImageModel can match across providers.
  */
 function collectImageModelKeys(
   imageModelConfig: AgentModelConfig | undefined,
@@ -83,25 +85,47 @@ function collectImageModelKeys(
     return keys;
   }
 
+  const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+
+  // Resolve the image model's primary to get its provider for fallback resolution.
+  // Providerless fallbacks should resolve against the image model's provider,
+  // not the agent's default provider (to handle mixed-provider configs correctly).
+  let imageModelDefaultProvider = defaultProvider;
+  if (imageModelPrimary && aliasIndex && defaultProvider) {
+    const resolved = resolveModelRefFromString({
+      raw: imageModelPrimary.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      imageModelDefaultProvider = resolved.ref.provider;
+    }
+  }
+
   const addModelKey = (rawModel: string) => {
     const trimmed = rawModel.trim();
     if (!trimmed) {
       return;
     }
 
-    // Only add provider-qualified raw strings; providerless entries are resolved below.
-    // This ensures image-safe matching uses provider-qualified keys, preventing incorrect
-    // matches when two providers share a model ID but only one supports images.
     const trimmedSlash = trimmed.indexOf("/");
+
+    // Add provider-qualified raw strings directly
     if (trimmedSlash > 0) {
       keys.add(trimmed);
     }
 
-    // Also resolve alias and add canonical key
-    if (aliasIndex && defaultProvider) {
+    // Also add providerless model names directly for cross-provider matching.
+    // This allows a providerless imageModel like "gpt-4o" to match "openai/gpt-4o".
+    if (trimmedSlash <= 0) {
+      keys.add(trimmed);
+    }
+
+    // Resolve alias and add canonical key using image model's provider context
+    if (aliasIndex && imageModelDefaultProvider) {
       const resolved = resolveModelRefFromString({
         raw: trimmed,
-        defaultProvider,
+        defaultProvider: imageModelDefaultProvider,
         aliasIndex,
       });
       if (resolved) {
@@ -113,8 +137,8 @@ function collectImageModelKeys(
   if (typeof imageModelConfig === "string") {
     addModelKey(imageModelConfig);
   } else {
-    if (imageModelConfig.primary?.trim()) {
-      addModelKey(imageModelConfig.primary);
+    if (imageModelPrimary?.trim()) {
+      addModelKey(imageModelPrimary);
     }
     if (Array.isArray(imageModelConfig.fallbacks)) {
       for (const fb of imageModelConfig.fallbacks) {
@@ -129,11 +153,11 @@ function collectImageModelKeys(
 
 /**
  * Check if a given provider/model combination is in the set of image models.
- * Checks provider-qualified keys only:
+ * Checks:
  * 1. "provider/model" format (exact match against provider-qualified keys)
  * 2. Stored model string directly (for provider-qualified raw entries like "openai/gpt-4.1")
- * 3. Pure name match requiring provider alignment (handles provider-qualified imageModel
- *    entries matching providerless stored models)
+ * 3. Pure name match with provider alignment for provider-qualified entries
+ * 4. Pure name match for providerless entries (matches any provider)
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
   const modelSlash = model.indexOf("/");
@@ -151,21 +175,23 @@ function isImageModel(provider: string, model: string, imageModelKeys: Set<strin
     return true;
   }
 
-  // 3. Match by pure name with required provider alignment
-  // This handles provider-qualified imageModel entries (e.g., "provider-a/model-x")
-  // matching stored models. The effectiveProvider must match the entry's provider.
+  // 3. Match against all entries in imageModelKeys
   for (const entry of imageModelKeys) {
     const slash = entry.indexOf("/");
     if (slash <= 0) {
-      // Skip providerless entries - all entries should be provider-qualified
-      // after collectImageModelKeys resolves them with defaultProvider
-      continue;
-    }
-    const entryPureModel = entry.slice(slash + 1);
-    if (entryPureModel === pureModel) {
-      const entryProvider = entry.slice(0, slash);
-      if (effectiveProvider === entryProvider) {
+      // Providerless entry - matches any provider with the same model name.
+      // This handles imageModel configs like "gpt-4o" matching "openai/gpt-4o".
+      if (entry === pureModel) {
         return true;
+      }
+    } else {
+      // Provider-qualified entry - match by pure name with provider alignment
+      const entryPureModel = entry.slice(slash + 1);
+      if (entryPureModel === pureModel) {
+        const entryProvider = entry.slice(0, slash);
+        if (effectiveProvider === entryProvider) {
+          return true;
+        }
       }
     }
   }
