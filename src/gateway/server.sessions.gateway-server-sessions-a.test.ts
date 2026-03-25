@@ -1089,6 +1089,33 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
+      "agent:main:subagent:target": {
+        sessionId: "sess-target-exact",
+        updatedAt: now - 20_000,
+      },
+    };
+    for (let i = 0; i < 9; i += 1) {
+      entries[`agent:main:subagent:noisy-${i}`] = {
+        sessionId: `sess-noisy-${i}`,
+        updatedAt: now - i * 1_000,
+        label: `sess-target-exact noisy ${i}`,
+      };
+    }
+    await writeSessionStore({ entries });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-target-exact",
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+  });
+
   test("sessions.delete rejects main and aborts active runs", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
