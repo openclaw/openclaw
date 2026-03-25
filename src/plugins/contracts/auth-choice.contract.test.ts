@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createAuthTestLifecycle,
@@ -240,5 +243,63 @@ describe("provider auth-choice contract", () => {
       access: "access-token",
       refresh: "refresh-token",
     });
+  });
+
+  it("syncs Anthropic setup-token profiles to sibling agent dirs", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-token-sync-"));
+    activeStateDir = stateDir;
+    lifecycle.setStateDir(stateDir);
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const kidAgentDir = path.join(stateDir, "agents", "kid", "agent");
+    const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(kidAgentDir, { recursive: true });
+    await fs.mkdir(workerAgentDir, { recursive: true });
+
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
+
+    const token = `sk-ant-oat01-${"a".repeat(80)}`;
+    const result = await runProviderPluginAuthMethod({
+      config: {},
+      prompter: createWizardPrompter({}),
+      runtime: createExitThrowingRuntime(),
+      method: {
+        id: "setup-token",
+        label: "Setup token",
+        kind: "token",
+        run: async () => ({
+          profiles: [
+            {
+              profileId: "anthropic:default",
+              credential: {
+                type: "token",
+                provider: "anthropic",
+                token,
+              },
+            },
+          ],
+        }),
+      },
+      allowSecretRefPrompt: false,
+    });
+
+    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+      provider: "anthropic",
+      mode: "token",
+    });
+
+    for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
+      const stored = await readAuthProfilesForAgent<{
+        profiles?: Record<string, StoredAuthProfile>;
+      }>(dir);
+      expect(stored.profiles?.["anthropic:default"]).toMatchObject({
+        type: "token",
+        provider: "anthropic",
+        token,
+      });
+    }
   });
 });

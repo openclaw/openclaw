@@ -4,7 +4,6 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -16,7 +15,11 @@ import {
   pickAuthMethod,
   resolveProviderMatch,
 } from "./provider-auth-choice-helpers.js";
-import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
+import {
+  applyAuthProfileConfig,
+  shouldSyncSiblingAgentsForCredential,
+  writeAuthProfile,
+} from "./provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
 import type { ProviderAuthMethod, ProviderAuthOptionBag } from "./types.js";
@@ -130,10 +133,8 @@ export async function runProviderPluginAuthMethod(params: {
   }
 
   for (const profile of result.profiles) {
-    upsertAuthProfile({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir,
+    writeAuthProfile(profile.profileId, profile.credential, agentDir, {
+      syncSiblingAgents: shouldSyncSiblingAgentsForCredential(profile.credential),
     });
 
     nextConfig = applyAuthProfileConfig(nextConfig, {

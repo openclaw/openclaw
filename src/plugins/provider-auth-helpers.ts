@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -25,6 +26,10 @@ export type ApiKeyStorageOptions = {
 };
 
 export type WriteOAuthCredentialsOptions = {
+  syncSiblingAgents?: boolean;
+};
+
+export type WriteAuthProfileOptions = {
   syncSiblingAgents?: boolean;
 };
 
@@ -214,6 +219,52 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
+export function shouldSyncSiblingAgentsForCredential(credential: AuthProfileCredential): boolean {
+  return (
+    credential.type === "oauth" ||
+    (credential.type === "token" && normalizeProviderIdForAuth(credential.provider) === "anthropic")
+  );
+}
+
+export function writeAuthProfile(
+  profileId: string,
+  credential: AuthProfileCredential,
+  agentDir?: string,
+  options?: WriteAuthProfileOptions,
+): void {
+  const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
+  const targetAgentDirs = options?.syncSiblingAgents
+    ? resolveSiblingAgentDirs(resolvedAgentDir)
+    : [resolvedAgentDir];
+
+  upsertAuthProfile({
+    profileId,
+    credential,
+    agentDir: resolvedAgentDir,
+  });
+
+  if (!options?.syncSiblingAgents) {
+    return;
+  }
+
+  const primaryReal = safeRealpathSync(resolvedAgentDir);
+  for (const targetAgentDir of targetAgentDirs) {
+    const targetReal = safeRealpathSync(targetAgentDir);
+    if (targetReal && primaryReal && targetReal === primaryReal) {
+      continue;
+    }
+    try {
+      upsertAuthProfile({
+        profileId,
+        credential,
+        agentDir: targetAgentDir,
+      });
+    } catch {
+      // Best-effort: sibling sync failure must not block primary setup.
+    }
+  }
+}
+
 export async function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
@@ -223,40 +274,12 @@ export async function writeOAuthCredentials(
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
   const profileId = `${provider}:${email}`;
-  const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
-  const targetAgentDirs = options?.syncSiblingAgents
-    ? resolveSiblingAgentDirs(resolvedAgentDir)
-    : [resolvedAgentDir];
-
   const credential = {
     type: "oauth" as const,
     provider,
     ...creds,
   };
 
-  upsertAuthProfile({
-    profileId,
-    credential,
-    agentDir: resolvedAgentDir,
-  });
-
-  if (options?.syncSiblingAgents) {
-    const primaryReal = safeRealpathSync(resolvedAgentDir);
-    for (const targetAgentDir of targetAgentDirs) {
-      const targetReal = safeRealpathSync(targetAgentDir);
-      if (targetReal && primaryReal && targetReal === primaryReal) {
-        continue;
-      }
-      try {
-        upsertAuthProfile({
-          profileId,
-          credential,
-          agentDir: targetAgentDir,
-        });
-      } catch {
-        // Best-effort: sibling sync failure must not block primary setup.
-      }
-    }
-  }
+  writeAuthProfile(profileId, credential, agentDir, options);
   return profileId;
 }
