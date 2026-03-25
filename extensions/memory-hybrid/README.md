@@ -144,8 +144,8 @@ As an open-source `OpenClaw` plugin, installation is simple:
             "model": "gemini-embedding-002"
           },
           "autoRecall": true,
-          "autoCapture": true,
-          "smartCapture": true
+          "autoCapture": false,
+          "smartCapture": false
         }
       }
     }
@@ -171,12 +171,12 @@ As an open-source `OpenClaw` plugin, installation is simple:
 | Option             | Default                      | Description                                                            |
 | ------------------ | ---------------------------- | ---------------------------------------------------------------------- |
 | `embedding.apiKey` | _required_                   | API key (OpenAI or Google)                                             |
-| `embedding.model`  | `gemini-embedding-002`       | Latest Google embedding model (768/3072 dims)                          |
+| `embedding.model`  | `text-embedding-004`         | Latest Google embedding model (768 dims)                               |
 | `chatModel`        | auto                         | LLM for graph/capture (auto: `gemini-3.1-flash-lite` or `gpt-4o-mini`) |
 | `dbPath`           | `~/.openclaw/memory/lancedb` | Database path                                                          |
-| `autoCapture`      | `true`                       | Auto-capture from conversations                                        |
+| `autoCapture`      | `false`                      | Auto-capture from conversations                                        |
 | `autoRecall`       | `true`                       | Auto-inject memories into context                                      |
-| `smartCapture`     | `true`                       | Use LLM for intelligent fact extraction                                |
+| `smartCapture`     | `false`                      | Use LLM for intelligent fact extraction                                |
 | `captureMaxChars`  | `500`                        | Max message length for capture                                         |
 
 ## Tools
@@ -240,20 +240,24 @@ Unlike standard RAG, BrainClaw preserves a pool of **50-70 candidates** through 
 
 ## Architecture
 
-| File             | Purpose                                                  |
-| ---------------- | -------------------------------------------------------- |
-| `config.ts`      | Configuration parsing and validation                     |
-| `embeddings.ts`  | OpenAI + Google embedding API clients                    |
-| `chat.ts`        | LLM client with retry logic (OpenAI + Google)            |
-| `graph.ts`       | Knowledge Graph storage and LLM extraction               |
-| `capture.ts`     | Rule-based + LLM-powered memory capture                  |
-| `stack.ts`       | Conversation Stack (context compression module)          |
-| `recall.ts`      | 7-Channel Hybrid scoring routing & AMHR logic            |
-| `buffer.ts`      | Working Memory Buffer (short-term → long-term promotion) |
-| `tracer.ts`      | Asynchronous JSONL Observability logging                 |
-| `consolidate.ts` | Memory deduplication / clustering / LLM merging          |
-| `reflection.ts`  | User profile generation from accumulated memories        |
-| `index.ts`       | Plugin registration, tools, hooks, CLI                   |
+| File             | Purpose                                                     |
+| ---------------- | ----------------------------------------------------------- |
+| `config.ts`      | Configuration parsing and validation                        |
+| `embeddings.ts`  | OpenAI + Google embedding API clients                       |
+| `chat.ts`        | LLM client with retry logic (OpenAI + Google)               |
+| `database.ts`    | LanceDB persistence layer and atomic operations             |
+| `graph.ts`       | Knowledge Graph storage and search (with concurrency locks) |
+| `tools.ts`       | AI-facing tools (Recall, Store, Forget, Reflect, Fetch)     |
+| `cli.ts`         | Developer CLI command implementations                       |
+| `hooks.ts`       | OpenClaw lifecycle hooks and event handlers                 |
+| `capture.ts`     | Rule-based + LLM-powered memory capture (hardened)          |
+| `stack.ts`       | Conversation Stack (context compression module)             |
+| `recall.ts`      | 7-Channel Hybrid scoring routing & AMHR logic               |
+| `buffer.ts`      | Working Memory Buffer (Hippocampus mimic, JSONL)            |
+| `tracer.ts`      | Asynchronous JSONL Observability logging                    |
+| `consolidate.ts` | Memory deduplication / clustering / LLM merging             |
+| `reflection.ts`  | User profile generation from accumulated memories           |
+| `index.ts`       | Entry point and dependency injection bootstrap              |
 
 ## Testing
 

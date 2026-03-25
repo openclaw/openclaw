@@ -38,7 +38,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 // Defaults
 // ============================================================================
 
-const DEFAULT_MODEL = "gemini-embedding-2-preview";
+const DEFAULT_MODEL = "text-embedding-004";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
