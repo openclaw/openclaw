@@ -495,8 +495,28 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    for (const plugin of listChannelPlugins()) {
-      await startChannel(plugin.id);
+    const results = await Promise.allSettled(
+      listChannelPlugins().map(async (plugin) => {
+        try {
+          await startChannel(plugin.id);
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          channelLogs[plugin.id].error?.(
+            `[${plugin.id}] channel startup failed: ${message}`,
+          );
+          // Continue with other channels - fault isolation
+        }
+      }),
+    );
+
+    // Log summary of channel startup results
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length > 0) {
+      const total = results.length;
+      const succeeded = total - failed.length;
+      channelLogs.discord?.warn?.(
+        `Channel startup summary: ${succeeded}/${total} channels started successfully`,
+      );
     }
   };
 
