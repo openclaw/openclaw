@@ -294,7 +294,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
 
@@ -314,7 +314,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
 
@@ -362,7 +362,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     // Requesting a non-listed model forces the providerCfg fallback branch.
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
@@ -388,7 +388,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
 
@@ -442,7 +442,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
 
@@ -469,7 +469,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
 
@@ -495,7 +495,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const models = buildInlineProviderModels(cfg.models?.providers ?? {});
     expect(models).toEqual(
@@ -661,7 +661,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("onehub", "glm-5", "/tmp/agent", cfg);
 
@@ -720,7 +720,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
 
@@ -869,7 +869,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("github-copilot", "gpt-5.4-mini", "/tmp/agent", cfg);
 
