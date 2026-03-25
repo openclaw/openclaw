@@ -44,6 +44,41 @@ Notes:
 - The runtime still serves its normal upstream Control UI and Web UI routes;
   the added bridge routes are separate and do not depend on the Control UI.
 
+## How To Publish To A Target Mac
+
+Use the local packaging script so the target machine installs THIS repository's
+OpenClaw build instead of upstream `openclaw@latest`.
+
+From `/Users/lidongdong/iq/openclaw`:
+
+```bash
+bash scripts/package-openclaw-mac.sh
+```
+
+This produces an archive like:
+
+```text
+openclaw-mac-bundle-20260325-xxxxxx.tar.gz
+```
+
+The archive includes:
+
+- a tarball packed from the current local repository
+- `~/.openclaw/openclaw.json`
+- `~/.openclaw/exec-approvals.json`
+- `~/.openclaw/workspace/SOUL.md`
+
+On the target Mac:
+
+1. Extract the archive.
+2. Install the included local OpenClaw tarball with `npm install -g`.
+3. Restore the bundled runtime profile.
+4. Export `OPENCLAW_BRIDGE_TOKEN`.
+5. Start `openclaw gateway --config ~/.openclaw/openclaw.json`.
+
+Do not install upstream `openclaw@latest` for this scenario; that package will
+miss the control-plane compatibility routes required by `agent-bot-task-a`.
+
 ## How To Connect It To `agent-bot-task-a`
 
 The current control plane calls these runtime routes:
