@@ -62,4 +62,20 @@ describe("session reset timezone semantics", () => {
     const boundaryMs = resolveDailyResetAtMs(now, 4, shanghaiCfg);
     expect(boundaryMs).toBe(Date.UTC(2026, 2, 18, 20, 0, 0));
   });
+
+  it("treats invalid activity timestamps as stale instead of throwing", () => {
+    const now = Date.UTC(2026, 2, 18, 21, 0, 0); // 2026-03-19 05:00 +08:00
+
+    const freshness = evaluateSessionFreshness({
+      updatedAt: Number.NaN,
+      now,
+      policy: dailyPolicy,
+      cfg: shanghaiCfg,
+    });
+
+    expect(freshness).toEqual({
+      fresh: false,
+      dailyResetAt: Date.UTC(2026, 2, 18, 20, 0, 0),
+    });
+  });
 });

@@ -338,6 +338,52 @@ describe("getSessionSnapshot", () => {
       process.env.TZ = originalTz;
     }
   });
+
+  it("treats malformed session store entries without updatedAt as stale", async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = "UTC";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.UTC(2026, 0, 17, 21, 0, 0)));
+    try {
+      await withTempDir("openclaw-snapshot-", async (root) => {
+        const storePath = path.join(root, "sessions.json");
+        const sessionKey = "agent:main:whatsapp:dm:s1";
+
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "snapshot-session",
+              lastChannel: "whatsapp",
+            },
+          }),
+          "utf8",
+        );
+
+        const cfg = {
+          agents: {
+            defaults: {
+              userTimezone: "Asia/Shanghai",
+            },
+          },
+          session: {
+            store: storePath,
+            reset: { mode: "daily", atHour: 4 },
+          },
+        } as Parameters<typeof getSessionSnapshot>[0];
+
+        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+          sessionKey,
+        });
+
+        expect(snapshot.fresh).toBe(false);
+        expect(snapshot.dailyResetAt).toBe(Date.UTC(2026, 0, 17, 20, 0, 0));
+      });
+    } finally {
+      vi.useRealTimers();
+      process.env.TZ = originalTz;
+    }
+  });
 });
 
 describe("web auto-reply util", () => {
