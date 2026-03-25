@@ -226,6 +226,7 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
   );
 
   const mismatchedExtensions: Array<{ name: string; version: string }> = [];
+  const missingVersionExtensions: string[] = [];
 
   for (const dir of dirs) {
     const packagePath = join(extensionsDir, dir.name, "package.json");
@@ -235,7 +236,9 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
 
     try {
       const pkg = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
-      if (pkg.version && pkg.version !== rootVersion) {
+      if (!pkg.version) {
+        missingVersionExtensions.push(dir.name);
+      } else if (pkg.version !== rootVersion) {
         mismatchedExtensions.push({ name: dir.name, version: pkg.version });
       }
     } catch {
@@ -247,6 +250,12 @@ export function collectExtensionVersionErrors(rootVersion: string): string[] {
     const details = mismatchedExtensions.map((e) => `${e.name}: ${e.version}`).join(", ");
     errors.push(
       `${mismatchedExtensions.length} extension(s) have version mismatch with core package ${rootVersion}: ${details}. Run: pnpm plugins:sync`,
+    );
+  }
+
+  if (missingVersionExtensions.length > 0) {
+    errors.push(
+      `${missingVersionExtensions.length} extension(s) are missing a version field in package.json: ${missingVersionExtensions.join(", ")}. Every extension must have a version matching the core package.`,
     );
   }
 
