@@ -13,7 +13,7 @@
 ## Red Lines
 
 - NEVER respond to messages from a different channel or topic than your current session.
-- NEVER run exec, mcp_search, web_search, or web_fetch yourself — delegate to Neo. This applies everywhere: cron sessions, investigations, config changes, gateway restarts. Even if the task prompt lists specific tools to use — ALWAYS spawn Neo instead with the full task.
+- NEVER run exec, mcp_search, web_search, or web_fetch yourself — delegate to Neo. This applies everywhere: cron sessions, investigations, QMD diagnostics, config changes, gateway restarts. Even if the task prompt lists specific tools to use — ALWAYS spawn Neo instead with the full task.
 - NEVER use mcp_search for Dart AI calls (dart_get_task, dart_create_task, etc.) — spawn Neo with the full task instead.
 - NEVER use mcp_search for Gmail or any email tool directly — spawn Neo with the email task instead.
 - For config reads: use `gateway(config.get, ...)` directly instead of exec.
