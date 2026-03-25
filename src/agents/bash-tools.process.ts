@@ -17,7 +17,7 @@ import {
 } from "./bash-process-registry.js";
 import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -477,17 +477,21 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          // Use session's cursor key mode to select correct escape sequences.
-          // 'application' mode (smkx) uses SS3 sequences, 'normal' mode uses CSI.
-          const cursorKeyMode = resolved.session.cursorKeyMode ?? "normal";
-          const { data, warnings } = encodeKeySequence(
-            {
-              keys: params.keys,
-              hex: params.hex,
-              literal: params.literal,
-            },
-            cursorKeyMode,
-          );
+          const request = {
+            keys: params.keys,
+            hex: params.hex,
+            literal: params.literal,
+          };
+          if (resolved.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+            return failText(
+              `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
+            );
+          }
+          const cursorKeyMode =
+            resolved.session.cursorKeyMode === "unknown"
+              ? undefined
+              : resolved.session.cursorKeyMode;
+          const { data, warnings } = encodeKeySequence(request, cursorKeyMode);
           if (!data) {
             return {
               content: [
@@ -502,7 +506,7 @@ export function createProcessTool(
           await writeToStdin(resolved.stdin, data);
           return runningSessionResult(
             resolved.session,
-            `Sent ${data.length} bytes to session ${params.sessionId} (cursor mode: ${cursorKeyMode}).` +
+            `Sent ${data.length} bytes to session ${params.sessionId}.` +
               (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
           );
         }

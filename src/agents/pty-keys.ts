@@ -112,6 +112,22 @@ export type KeyEncodingResult = {
   warnings: string[];
 };
 
+export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
+  return (
+    request.keys?.some((raw) => {
+      const token = raw.trim();
+      if (!token) {
+        return false;
+      }
+      const parsed = parseModifiers(token);
+      if (hasAnyModifier(parsed.mods)) {
+        return false;
+      }
+      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
+    }) ?? false
+  );
+}
+
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",

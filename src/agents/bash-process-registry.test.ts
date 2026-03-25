@@ -122,6 +122,7 @@ describe("cursorKeyMode", () => {
     maxOutputChars: number;
     pendingMaxOutputChars: number;
     backgrounded: boolean;
+    cursorKeyMode?: ProcessSession["cursorKeyMode"];
   }): ProcessSession {
     return createProcessSessionFixture({
       id: params.id ?? "sess",
@@ -130,16 +131,18 @@ describe("cursorKeyMode", () => {
       maxOutputChars: params.maxOutputChars,
       pendingMaxOutputChars: params.pendingMaxOutputChars,
       backgrounded: params.backgrounded,
+      cursorKeyMode: params.cursorKeyMode,
     });
   }
 
-  it("session defaults to undefined cursorKeyMode (normal)", () => {
+  it("session cursorKeyMode can start unknown", () => {
     const session = createRegistrySession({
       maxOutputChars: 100,
       pendingMaxOutputChars: 30_000,
       backgrounded: false,
+      cursorKeyMode: "unknown",
     });
-    expect(session.cursorKeyMode).toBeUndefined();
+    expect(session.cursorKeyMode).toBe("unknown");
   });
 
   it("session cursorKeyMode can be set to application", () => {
@@ -157,8 +160,9 @@ describe("cursorKeyMode", () => {
       maxOutputChars: 100,
       pendingMaxOutputChars: 30_000,
       backgrounded: false,
+      cursorKeyMode: "unknown",
     });
-    expect(session.cursorKeyMode).toBeUndefined();
+    expect(session.cursorKeyMode).toBe("unknown");
 
     session.cursorKeyMode = "application";
     expect(session.cursorKeyMode).toBe("application");

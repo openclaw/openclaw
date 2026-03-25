@@ -493,6 +493,7 @@ export async function runExecProcess(opts: {
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
 
