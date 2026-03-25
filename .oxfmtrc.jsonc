@@ -9,6 +9,7 @@
   "tabWidth": 2,
   "useTabs": false,
   "ignorePatterns": [
+    ".claude/",
     "apps/",
     "assets/",
     "CLAUDE.md",
