@@ -474,6 +474,7 @@ async function resolveUploadInput(
   maxBytes: number,
   explicitFileName?: string,
   imageInput?: string, // data URI, plain base64, or local path
+  localRoots?: readonly string[],
 ): Promise<{ buffer: Buffer; fileName: string }> {
   // Enforce mutual exclusivity: exactly one input source must be provided.
   const inputSources = (
@@ -537,12 +538,11 @@ async function resolveUploadInput(
 
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
       // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-      // TODO: thread a localRoots parameter through resolveUploadInput so operators
-      // who extend localRoots beyond the defaults get consistent behavior with sendMediaFeishu.
       const resolvedPath = resolve(candidate);
       const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
         maxBytes,
         optimizeImages: false,
+        localRoots: localRoots?.length ? localRoots : undefined,
       });
       return { buffer: loaded.buffer, fileName: explicitFileName ?? basename(candidate) };
     }
@@ -599,12 +599,11 @@ async function resolveUploadInput(
   }
 
   // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
-  // TODO: thread a localRoots parameter through resolveUploadInput so operators
-  // who extend localRoots beyond the defaults get consistent behavior with sendMediaFeishu.
   const resolvedFilePath = resolve(filePath!);
   const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
     maxBytes,
     optimizeImages: false,
+    localRoots: localRoots?.length ? localRoots : undefined,
   });
   return {
     buffer: loaded.buffer,
@@ -665,6 +664,7 @@ async function uploadImageBlock(
   filename?: string,
   index?: number,
   imageInput?: string, // data URI, plain base64, or local path
+  localRoots?: readonly string[],
 ) {
   // Step 1: Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
@@ -684,7 +684,14 @@ async function uploadImageBlock(
   }
 
   // Step 2: Resolve and upload the image buffer.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename, imageInput);
+  const upload = await resolveUploadInput(
+    url,
+    filePath,
+    maxBytes,
+    filename,
+    imageInput,
+    localRoots,
+  );
   const fileToken = await uploadImageToDocx(
     client,
     imageBlockId,
@@ -719,13 +726,14 @@ async function uploadFileBlock(
   filePath?: string,
   parentBlockId?: string,
   filename?: string,
+  localRoots?: readonly string[],
 ) {
   const blockId = parentBlockId ?? docToken;
 
   // Feishu API does not allow creating empty file blocks (block_type 23).
   // Workaround: create a placeholder text block, then replace it with file content.
   // Actually, file blocks need a different approach: use markdown link as placeholder.
-  const upload = await resolveUploadInput(url, filePath, maxBytes, filename);
+  const upload = await resolveUploadInput(url, filePath, maxBytes, filename, undefined, localRoots);
 
   // Create a placeholder text block first
   const placeholderMd = `[${upload.fileName}](https://example.com/placeholder)`;
@@ -1356,6 +1364,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         const defaultAccountId = ctx.agentAccountId;
         const trustedRequesterOpenId =
           ctx.messageChannel === "feishu" ? ctx.requesterSenderId?.trim() || undefined : undefined;
+        // Scoped local roots: include workspace/agent dirs so uploads from
+        // non-default workspaces are not rejected by assertLocalMediaAllowed.
+        const scopedLocalRoots = [ctx.workspaceDir, ctx.agentDir].filter((d): d is string => !!d);
         return {
           name: "feishu_doc",
           label: "Feishu Doc",
@@ -1454,6 +1465,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.filename,
                       p.index,
                       p.image, // data URI or plain base64
+                      scopedLocalRoots,
                     ),
                   );
                 case "upload_file":
@@ -1466,6 +1478,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.file_path,
                       p.parent_block_id,
                       p.filename,
+                      scopedLocalRoots,
                     ),
                   );
                 case "color_text":

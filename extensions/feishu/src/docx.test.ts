@@ -430,7 +430,7 @@ describe("feishu_doc image fetch hardening", () => {
       fileName: "test-local.txt",
     });
 
-    const feishuDocTool = resolveFeishuDocTool();
+    const feishuDocTool = resolveFeishuDocTool({ workspaceDir: "/home/user/project" });
 
     const result = await feishuDocTool.execute("tool-call", {
       action: "upload_file",
@@ -445,7 +445,10 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false }),
+      expect.objectContaining({
+        optimizeImages: false,
+        localRoots: ["/home/user/project"],
+      }),
     );
 
     expect(driveUploadAllMock).toHaveBeenCalledWith(
