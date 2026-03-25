@@ -136,11 +136,32 @@ describe("scripts/test-parallel lane planning", () => {
         ...process.env,
         CI: "",
         OPENCLAW_TEST_LIST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_LANES: "1",
+        OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
       },
       encoding: "utf8",
     });
 
     expect(output).toContain("unit-fast-batch-");
     expect(output).not.toContain("unit-fast filters=all maxWorkers=");
+  });
+
+  it("keeps legacy base-pinned targeted reruns on dedicated forks lanes", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync(
+      "node",
+      ["scripts/test-parallel.mjs", "src/auto-reply/reply/followup-runner.test.ts"],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          OPENCLAW_TEST_LIST_LANES: "1",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(output).toContain("base-pinned-followup-runner");
+    expect(output).not.toContain("base-followup-runner");
   });
 });
