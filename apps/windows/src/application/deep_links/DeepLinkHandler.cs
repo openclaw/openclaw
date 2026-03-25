@@ -139,6 +139,9 @@ internal sealed class DeepLinkHandler
         var settings = settingsResult.Value;
         settings.SetRemoteUrl(url);
         settings.SetConnectionMode(ConnectionMode.Remote);
+        settings.SetRemoteTransport(RemoteTransport.Direct);
+        settings.SetRemoteToken(link.Token ?? string.Empty);
+        settings.SetRemotePassword(link.Password ?? string.Empty);
 
         var saveResult = await _sender.Send(new SaveSettingsCommand(settings));
         if (saveResult.IsError)

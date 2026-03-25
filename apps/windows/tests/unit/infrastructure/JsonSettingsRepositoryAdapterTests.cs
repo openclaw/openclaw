@@ -55,6 +55,33 @@ public sealed class JsonSettingsRepositoryAdapterTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveThenLoad_RemoteCredentials_RoundTripWithoutExposure()
+    {
+        // RemoteToken and RemotePassword must survive a save/load cycle without
+        // being readable as plaintext in the serialised JSON (DPAPI-encrypted on Windows).
+        var settings = await _adapter.LoadAsync(default);
+        settings.SetConnectionMode(ConnectionMode.Remote);
+        settings.SetRemoteTransport(RemoteTransport.Direct);
+        settings.SetRemoteUrl("ws://localhost:18789");
+        settings.SetRemoteToken("secret-token");
+        settings.SetRemotePassword("secret-pw");
+
+        await _adapter.SaveAsync(settings, default);
+
+        // Verify plaintext is not present in the raw JSON bytes on disk.
+        var raw = await File.ReadAllTextAsync(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                         "OpenClaw", "settings.json"));
+        raw.Should().NotContain("secret-token");
+        raw.Should().NotContain("secret-pw");
+
+        // But the values must round-trip correctly through load.
+        var loaded = await _adapter.LoadAsync(default);
+        loaded.RemoteToken.Should().Be("secret-token");
+        loaded.RemotePassword.Should().Be("secret-pw");
+    }
+
+    [Fact]
     public async Task Save_IsConcurrencySafe()
     {
         // Multiple concurrent saves must not throw or corrupt

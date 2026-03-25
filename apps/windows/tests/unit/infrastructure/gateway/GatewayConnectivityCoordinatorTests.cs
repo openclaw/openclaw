@@ -210,6 +210,32 @@ public sealed class GatewayConnectivityCoordinatorTests
         await med.DidNotReceiveWithAnyArgs().Send(default!, default);
     }
 
+    // ── Restart reconnect ─────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(ConnectionMode.Unconfigured)]
+    [InlineData(ConnectionMode.Local)]
+    [InlineData(ConnectionMode.Remote)]
+    public async Task StartAsync_AlwaysTriggersRefreshForAppSettingsFallback(ConnectionMode initial)
+    {
+        // RefreshAsync is fired unconditionally so deep-link or UI-configured gateways reconnect
+        // after restart, even when openclaw.json previously reported a different mode.
+        var initialState = initial switch
+        {
+            ConnectionMode.Local   => (GatewayEndpointState)new GatewayEndpointState.Ready(ConnectionMode.Local, DefaultUrl, null, null),
+            ConnectionMode.Remote  => new GatewayEndpointState.Connecting(ConnectionMode.Remote, "Connecting…"),
+            _                      => new GatewayEndpointState.Unavailable(ConnectionMode.Unconfigured, "none"),
+        };
+        var store = Substitute.For<IGatewayEndpointStore>();
+        store.CurrentState.Returns(initialState);
+        var coord = Make(eps: store);
+
+        await coord.StartAsync(CancellationToken.None);
+        await Task.Yield();
+
+        await store.Received(1).RefreshAsync(Arg.Any<CancellationToken>());
+    }
+
     // ── HostLabel ────────────────────────────────────────────────────────────
 
     [Fact]

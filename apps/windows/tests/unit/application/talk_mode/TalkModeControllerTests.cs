@@ -233,11 +233,15 @@ public sealed class TalkModeControllerTests
     public async Task PhaseChanged_MapsPhaseToCorrectGatewayString(TalkModePhase phase, string expected)
     {
         await _controller.SetEnabledAsync(true);
+
+        // Signal when the fire-and-forget Task.Run reaches TalkModeAsync — more reliable than a fixed delay in CI.
+        var called = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _rpc.TalkModeAsync(Arg.Any<bool>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(call => { called.TrySetResult(); return Task.CompletedTask; });
         _rpc.ClearReceivedCalls();
 
         _runtime.PhaseChanged += Raise.Event<EventHandler<TalkModePhase>>(this, phase);
-        // Task.Yield() is insufficient for Task.Run fire-and-forget on some scheduler orderings.
-        await Task.Delay(50);
+        await called.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await _rpc.Received().TalkModeAsync(
             Arg.Any<bool>(),

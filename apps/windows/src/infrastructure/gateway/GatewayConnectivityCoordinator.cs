@@ -48,6 +48,12 @@ internal sealed class GatewayConnectivityCoordinator : IHostedService
         var initialMode = ResolvedMode ?? ConnectionMode.Unconfigured;
         _ = _portGuardian.SweepAsync(initialMode);
 
+        // Always refresh from AppSettings at startup so a deep-link or UI-configured remote
+        // gateway reconnects even when openclaw.json previously reported a different mode.
+        // ResolveEffectiveMode gives AppSettings priority while falling back to openclaw.json
+        // for SSH users who never went through the UI.
+        _ = _endpointStore.RefreshAsync(ct);
+
         return Task.CompletedTask;
     }
 

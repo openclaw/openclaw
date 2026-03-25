@@ -85,7 +85,8 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
     public async Task RefreshAsync(CancellationToken ct = default)
     {
         var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
-        var mode     = ResolveEffectiveMode(settings);
+        var root     = OpenClawConfigFile.LoadDict();
+        var mode     = ResolveEffectiveMode(settings, root);
         await SetModeAsync(mode, ct).ConfigureAwait(false);
     }
 
@@ -118,9 +119,24 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
 
             case ConnectionMode.Remote:
             {
-                if (GatewayRemoteConfig.ResolveTransport(root) == RemoteTransport.Direct)
+                // Load settings for transport resolution and SSH tunnel config.
+                var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
+                // When openclaw.json has an explicit transport, use it.
+                // When openclaw.json has a remote section but no transport, default to SSH
+                //   (missing transport = SSH, not a signal to reuse the persisted value).
+                // When openclaw.json has no remote section at all (UI-only install), fall back
+                //   to settings.RemoteTransport so deep-link / onboarding setups work.
+                var transport = GatewayRemoteConfig.HasTransportEntry(root)
+                    ? GatewayRemoteConfig.ResolveTransport(root)
+                    : GatewayRemoteConfig.HasRemoteSection(root)
+                        ? RemoteTransport.Ssh
+                        : settings.RemoteTransport;
+
+                if (transport == RemoteTransport.Direct)
                 {
-                    var url = GatewayRemoteConfig.ResolveGatewayUrl(root);
+                    // URL: config file is authoritative; settings.RemoteUrl is the fallback for UI-only setups.
+                    var url = GatewayRemoteConfig.ResolveGatewayUrl(root)
+                           ?? GatewayRemoteConfig.NormalizeGatewayUrl(settings.RemoteUrl);
                     if (url is null)
                     {
                         await CancelRemoteEnsureAsync(ct).ConfigureAwait(false);
@@ -129,13 +145,27 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
                             "gateway.remote.url missing or invalid for direct transport"));
                         return;
                     }
+                    // Credentials: config/env are authoritative when present — never mix with settings
+                    // to avoid a stale persisted token overriding a config-file password.
+                    // Fall back to settings only when config provides neither credential.
+                    string? directToken;
+                    string? directPassword;
+                    if (!string.IsNullOrEmpty(token) || !string.IsNullOrEmpty(password))
+                    {
+                        directToken    = token;
+                        directPassword = password;
+                    }
+                    else
+                    {
+                        directToken    = settings.RemoteToken.Length    > 0 ? settings.RemoteToken    : null;
+                        directPassword = settings.RemotePassword.Length > 0 ? settings.RemotePassword : null;
+                    }
                     await CancelRemoteEnsureAsync(ct).ConfigureAwait(false);
-                    SetState(new GatewayEndpointState.Ready(ConnectionMode.Remote, url, token, password));
+                    SetState(new GatewayEndpointState.Ready(ConnectionMode.Remote, url, directToken, directPassword));
                     return;
                 }
 
                 // SSH transport — set connecting and kick ensure task
-                var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
                 SetState(new GatewayEndpointState.Connecting(ConnectionMode.Remote, RemoteConnectingDetail));
                 await _ensureLock.WaitAsync(ct).ConfigureAwait(false);
                 try { KickRemoteEnsureIfNeeded(settings); }
@@ -179,10 +209,19 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
     {
         await RequireRemoteModeAsync(ct).ConfigureAwait(false);
 
-        var root = OpenClawConfigFile.LoadDict();
-        if (GatewayRemoteConfig.ResolveTransport(root) == RemoteTransport.Direct)
+        var root     = OpenClawConfigFile.LoadDict();
+        var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
+        // Mirror SetModeAsync transport resolution: config explicit → SSH default when section present → settings fallback.
+        var transport = GatewayRemoteConfig.HasTransportEntry(root)
+            ? GatewayRemoteConfig.ResolveTransport(root)
+            : GatewayRemoteConfig.HasRemoteSection(root)
+                ? RemoteTransport.Ssh
+                : settings.RemoteTransport;
+
+        if (transport == RemoteTransport.Direct)
         {
-            var url = GatewayRemoteConfig.ResolveGatewayUrl(root);
+            var url = GatewayRemoteConfig.ResolveGatewayUrl(root)
+                   ?? GatewayRemoteConfig.NormalizeGatewayUrl(settings.RemoteUrl);
             if (url is null)
                 throw new InvalidOperationException("gateway.remote.url missing or invalid");
             var directPort = GatewayRemoteConfig.DefaultPort(url);
@@ -199,9 +238,8 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
     public async Task<GatewayEndpointConfig?> MaybeFallbackToTailnetAsync(Uri currentUrl, CancellationToken ct = default)
     {
         var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
-        if (ResolveEffectiveMode(settings) != ConnectionMode.Local) return null;
-
         var root = OpenClawConfigFile.LoadDict();
+        if (ResolveEffectiveMode(settings, root) != ConnectionMode.Local) return null;
         var env  = GetEnv();
         if (ResolveGatewayBindMode(root, env) != "tailnet") return null;
 
@@ -463,12 +501,19 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
         };
     }
 
-    private static ConnectionMode ResolveEffectiveMode(AppSettings settings)
+    private static ConnectionMode ResolveEffectiveMode(AppSettings settings, Dictionary<string, object?> root)
     {
-        if (settings.ConnectionMode != ConnectionMode.Unconfigured)
-            return settings.ConnectionMode;
+        // Only Remote wins over openclaw.json — it reflects an intentional deep-link or UI switch.
+        // Local is set by onboarding heuristics and must not downgrade an operator-configured remote mode.
+        if (settings.ConnectionMode == ConnectionMode.Remote)
+            return ConnectionMode.Remote;
+        // Legacy: a saved remote URL implies remote mode.
         if (!string.IsNullOrWhiteSpace(settings.RemoteUrl))
             return ConnectionMode.Remote;
+        // Config file is authoritative for local/remote when AppSettings is neutral.
+        var configMode = ResolveInitialMode(root);
+        if (configMode != ConnectionMode.Unconfigured)
+            return configMode;
         return settings.OnboardingSeen ? ConnectionMode.Local : ConnectionMode.Unconfigured;
     }
 
@@ -531,7 +576,8 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
     private async Task RequireRemoteModeAsync(CancellationToken ct)
     {
         var settings = await _settings.LoadAsync(ct).ConfigureAwait(false);
-        if (ResolveEffectiveMode(settings) != ConnectionMode.Remote)
+        var root     = OpenClawConfigFile.LoadDict();
+        if (ResolveEffectiveMode(settings, root) != ConnectionMode.Remote)
             throw new InvalidOperationException("Remote mode is not enabled");
     }
 
@@ -569,7 +615,8 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
         {
             var result      = await ensure.Value.Task.ConfigureAwait(false);
             var stillRemote = ResolveEffectiveMode(
-                await _settings.LoadAsync(CancellationToken.None).ConfigureAwait(false))
+                await _settings.LoadAsync(CancellationToken.None).ConfigureAwait(false),
+                OpenClawConfigFile.LoadDict())
                 == ConnectionMode.Remote;
 
             if (!stillRemote) throw new InvalidOperationException("Remote mode is not enabled");

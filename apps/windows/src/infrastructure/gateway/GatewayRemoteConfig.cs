@@ -18,6 +18,14 @@ internal static class GatewayRemoteConfig
         return trimmed == "direct" ? RemoteTransport.Direct : RemoteTransport.Ssh;
     }
 
+    // Returns true when a gateway.remote section exists in the config file (regardless of fields).
+    internal static bool HasRemoteSection(Dictionary<string, object?> root)
+        => RemoteSection(root) is not null;
+
+    // Returns true when gateway.remote.transport is explicitly present in the config file.
+    internal static bool HasTransportEntry(Dictionary<string, object?> root)
+        => RemoteSection(root)?.GetValueOrDefault("transport") is string { Length: > 0 };
+
     internal static string? ResolveUrlString(Dictionary<string, object?> root)
     {
         var remote = RemoteSection(root);

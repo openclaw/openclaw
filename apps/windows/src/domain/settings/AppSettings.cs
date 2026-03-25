@@ -26,6 +26,8 @@ public sealed class AppSettings : Entity<Guid>
     public RemoteTransport RemoteTransport { get; private set; }
     public string RemoteTarget { get; private set; }
     public string RemoteUrl { get; private set; }
+    public string RemoteToken { get; private set; }
+    public string RemotePassword { get; private set; }
     public string RemoteIdentity { get; private set; }
     public string RemoteProjectRoot { get; private set; }
     public string RemoteCliPath { get; private set; }
@@ -93,6 +95,8 @@ public sealed class AppSettings : Entity<Guid>
         RemoteTransport = RemoteTransport.Ssh;
         RemoteTarget = string.Empty;
         RemoteUrl = string.Empty;
+        RemoteToken = string.Empty;
+        RemotePassword = string.Empty;
         RemoteIdentity = string.Empty;
         RemoteProjectRoot = string.Empty;
         RemoteCliPath = string.Empty;
@@ -162,6 +166,8 @@ public sealed class AppSettings : Entity<Guid>
     public void SetRemoteTransport(RemoteTransport transport) => RemoteTransport = transport;
     public void SetRemoteTarget(string target) => RemoteTarget = target ?? string.Empty;
     public void SetRemoteUrl(string url) => RemoteUrl = url ?? string.Empty;
+    public void SetRemoteToken(string token) => RemoteToken = token ?? string.Empty;
+    public void SetRemotePassword(string password) => RemotePassword = password ?? string.Empty;
     public void SetRemoteIdentity(string identity) => RemoteIdentity = identity ?? string.Empty;
     public void SetRemoteProjectRoot(string root) => RemoteProjectRoot = root ?? string.Empty;
     public void SetRemoteCliPath(string path) => RemoteCliPath = path ?? string.Empty;

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -27,6 +29,9 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
     // Tunables
     private const int ConfigGetTimeoutMs = 8000;
     private const int ConfigSetTimeoutMs = 10000;
+
+    // DPAPI entropy for remote gateway credentials — isolates these blobs from other DPAPI uses
+    private static readonly byte[] CredentialEntropy = "openclaw-remote-creds-v1"u8.ToArray();
 
     // Cached from last config.get — enables hash-based conflict detection on config.set
     private string? _lastHash;
@@ -65,6 +70,14 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
                 var fromGateway = await TryLoadFromGatewayAsync(ct);
                 if (fromGateway is not null)
                 {
+                    // Gateway config schema lacks Windows-only credential fields — restore from local file.
+                    try
+                    {
+                        var local = await LoadLocalAsync(ct);
+                        if (!string.IsNullOrEmpty(local.RemoteToken))    fromGateway.SetRemoteToken(local.RemoteToken);
+                        if (!string.IsNullOrEmpty(local.RemotePassword)) fromGateway.SetRemotePassword(local.RemotePassword);
+                    }
+                    catch { }
                     _cachedConnectionMode = fromGateway.ConnectionMode;
                     return fromGateway;
                 }
@@ -90,6 +103,10 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
 
         if (_cachedConnectionMode == ConnectionMode.Remote)
         {
+            // Save locally first: credentials (RemoteToken/RemotePassword) are never in the gateway
+            // schema, and the local file is the only recovery source on restart. Doing this before
+            // the gateway write ensures they survive even when the gateway write fails.
+            await SaveLocalAsync(settings, ct);
             // Remote mode: gateway mandatory — propagate failure
             await SaveToGatewayAsync(settings, ct);
             return;
@@ -132,7 +149,11 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         if (_lastHash is null && _connection.State == GatewayConnectionState.Connected)
             _ = await TryLoadFromGatewayAsync(ct);
 
-        var raw = JsonSerializer.Serialize(MapToDto(settings), JsonOptions);
+        // Strip Windows-only credential fields — gateway schema does not accept them.
+        var dto = MapToDto(settings);
+        dto.RemoteToken    = string.Empty;
+        dto.RemotePassword = string.Empty;
+        var raw = JsonSerializer.Serialize(dto, JsonOptions);
         var parameters = new Dictionary<string, object?> { ["raw"] = raw };
         if (_lastHash is not null)
             parameters["baseHash"] = _lastHash;
@@ -196,7 +217,11 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
             // Write to .tmp first, then atomic rename — prevents corruption on crash
             await using (var stream = File.Create(tmpPath))
             {
-                await JsonSerializer.SerializeAsync(stream, MapToDto(settings), JsonOptions, ct);
+                var dto = MapToDto(settings);
+                // Encrypt credentials so they are not persisted as plaintext JSON.
+                dto.RemoteToken    = EncryptCredential(dto.RemoteToken);
+                dto.RemotePassword = EncryptCredential(dto.RemotePassword);
+                await JsonSerializer.SerializeAsync(stream, dto, JsonOptions, ct);
             }
 
             File.Move(tmpPath, _settingsPath, overwrite: true);
@@ -278,6 +303,8 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         settings.SetRemoteTransport(dto.RemoteTransport);
         settings.SetRemoteTarget(dto.RemoteTarget);
         settings.SetRemoteUrl(dto.RemoteUrl);
+        settings.SetRemoteToken(DecryptCredential(dto.RemoteToken));
+        settings.SetRemotePassword(DecryptCredential(dto.RemotePassword));
         settings.SetRemoteIdentity(dto.RemoteIdentity);
         settings.SetRemoteProjectRoot(dto.RemoteProjectRoot);
         settings.SetRemoteCliPath(dto.RemoteCliPath);
@@ -339,6 +366,8 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         RemoteTransport = s.RemoteTransport,
         RemoteTarget = s.RemoteTarget,
         RemoteUrl = s.RemoteUrl,
+        RemoteToken = s.RemoteToken,
+        RemotePassword = s.RemotePassword,
         RemoteIdentity = s.RemoteIdentity,
         RemoteProjectRoot = s.RemoteProjectRoot,
         RemoteCliPath = s.RemoteCliPath,
@@ -382,6 +411,39 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         TailscalePassword = s.TailscalePassword,
     };
 
+    private static string EncryptCredential(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        try
+        {
+            var encrypted = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(value), CredentialEntropy, DataProtectionScope.CurrentUser);
+            return "dpapi:" + Convert.ToBase64String(encrypted);
+        }
+        catch
+        {
+            // DPAPI unavailable (headless CI, LocalSystem account) — fall back to plaintext
+            return value;
+        }
+    }
+
+    private static string DecryptCredential(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return value;
+        if (!value.StartsWith("dpapi:", StringComparison.Ordinal))
+            return value; // plaintext — pre-DPAPI file or migration path
+        try
+        {
+            var decrypted = ProtectedData.Unprotect(
+                Convert.FromBase64String(value["dpapi:".Length..]), CredentialEntropy, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(decrypted);
+        }
+        catch
+        {
+            return string.Empty; // credentials lost on profile change — cleaner than corrupted data
+        }
+    }
+
     // Private DTO — keeps AppSettings domain-pure (no JSON annotations in domain)
     private sealed class AppSettingsDto
     {
@@ -399,6 +461,8 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         public RemoteTransport RemoteTransport { get; set; } = RemoteTransport.Ssh;
         public string RemoteTarget { get; set; } = string.Empty;
         public string RemoteUrl { get; set; } = string.Empty;
+        public string RemoteToken { get; set; } = string.Empty;
+        public string RemotePassword { get; set; } = string.Empty;
         public string RemoteIdentity { get; set; } = string.Empty;
         public string RemoteProjectRoot { get; set; } = string.Empty;
         public string RemoteCliPath { get; set; } = string.Empty;
