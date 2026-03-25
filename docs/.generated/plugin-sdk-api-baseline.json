@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1683,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1404,7 +1404,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -1455,8 +1455,8 @@
           "exportName": "createAccountStatusSink",
           "kind": "function",
           "source": {
-            "line": 23,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 15,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1518,8 +1518,8 @@
           "exportName": "keepHttpServerTaskAlive",
           "kind": "function",
           "source": {
-            "line": 79,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 71,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -1698,8 +1698,8 @@
           "exportName": "waitUntilAbort",
           "kind": "function",
           "source": {
-            "line": 38,
-            "path": "src/plugin-sdk/channel-lifecycle.ts"
+            "line": 30,
+            "path": "src/plugin-sdk/channel-lifecycle.core.ts"
           }
         },
         {
@@ -3761,7 +3761,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -3819,7 +3819,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1683,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4334,7 +4334,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1680,
+            "line": 1683,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5321,7 +5321,7 @@
           }
         },
         {
-          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getAuthHeader: () => string | null; };",
+          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getAuthHeader: () => string | null; };",
           "exportName": "createAuthCaptureJsonFetch",
           "kind": "function",
           "source": {
@@ -5348,7 +5348,7 @@
           }
         },
         {
-          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getRequest: () => { ...; }; };",
+          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getRequest: () => { ...; }; };",
           "exportName": "createRequestCaptureJsonFetch",
           "kind": "function",
           "source": {

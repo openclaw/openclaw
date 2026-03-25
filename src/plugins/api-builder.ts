@@ -14,6 +14,7 @@ export type BuildPluginApiParams = {
   pluginConfig?: Record<string, unknown>;
   runtime: PluginRuntime;
   logger: PluginLogger;
+  resetSession?: OpenClawPluginApi["resetSession"];
   resolvePath: (input: string) => string;
   handlers?: Partial<
     Pick<
@@ -85,6 +86,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
+    resetSession: params.resetSession,
     registerTool: handlers.registerTool ?? noopRegisterTool,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,

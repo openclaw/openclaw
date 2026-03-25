@@ -1674,6 +1674,9 @@ export type OpenClawPluginModule =
   | OpenClawPluginDefinition
   | ((api: OpenClawPluginApi) => void | Promise<void>);
 
+export type PluginResetSessionResult =
+  | { ok: true; key: string; sessionId: string }
+  | { ok: false; key: string; error: string };
 export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
 
 /** Main registration API injected into native plugin entry files. */
@@ -1767,6 +1770,7 @@ export type OpenClawPluginApi = {
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
+  resetSession?: (key: string, reason?: "new" | "reset") => Promise<PluginResetSessionResult>;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
