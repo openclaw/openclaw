@@ -70,7 +70,10 @@ export default {
             .replace(/[\r\n]/g, " ")
             .replace(/"/g, '""')
             .replace(/'/g, "''");
-          const safeLimit = Math.max(1, Math.min(1000, limit));
+          const safeLimit = Math.max(
+            1,
+            Math.min(1000, Math.floor(Number.isFinite(limit) ? limit : 20)),
+          );
           const normalizedExtensionRaw =
             typeof extension === "string"
               ? extension
@@ -122,7 +125,7 @@ try {
     $rs = New-Object -ComObject ADODB.Recordset
     $con.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
     $whereParts = @()
-    $whereParts += "System.FileName LIKE '%$queryLike%' ESCAPE '\\\\'"
+    $whereParts += "System.FileName LIKE '%$queryLike%' ESCAPE '\\'"
     if ($scope) {
         $scopeSql = $scope.Replace("'", "''")
         $whereParts += "SCOPE = '$scopeSql'"
