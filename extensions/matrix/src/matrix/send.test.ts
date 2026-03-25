@@ -172,19 +172,50 @@ describe("sendMessageMatrix media", () => {
     expect(content.file?.url).toBe("mxc://example/file");
   });
 
-  it("does not upload plaintext thumbnails for encrypted image sends", async () => {
-    const { client, uploadContent } = makeEncryptedMediaClient();
+  it("encrypts thumbnail via thumbnail_file when room is encrypted", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    const encryptMedia = vi.fn().mockResolvedValue({
+      buffer: Buffer.from("encrypted-thumb"),
+      file: {
+        key: { kty: "oct", key_ops: ["encrypt", "decrypt"], alg: "A256CTR", k: "tkey", ext: true },
+        iv: "tiv",
+        hashes: { sha256: "thash" },
+        v: "v2",
+      },
+    });
+    (client as { crypto?: object }).crypto = {
+      isRoomEncrypted: vi.fn().mockResolvedValue(true),
+      encryptMedia,
+    };
+    // Return image metadata so thumbnail generation is triggered (image > 800px)
     getImageMetadataMock
-      .mockResolvedValueOnce({ width: 1600, height: 1200 })
-      .mockResolvedValueOnce({ width: 800, height: 600 });
-    resizeToJpegMock.mockResolvedValueOnce(Buffer.from("thumb"));
+      .mockResolvedValueOnce({ width: 1920, height: 1080 }) // original image
+      .mockResolvedValueOnce({ width: 800, height: 450 }); // thumbnail
+    resizeToJpegMock.mockResolvedValueOnce(Buffer.from("thumb-bytes"));
+    // Two uploadContent calls: one for the main encrypted image, one for the encrypted thumbnail
+    uploadContent
+      .mockResolvedValueOnce("mxc://example/main")
+      .mockResolvedValueOnce("mxc://example/thumb");
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    expect(uploadContent).toHaveBeenCalledTimes(1);
+    // encryptMedia called twice: once for main media, once for thumbnail
+    expect(encryptMedia).toHaveBeenCalledTimes(2);
+
+    const content = sendMessage.mock.calls[0]?.[1] as {
+      url?: string;
+      file?: { url?: string };
+      info?: { thumbnail_url?: string; thumbnail_file?: { url?: string } };
+    };
+    // Main media encrypted correctly
+    expect(content.url).toBeUndefined();
+    expect(content.file?.url).toBe("mxc://example/main");
+    // Thumbnail must use thumbnail_file (encrypted), NOT thumbnail_url (unencrypted)
+    expect(content.info?.thumbnail_url).toBeUndefined();
+    expect(content.info?.thumbnail_file?.url).toBe("mxc://example/thumb");
   });
 
   it("keeps reply context on voice transcript follow-ups outside threads", async () => {

@@ -135,7 +135,7 @@ export async function sendMessageMatrix(
           ? await prepareImageInfo({
               buffer: media.buffer,
               client,
-              encrypted: Boolean(uploaded.file),
+              roomId,
             })
           : undefined;
         const [firstChunk, ...rest] = chunks;

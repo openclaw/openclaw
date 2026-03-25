@@ -113,7 +113,7 @@ const THUMBNAIL_QUALITY = 80;
 export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
-  encrypted?: boolean;
+  roomId?: string;
 }): Promise<DimensionalFileInfo | undefined> {
   const meta = await getCore()
     .media.getImageMetadata(params.buffer)
@@ -122,10 +122,6 @@ export async function prepareImageInfo(params: {
     return undefined;
   }
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
-  if (params.encrypted) {
-    // For E2EE media, avoid uploading plaintext thumbnails.
-    return imageInfo;
-  }
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
@@ -138,12 +134,24 @@ export async function prepareImageInfo(params: {
       const thumbMeta = await getCore()
         .media.getImageMetadata(thumbBuffer)
         .catch(() => null);
-      const thumbUri = await params.client.uploadContent(
-        thumbBuffer,
-        "image/jpeg",
-        "thumbnail.jpg",
-      );
-      imageInfo.thumbnail_url = thumbUri;
+      if (params.roomId) {
+        const result = await uploadMediaMaybeEncrypted(params.client, params.roomId, thumbBuffer, {
+          contentType: "image/jpeg",
+          filename: "thumbnail.jpg",
+        });
+        if (result.file) {
+          imageInfo.thumbnail_file = result.file;
+        } else {
+          imageInfo.thumbnail_url = result.url;
+        }
+      } else {
+        const thumbUri = await params.client.uploadContent(
+          thumbBuffer,
+          "image/jpeg",
+          "thumbnail.jpg",
+        );
+        imageInfo.thumbnail_url = thumbUri;
+      }
       if (thumbMeta) {
         imageInfo.thumbnail_info = {
           w: thumbMeta.width,
