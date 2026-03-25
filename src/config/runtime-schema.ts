@@ -1,7 +1,8 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, readConfigFileSnapshot } from "./config.js";
+import type { OpenClawConfig } from "./config.js";
 import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 const silentSchemaLogger = {
@@ -11,12 +12,15 @@ const silentSchemaLogger = {
   debug: () => {},
 };
 
-export function loadRuntimeConfigSchema(): ConfigSchemaResponse {
-  const cfg = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+function mapPluginSchemaMetadata(
+  config: OpenClawConfig,
+  opts?: { activate?: boolean; cache?: boolean },
+) {
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const pluginRegistry = loadOpenClawPlugins({
-    config: cfg,
-    cache: true,
+    config,
+    cache: opts?.cache,
+    activate: opts?.activate,
     workspaceDir,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
@@ -24,20 +28,47 @@ export function loadRuntimeConfigSchema(): ConfigSchemaResponse {
     logger: silentSchemaLogger,
   });
 
+  return pluginRegistry.plugins.map((plugin) => ({
+    id: plugin.id,
+    name: plugin.name,
+    description: plugin.description,
+    configUiHints: plugin.configUiHints,
+    configSchema: plugin.configJsonSchema,
+  }));
+}
+
+function mapChannelSchemaMetadata() {
+  return listChannelPlugins().map((entry) => ({
+    id: entry.id,
+    label: entry.meta.label,
+    description: entry.meta.blurb,
+    configSchema: entry.configSchema?.schema,
+    configUiHints: entry.configSchema?.uiHints,
+  }));
+}
+
+export function loadRuntimeConfigSchema(): ConfigSchemaResponse {
+  const cfg = loadConfig();
   return buildConfigSchema({
-    plugins: pluginRegistry.plugins.map((plugin) => ({
-      id: plugin.id,
-      name: plugin.name,
-      description: plugin.description,
-      configUiHints: plugin.configUiHints,
-      configSchema: plugin.configJsonSchema,
-    })),
-    channels: listChannelPlugins().map((entry) => ({
-      id: entry.id,
-      label: entry.meta.label,
-      description: entry.meta.blurb,
-      configSchema: entry.configSchema?.schema,
-      configUiHints: entry.configSchema?.uiHints,
-    })),
+    plugins: mapPluginSchemaMetadata(cfg, { activate: true, cache: true }),
+    channels: mapChannelSchemaMetadata(),
   });
+}
+
+export async function readBestEffortRuntimeConfigSchema(): Promise<ConfigSchemaResponse> {
+  const snapshot = await readConfigFileSnapshot();
+  const channels = mapChannelSchemaMetadata();
+
+  if (!snapshot.valid) {
+    return buildConfigSchema({ channels });
+  }
+
+  try {
+    return buildConfigSchema({
+      plugins: mapPluginSchemaMetadata(snapshot.config, { activate: false, cache: false }),
+      channels,
+    });
+  } catch {
+    return buildConfigSchema({ channels });
+  }
 }
