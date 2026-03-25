@@ -1,6 +1,6 @@
 ---
 summary: "Complete guide to the Orchestration system - workspaces, projects, tasks, goals, and more."
-updated: "2026-03-23"
+updated: "2026-03-25"
 title: "Orchestration"
 tags: ["orchestration", "workspaces", "tasks", "goals", "projects", "infographics"]
 ---

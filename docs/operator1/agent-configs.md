@@ -1,6 +1,6 @@
 ---
 summary: "Agent workspace file reference — SOUL.md, AGENTS.md, IDENTITY.md, MEMORY.md, and other files that define each agent's persona and behavior."
-updated: "2026-03-23"
+updated: "2026-03-25"
 title: "Agent Configs"
 ---
 
