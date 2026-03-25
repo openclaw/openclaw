@@ -7,8 +7,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { clearSessionsListResultCacheForTest } from "./sessions-list-result-cache.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { clearSessionsListResultCacheForTest } from "./sessions-list-result-cache.js";
 import {
   connectOk,
   installGatewayTestHooks,

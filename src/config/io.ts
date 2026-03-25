@@ -17,6 +17,7 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { getFileStatSnapshot } from "./cache-utils.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -47,7 +48,6 @@ import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import { getFileStatSnapshot } from "./cache-utils.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -1997,7 +1997,9 @@ function fingerprintRootStatParts(configPath: string): {
  * With default deps (no overrides), repeats reuse resolved `$include` paths and only
  * re-stat files until the root config file changes.
  */
-export function collectResolvedConfigSourceStatFingerprintSync(overrides: ConfigIoDeps = {}): string {
+export function collectResolvedConfigSourceStatFingerprintSync(
+  overrides: ConfigIoDeps = {},
+): string {
   const deps = normalizeDeps(overrides);
   const requestedConfigPath = resolveConfigPathForDeps(deps);
   const candidatePaths = deps.configPath

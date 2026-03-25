@@ -886,9 +886,7 @@ export function collectCombinedSessionStoreStatFingerprint(cfg: OpenClawConfig):
     }
     seen.add(storePath);
     const snap = getFileStatSnapshot(storePath);
-    markers.push(
-      snap ? `${storePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `${storePath}:missing`,
-    );
+    markers.push(snap ? `${storePath}:${snap.mtimeMs}:${snap.sizeBytes}` : `${storePath}:missing`);
   }
   markers.sort();
   return markers.join("\n");

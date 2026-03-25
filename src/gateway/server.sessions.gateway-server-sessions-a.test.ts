@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   clearSessionsListResultCacheForTest,
   getSessionsListFullComputationForTest,
