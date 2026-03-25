@@ -2,6 +2,7 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../channels/plugins/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
@@ -52,12 +53,18 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  const agentId =
+    typeof opts.agent === "string"
+      ? opts.agent
+      : normalizeAgentId(cfg.agent?.id);
+
   const run = async () =>
     await runMessageAction({
       cfg,
       action,
       params: opts,
       deps: outboundDeps,
+      agentId,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
