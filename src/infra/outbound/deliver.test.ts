@@ -492,7 +492,7 @@ describe("deliverOutboundPayloads", () => {
       "123",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.resolve(resolvePreferredOpenClawTmpDir())]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -512,7 +512,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.resolve(resolvePreferredOpenClawTmpDir())]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -575,7 +575,7 @@ describe("deliverOutboundPayloads", () => {
       "+1555",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.resolve(resolvePreferredOpenClawTmpDir())]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
@@ -595,7 +595,7 @@ describe("deliverOutboundPayloads", () => {
       "imessage:+15551234567",
       "hi",
       expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([path.resolve(resolvePreferredOpenClawTmpDir())]),
+        mediaLocalRoots: expect.arrayContaining([expectedResolvedTmpRoot]),
       }),
     );
   });
