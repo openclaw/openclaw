@@ -217,6 +217,26 @@ describe("loadDotEnv", () => {
 });
 
 describe("loadCliDotEnv", () => {
+  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_STATE_DIR=./evil-state\n",
+        );
+
+        // Delete the fixture-provided value so the blocking must come from
+        // the workspace blocklist, not the "already set" skip.
+        delete process.env.OPENCLAW_STATE_DIR;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
