@@ -185,6 +185,32 @@ export async function promptAuthConfig(
   let next = cfg;
   let authChoice: string = "skip";
   let preferredProvider: string | undefined;
+  const promptPrimaryModel = async (params: {
+    includeProviderPluginSetups: boolean;
+    loadCatalog: boolean;
+    browseCatalogOnDemand?: boolean;
+  }): Promise<void> => {
+    const modelSelection = await promptDefaultModel({
+      config: next,
+      prompter,
+      allowKeep: true,
+      ignoreAllowlist: true,
+      includeProviderPluginSetups: params.includeProviderPluginSetups,
+      loadCatalog: params.loadCatalog,
+      browseCatalogOnDemand: params.browseCatalogOnDemand,
+      preferredProvider,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      runtime,
+    });
+    if (modelSelection.config) {
+      next = modelSelection.config;
+    }
+    if (modelSelection.model) {
+      next = applyPrimaryModel(next, modelSelection.model);
+      preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
+    }
+  };
+
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
       prompter,
@@ -210,25 +236,11 @@ export async function promptAuthConfig(
     }
 
     if (authChoice === "skip") {
-      const modelSelection = await promptDefaultModel({
-        config: next,
-        prompter,
-        allowKeep: true,
-        ignoreAllowlist: true,
+      await promptPrimaryModel({
         includeProviderPluginSetups: false,
         loadCatalog: true,
         browseCatalogOnDemand: true,
-        preferredProvider,
-        workspaceDir: resolveDefaultAgentWorkspaceDir(),
-        runtime,
       });
-      if (modelSelection.config) {
-        next = modelSelection.config;
-      }
-      if (modelSelection.model) {
-        next = applyPrimaryModel(next, modelSelection.model);
-        preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
-      }
       break;
     }
 
@@ -250,6 +262,10 @@ export async function promptAuthConfig(
     if (applied.retrySelection) {
       continue;
     }
+    await promptPrimaryModel({
+      includeProviderPluginSetups: true,
+      loadCatalog: true,
+    });
     break;
   }
 

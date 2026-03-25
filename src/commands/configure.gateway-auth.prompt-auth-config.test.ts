@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -199,7 +200,13 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 import { promptAuthConfig } from "./configure.gateway-auth.js";
 
 beforeEach(() => {
+  vi.clearAllMocks();
   mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  mocks.promptDefaultModel.mockResolvedValue({});
+  mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+  mocks.resolvePluginProviders.mockReturnValue([]);
+  mocks.resolveProviderPluginChoice.mockReturnValue(null);
+  mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
 });
 
 function makeRuntime(): RuntimeEnv {
@@ -690,5 +697,22 @@ describe("promptAuthConfig", () => {
     expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
     expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the user selected OpenRouter default model after auth", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openrouter-api-key");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/auto" },
+          },
+        },
+      },
+    });
+    mocks.promptDefaultModel.mockResolvedValue({ model: "openrouter/free" });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+    expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openrouter/free");
   });
 });
