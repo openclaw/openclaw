@@ -371,6 +371,118 @@ describe("handleFeishuMessage ACP routing", () => {
     );
   });
 
+  it("keeps ACP initialization failure replies anchored to the topic root", async () => {
+    mockResolveConfiguredBindingRoute.mockReturnValue({
+      bindingResolution: {
+        configuredBinding: {
+          spec: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+            agentId: "codex",
+            mode: "persistent",
+          },
+          record: {
+            bindingId:
+              "config:acp:feishu:default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+            targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+            },
+            status: "active",
+            boundAt: 0,
+            metadata: { source: "config" },
+          },
+        },
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+          agentId: "codex",
+        },
+      },
+      configuredBinding: {
+        spec: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+          agentId: "codex",
+          mode: "persistent",
+        },
+        record: {
+          bindingId:
+            "config:acp:feishu:default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+          targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+          targetKind: "session",
+          conversation: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
+          },
+          status: "active",
+          boundAt: 0,
+          metadata: { source: "config" },
+        },
+      },
+      route: {
+        agentId: "codex",
+        channel: "feishu",
+        accountId: "default",
+        sessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+        mainSessionKey: "agent:codex:main",
+        matchedBy: "binding.channel",
+      },
+    } as any);
+    mockEnsureConfiguredBindingRouteReady.mockResolvedValue({
+      ok: false,
+      error: "runtime unavailable",
+    } as any);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+                groupSessionScope: "group_topic_sender",
+                replyInThread: "enabled",
+              },
+            },
+          },
+        },
+      } as any,
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-topic-inline-reply",
+          root_id: "om_topic_root",
+          parent_id: "om_explicit_reply",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "quoted reply inside topic sender session" }),
+        },
+      },
+    });
+
+    expect(mockSendMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_group_chat",
+        text: expect.stringContaining("runtime unavailable"),
+        replyToMessageId: "om_topic_root",
+        replyInThread: true,
+      }),
+    );
+  });
+
   it("routes Feishu topic messages through active bound conversations", async () => {
     mockResolveBoundConversation.mockReturnValue({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
