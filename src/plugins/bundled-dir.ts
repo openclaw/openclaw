@@ -32,6 +32,12 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
         return runtimeExtensionsDir;
       }
+      // Dev checkout without dist-runtime: fall back to source extensions/ directly.
+      // This handles the case where plugin-sdk bundles resolve a wrong extensions/
+      // sub-directory (e.g. dist/plugin-sdk/extensions) via the module walk-up below.
+      if (fs.existsSync(sourceExtensionsDir)) {
+        return sourceExtensionsDir;
+      }
     }
   } catch {
     // ignore
@@ -49,6 +55,8 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   }
 
   // npm/dev: walk up from this module to find `extensions/` at the package root.
+  // Note: this fallback can match incorrect sub-directories (e.g. dist/plugin-sdk/extensions)
+  // so it is only reached when package-root resolution above produced no result.
   try {
     let cursor = path.dirname(fileURLToPath(import.meta.url));
     for (let i = 0; i < 6; i += 1) {
