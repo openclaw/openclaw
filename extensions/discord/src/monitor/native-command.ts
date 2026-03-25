@@ -81,6 +81,27 @@ import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
+// Discord application command and option descriptions are limited to 1-100 chars.
+// https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
+const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
+
+function truncateDiscordCommandDescription(params: { value: string; label: string }): string {
+  const { value, label } = params;
+  if (value.length <= DISCORD_COMMAND_DESCRIPTION_MAX) {
+    return value;
+  }
+  log.warn(
+    `discord: truncating native command description (${label}) from ${value.length} to ${DISCORD_COMMAND_DESCRIPTION_MAX}: ${JSON.stringify(value)}`,
+  );
+  return value.slice(0, DISCORD_COMMAND_DESCRIPTION_MAX);
+}
+
+function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
+  if (typeof command.nativeName === "string" && command.nativeName.trim().length > 0) {
+    return command.nativeName;
+  }
+  return command.key;
+}
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
@@ -124,6 +145,7 @@ function buildDiscordCommandOptions(params: {
   ) => Promise<{ provider?: string; model?: string } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, authorizeChoiceContext, resolveChoiceContext } = params;
+  const commandLabel = resolveDiscordCommandLogLabel(command);
   const args = command.args;
   if (!args || args.length === 0) {
     return undefined;
@@ -133,7 +155,10 @@ function buildDiscordCommandOptions(params: {
     if (arg.type === "number") {
       return {
         name: arg.name,
-        description: arg.description,
+        description: truncateDiscordCommandDescription({
+          value: arg.description,
+          label: `command:${commandLabel} arg:${arg.name}`,
+        }),
         type: ApplicationCommandOptionType.Number,
         required,
       };
@@ -141,7 +166,10 @@ function buildDiscordCommandOptions(params: {
     if (arg.type === "boolean") {
       return {
         name: arg.name,
-        description: arg.description,
+        description: truncateDiscordCommandDescription({
+          value: arg.description,
+          label: `command:${commandLabel} arg:${arg.name}`,
+        }),
         type: ApplicationCommandOptionType.Boolean,
         required,
       };
@@ -192,7 +220,10 @@ function buildDiscordCommandOptions(params: {
         : undefined;
     return {
       name: arg.name,
-      description: arg.description,
+      description: truncateDiscordCommandDescription({
+        value: arg.description,
+        label: `command:${commandLabel} arg:${arg.name}`,
+      }),
       type: ApplicationCommandOptionType.String,
       required,
       choices,
@@ -517,7 +548,10 @@ export function createDiscordNativeCommand(params: {
 
   return new (class extends Command {
     name = command.name;
-    description = command.description;
+    description = truncateDiscordCommandDescription({
+      value: command.description,
+      label: `command:${command.name}`,
+    });
     defer = true;
     ephemeral = ephemeralDefault;
     options = options;
