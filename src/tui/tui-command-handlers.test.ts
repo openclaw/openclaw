@@ -13,6 +13,7 @@ function createHarness(params?: {
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
+  client?: Record<string, unknown>;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
@@ -31,9 +32,10 @@ function createHarness(params?: {
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
+  const client = { sendChat, resetSession, ...params?.client } as never;
 
   const { handleCommand } = createCommandHandlers({
-    client: { sendChat, resetSession } as never,
+    client,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: {},
@@ -201,5 +203,38 @@ describe("tui command handlers", () => {
     expect(addUser).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("not connected to gateway — message not sent");
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
+  });
+
+  it("handles /model list by opening model selector instead of setting model", async () => {
+    const listModels = vi.fn().mockResolvedValue([
+      { id: "gpt-4", provider: "openai", name: "GPT-4" },
+      { id: "claude-3", provider: "anthropic", name: "Claude 3" },
+    ]);
+    const client = { listModels } as never;
+    const harness = createHarness({ client });
+    const { handleCommand } = harness;
+
+    await handleCommand("/model list");
+
+    expect(listModels).toHaveBeenCalled();
+  });
+
+  it("handles /model status by showing current model", async () => {
+    const harness = createHarness();
+    harness.state.sessionInfo = { modelProvider: "anthropic", model: "claude-3" };
+    const { handleCommand, addSystem } = harness;
+
+    await handleCommand("/model status");
+
+    expect(addSystem).toHaveBeenCalledWith("model: anthropic/claude-3");
+  });
+
+  it("handles /model status when session info is not loaded", async () => {
+    const harness = createHarness();
+    const { handleCommand, addSystem } = harness;
+
+    await handleCommand("/model status");
+
+    expect(addSystem).toHaveBeenCalledWith("model: unknown (session not loaded)");
   });
 });

@@ -295,8 +295,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openSessionSelector();
         break;
       case "model":
-        if (!args) {
+        if (!args || args === "list") {
           await openModelSelector();
+        } else if (args === "status") {
+          const { modelProvider, model } = state.sessionInfo;
+          if (modelProvider && model) {
+            chatLog.addSystem(`model: ${modelProvider}/${model}`);
+          } else {
+            chatLog.addSystem("model: unknown (session not loaded)");
+          }
         } else {
           try {
             const result = await client.patchSession({
