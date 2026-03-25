@@ -252,4 +252,35 @@ describe("sandbox/tool-policy", () => {
       "openclaw sandbox explain --session 'agent:main:weird session;rm -rf /'",
     );
   });
+
+  it("avoids terminal injection for control-character session keys", () => {
+    const sessionKey = "agent:main:abcde\n12345";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["browser"],
+          },
+        },
+      },
+    };
+
+    const message = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "browser",
+    });
+
+    const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
+    expect(sessionLine).toBeDefined();
+    expect(sessionLine).not.toContain(sessionKey);
+    expect(sessionLine).toContain("\\n");
+    expect(message).toContain("openclaw sandbox explain --agent main");
+    expect(message).not.toContain("--session");
+  });
 });

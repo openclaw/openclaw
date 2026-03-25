@@ -83,6 +83,32 @@ export function resolveSandboxRuntimeStatus(params: {
   };
 }
 
+function sanitizeForSingleLineDisplay(value: string): string {
+  return Array.from(value, (char) => {
+    if (char === "\n") {
+      return "\\n";
+    }
+    if (char === "\r") {
+      return "\\r";
+    }
+    if (char === "\t") {
+      return "\\t";
+    }
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (codePoint < 0x20 || codePoint === 0x7f) {
+      return `\\x${codePoint.toString(16).padStart(2, "0")}`;
+    }
+    return char;
+  }).join("");
+}
+
+function hasUnsafeControlChars(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint < 0x20 || codePoint === 0x7f;
+  });
+}
+
 function redactSessionKey(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -91,7 +117,7 @@ function redactSessionKey(value: string): string {
   if (trimmed.length <= 12) {
     return "(redacted)";
   }
-  return `${trimmed.slice(0, 6)}…${trimmed.slice(-6)}`;
+  return `${sanitizeForSingleLineDisplay(trimmed.slice(0, 6))}…${sanitizeForSingleLineDisplay(trimmed.slice(-6))}`;
 }
 
 function shellEscapeSingleArg(value: string): string {
@@ -150,7 +176,9 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push("- Use the agent main session instead of a non-main session.");
   }
   const explainCommand = runtime.sessionKey
-    ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)}`
+    ? hasUnsafeControlChars(runtime.sessionKey)
+      ? `openclaw sandbox explain --agent ${runtime.agentId}`
+      : `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)}`
     : "openclaw sandbox explain";
   lines.push(`- See: ${formatCliCommand(explainCommand)}`);
 
