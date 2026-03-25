@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
@@ -6,6 +7,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
@@ -23,6 +25,10 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
+import {
+  detectNestedOpenClawStateRoot,
+  formatNestedOpenClawStateRootWarning,
+} from "./state-root-diagnostics.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -41,6 +47,24 @@ const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 const INDEX_CACHE_PENDING = new Map<string, Promise<MemoryIndexManager>>();
+const WARNED_NESTED_STATE_ROOTS = new Set<string>();
+
+function warnIfNestedStateRoot(settings: ResolvedMemorySearchConfig): void {
+  const stateDir = resolveStateDir(process.env, os.homedir);
+  const diagnostic = detectNestedOpenClawStateRoot({
+    dbPath: settings.store.path,
+    stateDir,
+  });
+  if (!diagnostic) {
+    return;
+  }
+  const warningKey = `${diagnostic.stateDir}:${diagnostic.dbPath}`;
+  if (WARNED_NESTED_STATE_ROOTS.has(warningKey)) {
+    return;
+  }
+  WARNED_NESTED_STATE_ROOTS.add(warningKey);
+  log.warn(formatNestedOpenClawStateRootWarning(diagnostic));
+}
 
 export async function closeAllMemoryIndexManagers(): Promise<void> {
   const pending = Array.from(INDEX_CACHE_PENDING.values());
@@ -169,6 +193,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!settings) {
       return null;
     }
+    warnIfNestedStateRoot(settings);
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
     const existing = INDEX_CACHE.get(key);

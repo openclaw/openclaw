@@ -8,12 +8,26 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const detectStaleMemoryAgentIndexes = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<
+      Array<{
+        agentId: string;
+        dbPath: string;
+        staleCount: number;
+        missingPaths: string[];
+      }>
+    > => [],
+  ),
+);
+const listAgentIds = vi.hoisted(() => vi.fn(() => ["agent-default"]));
 
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds,
   resolveDefaultAgentId,
   resolveAgentDir,
 }));
@@ -28,6 +42,10 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
+}));
+
+vi.mock("../memory/stale-index-diagnostics.js", () => ({
+  detectStaleMemoryAgentIndexes,
 }));
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
@@ -58,6 +76,10 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    detectStaleMemoryAgentIndexes.mockReset();
+    detectStaleMemoryAgentIndexes.mockResolvedValue([]);
+    listAgentIds.mockClear();
+    listAgentIds.mockReturnValue(["agent-default"]);
   });
 
   it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
@@ -289,6 +311,31 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("notes stale agent indexes with per-agent reindex commands", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      local: {},
+      remote: { apiKey: "from-config" },
+    });
+    detectStaleMemoryAgentIndexes.mockResolvedValue([
+      {
+        agentId: "codex",
+        dbPath: "/Users/test/.openclaw/memory/codex.sqlite",
+        staleCount: 2,
+        missingPaths: ["memory/2026-03-21.md", "memory/2026-03-23.md"],
+      },
+    ]);
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("agent memory indexes are stale");
+    expect(message).toContain("codex");
+    expect(message).toContain("memory/2026-03-21.md");
+    expect(message).toContain("openclaw memory index --agent codex");
   });
 });
 

@@ -662,6 +662,9 @@ export abstract class MemoryManagerSyncOps {
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
     }
+    // TODO: fan out workspace memory-file changes to sibling agent indexes too.
+    // Today only instantiated managers watch and sync their own stores, so idle
+    // agent indexes can drift stale until that agent is explicitly reindexed.
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
       void this.sync({ reason: "watch" }).catch((err) => {
