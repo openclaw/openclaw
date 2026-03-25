@@ -14,6 +14,7 @@ import {
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+import { sortWebSearchProviders } from "../plugins/web-search-providers.shared.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -37,19 +38,6 @@ export const SEARCH_PROVIDER_OPTIONS: readonly PluginWebSearchProviderEntry[] =
   resolvePluginWebSearchProviders({
     bundledAllowlistCompat: true,
   });
-
-function sortSearchProviderOptions(
-  providers: PluginWebSearchProviderEntry[],
-): PluginWebSearchProviderEntry[] {
-  return providers.toSorted((left, right) => {
-    const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.id.localeCompare(right.id);
-  });
-}
 
 function canRepairBundledProviderSelection(
   config: OpenClawConfig,
@@ -87,7 +75,7 @@ export function resolveSearchProviderOptions(
     merged.set(entry.id, entry);
   }
 
-  return sortSearchProviderOptions([...merged.values()]);
+  return sortWebSearchProviders([...merged.values()]);
 }
 
 function resolveSearchProviderEntry(
@@ -139,10 +127,16 @@ export function resolveSearchProviderSignupUrl(
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
   const search = config.tools?.web?.search;
   const entry = resolveSearchProviderEntry(config, provider);
-  return (
+  const configuredValue =
     entry?.getConfiguredCredentialValue?.(config) ??
-    entry?.getCredentialValue(search as Record<string, unknown> | undefined)
-  );
+    entry?.getCredentialValue(search as Record<string, unknown> | undefined);
+  if (configuredValue != null) {
+    return configuredValue;
+  }
+  if (provider === "qveris") {
+    return (config.tools?.qveris as { apiKey?: unknown } | undefined)?.apiKey;
+  }
+  return configuredValue;
 }
 
 /** Returns the plaintext key string, or undefined for SecretRefs/missing. */

@@ -65,6 +65,7 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: vi.fn(),
     install: vi.fn(),
     uninstall: vi.fn(),
     stop: vi.fn(),
@@ -81,7 +82,8 @@ vi.mock("../daemon/program-args.js", () => ({
   }),
 }));
 
-vi.mock("../infra/bonjour-discovery.js", () => ({
+vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bonjour-discovery.js")>()),
   discoverGatewayBeacons: (opts: unknown) => discoverGatewayBeacons(opts),
 }));
 
@@ -147,6 +149,7 @@ describe("gateway-cli coverage", () => {
         displayName: "Studio",
         domain: "openclaw.internal.",
         host: "studio.openclaw.internal",
+        port: 18789,
         lanHost: "studio.local",
         tailnetDns: "studio.tailnet.ts.net",
         gatewayPort: 18789,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
@@ -10,13 +10,20 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: loadOpenClawPluginsMock,
 }));
 
-import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
+let getImageGenerationProvider: typeof import("./provider-registry.js").getImageGenerationProvider;
+let listImageGenerationProviders: typeof import("./provider-registry.js").listImageGenerationProviders;
 
 describe("image-generation provider registry", () => {
   afterEach(() => {
     loadOpenClawPluginsMock.mockReset();
     loadOpenClawPluginsMock.mockReturnValue(createEmptyPluginRegistry());
     resetPluginRuntimeStateForTest();
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ getImageGenerationProvider, listImageGenerationProviders } =
+      await import("./provider-registry.js"));
   });
 
   it("does not load plugins when listing without config", () => {

@@ -120,6 +120,11 @@ Marketplace sources can be:
 - a GitHub repo shorthand such as `owner/repo`
 - a git URL
 
+For remote marketplaces loaded from GitHub or git, plugin entries must stay
+inside the cloned marketplace repo. OpenClaw accepts relative path sources from
+that repo and rejects external git, GitHub, URL/archive, and absolute-path
+plugin sources from remote manifests.
+
 For local paths and archives, OpenClaw auto-detects:
 
 - native OpenClaw plugins (`openclaw.plugin.json`)

@@ -44,7 +44,7 @@ import {
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramApi = Bot["api"];
-type TelegramApiOverride = Partial<TelegramApi>;
+export type TelegramApiOverride = Partial<TelegramApi>;
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile

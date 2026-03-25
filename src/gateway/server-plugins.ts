@@ -32,16 +32,32 @@ const FALLBACK_GATEWAY_CONTEXT_STATE_KEY: unique symbol = Symbol.for(
 
 type FallbackGatewayContextState = {
   context: GatewayRequestContext | undefined;
+  resolveContext: (() => GatewayRequestContext | undefined) | undefined;
 };
 
-const fallbackGatewayContextState = resolveGlobalSingleton<FallbackGatewayContextState>(
-  FALLBACK_GATEWAY_CONTEXT_STATE_KEY,
-  () => ({ context: undefined }),
-);
+const getFallbackGatewayContextState = () =>
+  resolveGlobalSingleton<FallbackGatewayContextState>(FALLBACK_GATEWAY_CONTEXT_STATE_KEY, () => ({
+    context: undefined,
+    resolveContext: undefined,
+  }));
 
 export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
-  // TODO: This startup snapshot can become stale if runtime config/context changes.
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
+  fallbackGatewayContextState.resolveContext = undefined;
+}
+
+export function setFallbackGatewayContextResolver(
+  resolveContext: () => GatewayRequestContext | undefined,
+): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.resolveContext = resolveContext;
+}
+
+function getFallbackGatewayContext(): GatewayRequestContext | undefined {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  const resolved = fallbackGatewayContextState.resolveContext?.();
+  return resolved ?? fallbackGatewayContextState.context;
 }
 
 type PluginSubagentOverridePolicy = {
@@ -59,12 +75,10 @@ const PLUGIN_SUBAGENT_POLICY_STATE_KEY: unique symbol = Symbol.for(
   "openclaw.pluginSubagentOverridePolicyState",
 );
 
-const pluginSubagentPolicyState = resolveGlobalSingleton<PluginSubagentPolicyState>(
-  PLUGIN_SUBAGENT_POLICY_STATE_KEY,
-  () => ({
+const getPluginSubagentPolicyState = () =>
+  resolveGlobalSingleton<PluginSubagentPolicyState>(PLUGIN_SUBAGENT_POLICY_STATE_KEY, () => ({
     policies: {},
-  }),
-);
+  }));
 
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
@@ -88,6 +102,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
 }
 
 function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const normalized = normalizePluginsConfig(cfg.plugins);
   const policies: PluginSubagentPolicyState["policies"] = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
@@ -130,6 +145,7 @@ function authorizeFallbackModelOverride(params: {
   provider?: string;
   model?: string;
 }): { allowed: true } | { allowed: false; reason: string } {
+  const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
     return {
@@ -238,7 +254,7 @@ async function dispatchGatewayMethod<T>(
   },
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const context = scope?.context ?? fallbackGatewayContextState.context;
+  const context = scope?.context ?? getFallbackGatewayContext();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(

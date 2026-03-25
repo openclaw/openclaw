@@ -191,7 +191,7 @@ Live tests are split into two layers so we can isolate failures:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - Set `OPENCLAW_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.5, Grok 4)
+  - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."` (comma allowlist)
 - How to select providers:
@@ -222,7 +222,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to enable:
   - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.5, Grok 4)
+  - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
@@ -306,7 +306,7 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -335,10 +335,10 @@ This is the “common models” run we expect to keep working:
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
-- MiniMax: `minimax/minimax-m2.5`
+- MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.4,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
@@ -348,7 +348,7 @@ Pick at least one per provider family:
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
-- MiniMax: `minimax/minimax-m2.5`
+- MiniMax: `minimax/MiniMax-M2.7`
 
 Optional additional coverage (nice to have):
 
@@ -424,17 +424,19 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional "works in Linux" checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount CLI auth homes like `~/.codex`, `~/.claude`, `~/.qwen`, and `~/.minimax` when present, then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
+These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
-- Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+- Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
 image slim while still running Vitest against your exact local source/config.
+They also set `OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start
+real Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
 live coverage from that Docker lane.
@@ -449,7 +451,10 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
-- External CLI auth dirs under `$HOME` (`.codex`, `.claude`, `.qwen`, `.minimax`) are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
+- External CLI auth dirs under `$HOME` are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
+  - Default: mount all supported dirs (`.codex`, `.claude`, `.qwen`, `.minimax`)
+  - Narrowed provider runs mount only the needed dirs inferred from `OPENCLAW_LIVE_PROVIDERS` / `OPENCLAW_LIVE_GATEWAY_PROVIDERS`
+  - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)

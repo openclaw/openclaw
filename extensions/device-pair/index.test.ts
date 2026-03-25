@@ -17,11 +17,16 @@ const pluginApiMocks = vi.hoisted(() => ({
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   renderQrPngBase64: vi.fn(async () => "ZmFrZXBuZw=="),
+  resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
 }));
 
 vi.mock("./api.js", () => {
   return {
+    PAIRING_SETUP_BOOTSTRAP_PROFILE: {
+      roles: ["node"],
+      scopes: [],
+    },
     approveDevicePairing: vi.fn(),
     clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
     definePluginEntry: vi.fn((entry) => entry),
@@ -31,6 +36,7 @@ vi.mock("./api.js", () => {
     revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
     resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
     resolveGatewayBindUrl: vi.fn(),
+    resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
     runPluginCommandWithTimeout: vi.fn(),
   };
@@ -149,6 +155,12 @@ describe("device-pair /pair qr", () => {
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngBase64).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node"],
+        scopes: [],
+      },
+    });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(text).toContain("![OpenClaw pairing QR](data:image/png;base64,ZmFrZXBuZw==)");
     expect(text).toContain("- Security: single-use bootstrap token");

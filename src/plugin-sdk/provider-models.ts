@@ -26,7 +26,18 @@ export {
 } from "../agents/model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
 export { normalizeXaiModelId } from "../agents/model-id-normalization.js";
-export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
+export {
+  cloneFirstTemplateModel,
+  matchesExactOrPrefix,
+} from "../plugins/provider-model-helpers.js";
+export {
+  MINIMAX_DEFAULT_MODEL_ID,
+  MINIMAX_DEFAULT_MODEL_REF,
+  MINIMAX_TEXT_MODEL_CATALOG,
+  MINIMAX_TEXT_MODEL_ORDER,
+  MINIMAX_TEXT_MODEL_REFS,
+  isMiniMaxModernModelId,
+} from "../plugins/provider-model-minimax.js";
 
 export {
   applyGoogleGeminiModelDefault,
@@ -75,6 +86,11 @@ export {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 export {
+  buildDeepSeekModelDefinition,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_MODEL_CATALOG,
+} from "../agents/deepseek-models.js";
+export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,
@@ -117,6 +133,15 @@ export {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,
 } from "../agents/vercel-ai-gateway.js";
+export {
+  buildModelStudioDefaultModelDefinition,
+  buildModelStudioModelDefinition,
+  MODELSTUDIO_CN_BASE_URL,
+  MODELSTUDIO_DEFAULT_COST,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+  MODELSTUDIO_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {

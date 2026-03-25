@@ -13,6 +13,7 @@ import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
+import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 import { isCarrierGradeNatIpv4Address, isRfc1918Ipv4Address } from "../shared/net/ip.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -384,6 +385,7 @@ export async function resolvePairingSetupFromConfig(
       bootstrapToken: (
         await issueDeviceBootstrapToken({
           baseDir: options.pairingBaseDir,
+          profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
         })
       ).token,
     },

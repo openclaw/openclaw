@@ -76,6 +76,20 @@ function getPackageRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
+function findDistChunkByPrefix(prefix) {
+  const distRoot = path.join(getPackageRoot(), "dist");
+  try {
+    const entries = fs.readdirSync(distRoot, { withFileTypes: true });
+    const match = entries.find(
+      (entry) =>
+        entry.isFile() && entry.name.startsWith(`${prefix}-`) && entry.name.endsWith(".js"),
+    );
+    return match ? path.join(distRoot, match.name) : null;
+  } catch {
+    return null;
+  }
+}
+
 function listPluginSdkExportedSubpaths() {
   const packageRoot = getPackageRoot();
   if (pluginSdkSubpathsCache.has(packageRoot)) {
@@ -148,7 +162,7 @@ function loadMonolithicSdk() {
     }
   }
 
-  monolithicSdk = getJiti(false)(path.join(__dirname, "compat.ts"));
+  monolithicSdk = getJiti(false)(path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"));
   return monolithicSdk;
 }
 
@@ -157,7 +171,7 @@ function loadDiagnosticEventsModule() {
     return diagnosticEventsModule;
   }
 
-  const distCandidate = path.resolve(
+  const directDistCandidate = path.resolve(
     __dirname,
     "..",
     "..",
@@ -165,19 +179,40 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
-    try {
-      diagnosticEventsModule = getJiti(true)(distCandidate);
-      return diagnosticEventsModule;
-    } catch {
-      // Fall through to source path if dist is unavailable or stale.
+  if (!shouldPreferSourceInTests) {
+    const distCandidate =
+      (fs.existsSync(directDistCandidate) && directDistCandidate) ||
+      findDistChunkByPrefix("diagnostic-events");
+    if (distCandidate) {
+      try {
+        diagnosticEventsModule = normalizeDiagnosticEventsModule(getJiti(true)(distCandidate));
+        return diagnosticEventsModule;
+      } catch {
+        // Fall through to source path if dist is unavailable or stale.
+      }
     }
   }
 
-  diagnosticEventsModule = getJiti(false)(
-    path.join(__dirname, "..", "infra", "diagnostic-events.ts"),
+  diagnosticEventsModule = normalizeDiagnosticEventsModule(
+    getJiti(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
   );
   return diagnosticEventsModule;
+}
+
+function normalizeDiagnosticEventsModule(mod) {
+  if (!mod || typeof mod !== "object") {
+    return mod;
+  }
+  if (typeof mod.onDiagnosticEvent === "function") {
+    return mod;
+  }
+  if (typeof mod.r === "function") {
+    return {
+      ...mod,
+      onDiagnosticEvent: mod.r,
+    };
+  }
+  return mod;
 }
 
 function tryLoadMonolithicSdk() {
