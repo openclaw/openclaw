@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -32,7 +34,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
-  triggerInternalHook: vi.fn(async () => {}),
+  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -236,8 +238,25 @@ async function getMainPreviewEntry(ws: import("ws").WebSocket) {
   return entry;
 }
 
+function isInternalHookEvent(value: unknown): value is InternalHookEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.sessionKey === "string" &&
+    Array.isArray(candidate.messages) &&
+    typeof candidate.context === "object" &&
+    candidate.context !== null
+  );
+}
+
 describe("gateway server sessions", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
@@ -1783,6 +1802,182 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    ws.close();
+  });
+
+  test("session:patch hook fires with correct context", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-hook-test",
+          updatedAt: Date.now(),
+          label: "original-label",
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const { ws } = await openClient();
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "updated-label",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+        sessionKey: expect.stringMatching(/agent:main:main/),
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "sess-hook-test",
+            label: "updated-label",
+          }),
+          patch: expect.objectContaining({
+            label: "updated-label",
+          }),
+          cfg: expect.any(Object),
+        }),
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch hook does not fire for webchat clients", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-webchat-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-not-trigger-hook",
+    });
+
+    expect(patched.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("session:patch hook only fires after successful patch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-success-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    // Test 1: Invalid patch (missing key) - hook should not fire
+    const invalidPatch = await rpcReq(ws, "sessions.patch", {
+      // Missing required 'key' parameter
+      label: "should-fail",
+    });
+
+    expect(invalidPatch.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    // Test 2: Valid patch - hook should fire
+    const validPatch = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-succeed",
+    });
+
+    expect(validPatch.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch hook mutations cannot change the response path", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cfg-isolation-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
+      if (!isInternalHookEvent(event) || !isSessionPatchEvent(event)) {
+        return;
+      }
+      event.context.cfg.agents = {
+        ...event.context.cfg.agents,
+        defaults: {
+          ...event.context.cfg.agents?.defaults,
+          model: "zai/glm-4.6",
+        },
+      };
+    });
+
+    const { ws } = await openClient();
+    const patched = await rpcReq<{
+      entry: { label?: string };
+      key: string;
+      resolved: { modelProvider: string; model: string };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "cfg-isolation",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.resolved).toEqual({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
     ws.close();
   });
