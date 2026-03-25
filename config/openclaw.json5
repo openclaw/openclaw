@@ -29,6 +29,11 @@
   // Extensions loaded at startup (built into the container image via OPENCLAW_EXTENSIONS).
   plugins: {
     enabled: true,
+    // Use AgentCore Memory for memory_search instead of built-in SQLite + embeddings.
+    // This avoids needing a local embedding provider (OpenAI, Gemini, etc.) in the container.
+    slots: {
+      memory: "memory-agentcore",
+    },
   },
 
   // Logging — structured JSON for CloudWatch ingestion.

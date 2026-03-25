@@ -1,1 +1,34 @@
-[]
+[
+  {
+    "file": "extensions/agentcore/src/runtime.ts",
+    "line": 20,
+    "kind": "import",
+    "specifier": "../../hyperion/src/globals.js",
+    "resolvedPath": "extensions/hyperion/src/globals.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/agentcore/src/runtime.ts",
+    "line": 21,
+    "kind": "import",
+    "specifier": "../../hyperion/src/lib/index.js",
+    "resolvedPath": "extensions/hyperion/src/lib/index.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/memory-agentcore/index.ts",
+    "line": 2,
+    "kind": "import",
+    "specifier": "../agentcore/src/index.js",
+    "resolvedPath": "extensions/agentcore/src/index.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  },
+  {
+    "file": "extensions/memory-agentcore/index.ts",
+    "line": 3,
+    "kind": "import",
+    "specifier": "../hyperion/src/lib/index.js",
+    "resolvedPath": "extensions/hyperion/src/lib/index.js",
+    "reason": "imports another extension via relative path outside the extension package"
+  }
+]

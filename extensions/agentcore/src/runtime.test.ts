@@ -592,9 +592,9 @@ describe("AgentCoreRuntime", () => {
       };
 
       vi.mocked(hasHyperionRuntime).mockReturnValue(true);
-      vi.mocked(getHyperionRuntime).mockReturnValue({ dbClient: mockDbClient } as ReturnType<
-        typeof getHyperionRuntime
-      >);
+      vi.mocked(getHyperionRuntime).mockReturnValue({
+        dbClient: mockDbClient,
+      } as unknown as ReturnType<typeof getHyperionRuntime>);
 
       const runtime = createRuntime();
       const handle = await runtime.ensureSession(makeEnsureInput());
@@ -776,7 +776,7 @@ describe("AgentCoreRuntime", () => {
         dbClient: {
           getTenantConfig: vi.fn().mockRejectedValue(new Error("DDB timeout")),
         },
-      } as ReturnType<typeof getHyperionRuntime>);
+      } as unknown as ReturnType<typeof getHyperionRuntime>);
 
       const runtime = createRuntime();
       const handle = await runtime.ensureSession(makeEnsureInput());

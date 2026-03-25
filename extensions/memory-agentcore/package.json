@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/memory-agentcore",
+  "version": "2026.3.25",
+  "private": true,
+  "description": "OpenClaw memory search plugin backed by AWS Bedrock AgentCore Memory",
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.11"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

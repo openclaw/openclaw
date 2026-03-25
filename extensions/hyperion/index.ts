@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createHyperionPluginService, type HyperionPluginConfig } from "./src/service.js";
 
 const plugin = {

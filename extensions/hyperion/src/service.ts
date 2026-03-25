@@ -1,7 +1,7 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { KMSClient } from "@aws-sdk/client-kms";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
+import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/acpx";
 import { buildDynamoConfig, resolveStage } from "./env.js";
 import { clearHyperionRuntime, setHyperionRuntime } from "./globals.js";
 import { createHyperionRuntime } from "./lib/index.js";

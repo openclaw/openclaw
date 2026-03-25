@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 
 // ChannelsConfig is the channels section of OpenClawConfig.
 // Defined inline to avoid importing from OC internals.
@@ -142,7 +142,10 @@ export class TenantConfigLoader {
         };
       }
 
-      channels[platform]!.accounts[accountId] = this.buildAccountConfig(link);
+      const platformConfig = channels[platform];
+      if (platformConfig?.accounts) {
+        platformConfig.accounts[accountId] = this.buildAccountConfig(link);
+      }
     }
 
     return channels;
@@ -256,7 +259,9 @@ export class TenantConfigLoader {
       for (const [platform, token] of Object.entries(credentials.channel_tokens)) {
         const platformConfig = channels[platform];
         if (platformConfig?.accounts) {
-          for (const account of Object.values(platformConfig.accounts)) {
+          for (const account of Object.values(platformConfig.accounts) as Array<
+            Record<string, unknown>
+          >) {
             account.botToken = token;
           }
         }

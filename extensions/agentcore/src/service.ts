@@ -6,12 +6,21 @@ import type {
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk/acpx";
 import { loadAgentCoreConfig, type AgentCoreConfigSource } from "./config.js";
 import { AGENTCORE_BACKEND_ID, AgentCoreRuntime } from "./runtime.js";
+import type { AgentCoreRuntimeConfig } from "./types.js";
 
 type AgentCoreRuntimeLike = AcpRuntime & {
   isHealthy(): boolean;
   setHealthy(value: boolean): void;
   doctor(): Promise<{ ok: boolean; message: string }>;
 };
+
+// Singleton: the loaded config is stored here so the memory plugin can access it.
+let _loadedConfig: AgentCoreRuntimeConfig | null = null;
+
+/** Returns the AgentCore config loaded at startup, or null if not yet started. */
+export function getAgentCoreConfig(): AgentCoreRuntimeConfig | null {
+  return _loadedConfig;
+}
 
 export type CreateAgentCoreServiceParams = {
   configSource: AgentCoreConfigSource;
@@ -52,6 +61,7 @@ export function createAgentCoreRuntimeService(
       }
 
       runtime = new AgentCoreRuntime(config);
+      _loadedConfig = config;
 
       registerAcpRuntimeBackend({
         id: AGENTCORE_BACKEND_ID,
@@ -85,6 +95,7 @@ export function createAgentCoreRuntimeService(
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       unregisterAcpRuntimeBackend(AGENTCORE_BACKEND_ID);
       runtime = null;
+      _loadedConfig = null;
     },
   };
 }

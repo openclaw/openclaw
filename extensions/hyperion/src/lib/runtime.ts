@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { ChannelIdentityResolver } from "./channel-identity-resolver.js";
 import { HyperionDynamoDBClient, type DynamoDBDocClient } from "./dynamodb-client.js";
 import { HyperionPairingStore } from "./pairing-store.js";

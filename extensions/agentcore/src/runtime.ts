@@ -4,7 +4,7 @@ import {
   InvokeAgentRuntimeCommand,
   StopRuntimeSessionCommand,
   RetrieveMemoryRecordsCommand,
-  StartMemoryExtractionJobCommand,
+  BatchCreateMemoryRecordsCommand,
 } from "@aws-sdk/client-bedrock-agentcore";
 import type {
   AcpRuntime,
@@ -339,15 +339,16 @@ export class AgentCoreRuntime implements AcpRuntime {
     try {
       const resp = await this.client.send(
         new RetrieveMemoryRecordsCommand({
+          memoryId: this.config.memoryId,
           namespace,
-          query: { text: query },
+          searchCriteria: { searchQuery: query, topK: 10 },
           maxResults: 10,
         }),
       );
-      if (!resp.records || resp.records.length === 0) return [];
-      return resp.records.map((r) => ({
+      const summaries = resp.memoryRecordSummaries;
+      if (!summaries || summaries.length === 0) return [];
+      return summaries.map((r) => ({
         content: r.content?.text ?? "",
-        score: r.score,
       }));
     } catch {
       // Non-fatal: agent runs without memory context on failure
@@ -364,13 +365,21 @@ export class AgentCoreRuntime implements AcpRuntime {
     userMessage: string,
     agentResponse: string,
   ): Promise<void> {
+    if (!this.config.memoryId) return;
     try {
       await this.client.send(
-        new StartMemoryExtractionJobCommand({
-          namespace,
-          content: {
-            text: `User: ${userMessage}\nAssistant: ${agentResponse}`,
-          },
+        new BatchCreateMemoryRecordsCommand({
+          memoryId: this.config.memoryId,
+          records: [
+            {
+              requestIdentifier: crypto.randomUUID(),
+              namespaces: [namespace],
+              content: {
+                text: `User: ${userMessage}\nAssistant: ${agentResponse}`,
+              },
+              timestamp: new Date(),
+            },
+          ],
         }),
       );
     } catch {

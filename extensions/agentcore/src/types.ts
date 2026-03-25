@@ -9,6 +9,8 @@ export type AgentCoreRuntimeConfig = {
   runtimeArns: string[];
   /** Prefix for per-tenant memory namespacing (e.g. "tenant_"). */
   memoryNamespacePrefix: string;
+  /** AgentCore Memory resource ID (from CDK CfnMemory). */
+  memoryId?: string;
   /** Default Bedrock model ID (e.g. "anthropic.claude-sonnet-4-20250514"). */
   defaultModel: string;
   /** AgentCore endpoint override (for local testing). */

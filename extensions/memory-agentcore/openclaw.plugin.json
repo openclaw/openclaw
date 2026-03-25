@@ -1,6 +1,6 @@
 {
-  "id": "nova",
-  "channels": ["nova"],
+  "id": "memory-agentcore",
+  "kind": "memory",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

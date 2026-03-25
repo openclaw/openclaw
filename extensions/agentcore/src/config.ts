@@ -34,6 +34,7 @@ export async function loadAgentCoreConfig(
       runtimeArns: source.localOverride.runtimeArns ?? [],
       memoryNamespacePrefix:
         source.localOverride.memoryNamespacePrefix ?? DEFAULT_MEMORY_NAMESPACE_PREFIX,
+      memoryId: source.localOverride.memoryId,
       defaultModel: source.localOverride.defaultModel ?? DEFAULT_MODEL,
       endpoint: source.localOverride.endpoint,
       invokeTimeoutMs: source.localOverride.invokeTimeoutMs,
@@ -59,10 +60,14 @@ export async function loadAgentCoreConfig(
   }
 
   let memoryNamespacePrefix = DEFAULT_MEMORY_NAMESPACE_PREFIX;
+  let memoryId: string | undefined;
   try {
     const parsed = JSON.parse(memoryConfigParam ?? "{}");
     if (parsed && typeof parsed.memoryNamespacePrefix === "string") {
       memoryNamespacePrefix = parsed.memoryNamespacePrefix;
+    }
+    if (parsed && typeof parsed.memoryId === "string" && parsed.memoryId) {
+      memoryId = parsed.memoryId;
     }
   } catch {
     // Fall through to default
@@ -74,6 +79,7 @@ export async function loadAgentCoreConfig(
     region,
     runtimeArns,
     memoryNamespacePrefix,
+    memoryId,
     defaultModel,
     ...(source.endpointOverride ? { endpoint: source.endpointOverride } : {}),
   };
