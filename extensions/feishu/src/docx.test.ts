@@ -1,10 +1,8 @@
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
 const convertMock = vi.hoisted(() => vi.fn());
 const documentCreateMock = vi.hoisted(() => vi.fn());
 const blockListMock = vi.hoisted(() => vi.fn());
@@ -27,6 +25,9 @@ vi.mock("./runtime.js", () => ({
       media: {
         fetchRemoteMedia: fetchRemoteMediaMock,
       },
+    },
+    media: {
+      loadWebMedia: loadWebMediaMock,
     },
   }),
 }));
@@ -424,21 +425,30 @@ describe("feishu_doc image fetch hardening", () => {
       },
     });
 
-    const localPath = join(tmpdir(), `feishu-docx-upload-${Date.now()}.txt`);
-    await fs.writeFile(localPath, "hello from local file", "utf8");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "test-local.txt",
+    });
 
     const feishuDocTool = resolveFeishuDocTool();
 
     const result = await feishuDocTool.execute("tool-call", {
       action: "upload_file",
       doc_token: "doc_1",
-      file_path: localPath,
+      file_path: "/tmp/allowed/test-local.txt",
       filename: "test-local.txt",
     });
 
     expect(result.details.success).toBe(true);
     expect(result.details.file_token).toBe("token_1");
     expect(result.details.file_name).toBe("test-local.txt");
+
+    // localRoots is not passed — loadWebMedia uses default roots (tmp, media,
+    // workspace, sandboxes) plus workspace-profile auto-discovery.
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      expect.stringContaining("test-local.txt"),
+      expect.objectContaining({ optimizeImages: false }),
+    );
 
     expect(driveUploadAllMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -449,8 +459,6 @@ describe("feishu_doc image fetch hardening", () => {
         }),
       }),
     );
-
-    await fs.unlink(localPath);
   });
 
   it("returns an error when upload_file cannot list placeholder siblings", async () => {
@@ -466,23 +474,64 @@ describe("feishu_doc image fetch hardening", () => {
       data: { items: [] },
     });
 
-    const localPath = join(tmpdir(), `feishu-docx-upload-fail-${Date.now()}.txt`);
-    await fs.writeFile(localPath, "hello from local file", "utf8");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("hello from local file", "utf8"),
+      fileName: "test-local.txt",
+    });
 
-    try {
-      const feishuDocTool = resolveFeishuDocTool();
+    const feishuDocTool = resolveFeishuDocTool();
 
-      const result = await feishuDocTool.execute("tool-call", {
-        action: "upload_file",
-        doc_token: "doc_1",
-        file_path: localPath,
-        filename: "test-local.txt",
-      });
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "upload_file",
+      doc_token: "doc_1",
+      file_path: "/tmp/allowed/test-local.txt",
+      filename: "test-local.txt",
+    });
 
-      expect(result.details.error).toBe("list failed");
-      expect(driveUploadAllMock).not.toHaveBeenCalled();
-    } finally {
-      await fs.unlink(localPath);
-    }
+    expect(result.details.error).toBe("list failed");
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects traversal paths in upload_file via loadWebMedia sandbox", async () => {
+    loadWebMediaMock.mockRejectedValueOnce(
+      new Error("Local media path is not under an allowed directory: /etc/passwd"),
+    );
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "upload_file",
+      doc_token: "doc_1",
+      file_path: "/etc/passwd",
+    });
+
+    expect(result.details.error).toContain("not under an allowed directory");
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects traversal paths in upload_image via loadWebMedia sandbox", async () => {
+    blockChildrenCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        children: [{ block_type: 27, block_id: "img_block_1" }],
+      },
+    });
+
+    loadWebMediaMock.mockRejectedValueOnce(
+      new Error(
+        "Local media path is not under an allowed directory: /home/admin/.openclaw/openclaw.json",
+      ),
+    );
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "upload_image",
+      doc_token: "doc_1",
+      file_path: "/home/admin/.openclaw/openclaw.json",
+    });
+
+    expect(result.details.error).toContain("not under an allowed directory");
+    expect(driveUploadAllMock).not.toHaveBeenCalled();
   });
 });
