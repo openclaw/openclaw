@@ -80,7 +80,7 @@ export async function executeSlashCommand(
       return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
-    case "export":
+    case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
       return await executeUsage(client, sessionKey);
