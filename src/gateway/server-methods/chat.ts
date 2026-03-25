@@ -1446,6 +1446,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
         const imageModelProvider = imageModelResolved?.ref.provider;
 
+        // Build a separate alias index for image fallback resolution using the image model's provider.
+        // This ensures providerless aliases in agents.defaults.models are resolved against the
+        // image model's provider context, not the agent default provider.
+        const imageFallbackAliasIndex =
+          imageModelProvider && imageModelProvider !== defaultProvider
+            ? buildModelAliasIndex({ cfg, defaultProvider: imageModelProvider })
+            : aliasIndex;
+
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
         const sessionModelOverride = entry?.modelOverride;
@@ -1520,7 +1528,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 fallbacks: effectiveImageModelFallbacks,
                 cfg,
                 agentId,
-                aliasIndex,
+                aliasIndex: imageFallbackAliasIndex,
                 defaultProvider,
                 defaultModel: agentDefault.model,
                 imageModelProvider,
@@ -1528,7 +1536,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageModelFallbacks = canonicalizeFallbacks({
                 fallbacks: filtered,
                 imageModelRaw: imageModelPrimary,
-                aliasIndex,
+                aliasIndex: imageFallbackAliasIndex,
                 agentDefaultProvider: defaultProvider,
               });
             } else {
@@ -1546,7 +1554,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 fallbacks: effectiveImageModelFallbacks,
                 cfg,
                 agentId,
-                aliasIndex,
+                aliasIndex: imageFallbackAliasIndex,
                 defaultProvider,
                 defaultModel: agentDefault.model,
                 imageModelProvider,
@@ -1554,7 +1562,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageModelFallbacks = canonicalizeFallbacks({
                 fallbacks: filtered,
                 imageModelRaw: imageModelPrimary,
-                aliasIndex,
+                aliasIndex: imageFallbackAliasIndex,
                 agentDefaultProvider: defaultProvider,
               });
             } else {
@@ -1573,7 +1581,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               fallbacks: effectiveImageModelFallbacks,
               cfg,
               agentId,
-              aliasIndex,
+              aliasIndex: imageFallbackAliasIndex,
               defaultProvider,
               defaultModel: agentDefault.model,
               imageModelProvider,
@@ -1582,7 +1590,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             imageModelFallbacks = canonicalizeFallbacks({
               fallbacks: filtered,
               imageModelRaw: imageModelPrimary,
-              aliasIndex,
+              aliasIndex: imageFallbackAliasIndex,
               agentDefaultProvider: defaultProvider,
             });
           } else {
