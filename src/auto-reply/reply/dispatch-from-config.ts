@@ -656,7 +656,7 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
       },
-      params.configOverride ?? cfg,
+      params.configOverride,
     );
 
     if (ctx.AcpDispatchTailAfterReset === true) {

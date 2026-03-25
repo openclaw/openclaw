@@ -333,7 +333,8 @@ describe("blocking mode requires explicit opt-in", () => {
       { channelId: "slack" },
     );
 
-    expect(result).toEqual({ cancel: false });
+    // stickyTrue(undefined, false) → undefined; cancel is only set when true
+    expect(result?.cancel).toBeUndefined();
   });
 
   it("no hooks registered returns undefined", async () => {
@@ -669,7 +670,7 @@ describe("non-regression: other hooks are unaffected", () => {
 
     expect(handler).toHaveBeenCalled();
     expect(result?.content).toBe("modified content");
-    expect(result?.cancel).toBe(false);
+    expect(result?.cancel).toBeUndefined();
   });
 
   it("message_sending cancel still works", async () => {
