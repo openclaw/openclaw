@@ -411,7 +411,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Resolve auth profile for the session, mirroring the inbound auto-reply path
   // (get-reply-run.ts). Without this, isolated cron sessions fall back to env-var
   // auth which may not match the configured auth-profiles, causing 401 errors.
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  const authProfileResolved = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
     agentDir,
@@ -421,7 +421,8 @@ export async function runCronIsolatedAgentTurn(params: {
     storePath: cronSession.storePath,
     isNewSession: cronSession.isNewSession,
   });
-  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+  const authProfileId = authProfileResolved.authProfileId;
+  const authProfileIdSource = authProfileResolved.authProfileIdSource;
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
   let fallbackProvider = provider;

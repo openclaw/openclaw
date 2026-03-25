@@ -46,7 +46,8 @@ describe("resolveSessionAuthProfileOverride", () => {
         isNewSession: false,
       });
 
-      expect(resolved).toBe("zai:work");
+      expect(resolved.authProfileId).toBe("zai:work");
+      expect(resolved.authProfileIdSource).toBe("user");
       expect(sessionEntry.authProfileOverride).toBe("zai:work");
     });
   });

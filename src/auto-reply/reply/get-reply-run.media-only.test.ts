@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue({
+    authProfileId: undefined,
+    authProfileIdSource: undefined,
+  }),
 }));
 
 vi.mock("../../agents/pi-embedded.runtime.js", () => ({

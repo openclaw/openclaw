@@ -47,6 +47,11 @@ export async function clearSessionAuthProfileOverride(params: {
   }
 }
 
+export type ResolvedAuthProfile = {
+  authProfileId: string | undefined;
+  authProfileIdSource: "user" | "auto" | undefined;
+};
+
 export async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -59,7 +64,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   /** True when images triggered a model switch to imageModel.
    *  In that case, preserve the saved auth profile even if provider differs. */
   hasAppliedImageModelOverride?: boolean;
-}): Promise<string | undefined> {
+}): Promise<ResolvedAuthProfile> {
   const {
     cfg,
     provider,
@@ -72,7 +77,10 @@ export async function resolveSessionAuthProfileOverride(params: {
     hasAppliedImageModelOverride,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
-    return sessionEntry?.authProfileOverride;
+    return {
+      authProfileId: sessionEntry?.authProfileOverride,
+      authProfileIdSource: sessionEntry?.authProfileOverrideSource,
+    };
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
@@ -117,7 +125,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (order.length === 0) {
-    return undefined;
+    return { authProfileId: undefined, authProfileIdSource: undefined };
   }
 
   const pickFirstAvailable = () =>
@@ -150,7 +158,7 @@ export async function resolveSessionAuthProfileOverride(params: {
         ? "user"
         : undefined);
   if (source === "user" && current && !isNewSession) {
-    return current;
+    return { authProfileId: current, authProfileIdSource: "user" };
   }
 
   // When image model is temporarily switched to a DIFFERENT provider, we still need
@@ -173,18 +181,17 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (!next) {
-    return current;
+    return { authProfileId: current, authProfileIdSource: source };
   }
 
   // Skip persisting auth profile changes when image model is temporarily switched
   // to a different provider. The current stored profile is for the original provider
   // and should be preserved for when the session returns to the original provider
   // after the image turn.
-  // IMPORTANT: Do NOT modify authProfileOverrideSource here - preserving "user"
-  // prevents subsequent non-image turns from rotating away from the user's chosen
-  // account/provider unexpectedly.
+  // Return source "auto" for the transient profile so downstream run setup treats
+  // it as auto-selected rather than user-locked, enabling normal rotation/cooldown.
   if (skipPersist) {
-    return next;
+    return { authProfileId: next, authProfileIdSource: "auto" };
   }
 
   const shouldPersist =
@@ -206,5 +213,5 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
   }
 
-  return next;
+  return { authProfileId: next, authProfileIdSource: "auto" };
 }

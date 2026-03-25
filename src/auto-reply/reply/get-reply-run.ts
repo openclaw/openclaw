@@ -503,7 +503,7 @@ export async function runPreparedReply(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  const authProfileResolved = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
     agentDir,
@@ -514,7 +514,8 @@ export async function runPreparedReply(
     isNewSession,
     hasAppliedImageModelOverride,
   });
-  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const authProfileId = authProfileResolved.authProfileId;
+  const authProfileIdSource = authProfileResolved.authProfileIdSource;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
