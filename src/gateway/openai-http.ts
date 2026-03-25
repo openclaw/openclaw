@@ -17,6 +17,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { ModelRouter } from "../router/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
@@ -27,7 +28,11 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext, resolveOpenAiCompatModelOverride } from "./http-utils.js";
+import {
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+  getRouterConfigForAgent,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
@@ -479,6 +484,15 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
+  // Check if router is configured for this agent
+  const routerConfig = getRouterConfigForAgent(agentId);
+  let router: ModelRouter | undefined;
+  let resolvedModel = modelOverride;
+  if (routerConfig?.enabled) {
+    router = new ModelRouter(routerConfig);
+    resolvedModel = router.getCurrentModel();
+  }
+
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
   const commandInput = buildAgentCommandInput({
@@ -487,7 +501,7 @@ export async function handleOpenAiHttpRequest(
       extraSystemPrompt: prompt.extraSystemPrompt,
       images: images.length > 0 ? images : undefined,
     },
-    modelOverride,
+    modelOverride: resolvedModel,
     sessionKey,
     runId,
     messageChannel,
