@@ -69,6 +69,7 @@ describe("runDiscordGatewayLifecycle", () => {
       };
       sequence?: number | null;
       emitter?: EventEmitter;
+      ws?: EventEmitter;
     };
   }) => {
     const start = vi.fn(params?.start ?? (async () => undefined));
@@ -152,6 +153,7 @@ describe("runDiscordGatewayLifecycle", () => {
       sequence?: number | null;
     };
     sequence?: number | null;
+    ws?: EventEmitter;
   }) {
     const emitter = new EventEmitter();
     const gateway = {
@@ -161,6 +163,7 @@ describe("runDiscordGatewayLifecycle", () => {
       connect: vi.fn(),
       ...(params?.state ? { state: params.state } : {}),
       ...(params?.sequence !== undefined ? { sequence: params.sequence } : {}),
+      ...(params?.ws ? { ws: params.ws } : {}),
       emitter,
     };
     return { emitter, gateway };
@@ -284,6 +287,76 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.disconnect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears resume state and suppresses socket-driven auto-resume during forced startup reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const pendingGatewayEvents: DiscordGatewayEvent[] = [];
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({
+        state: {
+          sessionId: "stale-session",
+          resumeGatewayUrl: "wss://gateway.discord.gg",
+          sequence: 123,
+        },
+        sequence: 123,
+        ws: socket,
+      });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      socket.on("error", (err) => {
+        pendingGatewayEvents.push({
+          type: "other",
+          err,
+          message: String(err),
+          shouldStopLifecycle: false,
+        });
+      });
+      socket.on("close", () => {
+        gateway.connect(true);
+      });
+      gateway.disconnect.mockImplementation(() => {
+        setTimeout(() => {
+          socket.emit(
+            "error",
+            new Error("WebSocket was closed before the connection was established"),
+          );
+          socket.emit("close", 1006, "");
+        }, 1);
+      });
+      gateway.connect.mockImplementation((resume?: boolean) => {
+        if (resume === false) {
+          setTimeout(() => {
+            gateway.isConnected = true;
+          }, 1_000);
+        }
+      });
+
+      const { lifecycleParams, runtimeError } = createLifecycleHarness({
+        gateway,
+        pendingGatewayEvents,
+      });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(17_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledWith(false);
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+      if (!gateway.state) {
+        throw new Error("gateway state was not initialized");
+      }
+      expect(gateway.state.sessionId).toBeNull();
+      expect(gateway.state.resumeGatewayUrl).toBeNull();
+      expect(gateway.state.sequence).toBeNull();
+      expect(gateway.sequence).toBeNull();
     } finally {
       vi.useRealTimers();
     }

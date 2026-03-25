@@ -18,6 +18,26 @@ type ExecApprovalsHandler = {
 
 const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
+const DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
+
+type GatewaySocketListener = (...args: unknown[]) => void;
+
+type DiscordGatewaySocket = {
+  once: (event: "close", listener: GatewaySocketListener) => unknown;
+  on: (event: "error", listener: GatewaySocketListener) => unknown;
+  listeners: (event: "close" | "error") => GatewaySocketListener[];
+  removeListener: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
+};
+
+type MutableGateway = GatewayPlugin & {
+  state?: {
+    sessionId?: string | null;
+    resumeGatewayUrl?: string | null;
+    sequence?: number | null;
+  };
+  sequence?: number | null;
+  ws?: DiscordGatewaySocket | null;
+};
 
 type GatewayReadyWaitResult = "ready" | "timeout" | "stopped";
 
@@ -163,16 +183,7 @@ export async function runDiscordGatewayLifecycle(params: {
     return Number.isFinite(code) ? code : undefined;
   };
   const clearResumeState = () => {
-    const mutableGateway = gateway as
-      | (GatewayPlugin & {
-          state?: {
-            sessionId?: string | null;
-            resumeGatewayUrl?: string | null;
-            sequence?: number | null;
-          };
-          sequence?: number | null;
-        })
-      | undefined;
+    const mutableGateway = gateway as MutableGateway | undefined;
     if (!mutableGateway?.state) {
       return;
     }
@@ -180,6 +191,57 @@ export async function runDiscordGatewayLifecycle(params: {
     mutableGateway.state.resumeGatewayUrl = null;
     mutableGateway.state.sequence = null;
     mutableGateway.sequence = null;
+  };
+  const disconnectGatewaySocketWithoutAutoReconnect = async () => {
+    if (!gateway) {
+      return;
+    }
+    const mutableGateway = gateway as MutableGateway;
+    const socket = mutableGateway.ws;
+    if (!socket) {
+      gateway.disconnect();
+      return;
+    }
+
+    // Carbon reconnects from the socket close handler even for intentional
+    // disconnects. Drop the current socket's close/error listeners so a forced
+    // reconnect does not race the old socket's automatic resume path.
+    for (const listener of socket.listeners("close")) {
+      socket.removeListener("close", listener);
+    }
+    for (const listener of socket.listeners("error")) {
+      socket.removeListener("error", listener);
+    }
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+      const timeout = setTimeout(finish, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
+      timeout.unref?.();
+      socket.on("error", () => {});
+      socket.once("close", () => {
+        clearTimeout(timeout);
+        finish();
+      });
+      gateway.disconnect();
+    });
+  };
+  const reconnectGateway = async (resume: boolean) => {
+    await disconnectGatewaySocketWithoutAutoReconnect();
+    gateway?.connect(resume);
+  };
+  const reconnectGatewayFresh = async () => {
+    // Carbon still sends RESUME on HELLO when session state is populated, even
+    // after connect(false). Clear cached session data first so this path truly
+    // forces a fresh IDENTIFY.
+    clearResumeState();
+    await reconnectGateway(false);
   };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
@@ -234,40 +296,55 @@ export async function runDiscordGatewayLifecycle(params: {
     }, HELLO_CONNECTED_POLL_MS);
 
     helloTimeoutId = setTimeout(() => {
-      if (helloConnectedPollId) {
-        clearInterval(helloConnectedPollId);
-        helloConnectedPollId = undefined;
-      }
-      if (sawConnected || gateway?.isConnected) {
-        resetHelloStallCounter();
-      } else {
-        consecutiveHelloStalls += 1;
-        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
-        const stalledAt = Date.now();
-        reconnectStallWatchdog.arm(stalledAt);
-        pushStatus({
-          connected: false,
-          lastEventAt: stalledAt,
-          lastDisconnect: {
-            at: stalledAt,
-            error: "hello-timeout",
-          },
-        });
-        params.runtime.log?.(
-          danger(
-            forceFreshIdentify
-              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
-              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
-          ),
-        );
-        if (forceFreshIdentify) {
-          clearResumeState();
-          resetHelloStallCounter();
-        }
-        gateway?.disconnect();
-        gateway?.connect(!forceFreshIdentify);
-      }
       helloTimeoutId = undefined;
+      void (async () => {
+        try {
+          if (helloConnectedPollId) {
+            clearInterval(helloConnectedPollId);
+            helloConnectedPollId = undefined;
+          }
+          if (sawConnected || gateway?.isConnected) {
+            resetHelloStallCounter();
+            return;
+          }
+
+          consecutiveHelloStalls += 1;
+          const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
+          const stalledAt = Date.now();
+          reconnectStallWatchdog.arm(stalledAt);
+          pushStatus({
+            connected: false,
+            lastEventAt: stalledAt,
+            lastDisconnect: {
+              at: stalledAt,
+              error: "hello-timeout",
+            },
+          });
+          params.runtime.log?.(
+            danger(
+              forceFreshIdentify
+                ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
+                : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
+            ),
+          );
+          if (forceFreshIdentify) {
+            resetHelloStallCounter();
+          }
+          if (lifecycleStopping || params.abortSignal?.aborted) {
+            return;
+          }
+          if (forceFreshIdentify) {
+            await reconnectGatewayFresh();
+            return;
+          }
+          await reconnectGateway(true);
+        } catch (err) {
+          params.runtime.error?.(
+            danger(`discord: failed to restart stalled gateway socket: ${String(err)}`),
+          );
+          triggerForceStop(err);
+        }
+      })();
     }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
@@ -336,8 +413,7 @@ export async function runDiscordGatewayLifecycle(params: {
             error: "startup-not-ready",
           },
         });
-        gateway?.disconnect();
-        gateway?.connect(false);
+        await reconnectGatewayFresh();
         const reconnected = await waitForDiscordGatewayReady({
           gateway,
           abortSignal: params.abortSignal,
