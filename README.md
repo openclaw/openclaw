@@ -418,7 +418,7 @@ openclaw gateway restart
 
 - **Private chats only** — group chats are not supported.
 - **Media support** — send and receive images, voice messages, video, and files (up to 100 MB).
-- **Multi-account** — connect multiple WeChat identities by running `openclaw channels login --channel openclaw-weixin` for each one.
+- **Multi-account** — connect additional WeChat identities with `openclaw channels login --channel openclaw-weixin --account <id>` (each `--account` value creates a separate login).
 - **Authorization** — uses [pairing](https://docs.openclaw.ai/channels#pairing) to authorize senders; the first message from a new user triggers a challenge that the gateway owner approves. No desktop client required.
 - **Typing indicators** — the bot shows "typing..." while generating a reply.
 - **Config path** — `channels.openclaw-weixin`; credentials (bot token) are stored separately in `~/.openclaw/openclaw-weixin/accounts/` and managed by the login flow.
