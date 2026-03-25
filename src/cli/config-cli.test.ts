@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildConfigSchema } from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -409,6 +410,25 @@ describe("config cli", () => {
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
       expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
       expect(mockLog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("config schema", () => {
+    it("prints the generated JSON schema as plain text", async () => {
+      await runConfigCommand(["config", "schema"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        properties?: Record<string, unknown>;
+      };
+      expect(payload.properties?.$schema).toEqual({ type: "string" });
+      expect(payload.properties?.gateway).toEqual(
+        (buildConfigSchema().schema as { properties?: Record<string, unknown> }).properties
+          ?.gateway,
+      );
     });
   });
 
