@@ -1538,6 +1538,56 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(result.sessions.map((session) => session.key)).toEqual([]);
   });
 
+  test("reports the newest run owner for moved child session rows", () => {
+    const now = Date.now();
+    const childSessionKey = "agent:main:subagent:shared-child-owner";
+    const store: Record<string, SessionEntry> = {
+      [childSessionKey]: {
+        sessionId: "sess-shared-child-owner",
+        updatedAt: now,
+        spawnedBy: "agent:main:subagent:old-parent-owner",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-child-owner-stale-parent",
+      childSessionKey,
+      controllerSessionKey: "agent:main:subagent:old-parent-owner",
+      requesterSessionKey: "agent:main:subagent:old-parent-owner",
+      requesterDisplayKey: "old-parent-owner",
+      task: "shared child stale owner parent",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_500,
+      endedAt: now - 4_500,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-child-owner-current-parent",
+      childSessionKey,
+      controllerSessionKey: "agent:main:subagent:new-parent-owner",
+      requesterSessionKey: "agent:main:subagent:new-parent-owner",
+      requesterDisplayKey: "new-parent-owner",
+      task: "shared child current owner parent",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]).toMatchObject({
+      key: childSessionKey,
+      spawnedBy: "agent:main:subagent:new-parent-owner",
+    });
+  });
+
   test("preserves original session timing across follow-up replacement runs", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
