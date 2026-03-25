@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -188,7 +190,7 @@ async function loadFreshOpenClawToolsForSessionStatusTest() {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 }
 
-function resetSessionStore(store: Record<string, unknown>) {
+function resetSessionStore(store: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
@@ -198,7 +200,35 @@ function resetSessionStore(store: Record<string, unknown>) {
     storePath: "(multiple)",
     store,
   });
-  callGatewayMock.mockResolvedValue({});
+  callGatewayMock.mockImplementation(async (opts: unknown) => {
+    const request = opts as { method?: string; params?: Record<string, unknown> };
+    if (request.method === "sessions.resolve") {
+      const key = typeof request.params?.key === "string" ? request.params.key.trim() : "";
+      if (key && store[key]) {
+        return { key };
+      }
+      const sessionId =
+        typeof request.params?.sessionId === "string" ? request.params.sessionId.trim() : "";
+      if (!sessionId) {
+        return {};
+      }
+      const spawnedBy =
+        typeof request.params?.spawnedBy === "string" ? request.params.spawnedBy.trim() : "";
+      const matches = Object.entries(store).filter((entry): entry is [string, SessionEntry] => {
+        return (
+          entry[1].sessionId === sessionId &&
+          (!spawnedBy ||
+            entry[1].spawnedBy === spawnedBy ||
+            entry[1].parentSessionKey === spawnedBy)
+        );
+      });
+      return { key: resolvePreferredSessionKeyForSessionIdMatches(matches, sessionId) };
+    }
+    if (request.method === "sessions.list") {
+      return { sessions: [] };
+    }
+    return {};
+  });
   mockConfig = createMockConfig();
 }
 
@@ -237,7 +267,6 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
     params: {
       includeGlobal: false,
       includeUnknown: false,
-      limit: 500,
       spawnedBy,
     },
   };
@@ -500,6 +529,62 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expectSpawnedSessionLookupCalls("agent:main:subagent:child");
+  });
+
+  it("blocks sandboxed child session_status sessionId access outside its tree before store lookup", async () => {
+    resetSessionStore({
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+      "agent:other:main": {
+        sessionId: "s-other",
+        updatedAt: 30,
+      },
+    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", {
+      sandboxed: true,
+    });
+    const expectedError = "Session status visibility is restricted to the current session tree";
+
+    await expect(
+      tool.execute("call6-session-id", {
+        sessionKey: "s-other",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "s-other",
+          spawnedBy: "agent:main:subagent:child",
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      },
+    ]);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          spawnedBy: "agent:main:subagent:child",
+        },
+      },
+    ]);
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {

@@ -3,6 +3,7 @@ import { theme } from "../../terminal/theme.js";
 import {
   filterContainerGenericHints,
   renderGatewayServiceStartHints,
+  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
 } from "./shared.js";
 
@@ -20,6 +21,19 @@ describe("resolveRuntimeStatusColor", () => {
 });
 
 describe("renderGatewayServiceStartHints", () => {
+  it("resolves daemon container context from either env key", () => {
+    expect(
+      resolveDaemonContainerContext({
+        OPENCLAW_CONTAINER: "openclaw-demo-container",
+      } as NodeJS.ProcessEnv),
+    ).toBe("openclaw-demo-container");
+    expect(
+      resolveDaemonContainerContext({
+        OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
+      } as NodeJS.ProcessEnv),
+    ).toBe("openclaw-demo-container");
+  });
+
   it("prepends a single container restart hint when OPENCLAW_CONTAINER is set", () => {
     expect(
       renderGatewayServiceStartHints({

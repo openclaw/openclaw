@@ -144,6 +144,15 @@ A single plugin can register any number of capabilities via the `api` object:
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
+Hook guard semantics to keep in mind:
+
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: false }` is treated as no decision.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
+- `message_sending`: `{ cancel: false }` is treated as no decision.
+
+See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+
 ## Registering agent tools
 
 Tools are typed functions the LLM can call. They can be required (always
