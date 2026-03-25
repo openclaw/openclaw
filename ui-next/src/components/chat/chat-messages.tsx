@@ -20,8 +20,11 @@ import {
   Zap,
   AlertTriangle,
   Trash2,
+  Maximize2,
+  X,
 } from "lucide-react";
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { PlanCard, extractPlanSteps } from "@/components/chat/plan-card";
 import { isCompactionMessage, CompactionDivider } from "@/components/chat/system-events";
 import {
@@ -541,6 +544,63 @@ export function StreamingBubble({
   );
 }
 
+// ─── Message Canvas (fullscreen overlay) ───
+
+function MessageCanvas({
+  content,
+  agentId,
+  onClose,
+}: {
+  content: string;
+  agentId?: string;
+  onClose: () => void;
+}) {
+  // Close on ESC key
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 md:p-8 animate-in fade-in duration-200"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Message canvas"
+    >
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      {/* Panel */}
+      <div className="relative z-10 w-full max-w-5xl h-full max-h-[90vh] bg-card border border-border/60 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border/40 shrink-0">
+          <span className="text-sm font-medium text-muted-foreground">Message Canvas</span>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+            aria-label="Close canvas"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto px-8 py-6">
+          <div className="prose prose-sm prose-chat max-w-none break-words leading-relaxed font-sans">
+            <Markdown agentId={agentId}>{content}</Markdown>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Message Bubble ───
 
 export function ChatMessageBubble({
@@ -599,6 +659,9 @@ export function ChatMessageBubble({
   const isTool = msg.role === "tool" || (msg.role as string) === "toolResult";
   const { copied, copy } = useCopyToClipboard();
   const { copied: idCopied, copy: copyId } = useCopyToClipboard();
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const openCanvas = useCallback(() => setCanvasOpen(true), []);
+  const closeCanvas = useCallback(() => setCanvasOpen(false), []);
 
   // Compute token delta from previous assistant message
   const currentTotal = msg.usage?.totalTokens ?? (msg.usage?.input ?? 0) + (msg.usage?.output ?? 0);
@@ -640,6 +703,7 @@ export function ChatMessageBubble({
 
   if (isUser) {
     return (
+      <>
       <div
         className={cn(
           "group flex justify-end px-4 animate-slide-in",
@@ -760,6 +824,16 @@ export function ChatMessageBubble({
                   <Trash2 className="h-3 w-3" />
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="h-6 w-6 text-primary/60 hover:text-primary hover:bg-primary/10 rounded-md transition-colors"
+                onClick={openCanvas}
+                title="Expand to canvas"
+                aria-label="Expand message to canvas"
+              >
+                <Maximize2 className="h-3 w-3" />
+              </Button>
             </span>
           </div>
         </div>
@@ -771,6 +845,14 @@ export function ChatMessageBubble({
           <div className="w-8 ml-2 shrink-0" />
         )}
       </div>
+      {canvasOpen && (
+        <MessageCanvas
+          content={text}
+          agentId={agentId}
+          onClose={closeCanvas}
+        />
+      )}
+      </>
     );
   }
 
@@ -826,6 +908,7 @@ export function ChatMessageBubble({
   }
 
   return (
+    <>
     <div
       className={cn("group px-4 animate-slide-in-left flex gap-3", isGroupFirst ? "py-2" : "py-1")}
     >
@@ -990,9 +1073,27 @@ export function ChatMessageBubble({
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             )}
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="h-7 w-7 text-primary/60 hover:text-primary hover:bg-primary/10 rounded-lg transition-colors"
+              onClick={openCanvas}
+              title="Expand to canvas"
+              aria-label="Expand message to canvas"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
           </span>
         </div>
       </div>
     </div>
+    {canvasOpen && (
+      <MessageCanvas
+        content={displayContent || text}
+        agentId={agentId}
+        onClose={closeCanvas}
+      />
+    )}
+    </>
   );
 }
