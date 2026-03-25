@@ -233,7 +233,7 @@ export function setAppearanceMode(
   const resolvedScheme =
     next === "sync"
       ? resolveAppearanceScheme({ ...appearance, mode: next })
-      : host.appearanceSingleScheme;
+      : resolveAppearanceScheme({ ...appearance, mode: "sync" });
   const resolved = resolveTheme(host.theme, resolvedScheme);
   const applyMode = () => {
     applySettings(host, {

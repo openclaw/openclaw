@@ -72,6 +72,7 @@ import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import {
   defaultAppearanceConfig,
+  resolveAppearancePreset,
   VALID_THEME_NAMES,
   type AppearanceMode,
   type AppearancePreset,
@@ -159,9 +160,9 @@ export class OpenClawApp extends LitElement {
   @state() appearanceSingleScheme: ThemeScheme = (
     this.settings.appearance ?? defaultAppearanceConfig()
   ).singleScheme;
-  @state() appearanceResolved: AppearancePreset = (
-    this.settings.appearance ?? defaultAppearanceConfig()
-  ).darkPreset;
+  @state() appearanceResolved: AppearancePreset = resolveAppearancePreset(
+    this.settings.appearance ?? defaultAppearanceConfig(),
+  );
   @state() themeSchemeResolved: ThemeScheme = "dark";
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;

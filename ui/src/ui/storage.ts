@@ -241,7 +241,7 @@ export function loadSettings(): UiSettings {
     );
     const appearance = parseAppearanceConfig(
       (parsed as { appearance?: unknown }).appearance,
-      (parsed as { themeMode?: unknown }).themeMode,
+      _mode ?? (parsed as { themeMode?: unknown }).themeMode,
     );
     const settings = {
       gatewayUrl,

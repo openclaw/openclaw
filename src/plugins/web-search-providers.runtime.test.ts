@@ -120,7 +120,6 @@ describe("resolvePluginWebSearchProviders", () => {
           },
         ],
         diagnostics: [],
-        main
       } as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
       ) => infer R

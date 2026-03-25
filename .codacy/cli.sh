@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 
 
-set -e +o pipefail
+set -eo pipefail
+
+fatal() {
+  echo "Error: $*" >&2
+  exit 1
+}
 
 # Set up paths first
 bin_name="codacy-cli-v2"
