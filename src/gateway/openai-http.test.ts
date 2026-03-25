@@ -262,7 +262,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
-          "openai-user:alice",
+          "anthropic-user:alice",
         );
         await res.text();
       }
@@ -693,6 +693,75 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("session key prefix reflects actual provider from config (#53158)", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getSessionKey = () => {
+      const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      return (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "";
+    };
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        user: "alice",
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getSessionKey()).toContain("anthropic-user:alice");
+      expect(getSessionKey()).not.toContain("openai-user:");
+      await res.text();
+    }
+
+    {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": {} },
+          },
+        },
+      });
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        user: "bob",
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getSessionKey()).toContain("openai-user:bob");
+      expect(getSessionKey()).not.toContain("anthropic-user:");
+      await res.text();
+    }
+
+    {
+      await writeGatewayConfig({
+        agents: {
+          defaults: {
+            model: { primary: "google/gemini-2.5-pro" },
+            models: { "google/gemini-2.5-pro": {} },
+          },
+        },
+      });
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        user: "carol",
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getSessionKey()).toContain("google-user:carol");
+      expect(getSessionKey()).not.toContain("openai-user:");
+      await res.text();
+    }
+
+    await writeGatewayConfig({});
   });
 
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
