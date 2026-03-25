@@ -186,6 +186,7 @@ type RegistryImportOptions = {
   registrationMode?: PluginRegistrationMode;
   gatewaySupportsReset?: boolean;
   runtimeAvailable?: boolean;
+  canonicalizationError?: Error;
 };
 
 function createRecord(): PluginRecord {
@@ -220,9 +221,12 @@ async function createApiHarness(options?: RegistryImportOptions) {
 
   const deps: SessionResetDeps = {
     loadConfig: vi.fn(() => ({}) as OpenClawConfig),
-    resolveGatewaySessionStoreTarget: vi.fn(({ key, cfg }) =>
-      resolveMockGatewayTarget({ key, cfg }),
-    ),
+    resolveGatewaySessionStoreTarget: vi.fn(({ key, cfg }) => {
+      if (options?.canonicalizationError) {
+        throw options.canonicalizationError;
+      }
+      return resolveMockGatewayTarget({ key, cfg });
+    }),
     performGatewaySessionReset: vi.fn(async (payload) => ({
       ok: true,
       key: payload.key,
@@ -530,9 +534,8 @@ describe("plugin resetSession", () => {
     });
 
     it("normalizes canonicalization failure before invoking the reset helper", async () => {
-      const { api, deps } = await createApiHarness();
-      deps.resolveGatewaySessionStoreTarget.mockImplementation(() => {
-        throw new Error("bad session key");
+      const { api, deps } = await createApiHarness({
+        canonicalizationError: new Error("bad session key"),
       });
 
       await expect(api.resetSession?.("agent:main:demo")).resolves.toEqual({
