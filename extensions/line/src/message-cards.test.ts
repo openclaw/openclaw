@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  createActionCard,
+  createCarousel,
+  createDeviceControlCard,
+  createEventCard,
+  createImageCard,
+  createInfoCard,
+  createListCard,
+} from "./flex-templates.js";
+import {
   createConfirmTemplate,
   createButtonTemplate,
   createTemplateCarousel,
@@ -120,5 +129,76 @@ describe("createProductCarousel", () => {
     const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
       .columns;
     expect(columns[0].actions[0].type).toBe(expectedType);
+  });
+});
+
+describe("flex cards", () => {
+  it("includes footer when provided", () => {
+    const card = createInfoCard("Title", "Body", "Footer text");
+
+    const footer = card.footer as { contents: Array<{ text: string }> };
+    expect(footer.contents[0].text).toBe("Footer text");
+  });
+
+  it("limits list items to 8", () => {
+    const items = Array.from({ length: 15 }, (_, i) => ({ title: `Item ${i}` }));
+    const card = createListCard("List", items);
+
+    const body = card.body as { contents: Array<{ type: string; contents?: unknown[] }> };
+    const listBox = body.contents[2] as { contents: unknown[] };
+    expect(listBox.contents.length).toBe(8);
+  });
+
+  it("includes image-card body text when provided", () => {
+    const card = createImageCard("https://example.com/img.jpg", "Title", "Body text");
+
+    const body = card.body as { contents: Array<{ text: string }> };
+    expect(body.contents.length).toBe(2);
+    expect(body.contents[1].text).toBe("Body text");
+  });
+
+  it("limits action-card actions to 4", () => {
+    const actions = Array.from({ length: 6 }, (_, i) => ({
+      label: `Action ${i}`,
+      action: { type: "message" as const, label: `A${i}`, text: `action${i}` },
+    }));
+    const card = createActionCard("Title", "Body", actions);
+
+    const footer = card.footer as { contents: unknown[] };
+    expect(footer.contents.length).toBe(4);
+  });
+
+  it("limits carousels to 12 bubbles", () => {
+    const bubbles = Array.from({ length: 15 }, (_, i) => createInfoCard(`Card ${i}`, `Body ${i}`));
+    const carousel = createCarousel(bubbles);
+
+    expect(carousel.contents.length).toBe(12);
+  });
+
+  it("limits device controls to 6", () => {
+    const card = createDeviceControlCard({
+      deviceName: "Device",
+      controls: Array.from({ length: 10 }, (_, i) => ({
+        label: `Control ${i}`,
+        data: `action=${i}`,
+      })),
+    });
+
+    const footer = card.footer as { contents: unknown[] };
+    expect(footer.contents.length).toBeLessThanOrEqual(3);
+  });
+
+  it("keeps event-card optional fields together", () => {
+    const card = createEventCard({
+      title: "Team Offsite",
+      date: "February 15, 2026",
+      time: "9:00 AM - 5:00 PM",
+      location: "Mountain View Office",
+      description: "Annual team building event",
+    });
+
+    expect(card.size).toBe("mega");
+    const body = card.body as { contents: Array<{ type: string }> };
+    expect(body.contents).toHaveLength(3);
   });
 });
