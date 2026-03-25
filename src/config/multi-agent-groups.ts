@@ -35,9 +35,10 @@ export function platformNeedsTranscript(channel: string): boolean {
 
 /**
  * Expand ~ to home directory in paths.
+ * Handles both Unix (~/) and Windows (~\) path separators.
  */
 function expandPath(path: string): string {
-  if (path.startsWith("~/")) {
+  if (path.startsWith("~/") || path.startsWith("~\\")) {
     return resolve(homedir(), path.slice(2));
   }
   if (path === "~") {

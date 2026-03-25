@@ -82,8 +82,9 @@ async function readTranscriptEntries(
       }
     }
 
-    // Return most recent entries up to limit
-    return entries.slice(-limit);
+    // Return most recent entries up to limit (clamp to positive to avoid slice(-0) returning all)
+    const safeLimit = Math.max(1, limit);
+    return entries.slice(-safeLimit);
   } catch (err) {
     log.error(`Failed to read transcript: ${err instanceof Error ? err.message : String(err)}`);
     return [];
@@ -135,6 +136,11 @@ export async function injectMultiAgentTranscript(
   // Get config
   const config = resolveMultiAgentTranscriptConfig(cfg, groupId);
   if (!config) {
+    return null;
+  }
+
+  // contextLimit=0 means disabled
+  if (config.contextLimit <= 0) {
     return null;
   }
 
