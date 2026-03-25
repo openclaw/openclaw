@@ -269,18 +269,19 @@ describe("sendMessageIMessage", () => {
     expect(result.messageId).toBe("123");
   });
 
-  it("prepends reply tag as the first token when replyToId is provided", async () => {
+  it("passes replyToId as separate reply_to param instead of embedding in text", async () => {
     requestMock.mockClear().mockResolvedValue({ ok: true });
     stopMock.mockClear().mockResolvedValue(undefined);
 
-    await sendWithDefaults("chat_id:123", "  hello\nworld", {
+    await sendWithDefaults("chat_id:123", "hello world", {
       replyToId: "abc-123",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abc-123]] hello\nworld");
+    expect(params.text).toBe("hello world");
+    expect(params.reply_to).toBe("abc-123");
   });
 
-  it("rewrites an existing leading reply tag to keep the requested id first", async () => {
+  it("strips inline reply tags from text and passes replyToId as reply_to param", async () => {
     requestMock.mockClear().mockResolvedValue({ ok: true });
     stopMock.mockClear().mockResolvedValue(undefined);
 
@@ -288,10 +289,11 @@ describe("sendMessageIMessage", () => {
       replyToId: "new-id",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:new-id]] hello");
+    expect(params.text).toBe("hello");
+    expect(params.reply_to).toBe("new-id");
   });
 
-  it("sanitizes replyToId before writing the leading reply tag", async () => {
+  it("sanitizes replyToId before passing as reply_to param", async () => {
     requestMock.mockClear().mockResolvedValue({ ok: true });
     stopMock.mockClear().mockResolvedValue(undefined);
 
@@ -299,10 +301,11 @@ describe("sendMessageIMessage", () => {
       replyToId: " [ab]\n\u0000c\td ] ",
     });
     const params = getSentParams();
-    expect(params.text).toBe("[[reply_to:abcd]] hello");
+    expect(params.text).toBe("hello");
+    expect(params.reply_to).toBe("abcd");
   });
 
-  it("skips reply tagging when sanitized replyToId is empty", async () => {
+  it("omits reply_to param when sanitized replyToId is empty", async () => {
     requestMock.mockClear().mockResolvedValue({ ok: true });
     stopMock.mockClear().mockResolvedValue(undefined);
 
@@ -311,6 +314,35 @@ describe("sendMessageIMessage", () => {
     });
     const params = getSentParams();
     expect(params.text).toBe("hello");
+    expect(params.reply_to).toBeUndefined();
+  });
+
+  it("strips stray [[reply_to:...]] tags from text even without replyToId option", async () => {
+    requestMock.mockClear().mockResolvedValue({ ok: true });
+    stopMock.mockClear().mockResolvedValue(undefined);
+
+    await sendWithDefaults("chat_id:123", "[[reply_to:65]] Great question");
+    const params = getSentParams();
+    expect(params.text).toBe("Great question");
+    expect(params.reply_to).toBeUndefined();
+  });
+
+  it("strips [[audio_as_voice]] tags from outbound text", async () => {
+    requestMock.mockClear().mockResolvedValue({ ok: true });
+    stopMock.mockClear().mockResolvedValue(undefined);
+
+    await sendWithDefaults("chat_id:123", "hello [[audio_as_voice]] world");
+    const params = getSentParams();
+    expect(params.text).toBe("hello world");
+  });
+
+  it("throws when text is only directive tags and no media", async () => {
+    requestMock.mockClear().mockResolvedValue({ ok: true });
+    stopMock.mockClear().mockResolvedValue(undefined);
+
+    await expect(sendWithDefaults("chat_id:123", "[[reply_to:65]]")).rejects.toThrow(
+      "iMessage send requires text or media",
+    );
   });
 
   it("normalizes string message_id values from rpc result", async () => {
