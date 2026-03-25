@@ -233,6 +233,14 @@ ENV NODE_ENV=production
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
+# PaaS gateway config: allow host-header origin fallback for the Control UI
+# since Railway/Render/Fly proxy traffic through their own domains.
+RUN mkdir -p /app/.openclaw && \
+    printf '{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}}}\n' \
+      > /app/.openclaw/openclaw.json && \
+    chown -R node:node /app/.openclaw
+ENV OPENCLAW_CONFIG_PATH=/app/.openclaw/openclaw.json
+
 USER node
 
 # Start gateway server with default config.
