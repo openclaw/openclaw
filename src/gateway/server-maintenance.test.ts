@@ -40,6 +40,7 @@ function createMaintenanceTimerDeps() {
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
+    chatSegmentOffsets: new Map(),
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
