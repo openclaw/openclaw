@@ -1,12 +1,10 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
 import {
   getCommandPathWithRootOptions,
@@ -14,6 +12,8 @@ import {
   hasHelpOrVersion,
   isRootHelpInvocation,
 } from "./argv.js";
+import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import { loadCliDotEnv } from "./dotenv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
@@ -81,17 +81,44 @@ export function shouldUseRootHelpFastPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
-  let normalizedArgv = normalizeWindowsArgv(argv);
-  const parsedProfile = parseCliProfileArgs(normalizedArgv);
+  const originalArgv = normalizeWindowsArgv(argv);
+  const parsedContainer = parseCliContainerArgs(originalArgv);
+  if (!parsedContainer.ok) {
+    throw new Error(parsedContainer.error);
+  }
+  const parsedProfile = parseCliProfileArgs(parsedContainer.argv);
   if (!parsedProfile.ok) {
     throw new Error(parsedProfile.error);
   }
   if (parsedProfile.profile) {
     applyCliProfileEnv({ profile: parsedProfile.profile });
   }
-  normalizedArgv = parsedProfile.argv;
+  const containerTargetName =
+    parsedContainer.container ?? process.env.OPENCLAW_CONTAINER?.trim() ?? null;
+  if (
+    containerTargetName &&
+    (parsedProfile.profile ||
+      process.env.OPENCLAW_PROFILE?.trim() ||
+      process.env.OPENCLAW_GATEWAY_PORT?.trim() ||
+      process.env.OPENCLAW_GATEWAY_URL?.trim() ||
+      process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+      process.env.OPENCLAW_GATEWAY_PASSWORD?.trim())
+  ) {
+    throw new Error(
+      "--container cannot be combined with --profile/--dev or gateway override env vars",
+    );
+  }
 
-  loadDotEnv({ quiet: true });
+  const containerTarget = maybeRunCliInContainer(originalArgv);
+  if (containerTarget.handled) {
+    if (containerTarget.exitCode !== 0) {
+      process.exitCode = containerTarget.exitCode;
+    }
+    return;
+  }
+  let normalizedArgv = parsedProfile.argv;
+
+  loadCliDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
@@ -116,6 +143,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
+    const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.

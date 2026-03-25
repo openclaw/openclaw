@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 import "./server-context.chrome-test-harness.js";
 import * as cdpModule from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
@@ -10,7 +15,9 @@ import {
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
 
-afterEach(() => {
+afterEach(async () => {
+  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
+  await closePlaywrightBrowserConnection().catch(() => {});
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });

@@ -1,6 +1,6 @@
 import { ChannelType, type Guild } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../src/test-utils/typed-cases.js";
+import { typedCases } from "../../../test/helpers/extensions/typed-cases.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -60,6 +60,11 @@ function createAutoThreadMentionContext() {
   });
   return { guildInfo, channelConfig };
 }
+
+beforeEach(() => {
+  vi.useRealTimers();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+});
 
 describe("registerDiscordListener", () => {
   class FakeListener {}
@@ -891,6 +896,22 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: enqueueSystemEventSpy,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+  return {
+    ...actual,
+    resolveAgentRoute: resolveAgentRouteMock,
+  };
+});
 
 vi.mock("../../../src/infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventSpy,

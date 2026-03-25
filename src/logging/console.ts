@@ -1,6 +1,6 @@
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -189,19 +189,6 @@ function hasTimestampPrefix(value: string): boolean {
   );
 }
 
-function isJsonPayload(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return false;
-  }
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Route console.* calls through file logging while still emitting to stdout/stderr.
  * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
@@ -262,10 +249,7 @@ export function enableConsoleCapture(): void {
       }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix &&
-        trimmed.length > 0 &&
-        !hasTimestampPrefix(trimmed) &&
-        !isJsonPayload(trimmed);
+        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
       const timestamp = shouldPrefixTimestamp
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
@@ -289,7 +273,7 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+        // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);

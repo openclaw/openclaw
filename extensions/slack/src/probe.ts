@@ -1,5 +1,5 @@
-import type { BaseProbeResult } from "../../../src/channels/plugins/types.js";
-import { withTimeout } from "../../../src/utils/with-timeout.js";
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { withTimeout } from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 
 export type SlackProbe = BaseProbeResult & {

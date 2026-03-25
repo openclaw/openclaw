@@ -1,5 +1,5 @@
+import type { MockFn } from "openclaw/plugin-sdk/testing";
 import { beforeEach, vi } from "vitest";
-import type { MockFn } from "../../../src/test-utils/vitest-mock-fn.js";
 
 const { botApi, botCtorSpy } = vi.hoisted(() => ({
   botApi: {
@@ -36,6 +36,35 @@ const { maybePersistResolvedTelegramTarget } = vi.hoisted(() => ({
   maybePersistResolvedTelegramTarget: vi.fn(async () => {}),
 }));
 
+const {
+  undiciFetch,
+  undiciSetGlobalDispatcher,
+  undiciAgentCtor,
+  undiciEnvHttpProxyAgentCtor,
+  undiciProxyAgentCtor,
+} = vi.hoisted(() => ({
+  undiciFetch: vi.fn(),
+  undiciSetGlobalDispatcher: vi.fn(),
+  undiciAgentCtor: vi.fn(function MockAgent(
+    this: { options?: Record<string, unknown> },
+    options?: Record<string, unknown>,
+  ) {
+    this.options = options;
+  }),
+  undiciEnvHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+    this: { options?: Record<string, unknown> },
+    options?: Record<string, unknown>,
+  ) {
+    this.options = options;
+  }),
+  undiciProxyAgentCtor: vi.fn(function MockProxyAgent(
+    this: { options?: Record<string, unknown> | string },
+    options?: Record<string, unknown> | string,
+  ) {
+    this.options = options;
+  }),
+}));
+
 type TelegramSendTestMocks = {
   botApi: Record<string, MockFn>;
   botCtorSpy: MockFn;
@@ -44,11 +73,15 @@ type TelegramSendTestMocks = {
   maybePersistResolvedTelegramTarget: MockFn;
 };
 
-vi.mock("../../whatsapp/src/media.js", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   Bot: class {
     api = botApi;
     catch = vi.fn();
@@ -61,11 +94,30 @@ vi.mock("grammy", () => ({
       botCtorSpy(token, options);
     }
   },
+  HttpError: class HttpError extends Error {
+    constructor(
+      message = "HttpError",
+      public error?: unknown,
+    ) {
+      super(message);
+    }
+  },
+  GrammyError: class GrammyError extends Error {
+    description = "";
+  },
   InputFile: class {},
 }));
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("undici", () => ({
+  Agent: undiciAgentCtor,
+  EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
+  ProxyAgent: undiciProxyAgentCtor,
+  fetch: undiciFetch,
+  setGlobalDispatcher: undiciSetGlobalDispatcher,
+}));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     loadConfig,
@@ -86,6 +138,11 @@ export function installTelegramSendTestHooks() {
     loadWebMedia.mockReset();
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
+    undiciFetch.mockReset();
+    undiciSetGlobalDispatcher.mockReset();
+    undiciAgentCtor.mockClear();
+    undiciEnvHttpProxyAgentCtor.mockClear();
+    undiciProxyAgentCtor.mockClear();
     botCtorSpy.mockReset();
     for (const fn of Object.values(botApi)) {
       fn.mockReset();
@@ -94,5 +151,6 @@ export function installTelegramSendTestHooks() {
 }
 
 export async function importTelegramSendModule() {
+  vi.resetModules();
   return await import("./send.js");
 }

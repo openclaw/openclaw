@@ -1,19 +1,19 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { InputFile, webhookCallback } from "grammy";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { isDiagnosticsEnabled } from "../../../src/infra/diagnostic-events.js";
-import { formatErrorMessage } from "../../../src/infra/errors.js";
-import { readJsonBodyWithLimit } from "../../../src/infra/http-body.js";
+import * as grammy from "grammy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/infra-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
-} from "../../../src/logging/diagnostic.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
-import { defaultRuntime } from "../../../src/runtime.js";
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
@@ -21,6 +21,12 @@ import { createTelegramBot } from "./bot.js";
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+const InputFileCtor: typeof grammy.InputFile =
+  typeof grammy.InputFile === "function"
+    ? grammy.InputFile
+    : (class InputFileFallback {
+        constructor(public readonly path: string) {}
+      } as unknown as typeof grammy.InputFile);
 
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
@@ -137,7 +143,7 @@ export async function startTelegramWebhook(opts: {
     runtime,
     abortSignal: opts.abortSignal,
   });
-  const handler = webhookCallback(bot, "callback", {
+  const handler = grammy.webhookCallback(bot, "callback", {
     secretToken: secret,
     onTimeout: "return",
     timeoutMilliseconds: TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS,
@@ -270,7 +276,7 @@ export async function startTelegramWebhook(opts: {
         bot.api.setWebhook(publicUrl, {
           secret_token: secret,
           allowed_updates: resolveTelegramAllowedUpdates(),
-          certificate: opts.webhookCertPath ? new InputFile(opts.webhookCertPath) : undefined,
+          certificate: opts.webhookCertPath ? new InputFileCtor(opts.webhookCertPath) : undefined,
         }),
     });
   } catch (err) {

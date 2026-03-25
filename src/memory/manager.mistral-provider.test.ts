@@ -11,7 +11,7 @@ import type {
   OllamaEmbeddingClient,
   OpenAiEmbeddingClient,
 } from "./embeddings.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 
 const { createEmbeddingProviderMock } = vi.hoisted(() => ({
   createEmbeddingProviderMock: vi.fn(),
@@ -24,6 +24,11 @@ vi.mock("./embeddings.js", () => ({
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));
+
+type MemoryIndexModule = typeof import("./index.js");
+
+let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
+let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
 function createProvider(id: string): EmbeddingProvider {
   return {
@@ -64,6 +69,9 @@ describe("memory manager mistral provider wiring", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
@@ -76,6 +84,7 @@ describe("memory manager mistral provider wiring", () => {
       await manager.close();
       manager = null;
     }
+    await closeAllMemorySearchManagers();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -102,6 +111,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
 
     const internal = manager as unknown as { mistral?: MistralEmbeddingClient };
     expect(internal.mistral).toBe(mistralClient);
@@ -135,6 +145,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;
@@ -176,6 +187,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;

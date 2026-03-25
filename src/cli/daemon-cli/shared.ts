@@ -181,11 +181,30 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
-  return buildPlatformServiceStartHints({
+  const container = env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim();
+  const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
     startCommand: formatCliCommand("openclaw gateway", env),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
     systemdServiceName: resolveGatewaySystemdServiceName(profile),
     windowsTaskName: resolveGatewayWindowsTaskName(profile),
   });
+  if (!container) {
+    return hints;
+  }
+  return [`Restart the container or the service that manages it for ${container}.`];
+}
+
+export function filterContainerGenericHints(
+  hints: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (!(env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim())) {
+    return hints;
+  }
+  return hints.filter(
+    (hint) =>
+      !hint.includes("If you're in a container, run the gateway in the foreground instead of") &&
+      !hint.includes("systemd user services are unavailable; install/enable systemd"),
+  );
 }

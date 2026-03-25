@@ -4,21 +4,32 @@ const normalizeChannelIdMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryVersionMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-}));
+type TargetNormalizationModule = typeof import("./target-normalization.js");
 
-vi.mock("../../plugins/runtime.js", () => ({
-  getActivePluginRegistryVersion: (...args: unknown[]) =>
-    getActivePluginRegistryVersionMock(...args),
-}));
+let buildTargetResolverSignature: TargetNormalizationModule["buildTargetResolverSignature"];
+let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
+let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
 
-import {
-  buildTargetResolverSignature,
-  normalizeChannelTargetInput,
-  normalizeTargetForProvider,
-} from "./target-normalization.js";
+async function loadTargetNormalizationModule() {
+  vi.doMock("../../channels/plugins/index.js", () => ({
+    normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
+    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+  }));
+  vi.doMock("../../plugins/runtime.js", () => ({
+    getActivePluginRegistryVersion: (...args: unknown[]) =>
+      getActivePluginRegistryVersionMock(...args),
+  }));
+  ({ buildTargetResolverSignature, normalizeChannelTargetInput, normalizeTargetForProvider } =
+    await import("./target-normalization.js"));
+}
+
+beforeEach(async () => {
+  vi.resetModules();
+  normalizeChannelIdMock.mockReset();
+  getChannelPluginMock.mockReset();
+  getActivePluginRegistryVersionMock.mockReset();
+  await loadTargetNormalizationModule();
+});
 
 describe("normalizeChannelTargetInput", () => {
   it("trims raw target input", () => {
@@ -27,12 +38,6 @@ describe("normalizeChannelTargetInput", () => {
 });
 
 describe("normalizeTargetForProvider", () => {
-  beforeEach(() => {
-    normalizeChannelIdMock.mockReset();
-    getChannelPluginMock.mockReset();
-    getActivePluginRegistryVersionMock.mockReset();
-  });
-
   it("returns undefined for missing or blank raw input", () => {
     expect(normalizeTargetForProvider("telegram")).toBeUndefined();
     expect(normalizeTargetForProvider("telegram", "   ")).toBeUndefined();
@@ -87,10 +92,6 @@ describe("normalizeTargetForProvider", () => {
 });
 
 describe("buildTargetResolverSignature", () => {
-  beforeEach(() => {
-    getChannelPluginMock.mockReset();
-  });
-
   it("builds stable signatures from resolver hint and looksLikeId source", () => {
     const looksLikeId = (value: string) => value.startsWith("C");
     getChannelPluginMock.mockReturnValueOnce({

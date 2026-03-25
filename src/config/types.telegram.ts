@@ -30,6 +30,19 @@ export type TelegramActionConfig = {
   editForumTopic?: boolean;
 };
 
+export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
+   * topics for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
+};
+
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
@@ -166,7 +179,7 @@ export type TelegramAccountConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /** Telegram thread/conversation binding overrides. */
-  threadBindings?: SessionThreadBindingsConfig;
+  threadBindings?: TelegramThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions
@@ -188,6 +201,8 @@ export type TelegramAccountConfig = {
   healthMonitor?: ChannelHealthMonitorConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Send Telegram bot error replies silently (no notification sound). Default: false. */
+  silentErrorReplies?: boolean;
   /**
    * Per-channel outbound response prefix override.
    *
@@ -201,6 +216,10 @@ export type TelegramAccountConfig = {
    * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
    */
   ackReaction?: string;
+  /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
+  apiRoot?: string;
+  /** Auto-rename DM forum topics on first message using LLM. Default: true. */
+  autoTopicLabel?: AutoTopicLabelConfig;
 };
 
 export type TelegramTopicConfig = {
@@ -242,6 +261,15 @@ export type TelegramGroupConfig = {
   disableAudioPreflight?: boolean;
 };
 
+/** Config for LLM-based auto-topic labeling. */
+export type AutoTopicLabelConfig =
+  | boolean
+  | {
+      enabled?: boolean;
+      /** Custom prompt for LLM-based topic naming. */
+      prompt?: string;
+    };
+
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
@@ -260,6 +288,8 @@ export type TelegramDirectConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this DM. */
   systemPrompt?: string;
+  /** Auto-rename DM forum topics on first message using LLM. Default: true. */
+  autoTopicLabel?: AutoTopicLabelConfig;
 };
 
 export type TelegramConfig = {

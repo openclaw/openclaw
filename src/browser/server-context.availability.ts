@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import {
+  CHROME_MCP_ATTACH_READY_POLL_MS,
+  CHROME_MCP_ATTACH_READY_WINDOW_MS,
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_POST_RESTART_WS_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
@@ -63,7 +66,7 @@ export function createProfileAvailability({
   const isReachable = async (timeoutMs?: number) => {
     if (capabilities.usesChromeMcp) {
       // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
-      await listChromeMcpTabs(profile.name);
+      await listChromeMcpTabs(profile.name, profile.userDataDir);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -150,10 +153,35 @@ export function createProfileAvailability({
     );
   };
 
+  const waitForChromeMcpReadyAfterAttach = async (): Promise<void> => {
+    const deadlineMs = Date.now() + CHROME_MCP_ATTACH_READY_WINDOW_MS;
+    let lastError: unknown;
+    while (Date.now() < deadlineMs) {
+      try {
+        await listChromeMcpTabs(profile.name, profile.userDataDir);
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+    }
+    const detail = lastError instanceof Error ? ` Last error: ${lastError.message}` : "";
+    throw new BrowserProfileUnavailableError(
+      `Chrome MCP existing-session attach for profile "${profile.name}" timed out waiting for tabs to become available.` +
+        ` Approve the browser attach prompt, keep the browser open, and retry.${detail}`,
+    );
+  };
+
   const ensureBrowserAvailable = async (): Promise<void> => {
     await reconcileProfileRuntime();
     if (capabilities.usesChromeMcp) {
-      await ensureChromeMcpAvailable(profile.name);
+      if (profile.userDataDir && !fs.existsSync(profile.userDataDir)) {
+        throw new BrowserProfileUnavailableError(
+          `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
+        );
+      }
+      await ensureChromeMcpAvailable(profile.name, profile.userDataDir);
+      await waitForChromeMcpReadyAfterAttach();
       return;
     }
     const current = state();
@@ -166,6 +194,17 @@ export function createProfileAvailability({
       if ((attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) {
+          return;
+        }
+      }
+      // Browser control service can restart while a loopback OpenClaw browser is still
+      // alive. Give that pre-existing browser one longer probe window before falling
+      // back to local executable resolution.
+      if (!attachOnly && !remoteCdp && profile.cdpIsLoopback && !profileState.running) {
+        if (
+          (await isHttpReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS)) &&
+          (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS))
+        ) {
           return;
         }
       }
