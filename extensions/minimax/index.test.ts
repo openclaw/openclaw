@@ -129,4 +129,25 @@ describe("minimax provider hooks", () => {
     expect(resolvedApiModelId).toBe("MiniMax-M2.7-highspeed");
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
   });
+
+  it("registers the bundled MiniMax web search provider", () => {
+    const webSearchProviders: unknown[] = [];
+
+    minimaxPlugin.register({
+      registerProvider() {},
+      registerMediaUnderstandingProvider() {},
+      registerImageGenerationProvider() {},
+      registerSpeechProvider() {},
+      registerWebSearchProvider(provider: unknown) {
+        webSearchProviders.push(provider);
+      },
+    } as never);
+
+    expect(webSearchProviders).toHaveLength(1);
+    expect(webSearchProviders[0]).toMatchObject({
+      id: "minimax",
+      label: "MiniMax Search",
+      envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+    });
+  });
 });

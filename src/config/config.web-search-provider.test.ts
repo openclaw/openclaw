@@ -5,6 +5,13 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
+  TELEGRAM_COMMAND_NAME_PATTERN: /^[a-z0-9_]+$/,
+  normalizeTelegramCommandName: (value: string) => value.trim().toLowerCase(),
+  normalizeTelegramCommandDescription: (value: string) => value.trim(),
+  resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
+}));
+
 const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
   (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
 const getConfiguredPluginWebSearchConfig =
@@ -60,6 +67,13 @@ const mockWebSearchProviders = [
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("moonshot"),
   },
   {
+    id: "minimax",
+    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+    credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
+    getCredentialValue: getScopedWebSearchCredential("minimax"),
+    getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
+  },
+  {
     id: "perplexity",
     envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
     credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
@@ -91,24 +105,8 @@ vi.mock("../plugins/web-search-providers.js", () => {
   };
 });
 
-const secretInputSchema = {
-  oneOf: [
-    { type: "string" },
-    {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        source: { type: "string" },
-        provider: { type: "string" },
-        id: { type: "string" },
-      },
-      required: ["source", "provider", "id"],
-    },
-  ],
-};
-
-function buildWebSearchPluginSchema() {
-  return {
+vi.mock("../plugins/manifest-registry.js", () => {
+  const buildSchema = () => ({
     type: "object",
     additionalProperties: false,
     properties: {
@@ -116,34 +114,69 @@ function buildWebSearchPluginSchema() {
         type: "object",
         additionalProperties: false,
         properties: {
-          apiKey: secretInputSchema,
-          baseUrl: secretInputSchema,
+          apiKey: {
+            oneOf: [
+              { type: "string" },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: { type: "string" },
+                  provider: { type: "string" },
+                  id: { type: "string" },
+                },
+                required: ["source", "provider", "id"],
+              },
+            ],
+          },
+          baseUrl: {
+            oneOf: [
+              { type: "string" },
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  source: { type: "string" },
+                  provider: { type: "string" },
+                  id: { type: "string" },
+                },
+                required: ["source", "provider", "id"],
+              },
+            ],
+          },
           model: { type: "string" },
         },
       },
     },
-  };
-}
+  });
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({
-    plugins: [
-      {
-        id: "brave",
-        origin: "bundled",
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        rootDir: "/tmp/plugins/brave",
-        source: "test",
-        manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
-        schemaCacheKey: "test:brave",
-        configSchema: buildWebSearchPluginSchema(),
-      },
-      ...["firecrawl", "google", "moonshot", "perplexity", "searxng", "tavily", "xai"].map(
-        (id) => ({
+  return {
+    loadPluginManifestRegistry: () => ({
+      plugins: [
+        {
+          id: "brave",
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/tmp/plugins/brave",
+          source: "test",
+          manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
+          schemaCacheKey: "test:brave",
+          configSchema: buildSchema(),
+        },
+        ...[
+          "firecrawl",
+          "google",
+          "minimax",
+          "moonshot",
+          "perplexity",
+          "searxng",
+          "tavily",
+          "xai",
+        ].map((id) => ({
           id,
           origin: "bundled",
           channels: [],
@@ -155,13 +188,13 @@ vi.mock("../plugins/manifest-registry.js", () => ({
           source: "test",
           manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
           schemaCacheKey: `test:${id}`,
-          configSchema: buildWebSearchPluginSchema(),
-        }),
-      ),
-    ],
-    diagnostics: [],
-  }),
-}));
+          configSchema: buildSchema(),
+        })),
+      ],
+      diagnostics: [],
+    }),
+  };
+});
 
 let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
@@ -278,6 +311,24 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts minimax provider config on the plugin-owned path", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "minimax",
+        providerConfig: {
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "MINIMAX_CODE_PLAN_KEY",
+          },
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts searxng provider config on the plugin-owned path", () => {
     const res = validateConfigObjectWithPlugins(
       buildWebSearchProviderConfig({
@@ -363,6 +414,9 @@ describe("web search provider auto-detection", () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_CODE_PLAN_KEY;
+    delete process.env.MINIMAX_CODING_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
@@ -410,6 +464,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {
     process.env.KIMI_API_KEY = "test-kimi-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects minimax when only MINIMAX_CODE_PLAN_KEY is set", () => {
+    process.env.MINIMAX_CODE_PLAN_KEY = "sk-cp-test";
+    expect(resolveSearchProvider({})).toBe("minimax");
   });
 
   it("auto-detects perplexity when only PERPLEXITY_API_KEY is set", () => {

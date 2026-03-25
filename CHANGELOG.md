@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
 - Providers/Anthropic: remove setup-token from new onboarding and auth-command setup paths, keep existing configured legacy token profiles runnable, and steer new Anthropic setup to Claude CLI or API keys.
 - Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
+- Tools/web_search: add a bundled MiniMax Search provider backed by the Coding Plan search API, with region reuse from `MINIMAX_API_HOST` and plugin-owned credential config. (#54648) Thanks @fengmk2.
 - Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so quoted, threaded, and fetched history context can be filtered by sender allowlists instead of always passing through as received.
 - Providers/request overrides: add shared model and media request transport overrides across OpenAI-, Anthropic-, Google-, and compatible provider paths, including headers, auth, proxy, and TLS controls. (#60200)
 - Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.

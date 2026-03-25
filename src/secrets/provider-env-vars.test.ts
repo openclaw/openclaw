@@ -37,7 +37,7 @@ describe("provider env vars", () => {
       ]),
     );
     expect(listKnownProviderAuthEnvVarNames()).toEqual(
-      expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY"]),
+      expect.arrayContaining(["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"]),
     );
     expect(listKnownSecretEnvVarNames()).not.toContain("OPENCLAW_API_KEY");
   });
