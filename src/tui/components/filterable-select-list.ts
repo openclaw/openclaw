@@ -1,7 +1,7 @@
 import type { Component } from "@mariozechner/pi-tui";
 import {
   Input,
-  getEditorKeybindings,
+  getKeybindings,
   matchesKey,
   type SelectItem,
   SelectList,
@@ -110,8 +110,8 @@ export class FilterableSelectList implements Component {
     }
 
     // Escape: clear filter or cancel
-    const kb = getEditorKeybindings();
-    if (kb.matches(keyData, "selectCancel")) {
+    const kb = getKeybindings();
+    if (kb.matches(keyData, "tui.select.cancel")) {
       if (this.filterText) {
         this.filterText = "";
         this.input.setValue("");
