@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { loadCliDotEnv } from "../cli/dotenv.js";
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -166,6 +167,42 @@ describe("loadDotEnv", () => {
 
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.SAFE_KEY).toBe("trusted-global");
+      });
+    });
+  });
+});
+
+describe("loadCliDotEnv", () => {
+  it("blocks workspace .env takeover vars before loading the global fallback", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "SAFE_KEY=from-cwd",
+            "OPENCLAW_STATE_DIR=./evil-state",
+            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+            "NODE_OPTIONS=--require ./evil.js",
+            "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+          ].join("\n"),
+        );
+        await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.SAFE_KEY;
+        delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.NODE_OPTIONS;
+        delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.BAR;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.SAFE_KEY).toBe("from-cwd");
+        expect(process.env.BAR).toBe("from-global");
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+        expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
       });
     });
   });
