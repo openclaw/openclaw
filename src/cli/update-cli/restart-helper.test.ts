@@ -287,40 +287,34 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
 
-    it("uses cmd.exe on Windows", async () => {
+    it("uses wscript.exe VBS wrapper on Windows to hide console", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\fake-script.bat";
       const mockChild = { unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+      const writeFileSpy = vi.spyOn(fs, "writeFile").mockResolvedValueOnce(undefined);
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
+      // Should write a VBS wrapper
+      expect(writeFileSpy).toHaveBeenCalledOnce();
+      const [vbsPath, vbsContent] = writeFileSpy.mock.calls[0] as [string, string, string];
+      expect(vbsPath).toBe("C:\\Temp\\fake-script.vbs");
+      expect(vbsContent).toContain("WScript.Shell");
+      expect(vbsContent).toContain("cmd.exe");
+
+      // Should spawn wscript.exe with the VBS wrapper
+      expect(spawn).toHaveBeenCalledWith("wscript.exe", [vbsPath], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
-    });
-
-    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "win32" });
-      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
-      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
-
-      await runRestartScript(scriptPath);
-
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      writeFileSpy.mockRestore();
     });
   });
 });
