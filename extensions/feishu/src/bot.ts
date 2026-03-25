@@ -357,6 +357,14 @@ export async function handleFeishuMessage(params: {
     ? [...new Set(rawBroadcastAgents.map((id) => normalizeAgentId(id)))]
     : null;
 
+  // Parse message create_time early so every downstream consumer (pending
+  // history, inbound payload, etc.) uses the original authoring timestamp
+  // instead of the delivery/processing time.  Feishu uses a millisecond
+  // epoch string; fall back to Date.now() only when the field is absent.
+  const messageCreateTimeMs = event.message.create_time
+    ? parseInt(event.message.create_time, 10)
+    : Date.now();
+
   let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {
     if (groupConfig?.enabled === false) {
@@ -434,7 +442,7 @@ export async function handleFeishuMessage(params: {
           entry: {
             sender: ctx.senderOpenId,
             body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
-            timestamp: Date.now(),
+            timestamp: messageCreateTimeMs,
             messageId: ctx.messageId,
           },
         });
@@ -919,7 +927,7 @@ export async function handleFeishuMessage(params: {
         // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
         // ID and would produce invalid reply targets downstream.
         MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
-        Timestamp: Date.now(),
+        Timestamp: messageCreateTimeMs,
         WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
@@ -929,10 +937,6 @@ export async function handleFeishuMessage(params: {
       });
     };
 
-    // Parse message create_time (Feishu uses millisecond epoch string).
-    const messageCreateTimeMs = event.message.create_time
-      ? parseInt(event.message.create_time, 10)
-      : undefined;
     // Determine reply target based on group session mode:
     // - Topic-mode groups (group_topic / group_topic_sender): reply to the topic
     //   root so the bot stays in the same thread.
