@@ -1,15 +1,18 @@
 import type { EventEmitter } from "node:events";
+import type {
+  DiscordGatewayEvent,
+  DiscordGatewaySupervisor,
+} from "./monitor/gateway-supervisor.js";
 
 export type DiscordGatewayHandle = {
-  emitter?: Pick<EventEmitter, "on" | "removeListener">;
   disconnect?: () => void;
 };
 
 export type WaitForDiscordGatewayStopParams = {
   gateway?: DiscordGatewayHandle;
   abortSignal?: AbortSignal;
-  onGatewayError?: (err: unknown) => void;
-  shouldStopOnError?: (err: unknown) => boolean;
+  gatewaySupervisor?: Pick<DiscordGatewaySupervisor, "attachLifecycle" | "detachLifecycle">;
+  onGatewayEvent?: (event: DiscordGatewayEvent) => "continue" | "stop";
   registerForceStop?: (forceStop: (err: unknown) => void) => void;
 };
 
@@ -20,13 +23,12 @@ export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | unde
 export async function waitForDiscordGatewayStop(
   params: WaitForDiscordGatewayStopParams,
 ): Promise<void> {
-  const { gateway, abortSignal, onGatewayError, shouldStopOnError } = params;
-  const emitter = gateway?.emitter;
+  const { gateway, abortSignal } = params;
   return await new Promise<void>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
       abortSignal?.removeEventListener("abort", onAbort);
-      emitter?.removeListener("error", onGatewayErrorEvent);
+      params.gatewaySupervisor?.detachLifecycle();
     };
     const finishResolve = () => {
       if (settled) {
@@ -57,11 +59,10 @@ export async function waitForDiscordGatewayStop(
     const onAbort = () => {
       finishResolve();
     };
-    const onGatewayErrorEvent = (err: unknown) => {
-      onGatewayError?.(err);
-      const shouldStop = shouldStopOnError?.(err) ?? true;
+    const onGatewayEvent = (event: DiscordGatewayEvent) => {
+      const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
       if (shouldStop) {
-        finishReject(err);
+        finishReject(event.err);
       }
     };
     const onForceStop = (err: unknown) => {
@@ -74,7 +75,7 @@ export async function waitForDiscordGatewayStop(
     }
 
     abortSignal?.addEventListener("abort", onAbort, { once: true });
-    emitter?.on("error", onGatewayErrorEvent);
+    params.gatewaySupervisor?.attachLifecycle(onGatewayEvent);
     params.registerForceStop?.(onForceStop);
   });
 }
