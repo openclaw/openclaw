@@ -220,6 +220,27 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards an empty gateway scope array into outbound delivery", async () => {
+    mockDeliverySuccess("m-telegram-empty-scope");
+
+    await runSendWithClient(
+      {
+        to: "https://t.me/mychannel",
+        message: "hi",
+        channel: "telegram",
+        idempotencyKey: "idem-telegram-empty-scope",
+      },
+      { connect: { scopes: [] } },
+    );
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        gatewayClientScopes: [],
+      }),
+    );
+  });
+
   it("rejects empty sends when neither text nor media is present", async () => {
     const { respond } = await runSend({
       to: "channel:C1",
@@ -320,6 +341,27 @@ describe("gateway send mirroring", () => {
         cfg: expect.any(Object),
         to: "resolved",
         gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("forwards an empty gateway scope array into outbound poll delivery", async () => {
+    await runPollWithClient(
+      {
+        to: "https://t.me/mychannel",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "telegram",
+        idempotencyKey: "idem-poll-empty-scope",
+      },
+      { connect: { scopes: [] } },
+    );
+
+    expect(mocks.sendPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        to: "resolved",
+        gatewayClientScopes: [],
       }),
     );
   });

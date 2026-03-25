@@ -60,6 +60,22 @@ describe("maybePersistResolvedTelegramTarget", () => {
     expect(saveCronStore).not.toHaveBeenCalled();
   });
 
+  it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
+    await maybePersistResolvedTelegramTarget({
+      cfg: {
+        cron: { store: "/tmp/cron/jobs.json" },
+      } as OpenClawConfig,
+      rawTarget: "t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: [],
+    });
+
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(loadCronStore).not.toHaveBeenCalled();
+    expect(saveCronStore).not.toHaveBeenCalled();
+  });
+
   it("writes back matching config and cron targets for gateway callers with operator.admin", async () => {
     readConfigFileSnapshotForWrite.mockResolvedValue({
       snapshot: {

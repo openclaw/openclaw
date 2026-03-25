@@ -263,7 +263,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
-          gatewayClientScopes: client?.connect?.scopes,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
@@ -445,7 +445,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         threadId,
         silent: request.silent,
         isAnonymous: request.isAnonymous,
-        gatewayClientScopes: client?.connect?.scopes,
+        gatewayClientScopes: client?.connect?.scopes ?? [],
       });
       const payload: Record<string, unknown> = {
         runId: idem,

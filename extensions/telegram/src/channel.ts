@@ -100,7 +100,7 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
-    ...(params.gatewayClientScopes?.length
+    ...(Array.isArray(params.gatewayClientScopes)
       ? { gatewayClientScopes: [...params.gatewayClientScopes] }
       : {}),
   };
