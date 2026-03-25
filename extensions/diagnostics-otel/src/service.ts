@@ -770,10 +770,20 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           // Current GenAI registry attributes (gen_ai.system is deprecated)
           "gen_ai.provider.name": evt.provider ?? "unknown",
           "gen_ai.operation.name": "chat",
-          "gen_ai.usage.input_tokens":
-            usage.promptTokens ??
-            (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
-          "gen_ai.usage.output_tokens": usage.output ?? 0,
+          // Only emit GenAI split token counts when the components are actually
+          // known. Total-only payloads (e.g. CLI runner) would otherwise report
+          // misleading zeros that skew dashboards.
+          ...(usage.promptTokens != null ||
+          usage.input != null ||
+          usage.cacheRead != null ||
+          usage.cacheWrite != null
+            ? {
+                "gen_ai.usage.input_tokens":
+                  usage.promptTokens ??
+                  (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
+              }
+            : {}),
+          ...(usage.output != null ? { "gen_ai.usage.output_tokens": usage.output } : {}),
         };
         if (evt.sessionKey) {
           spanAttrs["langfuse.session.id"] = evt.sessionKey;
