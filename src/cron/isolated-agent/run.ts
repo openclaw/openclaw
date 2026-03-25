@@ -163,12 +163,18 @@ async function resolveCronDeliveryContext(params: {
   agentId: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
-  const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: deliveryPlan.channel ?? "last",
-    to: deliveryPlan.to,
-    accountId: deliveryPlan.accountId,
-    sessionKey: params.job.sessionKey,
-  });
+
+  // When delivery is not requested (delivery.mode='none'), skip target resolution
+  // entirely to avoid false errors from attempting to resolve a non-existent target.
+  const resolvedDelivery = deliveryPlan.requested
+    ? await resolveDeliveryTarget(params.cfg, params.agentId, {
+        channel: deliveryPlan.channel ?? "last",
+        to: deliveryPlan.to,
+        accountId: deliveryPlan.accountId,
+        sessionKey: params.job.sessionKey,
+      })
+    : { ok: false as const, mode: "implicit" as const, error: new Error("delivery not requested") };
+
   return {
     deliveryPlan,
     deliveryRequested: deliveryPlan.requested,
