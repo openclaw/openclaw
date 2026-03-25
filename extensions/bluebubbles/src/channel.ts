@@ -9,12 +9,15 @@ import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createOpenGroupPolicyRestrictSendersWarningCollector,
-  projectWarningCollector,
+  projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
@@ -101,8 +104,8 @@ const meta = {
   preferOver: ["imessage"],
 };
 
-export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = createChatChannelPlugin(
-  {
+export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe> =
+  createChatChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
     base: {
       id: "bluebubbles",
       meta,
@@ -143,21 +146,6 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         targetResolver: {
           looksLikeId: looksLikeBlueBubblesExplicitTargetId,
           hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
-          resolveTarget: async ({ normalized }) => {
-            const to = normalized?.trim();
-            if (!to) {
-              return null;
-            }
-            const chatType = inferBlueBubblesTargetChatType(to);
-            if (!chatType) {
-              return null;
-            }
-            return {
-              to,
-              kind: chatType === "direct" ? "user" : "group",
-              source: "normalized" as const,
-            };
-          },
         },
         formatTargetDisplay: ({ target, display }) => {
           const shouldParseDisplay = (value: string): boolean => {
@@ -228,13 +216,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
       },
       setup: blueBubblesSetupAdapter,
       status: createComputedAccountStatusAdapter<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: collectBlueBubblesStatusIssues,
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
@@ -285,10 +267,10 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
     },
     security: {
       resolveDmPolicy: resolveBlueBubblesDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account }: { account: ResolvedBlueBubblesAccount }) => account,
-        collectBlueBubblesSecurityWarnings,
-      ),
+      collectWarnings: projectAccountWarningCollector<
+        ResolvedBlueBubblesAccount,
+        { account: ResolvedBlueBubblesAccount }
+      >(collectBlueBubblesSecurityWarnings),
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
@@ -368,5 +350,4 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = crea
         },
       },
     },
-  },
-);
+  });

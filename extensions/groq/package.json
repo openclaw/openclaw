@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/groq-media-understanding",
+  "name": "@openclaw/groq-provider",
   "version": "2026.3.14",
   "private": true,
   "description": "OpenClaw Groq media-understanding plugin",
