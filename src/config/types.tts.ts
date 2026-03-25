@@ -93,6 +93,21 @@ export type TtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  /** CLI command-based TTS (for local models like Kokoro, Piper, etc.). */
+  cli?: {
+    /** Executable path or binary name. */
+    command: string;
+    /** CLI args with {{TEXT_FILE}}, {{OUTPUT_FILE}}, {{VOICE}}, {{MODEL}} placeholders. */
+    args?: string[];
+    /** Audio output format produced by the command (default: "wav"). */
+    outputFormat?: string;
+    /** Max seconds before the command is killed (default: 30). */
+    timeoutSeconds?: number;
+    /** Optional voice identifier passed via {{VOICE}} placeholder. */
+    voice?: string;
+    /** Optional model identifier passed via {{MODEL}} placeholder. */
+    model?: string;
+  };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
   /** Hard cap for text sent to TTS (chars). */

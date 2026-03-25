@@ -132,6 +132,14 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  cli?: {
+    command: string;
+    args?: string[];
+    outputFormat?: string;
+    timeoutSeconds?: number;
+    voice?: string;
+    model?: string;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -339,6 +347,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: rawMicrosoft.proxy?.trim() || undefined,
       timeoutMs: rawMicrosoft.timeoutMs,
     },
+    cli: raw.cli?.command
+      ? {
+          command: raw.cli.command,
+          args: raw.cli.args,
+          outputFormat: raw.cli.outputFormat?.trim() || undefined,
+          timeoutSeconds: raw.cli.timeoutSeconds,
+          voice: raw.cli.voice?.trim() || undefined,
+          model: raw.cli.model?.trim() || undefined,
+        }
+      : undefined,
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
