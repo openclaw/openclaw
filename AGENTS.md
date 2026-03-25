@@ -48,6 +48,20 @@
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
 - Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
 
+## Multi-Agent Coordination (Claude Code + Codex)
+
+> **MANDATORY**: Read `MULTI_AGENT_PROTOCOL.md` (repo root) at session start.
+> Also read `STATUS.md` (repo root) for current project state.
+> Task brief for Codex: `CODEX_TASK_BRIEF.md` (repo root).
+
+- One branch = one owner (Claude or Codex). Never touch the other agent's active branch.
+- Check STATUS.md before creating a branch to avoid file/area conflicts.
+- Update STATUS.md at session end with what you did, branch name, and owner.
+- Use Conventional Commits. Squash-merge PRs to main. No direct pushes.
+- See MULTI_AGENT_PROTOCOL.md for full handoff procedures and conflict rules.
+
+---
+
 ## Gateway Deploy Protocol
 
 - Canonical terms:
