@@ -137,3 +137,7 @@ docs/superpowers
 
 # Deprecated changelog fragment workflow
 changelog/fragments/
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md

@@ -20,6 +20,9 @@ vi.mock("../../media-understanding/apply.runtime.js", () => ({
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
 }));
+vi.mock("./commands-core.runtime.js", () => ({
+  emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
+}));
 vi.mock("./get-reply-directives.js", () => ({
   resolveReplyDirectives: (...args: unknown[]) => mocks.resolveReplyDirectives(...args),
 }));
@@ -30,7 +33,12 @@ vi.mock("./session.js", () => ({
   initSessionState: (...args: unknown[]) => mocks.initSessionState(...args),
 }));
 
-const { getReplyFromConfig } = await import("./get-reply.js");
+let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+
+async function loadFreshGetReplyModuleForTest() {
+  vi.resetModules();
+  ({ getReplyFromConfig } = await import("./get-reply.js"));
+}
 
 function buildNativeResetContext(): MsgContext {
   return {
@@ -100,7 +108,8 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
 }
 
 describe("getReplyFromConfig reset-hook fallback", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshGetReplyModuleForTest();
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
     mocks.emitResetCommandHooks.mockReset();

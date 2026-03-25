@@ -22,5 +22,6 @@
     "src/auto-reply/reply/export-html/",
     "Swabble/",
     "vendor/",
+    ".github/instructions/kluster-code-verify.instructions.md",
   ],
 }

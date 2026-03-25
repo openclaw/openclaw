@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.fn();
 const dispatchPluginInteractiveHandlerMock = vi.fn(async () => ({
@@ -197,9 +197,12 @@ function createContext(overrides?: {
 }
 
 describe("registerSlackInteractionEvents", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ registerSlackInteractionEvents } = await import("./interactions.js"));
+  });
+
+  beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
@@ -364,6 +367,50 @@ describe("registerSlackInteractionEvents", () => {
     );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("treats Slack reply buttons as plain interaction events instead of plugin dispatch", async () => {
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "codex",
+        text: { type: "plain_text", text: "codex" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining('"actionId":"openclaw:reply_button"'),
+      expect.any(Object),
+    );
+    expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
   it("uses unique interaction ids for repeated Slack actions on the same message", async () => {

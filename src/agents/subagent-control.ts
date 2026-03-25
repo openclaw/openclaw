@@ -371,15 +371,23 @@ async function killSubagentRun(params: {
     );
   }
   if (resolved.entry) {
-    await updateSessionStore(resolved.storePath, (store) => {
-      const current = store[childSessionKey];
-      if (!current) {
-        return;
-      }
-      current.abortedLastRun = true;
-      current.updatedAt = Date.now();
-      store[childSessionKey] = current;
-    });
+    try {
+      await updateSessionStore(resolved.storePath, (store) => {
+        const current = store[childSessionKey];
+        if (!current) {
+          return;
+        }
+        current.abortedLastRun = true;
+        current.updatedAt = Date.now();
+        store[childSessionKey] = current;
+      });
+    } catch (error) {
+      logVerbose(
+        `subagents control kill: failed to persist abortedLastRun for ${childSessionKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
   const marked = markSubagentRunTerminated({
     runId: params.entry.runId,
@@ -500,6 +508,16 @@ export async function killControlledSubagentRun(params: {
       runId: params.entry.runId,
       sessionKey: params.entry.childSessionKey,
       error: "Leaf subagents cannot control other sessions.",
+    };
+  }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done" as const,
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      label: resolveSubagentLabel(params.entry),
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
     };
   }
   const killCache = new Map<string, Record<string, SessionEntry>>();
@@ -637,6 +655,15 @@ export async function steerControlledSubagentRun(params: {
       error: "Subagents cannot steer themselves.",
     };
   }
+  const currentEntry = getSubagentRunByChildSessionKey(params.entry.childSessionKey);
+  if (!currentEntry || currentEntry.runId !== params.entry.runId || currentEntry.endedAt) {
+    return {
+      status: "done",
+      runId: params.entry.runId,
+      sessionKey: params.entry.childSessionKey,
+      text: `${resolveSubagentLabel(params.entry)} is already finished.`,
+    };
+  }
 
   const rateKey = `${params.controller.callerSessionKey}:${params.entry.childSessionKey}`;
   if (process.env.VITEST !== "true") {
@@ -720,12 +747,22 @@ export async function steerControlledSubagentRun(params: {
     };
   }
 
-  replaceSubagentRunAfterSteer({
+  const replaced = replaceSubagentRunAfterSteer({
     previousRunId: params.entry.runId,
     nextRunId: runId,
     fallback: params.entry,
     runTimeoutSeconds: params.entry.runTimeoutSeconds ?? 0,
   });
+  if (!replaced) {
+    clearSubagentRunSteerRestart(params.entry.runId);
+    return {
+      status: "error",
+      runId,
+      sessionKey: params.entry.childSessionKey,
+      sessionId,
+      error: "failed to replace steered subagent run",
+    };
+  }
 
   return {
     status: "accepted",
@@ -770,47 +807,52 @@ export async function sendControlledSubagentMessage(params: {
 
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
-  const response = await subagentControlDeps.callGateway<{ runId: string }>({
-    method: "agent",
-    params: {
-      message: params.message,
-      sessionKey: targetSessionKey,
-      sessionId: targetSessionId,
-      idempotencyKey,
-      deliver: false,
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      lane: AGENT_LANE_SUBAGENT,
-      timeout: 0,
-    },
-    timeoutMs: 10_000,
-  });
-  const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
-  if (responseRunId) {
-    runId = responseRunId;
-  }
+  try {
+    const response = await subagentControlDeps.callGateway<{ runId: string }>({
+      method: "agent",
+      params: {
+        message: params.message,
+        sessionKey: targetSessionKey,
+        sessionId: targetSessionId,
+        idempotencyKey,
+        deliver: false,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        lane: AGENT_LANE_SUBAGENT,
+        timeout: 0,
+      },
+      timeoutMs: 10_000,
+    });
+    const responseRunId = typeof response?.runId === "string" ? response.runId : undefined;
+    if (responseRunId) {
+      runId = responseRunId;
+    }
 
-  const waitMs = 30_000;
-  const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
-    method: "agent.wait",
-    params: { runId, timeoutMs: waitMs },
-    timeoutMs: waitMs + 2_000,
-  });
-  if (wait?.status === "timeout") {
-    return { status: "timeout" as const, runId };
-  }
-  if (wait?.status === "error") {
-    const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
-    return { status: "error" as const, runId, error: waitError };
-  }
+    const waitMs = 30_000;
+    const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
+      method: "agent.wait",
+      params: { runId, timeoutMs: waitMs },
+      timeoutMs: waitMs + 2_000,
+    });
+    if (wait?.status === "timeout") {
+      return { status: "timeout" as const, runId };
+    }
+    if (wait?.status === "error") {
+      const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
+      return { status: "error" as const, runId, error: waitError };
+    }
 
-  const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-    method: "chat.history",
-    params: { sessionKey: targetSessionKey, limit: 50 },
-  });
-  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-  const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-  const replyText = last ? extractAssistantText(last) : undefined;
-  return { status: "ok" as const, runId, replyText };
+    const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
+      method: "chat.history",
+      params: { sessionKey: targetSessionKey, limit: 50 },
+    });
+    const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
+    const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+    const replyText = last ? extractAssistantText(last) : undefined;
+    return { status: "ok" as const, runId, replyText };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { status: "error" as const, runId, error };
+  }
 }
 
 export function resolveControlledSubagentTarget(
