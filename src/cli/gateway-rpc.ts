@@ -23,11 +23,17 @@ export function addGatewayClientOptions(cmd: Command) {
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
 
 function resolveGatewayRpcTimeoutMs(timeout: unknown): number {
-  const parsed = parsePositiveIntOrUndefined(timeout);
-  if (timeout !== undefined && timeout !== null && timeout !== "" && parsed === undefined) {
+  if (timeout === undefined || timeout === null) {
+    return DEFAULT_GATEWAY_RPC_TIMEOUT_MS;
+  }
+  if (typeof timeout === "string" && timeout.trim() === "") {
     throw new Error("--timeout must be a positive integer (milliseconds)");
   }
-  return parsed ?? DEFAULT_GATEWAY_RPC_TIMEOUT_MS;
+  const parsed = parsePositiveIntOrUndefined(timeout);
+  if (parsed === undefined) {
+    throw new Error("--timeout must be a positive integer (milliseconds)");
+  }
+  return parsed;
 }
 
 export async function callGatewayFromCli(

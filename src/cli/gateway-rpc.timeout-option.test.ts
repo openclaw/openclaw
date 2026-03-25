@@ -42,7 +42,7 @@ describe("gateway-rpc timeout option", () => {
   });
 
   it("rejects invalid timeout values instead of silently falling back", async () => {
-    for (const timeout of ["nope", "10ms", "1000abc", "1e3"]) {
+    for (const timeout of ["", "   ", "nope", "10ms", "1000abc", "1e3"]) {
       mocks.callGateway.mockClear();
       await expect(callGatewayFromCli("health", { timeout, json: true }, {})).rejects.toThrow(
         "--timeout must be a positive integer",
