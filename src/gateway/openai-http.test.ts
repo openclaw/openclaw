@@ -676,6 +676,25 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(usage?.total_tokens).toBe(64);
       }
 
+      // Non-streaming usage: arithmetic fallback when total is absent
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "usage reply no total" }],
+          meta: {
+            agentMeta: {
+              usage: { input: 10, output: 5, cacheRead: 3, cacheWrite: 1 },
+            },
+          },
+        } as never);
+        const jsonFallback = await postSyncUserMessage("fallback total");
+        const usageFallback = jsonFallback.usage as Record<string, unknown> | undefined;
+        expect(usageFallback).toBeDefined();
+        expect(usageFallback?.prompt_tokens).toBe(10);
+        expect(usageFallback?.completion_tokens).toBe(5);
+        expect(usageFallback?.total_tokens).toBe(19); // 10 + 5 + 3 + 1
+      }
+
       // Non-streaming usage falls back to zeros when meta is absent
       {
         agentCommand.mockClear();
