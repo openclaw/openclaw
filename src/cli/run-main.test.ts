@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
@@ -6,6 +6,7 @@ import {
   shouldSkipPluginCommandRegistration,
   shouldUseRootHelpFastPath,
 } from "./run-main.js";
+import * as workerMode from "./worker-mode.js";
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -134,5 +135,43 @@ describe("shouldUseRootHelpFastPath", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+  });
+});
+
+describe("runCli worker-mode branch", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("invokes runWorkerMode and returns when --mode=worker is present", async () => {
+    const mockEnv = {
+      teamName: "t",
+      memberName: "m",
+      role: "r",
+      configPath: "/tmp/config.json",
+      notifyPort: 9100,
+    };
+    vi.spyOn(workerMode, "isWorkerMode").mockReturnValue(true);
+    vi.spyOn(workerMode, "parseWorkerModeEnv").mockReturnValue(mockEnv);
+    const runWorkerModeSpy = vi.spyOn(workerMode, "runWorkerMode").mockResolvedValue(undefined);
+
+    const { runCli } = await import("./run-main.js");
+    await runCli(["node", "entry.js", "--mode=worker"]);
+
+    expect(runWorkerModeSpy).toHaveBeenCalledWith(mockEnv);
+  });
+
+  it("does NOT invoke runWorkerMode when --mode=worker is absent", async () => {
+    vi.spyOn(workerMode, "isWorkerMode").mockReturnValue(false);
+    const runWorkerModeSpy = vi.spyOn(workerMode, "runWorkerMode").mockResolvedValue(undefined);
+
+    try {
+      const { runCli } = await import("./run-main.js");
+      await runCli(["node", "entry.js", "status"]);
+    } catch {
+      // expected: normal CLI flow errors in test environment
+    }
+
+    expect(runWorkerModeSpy).not.toHaveBeenCalled();
   });
 });

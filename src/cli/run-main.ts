@@ -17,6 +17,7 @@ import { loadCliDotEnv } from "./dotenv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
+import { isWorkerMode, parseWorkerModeEnv, runWorkerMode } from "./worker-mode.js";
 
 async function closeCliMemoryManagers(): Promise<void> {
   try {
@@ -116,6 +117,14 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
+
+  // Worker mode: headless sub-process spawned by spawnAgentProcess().
+  // Short-circuit before the full CLI stack (config-guard, banner, Commander).
+  if (isWorkerMode(normalizedArgv)) {
+    const workerEnv = parseWorkerModeEnv();
+    await runWorkerMode(workerEnv);
+    return;
+  }
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
