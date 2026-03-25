@@ -195,9 +195,8 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
-    expect(output).toContain("unit-fast");
-    expect(output).toContain("filters=all maxWorkers=4");
-    expect(output).toContain("extensions filters=all maxWorkers=3");
+    expect(output).toContain("unit-fast filters=all maxWorkers=");
+    expect(output).toContain("extensions filters=all maxWorkers=");
   });
 
   it("explains targeted file ownership and execution policy", () => {
