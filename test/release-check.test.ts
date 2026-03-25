@@ -152,19 +152,22 @@ describe("collectMissingPackPaths", () => {
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata and control-ui assets are present", () => {
-    expect(
-      collectMissingPackPaths([
-        "dist/index.js",
-        "dist/entry.js",
-        "dist/control-ui/index.html",
-        "dist/control-ui/assets/app-abc123.js",
-        ...requiredBundledPluginPackPaths,
-        ...requiredPluginSdkPackPaths,
-        "dist/plugin-sdk/root-alias.cjs",
-        "dist/build-info.json",
-        "dist/channel-catalog.json",
-      ]),
-    ).toEqual([]);
+    const missing = collectMissingPackPaths([
+      "dist/index.js",
+      "dist/entry.js",
+      "dist/control-ui/index.html",
+      "dist/control-ui/assets/app-abc123.js",
+      ...requiredBundledPluginPackPaths,
+      ...requiredPluginSdkPackPaths,
+      "dist/plugin-sdk/root-alias.cjs",
+      "dist/build-info.json",
+      "dist/channel-catalog.json",
+    ]);
+
+    expect(missing).toEqual([]);
+    expect(missing).not.toEqual(
+      expect.arrayContaining(["dist/control-ui/index.html", "dist/control-ui/assets/*"]),
+    );
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
