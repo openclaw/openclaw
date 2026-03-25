@@ -153,8 +153,9 @@
 
 1. **Compiles clean** — `pnpm build` (or equivalent) with no errors
 2. **Linter passes** — run `pnpm check` and fix all issues
-3. **Relevant tests pass** — run automated tests related to the changed code; fix failures before proceeding
-4. **User confirms it works** — describe clearly what to test and how, then wait for explicit user confirmation. Do not commit until the user says it works. This avoids stacking commits that may need to be reverted.
+3. **Relevant tests pass** — run `pnpm test` and fix any failures
+4. **Documentation updated** — update existing docs or create new ones if the change affects behavior, APIs, or configuration
+5. **User confirms it works** — describe clearly what to test and how, then wait for explicit user confirmation. Do not commit until the user says it works. This avoids stacking commits that may need to be reverted.
 
 - Commit messages must be in **English**.
 - Never add yourself as co-author (no `Co-Authored-By` lines).
