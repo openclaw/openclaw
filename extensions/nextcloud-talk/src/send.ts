@@ -115,6 +115,7 @@ export async function sendMessageNextcloudTalk(
       body: bodyStr,
     },
     auditContext: "nextcloud-talk-send",
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
   try {
@@ -206,6 +207,7 @@ export async function sendReactionNextcloudTalk(
       body,
     },
     auditContext: "nextcloud-talk-reaction",
+    policy: account.config?.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
   });
 
   try {

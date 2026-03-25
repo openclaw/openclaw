@@ -78,6 +78,8 @@ export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
   fetchImpl?: typeof fetch;
+  /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
+  allowPrivateNetwork?: boolean;
 }): MattermostClient {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
   if (!baseUrl) {
@@ -106,6 +108,7 @@ export function createMattermostClient(params: {
       url,
       init,
       auditContext: "mattermost-api",
+      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
     });
     try {
       const bodyBytes = NULL_BODY_STATUSES.has(response.status)
