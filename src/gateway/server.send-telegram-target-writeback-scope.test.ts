@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { sendMessageTelegram, sendPollTelegram } from "../../extensions/telegram/src/send.js";
-import { loadCronStore, saveCronStore } from "../cron/store.js";
-import type { CronStoreFile } from "../cron/types.js";
 import {
   clearConfigCache,
   loadConfig,
   writeConfigFile,
   type OpenClawConfig,
 } from "../config/config.js";
+import { loadCronStore, saveCronStore } from "../cron/store.js";
+import type { CronStoreFile } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginRegistry,
