@@ -83,6 +83,8 @@ beforeEach(() => {
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
+  // Worker-thread Vitest runs do not reliably mutate the real process title,
+  // so capture writes at the property boundary instead.
   Object.defineProperty(process, "title", {
     configurable: true,
     enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
@@ -202,6 +204,7 @@ describe("registerPreActionHooks", () => {
   }
 
   it("handles debug mode and plugin-required command preaction", async () => {
+    const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
       processArgv: ["node", "openclaw", "status", "--debug"],
@@ -214,7 +217,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
-    expect(process.title).toBe("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
@@ -229,6 +232,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["message", "send"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    processTitleSetSpy.mockRestore();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
