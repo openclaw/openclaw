@@ -13,10 +13,10 @@ installTelegramSendTestHooks();
 const {
   botApi,
   botCtorSpy,
+  imageMetadata,
   loadConfig,
   loadWebMedia,
   maybePersistResolvedTelegramTarget,
-  sharpMetadata,
 } = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
@@ -1072,8 +1072,8 @@ describe("sendMessageTelegram", () => {
       sendPhoto: typeof sendPhoto;
     };
 
-    sharpMetadata.width = width;
-    sharpMetadata.height = height;
+    imageMetadata.width = width;
+    imageMetadata.height = height;
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/png",

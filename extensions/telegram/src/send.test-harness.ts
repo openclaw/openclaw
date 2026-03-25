@@ -28,14 +28,11 @@ const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
 
-const { sharp, sharpMetadata } = vi.hoisted(() => ({
-  sharpMetadata: {
+const { imageMetadata } = vi.hoisted(() => ({
+  imageMetadata: {
     width: undefined as number | undefined,
     height: undefined as number | undefined,
   },
-  sharp: vi.fn(() => ({
-    metadata: vi.fn(async () => ({ ...sharpMetadata })),
-  })),
 }));
 
 const { loadConfig } = vi.hoisted(() => ({
@@ -81,17 +78,20 @@ type TelegramSendTestMocks = {
   loadConfig: MockFn;
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
-  sharp: MockFn;
-  sharpMetadata: { width: number | undefined; height: number | undefined };
+  imageMetadata: { width: number | undefined; height: number | undefined };
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia,
 }));
 
-vi.mock("sharp", () => ({
-  default: sharp,
-}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
+  };
+});
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -151,8 +151,7 @@ export function getTelegramSendTestMocks(): TelegramSendTestMocks {
     loadConfig,
     loadWebMedia,
     maybePersistResolvedTelegramTarget,
-    sharp,
-    sharpMetadata,
+    imageMetadata,
   };
 }
 
@@ -160,9 +159,8 @@ export function installTelegramSendTestHooks() {
   beforeEach(() => {
     loadConfig.mockReturnValue({});
     loadWebMedia.mockReset();
-    sharp.mockClear();
-    sharpMetadata.width = undefined;
-    sharpMetadata.height = undefined;
+    imageMetadata.width = undefined;
+    imageMetadata.height = undefined;
     maybePersistResolvedTelegramTarget.mockReset();
     maybePersistResolvedTelegramTarget.mockResolvedValue(undefined);
     undiciFetch.mockReset();

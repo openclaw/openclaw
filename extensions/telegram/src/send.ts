@@ -15,6 +15,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -43,7 +44,6 @@ import {
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
-type Sharp = typeof import("sharp");
 type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 const InputFileCtor: typeof grammy.InputFile =
@@ -793,11 +793,9 @@ export async function sendMessageTelegram(
 
   async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
     try {
-      const mod = (await import("sharp")) as unknown as { default?: Sharp };
-      const sharp = mod.default ?? (mod as unknown as Sharp);
-      const metadata = await sharp(buffer).metadata();
-      const width = metadata.width;
-      const height = metadata.height;
+      const metadata = await getImageMetadata(buffer);
+      const width = metadata?.width;
+      const height = metadata?.height;
 
       if (typeof width !== "number" || typeof height !== "number") {
         return true;
