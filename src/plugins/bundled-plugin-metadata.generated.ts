@@ -296,9 +296,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           label: "Bocha Base URL",
           help: "Optional Bocha chat-completions base URL override. Default is 'https://api.bocha.cn/v1'.",
         },
-        "webSearch.content": {
-          label: "Bocha Content",
-          help: "Whether to return original web contents. Default is false.",
+        "webSearch.summary": {
+          label: "Bocha Summary",
+          help: "Whether to return original web contents. Default is true.",
         },
       },
     },
