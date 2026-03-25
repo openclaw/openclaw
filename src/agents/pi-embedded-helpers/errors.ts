@@ -13,8 +13,8 @@ export {
   isCloudflareOrHtmlErrorPage,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
 import { stableStringify } from "../stable-stringify.js";
-import { formatEffectiveSandboxToolPolicyBlockedMessage } from "../tool-policy-sandbox.js";
 import {
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
@@ -563,7 +563,7 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
-    const rewritten = formatEffectiveSandboxToolPolicyBlockedMessage({
+    const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
