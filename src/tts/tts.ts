@@ -28,6 +28,7 @@ import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
 } from "../plugins/provider-model-defaults.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
@@ -373,16 +374,24 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   };
 }
 
+function resolveAccountTtsOverride(
+  cfg: OpenClawConfig,
+  channel: string,
+  accountId: string,
+): TtsConfig | undefined {
+  const channelConfig = cfg.channels?.[channel] as
+    | { accounts?: Record<string, { tts?: TtsConfig }> }
+    | undefined;
+  return resolveAccountEntry(channelConfig?.accounts, accountId)?.tts;
+}
+
 export function resolveTtsConfigForAccount(
   cfg: OpenClawConfig,
   channel: string,
   accountId: string,
 ): ResolvedTtsConfig {
   const base = cfg.messages?.tts ?? {};
-  const channelConfig = cfg.channels?.[channel] as
-    | { accounts?: Record<string, { tts?: TtsConfig }> }
-    | undefined;
-  const accountTts = channelConfig?.accounts?.[accountId]?.tts;
+  const accountTts = resolveAccountTtsOverride(cfg, channel, accountId);
   const merged = mergeTtsConfig(base, accountTts);
   const cfgWithMerged = {
     ...cfg,
@@ -985,7 +994,7 @@ export async function maybeApplyTtsToPayload(params: {
     params.channel && params.accountId
       ? mergeTtsConfig(
           params.cfg.messages?.tts ?? {},
-          params.cfg.channels?.[params.channel]?.accounts?.[params.accountId]?.tts,
+          resolveAccountTtsOverride(params.cfg, params.channel, params.accountId),
         )
       : params.cfg.messages?.tts;
   const cfgWithAccountTts = {

@@ -915,6 +915,30 @@ describe("tts", () => {
       expect(config.edge.lang).toBe("en-US");
     });
 
+    it("matches account TTS overrides case-insensitively", () => {
+      const cfg: OpenClawConfig = {
+        ...baseCfg,
+        channels: {
+          telegram: {
+            accounts: {
+              "English-Bot": {
+                tts: {
+                  provider: "edge",
+                  edge: {
+                    voice: "en-US-JennyNeural",
+                    lang: "en-US",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const config = tts.resolveTtsConfigForAccount(cfg, "telegram", "english-bot");
+      expect(config.edge.voice).toBe("en-US-JennyNeural");
+      expect(config.edge.lang).toBe("en-US");
+    });
+
     it("merges partial account TTS with global config", () => {
       const cfg: OpenClawConfig = {
         ...baseCfg,
