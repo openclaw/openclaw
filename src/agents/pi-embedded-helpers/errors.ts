@@ -68,7 +68,9 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   // Try to pull a human-readable message out of a JSON error payload first.
   const info = parseApiErrorInfo(raw);
-  const candidate = info?.message ?? raw;
+  // When the raw string is not a JSON payload, strip any leading HTTP status
+  // code (e.g. "429 ") so the surfaced message stays clean.
+  const candidate = info?.message ?? (extractLeadingHttpStatus(raw.trim())?.rest || raw);
 
   if (!candidate || !RATE_LIMIT_SPECIFIC_HINT_RE.test(candidate)) {
     return undefined;

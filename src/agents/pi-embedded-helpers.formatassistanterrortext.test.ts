@@ -147,6 +147,14 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("try again in 24 hours");
+    expect(result).not.toMatch(/^⚠️ 429\b/);
+    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
