@@ -570,8 +570,13 @@ export async function createModelSelectionState(params: {
       aliasIndex,
       defaultProvider,
     );
-    const storedProvider = storedOverride.provider || defaultProvider;
-    const storedModel = storedOverride.model;
+    // Normalize the stored override to handle provider-qualified model strings
+    const normalizedStored = normalizeModelRef(
+      storedOverride.provider || defaultProvider,
+      storedOverride.model,
+    );
+    const storedProvider = normalizedStored.provider;
+    const storedModel = normalizedStored.model;
 
     // Check if stored override is in the configured imageModel list
     if (!isImageModel(storedProvider, storedModel, imageModelKeys)) {
