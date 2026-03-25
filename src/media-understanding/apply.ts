@@ -313,10 +313,7 @@ function isBinaryMediaMime(mime?: string): boolean {
     return true;
   }
   // Legacy Microsoft Office binary formats (OLE/CFB container)
-  if (
-    mime === "application/msword" ||
-    mime === "application/x-cfb"
-  ) {
+  if (mime === "application/msword" || mime === "application/x-cfb") {
     return true;
   }
   if (mime.startsWith("application/vnd.")) {

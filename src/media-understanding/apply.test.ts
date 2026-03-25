@@ -1280,6 +1280,25 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
+  it("skips legacy Microsoft Office binary formats (msword, x-cfb)", async () => {
+    // Legacy .doc files use OLE/CFB containers that are binary.
+    const oleMagic = Buffer.from("d0cf11e0a1b11ae1", "hex");
+    for (const mime of ["application/msword", "application/x-cfb"]) {
+      const filePath = await createTempMediaFile({
+        fileName: mime === "application/msword" ? "doc.doc" : "file.cfb",
+        content: oleMagic,
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:file>",
+        mediaPath: filePath,
+        mediaType: mime,
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:file>" });
+    }
+  });
+
   it("keeps vendor +json attachments eligible for text extraction", async () => {
     const filePath = await createTempMediaFile({
       fileName: "payload.bin",
