@@ -27,12 +27,9 @@ public sealed class GatewayReceiveLoopTests
         _settings.LoadAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AppSettings.WithDefaults(@"C:\AppData\OpenClaw")));
 
-        _endpointStore.CurrentState.Returns(
-            new GatewayEndpointState.Ready(
-                OpenClawWindows.Domain.Settings.ConnectionMode.Local,
-                new Uri("ws://127.0.0.1:18789"),
-                Token: null,
-                Password: null));
+        _endpointStore.RequireConfigAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                new GatewayEndpointConfig(new Uri("ws://127.0.0.1:18789"), Token: null, Password: null)));
 
         _service = new GatewayReceiveLoopHostedService(
             _ws, _router, _connection, _workActivity, _settings, _endpointStore, _sender,

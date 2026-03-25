@@ -388,15 +388,38 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         Dictionary<string, bool> permissions,
         CancellationToken        ct)
     {
-        // Refresh before reading so a token/password rotation or auth.mode change
-        // is picked up on the next reconnect attempt without requiring a restart.
-        await _endpointStore.RefreshAsync(ct).ConfigureAwait(false);
+        // RequireConfigAsync refreshes credentials and — for SSH remote mode — awaits
+        // the tunnel ensure task so token/password are available before sending.
         string? token = null;
         string? password = null;
-        if (_endpointStore.CurrentState is GatewayEndpointState.Ready endpointReady)
+        try
         {
-            token    = endpointReady.Token;
-            password = endpointReady.Password;
+            var config = await _endpointStore.RequireConfigAsync(ct).ConfigureAwait(false);
+            token    = config.Token;
+            password = config.Password;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning("Endpoint not ready for node connect: {Reason}", ex.Message);
+        }
+
+        // URI user-info fallback: for installs where the token is only persisted in
+        // GatewayEndpointUri (ws://token@host:port) and not in gateway.auth.token config.
+        if (string.IsNullOrEmpty(token) && string.IsNullOrEmpty(password))
+        {
+            try
+            {
+                var s = await _settings.LoadAsync(ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(s.GatewayEndpointUri) &&
+                    Uri.TryCreate(s.GatewayEndpointUri.Trim(), UriKind.Absolute, out var parsed) &&
+                    !string.IsNullOrEmpty(parsed.UserInfo))
+                {
+                    var userToken = Uri.UnescapeDataString(parsed.UserInfo.Split(':')[0]);
+                    if (!string.IsNullOrEmpty(userToken))
+                        token = userToken;
+                }
+            }
+            catch { /* proceed with no auth */ }
         }
 
         // Load or create device Ed25519 keypair

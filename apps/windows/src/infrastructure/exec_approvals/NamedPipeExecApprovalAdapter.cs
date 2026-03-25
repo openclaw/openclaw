@@ -105,8 +105,20 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
         var response = await ReadFrameAsync(client, ct);
 
         if (response is null) return false;
-        var doc = JsonDocument.Parse(response);
-        return doc.RootElement.TryGetProperty("approved", out var approved) && approved.GetBoolean();
+        using var doc = JsonDocument.Parse(response);
+        var root = doc.RootElement;
+        // NamedPipeFrame.ApprovalResponse embeds approved inside payloadJson; unwrap it.
+        if (root.TryGetProperty("payloadJson", out var pjProp))
+        {
+            var pjStr = pjProp.GetString();
+            if (pjStr is not null)
+            {
+                using var inner = JsonDocument.Parse(pjStr);
+                return inner.RootElement.TryGetProperty("approved", out var a) && a.GetBoolean();
+            }
+        }
+        // Fallback: approved at top level (direct response format)
+        return root.TryGetProperty("approved", out var approved) && approved.GetBoolean();
     }
 
     // ── Connection dispatch ────────────────────────────────────────────────────
@@ -133,9 +145,13 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
-                if (!root.TryGetProperty("type", out var typeProp)) return;
+                // macOS protocol uses "type"; Windows-internal NamedPipeFrame serializes as "messageType"
+                var frameType = root.TryGetProperty("type",        out var tp) ? tp.GetString()
+                              : root.TryGetProperty("messageType", out tp)     ? tp.GetString()
+                              : null;
+                if (frameType is null) return;
 
-                switch (typeProp.GetString())
+                switch (frameType)
                 {
                     case "request":
                         // macOS protocol: token-verified approval prompt
@@ -418,9 +434,14 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
 
     private static async Task<string?> ReadFrameAsync(PipeStream pipe, CancellationToken ct)
     {
-        var lenBuf = new byte[4];
-        var read   = await pipe.ReadAsync(lenBuf, ct);
-        if (read < 4) return null;
+        var lenBuf  = new byte[4];
+        var lenRead = 0;
+        while (lenRead < 4)
+        {
+            var n = await pipe.ReadAsync(lenBuf.AsMemory(lenRead, 4 - lenRead), ct);
+            if (n == 0) return null; // pipe closed before full prefix
+            lenRead += n;
+        }
 
         if (!BitConverter.IsLittleEndian)
             Array.Reverse(lenBuf);

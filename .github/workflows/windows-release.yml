@@ -2,7 +2,7 @@ name: Release — Windows MSIX
 
 on:
   push:
-    tags: ['v*.*.*']
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write
