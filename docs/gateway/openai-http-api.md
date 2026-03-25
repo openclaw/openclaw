@@ -165,6 +165,30 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
 
+## Open WebUI quick setup
+
+For a basic Open WebUI connection:
+
+- Base URL: `http://127.0.0.1:18789/v1`
+- Docker on macOS base URL: `http://host.docker.internal:18789/v1`
+- API key: your Gateway bearer token
+- Model: `openclaw/default`
+
+Expected behavior:
+
+- `GET /v1/models` should list `openclaw/default`
+- Open WebUI should use `openclaw/default` as the chat model id
+- If you want a specific backend provider/model for that agent, set the agent's normal default model or send `x-openclaw-model`
+
+Quick smoke:
+
+```bash
+curl -sS http://127.0.0.1:18789/v1/models \
+  -H 'Authorization: Bearer YOUR_TOKEN'
+```
+
+If that returns `openclaw/default`, most Open WebUI setups can connect with the same base URL and token.
+
 ## Examples
 
 Non-streaming:
