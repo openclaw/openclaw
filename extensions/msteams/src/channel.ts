@@ -140,6 +140,8 @@ function describeMSTeamsMessageTool({
           "unpin",
           "list-pins",
           "read",
+          "react",
+          "reactions",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -620,6 +622,106 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               ok: true,
               channel: "msteams",
               action: "list-pins",
+              ...result,
+            });
+          }
+
+          if (ctx.action === "react") {
+            const to =
+              typeof ctx.params.to === "string"
+                ? ctx.params.to.trim()
+                : typeof ctx.params.target === "string"
+                  ? ctx.params.target.trim()
+                  : (ctx.toolContext?.currentChannelId?.trim() ?? "");
+            const messageId =
+              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
+            const emoji = typeof ctx.params.emoji === "string" ? ctx.params.emoji.trim() : "";
+            const remove = typeof ctx.params.remove === "boolean" ? ctx.params.remove : false;
+            if (!to || !messageId) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "React requires a target (to) and messageId.",
+                  },
+                ],
+                details: { error: "React requires a target (to) and messageId." },
+              };
+            }
+            if (!emoji) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.",
+                  },
+                ],
+                details: {
+                  error: "React requires an emoji (reaction type).",
+                  validTypes: ["like", "heart", "laugh", "surprised", "sad", "angry"],
+                },
+              };
+            }
+            if (remove) {
+              const { unreactMessageMSTeams } = await loadMSTeamsChannelRuntime();
+              const result = await unreactMessageMSTeams({
+                cfg: ctx.cfg,
+                to,
+                messageId,
+                reactionType: emoji,
+              });
+              return jsonActionResult({
+                channel: "msteams",
+                action: "react",
+                removed: true,
+                reactionType: emoji,
+                ...result,
+              });
+            }
+            const { reactMessageMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await reactMessageMSTeams({
+              cfg: ctx.cfg,
+              to,
+              messageId,
+              reactionType: emoji,
+            });
+            return jsonActionResult({
+              channel: "msteams",
+              action: "react",
+              reactionType: emoji,
+              ...result,
+            });
+          }
+
+          if (ctx.action === "reactions") {
+            const to =
+              typeof ctx.params.to === "string"
+                ? ctx.params.to.trim()
+                : typeof ctx.params.target === "string"
+                  ? ctx.params.target.trim()
+                  : (ctx.toolContext?.currentChannelId?.trim() ?? "");
+            const messageId =
+              typeof ctx.params.messageId === "string" ? ctx.params.messageId.trim() : "";
+            if (!to || !messageId) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Reactions requires a target (to) and messageId.",
+                  },
+                ],
+                details: { error: "Reactions requires a target (to) and messageId." },
+              };
+            }
+            const { listReactionsMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await listReactionsMSTeams({ cfg: ctx.cfg, to, messageId });
+            return jsonActionResult({
+              ok: true,
+              channel: "msteams",
+              action: "reactions",
               ...result,
             });
           }

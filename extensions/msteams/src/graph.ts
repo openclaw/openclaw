@@ -1,5 +1,7 @@
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
+
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
@@ -95,6 +97,32 @@ export async function postGraphJson<T>(params: {
     throw new Error(`Graph POST ${params.path} failed (${res.status}): ${text || "unknown error"}`);
   }
   // Some Graph mutation endpoints return 204 No Content
+  if (res.status === 204 || res.headers.get("content-length") === "0") {
+    return undefined as T;
+  }
+  return (await res.json()) as T;
+}
+
+export async function postGraphBetaJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await fetch(`${GRAPH_BETA}${params.path}`, {
+    method: "POST",
+    headers: {
+      "User-Agent": buildUserAgent(),
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json",
+    },
+    body: params.body !== undefined ? JSON.stringify(params.body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Graph beta POST ${params.path} failed (${res.status}): ${text || "unknown error"}`,
+    );
+  }
   if (res.status === 204 || res.headers.get("content-length") === "0") {
     return undefined as T;
   }

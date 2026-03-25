@@ -3,14 +3,18 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import {
   getMessageMSTeams,
   listPinsMSTeams,
+  listReactionsMSTeams,
   pinMessageMSTeams,
+  reactMessageMSTeams,
   unpinMessageMSTeams,
+  unreactMessageMSTeams,
 } from "./graph-messages.js";
 
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
   postGraphJson: vi.fn(),
+  postGraphBetaJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
   findByUserId: vi.fn(),
 }));
@@ -19,6 +23,7 @@ vi.mock("./graph.js", () => ({
   resolveGraphToken: mockState.resolveGraphToken,
   fetchGraphJson: mockState.fetchGraphJson,
   postGraphJson: mockState.postGraphJson,
+  postGraphBetaJson: mockState.postGraphBetaJson,
   deleteGraphRequest: mockState.deleteGraphRequest,
 }));
 
@@ -310,5 +315,230 @@ describe("listPinsMSTeams", () => {
     });
 
     expect(result.pins).toEqual([]);
+  });
+});
+
+describe("reactMessageMSTeams", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  });
+
+  it("sets a like reaction on a chat message", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    const result = await reactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "like",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      body: { reactionType: "like" },
+    });
+  });
+
+  it("sets a reaction on a channel message", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    const result = await reactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      messageId: "msg-2",
+      reactionType: "heart",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/setReaction",
+      body: { reactionType: "heart" },
+    });
+  });
+
+  it("normalizes reaction type to lowercase", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    await reactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "LAUGH",
+    });
+
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
+      body: { reactionType: "laugh" },
+    });
+  });
+
+  it("rejects invalid reaction type", async () => {
+    await expect(
+      reactMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType: "thumbsup",
+      }),
+    ).rejects.toThrow('Invalid reaction type "thumbsup"');
+  });
+
+  it("resolves user: target through conversation store", async () => {
+    mockState.findByUserId.mockResolvedValue({
+      conversationId: "a:bot-id",
+      reference: { graphChatId: "19:dm-chat@thread.tacv2" },
+    });
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    await reactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "user:aad-user-1",
+      messageId: "msg-1",
+      reactionType: "like",
+    });
+
+    expect(mockState.findByUserId).toHaveBeenCalledWith("aad-user-1");
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages/msg-1/setReaction`,
+      body: { reactionType: "like" },
+    });
+  });
+});
+
+describe("unreactMessageMSTeams", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  });
+
+  it("removes a reaction from a chat message", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    const result = await unreactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+      reactionType: "sad",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
+      body: { reactionType: "sad" },
+    });
+  });
+
+  it("removes a reaction from a channel message", async () => {
+    mockState.postGraphBetaJson.mockResolvedValue(undefined);
+
+    const result = await unreactMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      messageId: "msg-2",
+      reactionType: "angry",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
+      body: { reactionType: "angry" },
+    });
+  });
+
+  it("rejects invalid reaction type", async () => {
+    await expect(
+      unreactMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        messageId: "msg-1",
+        reactionType: "clap",
+      }),
+    ).rejects.toThrow('Invalid reaction type "clap"');
+  });
+});
+
+describe("listReactionsMSTeams", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  });
+
+  it("lists reactions grouped by type with user details", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      reactions: [
+        { reactionType: "like", user: { id: "u1", displayName: "Alice" } },
+        { reactionType: "like", user: { id: "u2", displayName: "Bob" } },
+        { reactionType: "heart", user: { id: "u1", displayName: "Alice" } },
+      ],
+    });
+
+    const result = await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(result.reactions).toEqual([
+      {
+        reactionType: "like",
+        count: 2,
+        users: [
+          { id: "u1", displayName: "Alice" },
+          { id: "u2", displayName: "Bob" },
+        ],
+      },
+      {
+        reactionType: "heart",
+        count: 1,
+        users: [{ id: "u1", displayName: "Alice" }],
+      },
+    ]);
+  });
+
+  it("returns empty array when message has no reactions", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "No reactions" },
+    });
+
+    const result = await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(result.reactions).toEqual([]);
+  });
+
+  it("fetches from channel path for channel targets", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-2",
+      body: { content: "Channel msg" },
+      reactions: [{ reactionType: "surprised", user: { id: "u3", displayName: "Carol" } }],
+    });
+
+    const result = await listReactionsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      messageId: "msg-2",
+    });
+
+    expect(result.reactions).toEqual([
+      { reactionType: "surprised", count: 1, users: [{ id: "u3", displayName: "Carol" }] },
+    ]);
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
+    });
   });
 });

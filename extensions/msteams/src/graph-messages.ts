@@ -1,6 +1,12 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
-import { deleteGraphRequest, fetchGraphJson, postGraphJson, resolveGraphToken } from "./graph.js";
+import {
+  deleteGraphRequest,
+  fetchGraphJson,
+  postGraphBetaJson,
+  postGraphJson,
+  resolveGraphToken,
+} from "./graph.js";
 
 type GraphMessageBody = {
   content?: string;
@@ -231,4 +237,127 @@ export async function listPinsMSTeams(
     text: pin.message?.body?.content,
   }));
   return { pins };
+}
+
+// ---------------------------------------------------------------------------
+// Reactions
+// ---------------------------------------------------------------------------
+
+export const TEAMS_REACTION_TYPES = [
+  "like",
+  "heart",
+  "laugh",
+  "surprised",
+  "sad",
+  "angry",
+] as const;
+export type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
+
+type GraphReaction = {
+  reactionType?: string;
+  user?: { id?: string; displayName?: string };
+  createdDateTime?: string;
+};
+
+type GraphMessageWithReactions = GraphMessage & {
+  reactions?: GraphReaction[];
+};
+
+export type ReactMessageMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  messageId: string;
+  reactionType: string;
+};
+
+export type ListReactionsMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  messageId: string;
+};
+
+export type ReactionSummary = {
+  reactionType: string;
+  count: number;
+  users: Array<{ id: string; displayName?: string }>;
+};
+
+export type ListReactionsMSTeamsResult = {
+  reactions: ReactionSummary[];
+};
+
+function validateReactionType(raw: string): TeamsReactionType {
+  const normalized = raw.toLowerCase().trim();
+  if (!TEAMS_REACTION_TYPES.includes(normalized as TeamsReactionType)) {
+    throw new Error(
+      `Invalid reaction type "${raw}". Valid types: ${TEAMS_REACTION_TYPES.join(", ")}`,
+    );
+  }
+  return normalized as TeamsReactionType;
+}
+
+/**
+ * Add an emoji reaction to a message via Graph API (beta).
+ */
+export async function reactMessageMSTeams(
+  params: ReactMessageMSTeamsParams,
+): Promise<{ ok: true }> {
+  const reactionType = validateReactionType(params.reactionType);
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
+  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
+  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  return { ok: true };
+}
+
+/**
+ * Remove an emoji reaction from a message via Graph API (beta).
+ */
+export async function unreactMessageMSTeams(
+  params: ReactMessageMSTeamsParams,
+): Promise<{ ok: true }> {
+  const reactionType = validateReactionType(params.reactionType);
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
+  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
+  await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
+  return { ok: true };
+}
+
+/**
+ * List reactions on a message, grouped by type.
+ * Uses Graph v1.0 (reactions are included in the message resource).
+ */
+export async function listReactionsMSTeams(
+  params: ListReactionsMSTeamsParams,
+): Promise<ListReactionsMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
+  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
+
+  const grouped = new Map<string, Array<{ id: string; displayName?: string }>>();
+  for (const reaction of msg.reactions ?? []) {
+    const type = reaction.reactionType ?? "unknown";
+    if (!grouped.has(type)) {
+      grouped.set(type, []);
+    }
+    if (reaction.user?.id) {
+      grouped.get(type)!.push({
+        id: reaction.user.id,
+        displayName: reaction.user.displayName,
+      });
+    }
+  }
+
+  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, users]) => ({
+    reactionType: type,
+    count: users.length,
+    users,
+  }));
+
+  return { reactions };
 }
