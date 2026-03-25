@@ -565,7 +565,7 @@ export async function dispatchReplyFromConfig(params: {
         {
           channelId: hookContext.channelId,
           accountId: hookContext.accountId,
-          conversationId: hookContext.conversationId,
+          conversationId: inboundClaimContext.conversationId,
           sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
           senderId: hookContext.senderId,
         },
