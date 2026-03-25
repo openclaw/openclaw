@@ -121,12 +121,12 @@ describe("config env vars", () => {
           },
         };
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
         const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
         expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
 
         delete process.env.BRAVE_API_KEY;
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
         expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
       });

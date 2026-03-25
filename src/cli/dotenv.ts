@@ -2,7 +2,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadRuntimeDotEnvFile, loadWorkspaceDotEnvFile } from "../infra/dotenv.js";
 
-export function loadCliDotEnv(_opts?: { quiet?: boolean }) {
+export function loadCliDotEnv() {
   const cwdEnvPath = path.join(process.cwd(), ".env");
   loadWorkspaceDotEnvFile(cwdEnvPath);
 

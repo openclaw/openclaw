@@ -58,7 +58,7 @@ describe("loadDotEnv", () => {
         delete process.env.FOO;
         delete process.env.BAR;
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.FOO).toBe("from-cwd");
         expect(process.env.BAR).toBe("1");
@@ -76,7 +76,7 @@ describe("loadDotEnv", () => {
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.FOO).toBe("from-shell");
       });
@@ -90,7 +90,7 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.FOO).toBe("from-global");
       });
@@ -120,7 +120,7 @@ describe("loadDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
@@ -144,7 +144,7 @@ describe("loadDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
@@ -163,7 +163,7 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
 
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.SAFE_KEY).toBe("trusted-global");
@@ -195,7 +195,7 @@ describe("loadCliDotEnv", () => {
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.BAR;
 
-        loadCliDotEnv({ quiet: true });
+        loadCliDotEnv();
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");

@@ -70,7 +70,7 @@ export function loadWorkspaceDotEnvFile(filePath: string) {
   });
 }
 
-export function loadDotEnv(_opts?: { quiet?: boolean }) {
+export function loadDotEnv() {
   const cwdEnvPath = path.join(process.cwd(), ".env");
   loadWorkspaceDotEnvFile(cwdEnvPath);
 
