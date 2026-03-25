@@ -11,6 +11,7 @@ import {
 } from "../agents/model-selection.js";
 import {
   getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -253,6 +254,26 @@ function resolveEstimatedSessionCostUsd(params: {
   return resolveNonNegativeNumber(estimated);
 }
 
+function resolveListSubagentRunByChildSessionKey(childSessionKey: string) {
+  const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+  if (!latest) {
+    return null;
+  }
+  if (typeof latest.endedAt !== "number") {
+    return latest;
+  }
+  // When disk-backed run snapshots are enabled, local memory can lag behind and
+  // only keep terminal rows while persisted state still has an active run.
+  // In that mode, prefer the active run so list/status views don't regress to "done".
+  if (process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK === "1") {
+    const activePreferred = getSubagentRunByChildSessionKey(childSessionKey);
+    if (activePreferred && typeof activePreferred.endedAt !== "number") {
+      return activePreferred;
+    }
+  }
+  return latest;
+}
+
 function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
@@ -263,7 +284,7 @@ function resolveChildSessionKeys(
     if (!childSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latest = resolveListSubagentRunByChildSessionKey(childSessionKey);
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
     if (latestControllerSessionKey !== controllerSessionKey) {
@@ -280,7 +301,7 @@ function resolveChildSessionKeys(
     if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(key);
+    const latest = resolveListSubagentRunByChildSessionKey(key);
     if (latest) {
       const latestControllerSessionKey =
         latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
@@ -1105,7 +1126,7 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentRun = resolveListSubagentRunByChildSessionKey(key);
   const subagentOwner =
     subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
@@ -1300,7 +1321,7 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getLatestSubagentRunByChildSessionKey(key);
+      const latest = resolveListSubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
           latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
