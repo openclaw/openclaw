@@ -434,9 +434,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   }
 
   const providers = resolvePluginProviders({ config, workspaceDir });
-  const requestedProviderId = opts.provider?.trim()
-    ? normalizeProviderId(opts.provider)
-    : undefined;
 
   if (requestedProviderId === "anthropic") {
     if (opts.method && normalizeProviderId(opts.method) !== "oauth") {
