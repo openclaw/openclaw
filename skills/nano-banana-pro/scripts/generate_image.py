@@ -217,6 +217,50 @@ def main():
                 image_saved = True
 
         if image_saved:
+            # Post-process: resize to max 800x800 and convert to JPG to stay
+            # under platform upload limits (e.g. Bluesky 976KB).
+            MAX_DIM = 800
+            MAX_KB = 900
+            JPEG_QUALITY = 85
+
+            try:
+                final_img = PILImage.open(str(output_path))
+                w, h = final_img.size
+                if w > MAX_DIM or h > MAX_DIM:
+                    ratio = min(MAX_DIM / w, MAX_DIM / h)
+                    new_w, new_h = int(w * ratio), int(h * ratio)
+                    final_img = final_img.resize((new_w, new_h), PILImage.LANCZOS)
+                    print(f"Resized: {w}x{h} -> {new_w}x{new_h}")
+
+                # Convert to RGB and save as JPG
+                if final_img.mode != 'RGB':
+                    if final_img.mode in ('RGBA', 'P', 'LA'):
+                        bg = PILImage.new('RGB', final_img.size, (255, 255, 255))
+                        if final_img.mode == 'P':
+                            final_img = final_img.convert('RGBA')
+                        bg.paste(final_img, mask=final_img.split()[-1] if 'A' in final_img.mode else None)
+                        final_img = bg
+                    else:
+                        final_img = final_img.convert('RGB')
+
+                jpg_path = output_path.with_suffix('.jpg')
+                quality = JPEG_QUALITY
+                while quality >= 40:
+                    final_img.save(str(jpg_path), 'JPEG', quality=quality, optimize=True)
+                    if jpg_path.stat().st_size / 1024 <= MAX_KB:
+                        break
+                    quality -= 10
+
+                # Remove original PNG if we wrote a separate JPG
+                if jpg_path != output_path and output_path.exists():
+                    output_path.unlink()
+
+                output_path = jpg_path
+                size_kb = output_path.stat().st_size / 1024
+                print(f"Compressed to JPG: {size_kb:.0f} KB (quality={quality})")
+            except Exception as e:
+                print(f"Warning: post-processing failed, using original: {e}", file=sys.stderr)
+
             full_path = output_path.resolve()
             print(f"\nImage saved: {full_path}")
             # OpenClaw parses MEDIA: tokens and will attach the file on
