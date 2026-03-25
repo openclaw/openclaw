@@ -60,6 +60,11 @@ export function resetSessionsListFullComputationForTest(): void {
 
 /**
  * Transcript-backed fields and time windows need fresh reads; `activeMinutes` depends on `Date.now()`.
+ *
+ * Note: subagent `runtimeMs` in session rows is time-dependent during active runs, but the
+ * subagent registry generation counter in the cache key ensures the cache is busted on any
+ * spawn/release/sweep mutation. Between mutations, `runtimeMs` may drift by up to the cache TTL
+ * (default ~45s) — acceptable since the UI recomputes live durations client-side from `startedAt`.
  */
 export function isSessionsListResultCacheEligible(params: SessionsListParams): boolean {
   if (!isSessionsListResultCacheEnabled()) {

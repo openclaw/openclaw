@@ -520,10 +520,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     writeSessionsListResultCache({ cfg, listParams: p, hash, result });
     const clientHash = typeof p.lastHash === "string" ? p.lastHash : undefined;
     if (clientHash && clientHash === hash) {
-      respond(true, { unchanged: true, hash, ts: result.ts, count: result.count }, undefined);
+      respond(true, { unchanged: true, hash, ts: Date.now(), count: result.count }, undefined);
       return;
     }
-    respond(true, { ...result, hash }, undefined);
+    respond(true, { ...result, ts: Date.now(), hash }, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();

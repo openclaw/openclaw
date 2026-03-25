@@ -55,6 +55,8 @@ export async function loadSessions(
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    // Invariant: paramsKey must include every field sent in `params` below.
+    // If new filter fields are added (label, spawnedBy, agentId, search), add them here too.
     const paramsKey = JSON.stringify({ includeGlobal, includeUnknown, activeMinutes, limit });
     const params: Record<string, unknown> = {
       includeGlobal,
@@ -87,6 +89,7 @@ export async function loadSessions(
     state.sessionsListLastHash = null;
     state.sessionsListLastHashParamsKey = null;
     if (isMissingOperatorReadScopeError(err)) {
+      state.sessionsResult = null;
       state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
     } else {
       state.sessionsError = String(err);
