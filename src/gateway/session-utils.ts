@@ -1074,6 +1074,8 @@ export function buildGatewaySessionRow(params: {
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentOwner =
+    subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
@@ -1151,7 +1153,7 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
-    spawnedBy: entry?.spawnedBy,
+    spawnedBy: subagentOwner || entry?.spawnedBy,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
