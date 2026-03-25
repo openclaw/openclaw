@@ -496,7 +496,7 @@
           "exportName": "RuntimeLogger",
           "kind": "type",
           "source": {
-            "line": 4,
+            "line": 7,
             "path": "src/plugins/runtime/types-core.ts"
           }
         },
