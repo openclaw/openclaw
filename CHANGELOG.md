@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Infra/exec trust: preserve shell-multiplexer wrapper binaries for policy checks without breaking approved-command reconstruction, so BusyBox/ToyBox allowlist and audit flows bind to the real wrapper while execution plans stay coherent. (#53134) Thanks @vincentkoc.
 - LINE/runtime-api: pre-export overlapping runtime symbols before the `line-runtime` star export so jiti no longer throws `TypeError: Cannot redefine property` on startup. (#53221) Thanks @Drickon.
 - CLI/cron: make `openclaw cron add|edit --at ... --tz <iana>` honor the requested local wall-clock time for offset-less one-shot datetimes, including DST boundaries, and keep `--tz` rejected for `--every`. (#53224) Thanks @RolfHegr.
+- Gateway/exec-approvals: stop the async exec-approval followup from silently failing with `INVALID_REQUEST` when `bestEffortDeliver=true` and no external channels are configured (webchat-only / `OPENCLAW_SKIP_CHANNELS=1`), so the LLM receives the completion notification after an approved command finishes.
 
 ## 2026.3.23
 

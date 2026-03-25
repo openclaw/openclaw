@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   getSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  resolveMessageChannelSelection: vi
+    .fn<() => Promise<never>>()
+    .mockRejectedValue(new Error("Channel is required (no configured channels detected).")),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -89,6 +92,10 @@ vi.mock("../../utils/delivery-context.js", async () => {
     normalizeSessionDeliveryFields: () => ({}),
   };
 });
+
+vi.mock("../../infra/outbound/channel-selection.js", () => ({
+  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
+}));
 
 const makeContext = (): GatewayRequestContext =>
   ({
@@ -631,6 +638,97 @@ describe("gateway agent handler", () => {
     await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  describe("bestEffortDeliver with no external channels (webchat-only)", () => {
+    it("proceeds and dispatches agent run when bestEffortDeliver=true and channel selection throws", async () => {
+      mocks.agentCommand.mockClear();
+      // Simulate OPENCLAW_SKIP_CHANNELS=1: resolveMessageChannelSelection throws
+      mocks.resolveMessageChannelSelection.mockRejectedValue(
+        new Error("Channel is required (no configured channels detected)."),
+      );
+      primeMainAgentRun();
+
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "async command completed",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          deliver: true,
+          bestEffortDeliver: true,
+          idempotencyKey: "test-best-effort-no-channel",
+        },
+        { respond },
+      );
+
+      // Must NOT respond with INVALID_REQUEST
+      const errorCall = respond.mock.calls.find(
+        (call) =>
+          call[0] === false && (call[2] as Record<string, unknown>)?.code === "INVALID_REQUEST",
+      );
+      expect(errorCall).toBeUndefined();
+
+      // Must still dispatch the agent run
+      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    });
+
+    it("still errors with INVALID_REQUEST when bestEffortDeliver=false and no channels available", async () => {
+      mocks.agentCommand.mockClear();
+      mocks.resolveMessageChannelSelection.mockRejectedValue(
+        new Error("Channel is required (no configured channels detected)."),
+      );
+      primeMainAgentRun();
+
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "strict delivery test",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          deliver: true,
+          bestEffortDeliver: false,
+          idempotencyKey: "test-strict-no-channel",
+        },
+        { respond },
+      );
+
+      // Must reject with INVALID_REQUEST (existing strict-delivery behavior preserved)
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+    });
+
+    it("still errors with INVALID_REQUEST when bestEffortDeliver=true but multiple channels configured", async () => {
+      mocks.agentCommand.mockClear();
+      // Simulate multi-channel ambiguity: actionable error that the caller can fix
+      mocks.resolveMessageChannelSelection.mockRejectedValue(
+        new Error("Channel is required when multiple channels are configured: telegram, discord"),
+      );
+      primeMainAgentRun();
+
+      const respond = vi.fn();
+      await invokeAgent(
+        {
+          message: "multi-channel ambiguity test",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          deliver: true,
+          bestEffortDeliver: true,
+          idempotencyKey: "test-best-effort-multi-channel",
+        },
+        { respond },
+      );
+
+      // Must still surface the ambiguity error — bestEffortDeliver should NOT bypass this
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+    });
   });
 
   it("rejects public spawned-run metadata fields", async () => {

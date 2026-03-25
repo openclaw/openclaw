@@ -595,8 +595,19 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        // Only suppress the "no configured channels" case (webchat-only / OPENCLAW_SKIP_CHANNELS=1)
+        // when bestEffortDeliver is true. The "multiple channels configured" ambiguity error is
+        // actionable and must still surface so the caller can specify a channel explicitly.
+        const isNoChannelConfigured =
+          bestEffortDeliver &&
+          err instanceof Error &&
+          err.message.includes("no configured channels detected");
+        if (!isNoChannelConfigured) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          return;
+        }
+        // bestEffortDeliver + webchat-only: no external channel found — proceed without delivery.
+        // resolvedChannel stays as INTERNAL_MESSAGE_CHANNEL; line 639 forces deliver=false.
       }
     }
 
@@ -614,15 +625,18 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
-      );
-      return;
+      if (!bestEffortDeliver) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+          ),
+        );
+        return;
+      }
+      // bestEffortDeliver: webchat delivers via session WebSocket; proceed without external channel.
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
