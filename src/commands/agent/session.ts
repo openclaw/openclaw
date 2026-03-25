@@ -22,6 +22,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeSessionId, removeStaleTranscriptPathForSessionId } from "./session-entry.js";
 
 export type SessionResolution = {
   sessionId: string;
@@ -47,6 +48,7 @@ export function resolveSessionKeyForRequest(opts: {
   sessionKey?: string;
   agentId?: string;
 }): SessionKeyResolution {
+  const requestedSessionId = normalizeSessionId(opts.sessionId);
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -69,11 +71,11 @@ export function resolveSessionKeyForRequest(opts: {
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
     !explicitSessionKey &&
-    opts.sessionId &&
-    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
+    requestedSessionId &&
+    (!sessionKey || normalizeSessionId(sessionStore[sessionKey]?.sessionId) !== requestedSessionId)
   ) {
     const foundKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === opts.sessionId,
+      (key) => normalizeSessionId(sessionStore[key]?.sessionId) === requestedSessionId,
     );
     if (foundKey) {
       sessionKey = foundKey;
@@ -85,9 +87,9 @@ export function resolveSessionKeyForRequest(opts: {
   // store (derived from the default agent) won't contain them.
   // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
   if (
-    opts.sessionId &&
+    requestedSessionId &&
     !explicitSessionKey &&
-    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
+    (!sessionKey || normalizeSessionId(sessionStore[sessionKey]?.sessionId) !== requestedSessionId)
   ) {
     const allAgentIds = listAgentIds(opts.cfg);
     for (const agentId of allAgentIds) {
@@ -97,7 +99,7 @@ export function resolveSessionKeyForRequest(opts: {
       const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
       const altStore = loadSessionStore(altStorePath);
       const foundKey = Object.keys(altStore).find(
-        (key) => altStore[key]?.sessionId === opts.sessionId,
+        (key) => normalizeSessionId(altStore[key]?.sessionId) === requestedSessionId,
       );
       if (foundKey) {
         return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
@@ -125,25 +127,27 @@ export function resolveSession(opts: {
   });
   const now = Date.now();
 
-  const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const rawSessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel,
+    channel: rawSessionEntry?.lastChannel ?? rawSessionEntry?.channel,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,
     resetType,
     resetOverride: channelReset,
   });
-  const fresh = sessionEntry
-    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
+  const fresh = rawSessionEntry
+    ? evaluateSessionFreshness({ updatedAt: rawSessionEntry.updatedAt, now, policy: resetPolicy })
         .fresh
     : false;
+  const requestedSessionId = normalizeSessionId(opts.sessionId);
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    requestedSessionId || (fresh ? rawSessionEntry?.sessionId : undefined) || crypto.randomUUID();
+  const isNewSession = !fresh && !requestedSessionId;
+  const sessionEntry = removeStaleTranscriptPathForSessionId(rawSessionEntry, sessionId);
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

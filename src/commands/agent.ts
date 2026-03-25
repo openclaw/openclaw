@@ -90,6 +90,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
+import { removeStaleTranscriptPathForSessionId } from "./agent/session-entry.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
@@ -886,7 +887,7 @@ async function agentCommandInternal(
       : sessionEntry?.skillsSnapshot;
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
-      const current = sessionEntry ?? {
+      const current = removeStaleTranscriptPathForSessionId(sessionEntry, sessionId) ?? {
         sessionId,
         updatedAt: Date.now(),
       };
@@ -907,8 +908,13 @@ async function agentCommandInternal(
 
     // Persist explicit /command overrides to the session store when we have a key.
     if (sessionStore && sessionKey) {
-      const entry = sessionStore[sessionKey] ??
-        sessionEntry ?? { sessionId, updatedAt: Date.now() };
+      const entry = removeStaleTranscriptPathForSessionId(
+        sessionEntry ?? sessionStore[sessionKey],
+        sessionId,
+      ) ?? {
+        sessionId,
+        updatedAt: Date.now(),
+      };
       const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;

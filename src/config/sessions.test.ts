@@ -573,6 +573,16 @@ describe("sessions", () => {
     });
   });
 
+  it("uses custom store directories when resolving session file fallback paths", () => {
+    const storePath = "/tmp/openclaw/custom-state/sessions.json";
+    const opts = resolveSessionFilePathOptions({
+      agentId: "codex",
+      storePath,
+    });
+    const sessionFile = resolveSessionFilePath("sess-2", undefined, opts);
+    expect(sessionFile).toBe(path.join(path.dirname(path.resolve(storePath)), "sess-2.jsonl"));
+  });
+
   it("resolves cross-agent absolute sessionFile paths", async () => {
     const { stateDir, bot2SessionPath } = await createAgentSessionsLayout("cross-agent");
     const sessionFile = withStateDir(stateDir, () =>

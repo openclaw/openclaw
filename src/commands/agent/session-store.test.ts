@@ -124,4 +124,60 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+
+  it("does not restore a stale transcript path when caller rotates sessionId", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:codex:report:${randomUUID()}`;
+    const oldSessionId = randomUUID();
+    const nextSessionId = randomUUID();
+    const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: nextSessionId,
+            updatedAt: Date.now(),
+            sessionFile: nextSessionFile,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId: oldSessionId,
+        updatedAt: Date.now(),
+        sessionFile: path.join(dir, `${oldSessionId}.jsonl`),
+      },
+    };
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId: nextSessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.3-codex",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.3-codex",
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.sessionFile).toBe(nextSessionFile);
+    expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
+  });
 });

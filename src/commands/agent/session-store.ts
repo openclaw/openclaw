@@ -10,6 +10,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { removeStaleTranscriptPathForSessionId } from "./session-entry.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
@@ -55,7 +56,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const entry = sessionStore[sessionKey] ?? {
+  const entry = removeStaleTranscriptPathForSessionId(sessionStore[sessionKey], sessionId) ?? {
     sessionId,
     updatedAt: Date.now(),
   };

@@ -11,7 +11,6 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -459,24 +458,17 @@ describe("agentCommand", () => {
     });
   });
 
-  it("resolves resumed session transcript path from custom session store directory", async () => {
+  it("falls back to the agent sessions dir when resuming by sessionId without a stored key", async () => {
     await withTempHome(async (home) => {
       const customStoreDir = path.join(home, "custom-state");
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
-      const matchingCall = resolveSessionFilePathSpy.mock.calls.find(
-        (call) => call[0] === "session-custom-123",
-      );
-      expect(matchingCall?.[2]).toEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionsDir: customStoreDir,
-        }),
+      expect(getLastEmbeddedCall()?.sessionFile).toContain(
+        `${path.sep}.openclaw${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-custom-123.jsonl`,
       );
     });
   });
@@ -733,6 +725,55 @@ describe("agentCommand", () => {
       seedKey: "agent:main:telegram:group:123:topic:456",
       sessionId: "sess-topic",
       expectedPathFragment: "sess-topic-topic-456.jsonl",
+    });
+  });
+
+  it("rotates stale transcript paths when a caller forces a different sessionId", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:sre:main";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "old-session",
+          updatedAt: Date.now(),
+          sessionFile: path.join(home, "agents", "sre", "sessions", "old-session.jsonl"),
+        },
+      });
+      mockConfig(home, store, undefined, undefined, [{ id: "sre", default: true }]);
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "sre",
+          sessionKey,
+          sessionId: "rca-session",
+        },
+        runtime,
+      );
+
+      const saved = readSessionStore<{ sessionId?: string; sessionFile?: string }>(store);
+      const entry = saved[sessionKey];
+      expect(entry?.sessionId).toBe("rca-session");
+      expect(entry?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}sre${path.sep}sessions${path.sep}rca-session.jsonl`,
+      );
+      expect(entry?.sessionFile).not.toContain("old-session.jsonl");
+      expect(getLastEmbeddedCall()?.sessionFile).toBe(entry?.sessionFile);
+    });
+  });
+
+  it("treats whitespace-only session ids as fresh sessions", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand({ message: "hi", sessionId: "   " }, runtime);
+
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionId?.trim().length).toBeGreaterThan(0);
+      expect(callArgs?.sessionFile).toContain(
+        `${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}`,
+      );
     });
   });
 
