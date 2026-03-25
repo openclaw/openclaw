@@ -337,6 +337,43 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
+    clearConfigCache();
+    try {
+      await withStateDirEnv("session-utils-load-entry-freshest-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const storePath = path.join(sessionsDir, "sessions.json");
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify(
+            {
+              "agent:main:main": { sessionId: "sess-stale", updatedAt: 1 },
+              "agent:main:MAIN": { sessionId: "sess-fresh", updatedAt: 2 },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+        await writeConfigFile({
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        });
+        clearConfigCache();
+
+        const loaded = loadSessionEntry("agent:main:main");
+
+        expect(loaded.entry?.sessionId).toBe("sess-fresh");
+      });
+    } finally {
+      clearConfigCache();
+    }
+  });
+
   test("pruneLegacyStoreKeys removes alias and case-variant ghost keys", () => {
     const store: Record<string, unknown> = {
       "agent:ops:work": { sessionId: "canonical", updatedAt: 3 },
