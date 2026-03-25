@@ -63,6 +63,9 @@ async function issuePairingScopedOperator(name: string): Promise<{
     role: "operator",
     scopes: ["operator.pairing"],
   });
+  if ("error" in rotated) {
+    throw new Error(`rotateDeviceToken failed: ${rotated.message}`);
+  }
   expect(rotated.ok ? rotated.entry.token : "").toBeTruthy();
   return {
     identityPath: loaded.identityPath,

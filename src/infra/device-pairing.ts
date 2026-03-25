@@ -55,7 +55,12 @@ export type RotateDeviceTokenDenyReason =
 
 export type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
-  | { ok: false; reason: RotateDeviceTokenDenyReason };
+  | { ok: false; reason: RotateDeviceTokenDenyReason }
+  | {
+      error: "SCOPE_ESCALATION_DETECTED";
+      message: string;
+      details: { role: string; requestedScopes: string[]; approvedScopes: string[] | null };
+    };
 
 export type PairedDevice = {
   deviceId: string;
@@ -676,7 +681,9 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   baseDir?: string;
-}): Promise<DeviceAuthToken | null> {
+}): Promise<
+  { error: string; message: string; details: Record<string, unknown> } | DeviceAuthToken
+> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
@@ -686,7 +693,11 @@ export async function ensureDeviceToken(params: {
       role: params.role,
     });
     if (!context) {
-      return null;
+      return {
+        error: "DEVICE_OR_ROLE_NOT_FOUND",
+        message: "Device or role not found",
+        details: { deviceId: params.deviceId, role: params.role },
+      };
     }
     const { device, role, tokens, existing } = context;
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
@@ -697,7 +708,11 @@ export async function ensureDeviceToken(params: {
         approvedScopes,
       })
     ) {
-      return null;
+      return {
+        error: "SCOPE_ESCALATION_DETECTED",
+        message: "Requested scopes exceed approved baseline",
+        details: { role, requestedScopes, approvedScopes },
+      };
     }
     if (existing && !existing.revokedAtMs) {
       const existingWithinApproved = scopesWithinApprovedDeviceBaseline({
@@ -782,7 +797,11 @@ export async function rotateDeviceToken(params: {
         approvedScopes,
       })
     ) {
-      return { ok: false, reason: "scope-outside-approved-baseline" };
+      return {
+        error: "SCOPE_ESCALATION_DETECTED",
+        message: "Requested scopes exceed approved baseline",
+        details: { role, requestedScopes, approvedScopes },
+      };
     }
     const now = Date.now();
     const next = buildDeviceAuthToken({
@@ -804,19 +823,33 @@ export async function revokeDeviceToken(params: {
   deviceId: string;
   role: string;
   baseDir?: string;
-}): Promise<DeviceAuthToken | null> {
+}): Promise<
+  DeviceAuthToken | { error: string; message: string; details: Record<string, unknown> }
+> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const device = state.pairedByDeviceId[normalizeDeviceId(params.deviceId)];
     if (!device) {
-      return null;
+      return {
+        error: "DEVICE_NOT_FOUND",
+        message: "Device not found",
+        details: { deviceId: params.deviceId },
+      };
     }
     const role = normalizeRole(params.role);
     if (!role) {
-      return null;
+      return {
+        error: "ROLE_NOT_FOUND",
+        message: "Role not found",
+        details: { role: params.role },
+      };
     }
     if (!device.tokens?.[role]) {
-      return null;
+      return {
+        error: "TOKEN_NOT_FOUND",
+        message: "Token not found for role",
+        details: { deviceId: params.deviceId, role: params.role },
+      };
     }
     const tokens = { ...device.tokens };
     const entry = { ...tokens[role], revokedAtMs: Date.now() };

@@ -41,12 +41,26 @@ function logDeviceTokenRotationDenied(params: {
   log: { warn: (message: string) => void };
   deviceId: string;
   role: string;
-  reason: RotateDeviceTokenDenyReason | "caller-missing-scope" | "unknown-device-or-role";
+  reason:
+function logDeviceTokenRotationDenied(params: {
+  log: { warn: (message: string) => void };
+  deviceId: string;
+  role: string;
+  reason: RotateDeviceTokenDenyReason | "caller-missing-scope" | "unknown-device-or-role" | "SCOPE_ESCALATION_DETECTED";
   scope?: string | null;
+  message?: string;
+  details?: Record<string, unknown>;
 }) {
   const suffix = params.scope ? ` scope=${params.scope}` : "";
+  const detailsSuffix = params.details ? ` details=${JSON.stringify(params.details)}` : "";
   params.log.warn(
-    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}`,
+    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}${detailsSuffix}`,
+  );
+}
+  const suffix = params.scope ? ` scope=${params.scope}` : "";
+  const detailsSuffix = params.details ? ` details=${JSON.stringify(params.details)}` : "";
+  params.log.warn(
+    `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}${detailsSuffix}`,
   );
 }
 
@@ -233,7 +247,24 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const rotated = await rotateDeviceToken({ deviceId, role, scopes });
-    if (!rotated.ok) {
+    if ("error" in rotated) {
+      // Handle detailed error object
+      logDeviceTokenRotationDenied({
+        log: context.logGateway,
+        deviceId,
+        role,
+        reason: rotated.error,
+        message: rotated.message,
+        details: rotated.details,
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_ROTATION_DENIED_MESSAGE),
+      );
+      return;
+    } else if (!rotated.ok) {
+      // Handle legacy ok/reason format
       logDeviceTokenRotationDenied({
         log: context.logGateway,
         deviceId,
@@ -279,9 +310,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { deviceId, role } = params as { deviceId: string; role: string };
     const entry = await revokeDeviceToken({ deviceId, role });
-    if (!entry) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
+    if ("error" in entry) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, entry.message));
       return;
+    }
+    context.logGateway.info(`device token revoked device=${deviceId} role=${entry.role}`);
     }
     context.logGateway.info(`device token revoked device=${deviceId} role=${entry.role}`);
     respond(

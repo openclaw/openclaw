@@ -894,9 +894,45 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
-        const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
-          : null;
+        let deviceToken = null;
+        if (device) {
+          const tokenResult = await ensureDeviceToken({ deviceId: device.id, role, scopes });
+          // Check if the result is an error object
+          if ("error" in tokenResult) {
+            if (tokenResult.error === "SCOPE_ESCALATION_DETECTED") {
+              logWsControl.warn(`scope escalation detected: ${tokenResult.message}`, {
+                connId,
+                deviceId: device.id,
+                role,
+                scopes,
+                error: tokenResult.error,
+                details: tokenResult.details,
+          if ('error' in tokenResult) {
+            if (tokenResult.error === "SCOPE_ESCALATION_DETECTED") {
+              logWsControl.warn(`scope escalation detected: ${tokenResult.message}`, {
+                connId,
+                deviceId: device.id,
+                role,
+                scopes,
+                error: tokenResult.error,
+                details: tokenResult.details,
+              });
+            } else {
+              logWsControl.warn(`device token unavailable: ${tokenResult.message}`, {
+                connId,
+                deviceId: device.id,
+                role,
+                error: tokenResult.error,
+              });
+            }
+            // Set deviceToken to null to prevent connection with invalid token
+            deviceToken = null;
+            deviceToken = null;
+          } else {
+            // Success case - tokenResult is a DeviceAuthToken
+            deviceToken = tokenResult;
+          }
+        }
 
         if (role === "node") {
           const cfg = loadConfig();

@@ -87,6 +87,9 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
     role: "operator",
     scopes: ["operator.pairing"],
   });
+  if ("error" in rotated) {
+    throw new Error(`rotateDeviceToken failed: ${rotated.message}`);
+  }
   expect(rotated.ok).toBe(true);
   const pairingToken = rotated.ok ? rotated.entry.token : "";
   expect(pairingToken).toBeTruthy();

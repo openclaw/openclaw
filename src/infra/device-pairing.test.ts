@@ -58,6 +58,9 @@ function requireToken(token: string | undefined): string {
 }
 
 function requireRotatedEntry(result: RotateDeviceTokenResult) {
+  if ("error" in result) {
+    throw new Error(`expected rotated token entry, got error: ${result.message}`);
+  }
   expect(result.ok).toBe(true);
   if (!result.ok) {
     throw new Error(`expected rotated token entry, got ${result.reason}`);
@@ -261,6 +264,9 @@ describe("device pairing tokens", () => {
       scopes: ["operator.read"],
       baseDir,
     });
+    if ("error" in downscoped) {
+      throw new Error(`rotateDeviceToken failed: ${downscoped.message}`);
+    }
     expect(downscoped.ok).toBe(true);
     let paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
@@ -272,6 +278,9 @@ describe("device pairing tokens", () => {
       role: "operator",
       baseDir,
     });
+    if ("error" in reused) {
+      throw new Error(`rotateDeviceToken failed: ${reused.message}`);
+    }
     expect(reused.ok).toBe(true);
     paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
@@ -332,7 +341,8 @@ describe("device pairing tokens", () => {
       scopes: ["operator.admin"],
       baseDir,
     });
-    expect(ensured).toBeNull();
+    expect(ensured).toHaveProperty("error", "SCOPE_ESCALATION_DETECTED");
+    expect(ensured).toHaveProperty("message", "Requested scopes exceed approved baseline");
 
     const after = await getPairedDevice("device-1", baseDir);
     expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
@@ -431,14 +441,14 @@ describe("device pairing tokens", () => {
     await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
     await clearPairedOperatorApprovalBaseline(baseDir);
 
-    await expect(
-      ensureDeviceToken({
-        deviceId: "device-1",
-        role: "operator",
-        scopes: ["operator.admin"],
-        baseDir,
-      }),
-    ).resolves.toBeNull();
+    const result = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.admin"],
+      baseDir,
+    });
+    expect(result).toHaveProperty("error", "SCOPE_ESCALATION_DETECTED");
+    expect(result).toHaveProperty("message", "Requested scopes exceed approved baseline");
   });
 
   test("fails closed when the paired device approval baseline is missing during rotation", async () => {

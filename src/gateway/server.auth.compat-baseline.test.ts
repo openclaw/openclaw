@@ -174,6 +174,9 @@ describe("gateway auth compatibility baseline", () => {
         role: "operator",
         scopes: ["operator.admin"],
       });
+      if ("error" in rotated) {
+        throw new Error(`rotateDeviceToken failed: ${rotated.message}`);
+      }
       expect(rotated.ok).toBe(true);
       const rotatedToken = rotated.ok ? rotated.entry.token : "";
       expect(rotatedToken).toBeTruthy();
