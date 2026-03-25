@@ -4,6 +4,7 @@ import { handleEmailAction } from "./email-actions.js";
 
 export function createEmailTool(): AnyAgentTool {
   return {
+    label: "Email",
     name: "email",
     description: `Manage the VividWalls business email (kingler@vividwalls.co) via Microsoft Outlook/Exchange.
 
@@ -58,8 +59,8 @@ Inbox subfolders: Customer Inquiries, Orders & Shipping, Corporate & B2B, Return
       top: Type.Optional(Type.Number({ description: "Max results to return (default 10)" })),
       skip: Type.Optional(Type.Number({ description: "Number of results to skip (pagination)" })),
     }),
-    execute: async (_params, _abortSignal) => {
-      const params = _params as Record<string, unknown>;
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
       return handleEmailAction(params);
     },
   };
