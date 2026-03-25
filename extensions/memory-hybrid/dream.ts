@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import { clusterBySimilarity, mergeFacts, mergeFactsBatch } from "./consolidate.js";
 import type { Embeddings } from "./embeddings.js";
@@ -103,8 +104,9 @@ export class DreamService {
     // Use a maximum fact count to prevent token blowout (15k limit) without slicing mid-sentence
     let facts = "";
     for (const m of memories) {
-      if (facts.length + m.text.length + 1 > 10000) break;
-      facts += m.text + "\n";
+      const escapedText = escapeMemoryForPrompt(m.text);
+      if (facts.length + escapedText.length + 1 > 10000) break;
+      facts += escapedText + "\n";
     }
 
     const prompt = `Analyze these facts about the user and generate a concise 2-sentence Empathy Profile summarizing their current mental state, core interests, and communication preferences. Return ONLY the 2 sentences.\n\nFacts:\n${facts}`;
@@ -184,16 +186,28 @@ export class DreamService {
     const clusterTexts = validClusters.map((c) => c.map((item) => item.text));
     const mergedResults = await mergeFactsBatch(clusterTexts, this.chat);
 
-    let mergedCount = 0;
-    for (let i = 0; i < validClusters.length; i++) {
-      const merged = mergedResults[i];
-      if (!merged) continue;
+    // 4. Batch Embed! (Optimize API usage)
+    const validMergedIndices: number[] = [];
+    const textsToEmbed: string[] = [];
+    for (let i = 0; i < mergedResults.length; i++) {
+      if (mergedResults[i]) {
+        validMergedIndices.push(i);
+        textsToEmbed.push(mergedResults[i]!);
+      }
+    }
 
-      const cluster = validClusters[i];
+    if (textsToEmbed.length === 0) return;
+    const vectors = await this.embeddings.embedBatch(textsToEmbed);
+
+    let mergedCount = 0;
+    for (let i = 0; i < validMergedIndices.length; i++) {
+      const clusterIdx = validMergedIndices[i];
+      const merged = textsToEmbed[i];
+      const vector = vectors[i];
+      const cluster = validClusters[clusterIdx];
       const category = cluster[0].category;
 
       // Store new, delete old
-      const vector = await this.embeddings.embed(merged);
       await this.db.store({
         text: merged,
         importance: 0.8,

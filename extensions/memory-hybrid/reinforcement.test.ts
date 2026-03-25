@@ -1,7 +1,8 @@
 import { describe, test, expect, vi } from "vitest";
+import { MemoryDB } from "./database.js";
 import { Embeddings } from "./embeddings.js";
 import { GraphDB } from "./graph.js";
-import { MemoryDB } from "./index.js";
+import { GraphDB } from "./graph.js";
 
 describe("Memory Reinforcement Logic", () => {
   test("RED: should only reinforce memories that are actually injected into context", async () => {

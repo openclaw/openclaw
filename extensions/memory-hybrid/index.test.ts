@@ -16,9 +16,9 @@ import {
 } from "./capture.js";
 import { ChatModel } from "./chat.js";
 import { memoryConfigSchema } from "./config.js";
+import { MemoryDB } from "./database.js";
 import { vectorDimsForModel, detectProvider } from "./embeddings.js";
 import { GraphDB } from "./graph.js";
-import { MemoryDB } from "./index.js";
 
 // ============================================================================
 // Plugin Registration

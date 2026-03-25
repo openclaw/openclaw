@@ -41,7 +41,7 @@ export class ChatModel {
    * @returns The LLM response text
    */
   async complete(messages: { role: string; content: string }[], jsonMode = false): Promise<string> {
-    return this.withRetry(() => {
+    return this.executeWithRetry(() => {
       if (this.provider === "openai") {
         return this.completeOpenAI(messages, jsonMode);
       }
@@ -209,9 +209,13 @@ Return JSON:
   }
 
   /**
-   * Retry with exponential backoff (delegates to shared utility).
+   * Internal wrapper for retry logic.
    */
-  private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelay = 1000): Promise<T> {
+  private async executeWithRetry<T>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    baseDelay = 1000,
+  ): Promise<T> {
     return withRetry(fn, maxRetries, baseDelay);
   }
 }

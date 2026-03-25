@@ -1,48 +1,63 @@
 /**
- * Shared Utilities Module
- *
- * Common helpers used across multiple modules to avoid duplication.
+ * Utility functions for the memory-hybrid plugin
  */
 
 /**
- * Retry with exponential backoff for API calls.
- * Handles 429 (rate limit), 503 (overloaded), and RESOURCE_EXHAUSTED errors.
- *
- * @param fn - Async function to retry
- * @param maxRetries - Maximum number of retry attempts (default: 3)
- * @param baseDelay - Base delay in ms before first retry (default: 1000)
- * @returns Result of the function call
+ * Parses a relative date string into a timestamp.
+ * Supported: "yesterday", "last week", "last month", "2 days ago", "1 hour ago".
+ * Fallback to Date.parse() for ISO strings.
  */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  maxRetries = 3,
-  baseDelay = 1000,
-): Promise<T> {
-  let lastError: Error | undefined;
+export function parseDate(dateStr: string | null | undefined): number {
+  if (!dateStr) return NaN;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  const now = Date.now();
+  const lower = dateStr.toLowerCase().trim();
+
+  // 1. Common relative strings
+  if (lower === "today" || lower === "now") return now;
+  if (lower === "yesterday") return now - 24 * 60 * 60 * 1000;
+  if (lower === "last week") return now - 7 * 24 * 60 * 60 * 1000;
+  if (lower === "last month") return now - 30 * 24 * 60 * 60 * 1000;
+  if (lower === "tomorrow") return now + 24 * 60 * 60 * 1000;
+
+  // 2. Regex for "N units ago"
+  const agoMatch = lower.match(/^(\d+)\s+(year|month|week|day|hour|minute|second)s?\s+ago$/);
+  if (agoMatch) {
+    const value = parseInt(agoMatch[1], 10);
+    const unit = agoMatch[2];
+    const multipliers: Record<string, number> = {
+      second: 1000,
+      minute: 60 * 1000,
+      hour: 60 * 60 * 1000,
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 30 * 24 * 60 * 60 * 1000,
+      year: 365 * 24 * 60 * 60 * 1000,
+    };
+    return now - value * (multipliers[unit] ?? 0);
+  }
+
+  // 3. Fallback to native parser (ISO strings, etc.)
+  return Date.parse(dateStr);
+}
+
+/**
+ * Retry a function with exponential backoff.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay = 1000): Promise<T> {
+  let lastError: any;
+  for (let i = 0; i <= maxRetries; i++) {
     try {
       return await fn();
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      const msg = lastError.message;
-      const isRetryable =
-        msg.includes("429") ||
-        msg.includes("503") ||
-        msg.includes("rate") ||
-        msg.includes("overloaded") ||
-        msg.includes("RESOURCE_EXHAUSTED");
-
-      if (!isRetryable || attempt === maxRetries) {
-        throw lastError;
+      lastError = err;
+      if (i < maxRetries) {
+        const wait = delay * Math.pow(2, i);
+        // Add some jitter to avoid thundering herd
+        const jitter = Math.random() * 200;
+        await new Promise((resolve) => setTimeout(resolve, wait + jitter));
       }
-
-      // Exponential backoff: 1s, 2s, 4s
-      const delay = baseDelay * Math.pow(2, attempt);
-      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
-
-  throw lastError!;
+  throw lastError;
 }

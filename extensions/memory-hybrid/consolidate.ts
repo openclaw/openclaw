@@ -13,6 +13,7 @@
  * This keeps the memory store clean, fast, and token-efficient.
  */
 
+import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import type { Embeddings } from "./embeddings.js";
 
@@ -116,9 +117,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 export async function mergeFacts(facts: string[], chatModel: ChatModel): Promise<string | null> {
   if (facts.length < 2) return null;
 
-  const numberedFacts = facts
-    .map((f, i) => `${i + 1}. "${JSON.stringify(f).slice(1, -1)}"`)
-    .join("\n");
+  const numberedFacts = facts.map((f, i) => `${i + 1}. "${escapeMemoryForPrompt(f)}"`).join("\n");
 
   const prompt = `These facts are about the same topic. Merge them into ONE concise, complete statement.
 Keep ALL important details. Do NOT lose any information.
@@ -159,7 +158,7 @@ export async function mergeFactsBatch(
 
   const formattedClusters = clusters
     .map((facts, i) => {
-      const list = facts.map((f, j) => `  ${j + 1}. ${f}`).join("\n");
+      const list = facts.map((f, j) => `  ${j + 1}. ${escapeMemoryForPrompt(f)}`).join("\n");
       return `Cluster ${i + 1}:\n${list}`;
     })
     .join("\n\n");

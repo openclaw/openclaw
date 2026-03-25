@@ -18,6 +18,7 @@
  * They store facts — we understand the person.
  */
 
+import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 
 // ============================================================================
@@ -93,7 +94,7 @@ export async function generateReflection(
   for (const [category, facts] of Object.entries(grouped)) {
     factLines.push(`\n[${category.toUpperCase()}]`);
     for (const fact of facts) {
-      factLines.push(`- ${fact}`);
+      factLines.push(`- ${escapeMemoryForPrompt(fact)}`);
     }
   }
 
@@ -109,7 +110,7 @@ export async function generateReflection(
           ? ` (${m.emotionScore > 0 ? "+" : ""}${m.emotionScore.toFixed(1)})`
           : "";
       const when = m.happenedAt ? ` on ${m.happenedAt}` : "";
-      factLines.push(`- [${m.emotionalTone}${score}${when}] ${m.text}`);
+      factLines.push(`- [${m.emotionalTone}${score}${when}] ${escapeMemoryForPrompt(m.text)}`);
     }
   }
 

@@ -255,8 +255,10 @@ export class GraphDB {
   }
 
   /** Get all edges connected to a node */
-  getNeighbors(nodeId: string): GraphEdge[] {
-    return this.edges.filter((e) => e.source === nodeId || e.target === nodeId);
+  async getNeighbors(nodeId: string): Promise<GraphEdge[]> {
+    return this.withLock(async () => {
+      return this.edges.filter((e) => e.source === nodeId || e.target === nodeId);
+    });
   }
 
   /**
@@ -264,23 +266,25 @@ export class GraphDB {
    * Checks if any edge's source/target node name appears within the memory text.
    * (Memory text is long like "My email is test@example.com", node id is short like "test@example.com")
    */
-  findEdgesForTexts(texts: string[], limit = 10): GraphEdge[] {
-    if (texts.length === 0) return [];
+  async findEdgesForTexts(texts: string[], limit = 10): Promise<GraphEdge[]> {
+    return this.withLock(async () => {
+      if (texts.length === 0) return [];
 
-    // Case-insensitive matching
-    const lowerTexts = texts.map((t) => t.toLowerCase());
+      // Case-insensitive matching
+      const lowerTexts = texts.map((t) => t.toLowerCase());
 
-    // Require entity names to be at least 3 chars to avoid false positives
-    // (e.g. a node named "is" would match every text)
-    const matching = this.edges.filter((e) =>
-      lowerTexts.some(
-        (text) =>
-          (e.source.length >= 4 && text.includes(e.source.toLowerCase())) ||
-          (e.target.length >= 4 && text.includes(e.target.toLowerCase())),
-      ),
-    );
+      // Require entity names to be at least 3 chars to avoid false positives
+      // (e.g. a node named "is" would match every text)
+      const matching = this.edges.filter((e) =>
+        lowerTexts.some(
+          (text) =>
+            (e.source.length >= 4 && text.includes(e.source.toLowerCase())) ||
+            (e.target.length >= 4 && text.includes(e.target.toLowerCase())),
+        ),
+      );
 
-    return matching.slice(0, limit);
+      return matching.slice(0, limit);
+    });
   }
 
   /** Total node count */
@@ -316,50 +320,52 @@ export class GraphDB {
    *
    * Returns unique edges along the traversal path, sorted by relevance.
    */
-  traverse(
+  async traverse(
     seedNodeIds: string[],
     maxHops = 2,
     limit = 15,
-  ): { nodes: string[]; edges: GraphEdge[] } {
-    const visitedNodes = new Set<string>(seedNodeIds);
-    const collectedEdges: GraphEdge[] = [];
-    let frontier = [...seedNodeIds];
+  ): Promise<{ nodes: string[]; edges: GraphEdge[] }> {
+    return this.withLock(async () => {
+      const visitedNodes = new Set<string>(seedNodeIds);
+      const collectedEdges: GraphEdge[] = [];
+      let frontier = [...seedNodeIds];
 
-    for (let hop = 0; hop < maxHops; hop++) {
-      const nextFrontier: string[] = [];
+      for (let hop = 0; hop < maxHops; hop++) {
+        const nextFrontier: string[] = [];
 
-      for (const nodeId of frontier) {
-        const neighbors = this.getNeighbors(nodeId);
-        for (const edge of neighbors) {
-          // Avoid collecting duplicate edges
-          if (
-            !collectedEdges.some(
-              (e) =>
-                e.source === edge.source &&
-                e.target === edge.target &&
-                e.relation === edge.relation,
-            )
-          ) {
-            collectedEdges.push(edge);
-          }
+        for (const nodeId of frontier) {
+          const neighbors = this.edges.filter((e) => e.source === nodeId || e.target === nodeId);
+          for (const edge of neighbors) {
+            // Avoid collecting duplicate edges
+            if (
+              !collectedEdges.some(
+                (e) =>
+                  e.source === edge.source &&
+                  e.target === edge.target &&
+                  e.relation === edge.relation,
+              )
+            ) {
+              collectedEdges.push(edge);
+            }
 
-          // Discover new nodes
-          const otherNode = edge.source === nodeId ? edge.target : edge.source;
-          if (!visitedNodes.has(otherNode)) {
-            visitedNodes.add(otherNode);
-            nextFrontier.push(otherNode);
+            // Discover new nodes
+            const otherNode = edge.source === nodeId ? edge.target : edge.source;
+            if (!visitedNodes.has(otherNode)) {
+              visitedNodes.add(otherNode);
+              nextFrontier.push(otherNode);
+            }
           }
         }
+
+        frontier = nextFrontier;
+        if (frontier.length === 0) break;
       }
 
-      frontier = nextFrontier;
-      if (frontier.length === 0) break;
-    }
-
-    return {
-      nodes: Array.from(visitedNodes),
-      edges: collectedEdges.slice(0, limit),
-    };
+      return {
+        nodes: Array.from(visitedNodes),
+        edges: collectedEdges.slice(0, limit),
+      };
+    });
   }
 }
 

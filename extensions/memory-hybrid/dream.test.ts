@@ -50,6 +50,9 @@ describe("DreamService (Safe Pulsing Brain)", () => {
 
     mockEmbeddings = {
       embed: vi.fn().mockResolvedValue(new Array(384).fill(0.1)),
+      embedBatch: vi.fn().mockImplementation(async (texts: string[]) => {
+        return texts.map(() => new Array(384).fill(0.1));
+      }),
     };
 
     mockGraph = {

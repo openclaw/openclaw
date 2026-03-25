@@ -1,3 +1,6 @@
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+
 /**
  * Working Memory Buffer ("Short-term Memory")
  *
@@ -48,6 +51,36 @@ export class WorkingMemoryBuffer {
     this.maxSize = maxSize;
     this.importanceThreshold = importanceThreshold;
     this.mentionThreshold = mentionThreshold;
+  }
+
+  /**
+   * Load buffer from disk (JSONL format).
+   */
+  async load(path: string): Promise<void> {
+    try {
+      const raw = await readFile(path, "utf-8");
+      const lines = raw.split("\n").filter((l) => l.trim() !== "");
+      this.buffer = lines.map((l) => JSON.parse(l) as BufferEntry);
+      // Cap if file was larger than current maxSize
+      if (this.buffer.length > this.maxSize) {
+        this.buffer = this.buffer.slice(-this.maxSize);
+      }
+    } catch (err) {
+      // Normal if file doesn't exist yet
+    }
+  }
+
+  /**
+   * Save buffer to disk (JSONL format).
+   */
+  async save(path: string): Promise<void> {
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      const lines = this.buffer.map((entry) => JSON.stringify(entry)).join("\n");
+      await writeFile(path, lines, "utf-8");
+    } catch (err) {
+      console.warn(`[memory-hybrid] Failed to save working memory buffer: ${err}`);
+    }
   }
 
   /**

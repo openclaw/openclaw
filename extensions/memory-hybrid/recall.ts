@@ -17,6 +17,7 @@
  */
 
 import type { GraphDB } from "./graph.js";
+import { parseDate } from "./utils.js";
 
 // ============================================================================
 // Types
@@ -95,8 +96,8 @@ function recencyScore(createdAt: number): number {
  * More graph connections = higher score.
  * Normalized to 0-1 range using: connections / (connections + 3)
  */
-function graphConnectivityScore(text: string, graphDB: GraphDB): number {
-  const edges = graphDB.findEdgesForTexts([text], 20);
+async function graphConnectivityScore(text: string, graphDB: GraphDB): Promise<number> {
+  const edges = await graphDB.findEdgesForTexts([text], 20);
   if (edges.length === 0) return 0;
   // Soft normalization: 1 edge → 0.25, 3 edges → 0.5, 9 edges → 0.75
   return edges.length / (edges.length + 3);
@@ -118,12 +119,12 @@ function reinforcementScore(recallCount: number): number {
  * Also penalize expired memories (validUntil < today).
  * Score 1.0 if happened today, decays over days.
  */
-function temporalRelevanceScore(entry: MemoryEntry): number {
+export function temporalRelevanceScore(entry: MemoryEntry): number {
   const now = Date.now();
 
   // If validUntil is set and has passed, heavily penalize
   if (entry.validUntil) {
-    const expiry = Date.parse(entry.validUntil);
+    const expiry = parseDate(entry.validUntil);
     if (!isNaN(expiry) && expiry < now) {
       return 0.05; // Expired fact — near-zero but not invisible
     }
@@ -131,7 +132,7 @@ function temporalRelevanceScore(entry: MemoryEntry): number {
 
   // If happenedAt is set, boost based on proximity to today
   if (entry.happenedAt) {
-    const eventTime = Date.parse(entry.happenedAt);
+    const eventTime = parseDate(entry.happenedAt);
     if (!isNaN(eventTime)) {
       const daysDiff = Math.abs(now - eventTime) / (1000 * 60 * 60 * 24);
       // Same day → 1.0, 7 days → 0.5, 30 days → 0.14
@@ -149,7 +150,7 @@ function temporalRelevanceScore(entry: MemoryEntry): number {
  * Stronger emotions (positive or negative) get boosted.
  * Neutral → 0.3, Strong emotion → 0.8+
  */
-function emotionalAlignmentScore(entry: MemoryEntry): number {
+export function emotionalAlignmentScore(entry: MemoryEntry): number {
   const score = entry.emotionScore;
   if (score == null || score === 0) return 0.3; // Neutral baseline
   // Use absolute intensity: |emotionScore|
@@ -170,16 +171,16 @@ function emotionalAlignmentScore(entry: MemoryEntry): number {
  * for clustering — the two metrics have different scales, so thresholds are
  * not directly comparable between search and consolidation.
  */
-export function hybridScore(
+export async function hybridScore(
   results: Array<{ entry: MemoryEntry; score: number }>,
   graphDB: GraphDB,
-): ScoredMemory[] {
-  return results
-    .map((r) => {
+): Promise<ScoredMemory[]> {
+  const scored = await Promise.all(
+    results.map(async (r) => {
       const vs = r.score;
       const rs = recencyScore(r.entry.createdAt);
       const imp = r.entry.importance;
-      const gs = graphConnectivityScore(r.entry.text, graphDB);
+      const gs = await graphConnectivityScore(r.entry.text, graphDB);
       const rf = reinforcementScore(r.entry.recallCount ?? 0);
       const ts = temporalRelevanceScore(r.entry);
       const es = emotionalAlignmentScore(r.entry);
@@ -204,8 +205,10 @@ export function hybridScore(
         emotionalScore: es,
         finalScore,
       };
-    })
-    .sort((a, b) => b.finalScore - a.finalScore);
+    }),
+  );
+
+  return scored.sort((a, b) => b.finalScore - a.finalScore);
 }
 
 /**
@@ -213,12 +216,15 @@ export function hybridScore(
  * Uses multi-hop traversal (2 hops) for deeper context.
  * Returns a human-readable string of graph relationships.
  */
-export function getGraphEnrichment(results: ScoredMemory[], graphDB: GraphDB): string {
+export async function getGraphEnrichment(
+  results: ScoredMemory[],
+  graphDB: GraphDB,
+): Promise<string> {
   // Find all texts from results (not just entities)
   const allTexts = results.map((r) => r.entry.text);
 
   // Step 1: Find direct edges matching result texts
-  const directEdges = graphDB.findEdgesForTexts(allTexts, 10);
+  const directEdges = await graphDB.findEdgesForTexts(allTexts, 10);
   if (directEdges.length === 0) return "";
 
   // Step 2: Extract seed node IDs from direct edges
@@ -229,7 +235,7 @@ export function getGraphEnrichment(results: ScoredMemory[], graphDB: GraphDB): s
   }
 
   // Step 3: Traverse 2 hops from seed nodes for deeper context
-  const traversal = graphDB.traverse(Array.from(seedNodes), 2, 15);
+  const traversal = await graphDB.traverse(Array.from(seedNodes), 2, 15);
 
   const lines = traversal.edges.map((e) => `- ${e.source} --[${e.relation}]--> ${e.target}`);
 

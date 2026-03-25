@@ -133,7 +133,7 @@ export class Embeddings {
   }
 
   private async embedOpenAI(text: string): Promise<number[]> {
-    return this.withRetry(async () => {
+    return this.executeWithRetry(async () => {
       const response = await this.openai!.embeddings.create({
         model: this.model,
         input: text,
@@ -153,7 +153,7 @@ export class Embeddings {
   }
 
   private async embedGoogle(text: string, dimensions?: number): Promise<number[]> {
-    return this.withRetry(async () => {
+    return this.executeWithRetry(async () => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${this.apiKey}`;
 
       const body: any = {
@@ -189,7 +189,7 @@ export class Embeddings {
   }
 
   private async embedGoogleBatch(texts: string[], dimensions?: number): Promise<number[][]> {
-    return this.withRetry(async () => {
+    return this.executeWithRetry(async () => {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:batchEmbedContents?key=${this.apiKey}`;
 
       const requests = texts.map((text) => {
@@ -227,9 +227,9 @@ export class Embeddings {
   }
 
   /**
-   * Retry with exponential backoff (delegates to shared utility).
+   * Internal wrapper for retry logic.
    */
-  private async withRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+  private async executeWithRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
     return withRetry(fn, maxRetries);
   }
 }
