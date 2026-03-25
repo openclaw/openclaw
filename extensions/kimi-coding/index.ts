@@ -41,7 +41,7 @@ export default definePluginEntry({
             choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi",
+            groupHint: "Kimi K2.5",
           },
         }),
       ],
