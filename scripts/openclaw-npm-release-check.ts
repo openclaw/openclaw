@@ -44,7 +44,16 @@ const CORRECTION_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const REQUIRED_PACKED_PATHS = [
+  "dist/control-ui/index.html",
+  "docs/reference/templates/AGENTS.md",
+  "docs/reference/templates/SOUL.md",
+  "docs/reference/templates/TOOLS.md",
+  "docs/reference/templates/IDENTITY.md",
+  "docs/reference/templates/USER.md",
+  "docs/reference/templates/HEARTBEAT.md",
+  "docs/reference/templates/BOOTSTRAP.md",
+];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
