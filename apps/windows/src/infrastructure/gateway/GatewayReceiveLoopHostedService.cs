@@ -93,13 +93,14 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
             // block until the next successful hello-ok after reconnect.
             _router.ResetHandshakeGate();
 
-            // If the socket closed while a connect handshake was in progress (state = Connecting
-            // or Reconnecting), mark disconnected so the coordinator can schedule a retry.
-            // Without this, state stays Connecting and the coordinator skips indefinitely.
+            // If the socket closed in any non-idle state, mark disconnected so the coordinator
+            // can schedule a retry. Without this, state stays Connecting/Connected and the
+            // coordinator skips indefinitely.
             if (_connection.State is GatewayConnectionState.Connecting
-                                  or GatewayConnectionState.Reconnecting)
+                                  or GatewayConnectionState.Reconnecting
+                                  or GatewayConnectionState.Connected)
             {
-                _connection.MarkDisconnected("socket_closed_during_handshake");
+                _connection.MarkDisconnected("socket_closed");
                 _ = _sender.Send(
                     new UpdateTrayMenuStateCommand("disconnected", null, null, 0, null, false),
                     CancellationToken.None);

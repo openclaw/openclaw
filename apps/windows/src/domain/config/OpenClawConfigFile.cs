@@ -257,8 +257,34 @@ public static class OpenClawConfigFile
 
     // ── Gateway config ────────────────────────────────────────────────────────
 
+    // Reads the gateway password for password-auth deployments.
+    // Checks gateway.auth.password in ~/.openclaw/openclaw.json first (local gateway),
+    // then falls back to gateway.remote.password in the app config (remote gateway).
     public static string? GatewayPassword()
     {
+        // Local gateway password lives in the shared openclaw config, same as the token.
+        try
+        {
+            var gatewayConfigPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".openclaw", "openclaw.json");
+
+            if (File.Exists(gatewayConfigPath))
+            {
+                var text = File.ReadAllText(gatewayConfigPath);
+                var dict = ParseConfigText(text);
+                if (dict is not null)
+                {
+                    var gw   = AsDict(dict, "gateway");
+                    var auth = gw is not null ? AsDict(gw, "auth") : null;
+                    var pw   = auth?.GetValueOrDefault("password") as string;
+                    if (!string.IsNullOrWhiteSpace(pw)) return pw.Trim();
+                }
+            }
+        }
+        catch { }
+
+        // Fallback: remote password in app config.
         var root    = LoadDict();
         var gateway = AsDict(root, "gateway");
         var remote  = gateway is not null ? AsDict(gateway, "remote") : null;

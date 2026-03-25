@@ -403,6 +403,7 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         if (string.IsNullOrEmpty(token))
             token = Domain.Config.OpenClawConfigFile.ReadGatewayAuthToken();
 
+        // Read password for deployments using gateway.auth.mode=password.
         string? password = null;
         if (string.IsNullOrEmpty(token))
             password = Domain.Config.OpenClawConfigFile.GatewayPassword();
@@ -431,9 +432,12 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         var publicKey = keyPair.PublicKeyBase64Url();
         var signedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // Build v3 payload — matches GatewayDeviceAuthPayload.buildV3 exactly.
-        // Gateway requires a matching entry in GATEWAY_CLIENT_IDS (client-info.ts).
-        const string clientId     = "openclaw-windows";
+        // Build v3 payload — matches GatewayDeviceAuthPayload.buildV3 exactly
+        // "openclaw-macos" is the only node clientId the gateway accepts — BUG-009/011.
+        // "openclaw-windows" is not in GATEWAY_CLIENT_IDS; adding it requires a gateway change
+        // that will go into the PR (client-info.ts).  Use "openclaw-macos" for now so the
+        // device-identity handshake (already implemented) succeeds locally.
+        const string clientId     = "openclaw-macos";
         const string clientMode   = "node";
         const string role         = "node";
         const string scopeString  = "";
@@ -491,9 +495,6 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
             method = "connect",
             @params = connectParams,
         });
-
-        _logger.LogInformation("Node connect frame (first 500 chars): {Frame}",
-            frame.Length > 500 ? frame[..500] : frame);
 
         var bytes = Encoding.UTF8.GetBytes(frame);
         await _wsSendLock.WaitAsync(ct).ConfigureAwait(false);

@@ -2,10 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <ApplicationIcon>Assets\openclaw.ico</ApplicationIcon>
+    <!-- TODO: restore once openclaw.ico is created -->
+    <!-- <ApplicationIcon>packaging\assets\openclaw.ico</ApplicationIcon> -->
     <AssemblyName>OpenClawWindows</AssemblyName>
     <RootNamespace>OpenClawWindows</RootNamespace>
     <Platforms>x64;ARM64</Platforms>
+    <!-- dotnet CLI defaults to AnyCPU when no -p:Platform is given; Windows App SDK
+         requires a concrete architecture. Default to x64 so bare "dotnet build/test" works. -->
+    <Platform Condition="'$(Platform)' == 'AnyCPU' or '$(Platform)' == ''">x64</Platform>
 
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
