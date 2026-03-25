@@ -442,5 +442,6 @@ export async function runDiscordGatewayLifecycle(params: {
       await params.execApprovalsHandler.stop();
     }
     params.threadBindings.stop();
+    gatewayEmitter?.removeListener("error", suppressLateError);
   }
 }
