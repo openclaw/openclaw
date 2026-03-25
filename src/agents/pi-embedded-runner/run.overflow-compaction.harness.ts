@@ -1,4 +1,4 @@
-import { vi, type Mock } from "vitest";
+import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type {
   PluginHookAgentContext,
@@ -62,6 +62,7 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = mockedContextEngine.compact;
 export const mockedCompactDirect = mockedContextEngine.compact;
+export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedEnsureRuntimePluginsLoaded = vi.fn<(params?: unknown) => void>();
 export const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
 export const mockedRunEmbeddedAttempt =
@@ -137,6 +138,15 @@ export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
 export const mockedPickFallbackThinkingLevel = vi.fn<(params?: unknown) => ThinkLevel | null>(
   () => null,
 );
+export const mockedGetApiKeyForModel = vi.fn(
+  async ({ profileId }: { profileId?: string } = {}) => ({
+    apiKey: "test-key",
+    profileId: profileId ?? "test-profile",
+    source: "test",
+    mode: "api-key" as const,
+  }),
+);
+export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -226,6 +236,19 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   });
   mockedPickFallbackThinkingLevel.mockReset();
   mockedPickFallbackThinkingLevel.mockReturnValue(null);
+  mockedGetApiKeyForModel.mockReset();
+  mockedGetApiKeyForModel.mockImplementation(
+    async ({ profileId }: { profileId?: string } = {}) => ({
+      apiKey: "test-key",
+      profileId: profileId ?? "test-profile",
+      source: "test",
+      mode: "api-key",
+    }),
+  );
+  mockedResolveAuthProfileOrder.mockReset();
+  mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedRunPostCompactionSideEffects.mockReset();
+  mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
 }
 
 export async function loadRunOverflowCompactionHarness(): Promise<{
@@ -329,12 +352,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../model-auth.js", () => ({
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: vi.fn(() => ({})),
-    getApiKeyForModel: vi.fn(async () => ({
-      apiKey: "test-key",
-      profileId: "test-profile",
-      source: "test",
-    })),
-    resolveAuthProfileOrder: vi.fn(() => []),
+    getApiKeyForModel: mockedGetApiKeyForModel,
+    resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
   }));
 
   vi.doMock("../models-config.js", () => ({
@@ -397,6 +416,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+  }));
+
+  vi.doMock("./compact.js", () => ({
+    runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 
   vi.doMock("./utils.js", () => ({
