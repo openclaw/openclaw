@@ -3,6 +3,7 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatErrorMessage,
   resolveRetryConfig,
@@ -54,6 +55,19 @@ function withWhatsAppSendRetry<T>(
   });
 }
 
+// Account-level retry takes precedence; falls back to channel-level.
+function resolveWhatsAppRetryConfig(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): RetryConfig | undefined {
+  const root = cfg.channels?.whatsapp;
+  if (accountId) {
+    const accountCfg = root?.accounts?.[accountId];
+    if (accountCfg?.retry !== undefined) return accountCfg.retry;
+  }
+  return root?.retry;
+}
+
 function trimLeadingWhitespace(text: string | undefined): string {
   return text?.trimStart() ?? "";
 }
@@ -103,7 +117,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
             gifPlayback,
           }),
         "sendText",
-        cfg.channels?.whatsapp?.retry,
+        resolveWhatsAppRetryConfig(cfg, accountId),
       );
     },
     sendMedia: async ({
@@ -133,7 +147,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
             gifPlayback,
           }),
         "sendMedia",
-        cfg.channels?.whatsapp?.retry,
+        resolveWhatsAppRetryConfig(cfg, accountId),
       );
     },
     sendPoll: async ({ cfg, to, poll, accountId }) =>
@@ -145,7 +159,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
             cfg,
           }),
         "sendPoll",
-        cfg.channels?.whatsapp?.retry,
+        resolveWhatsAppRetryConfig(cfg, accountId),
       ),
   }),
 };
