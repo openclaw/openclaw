@@ -99,6 +99,59 @@ describe("doctor bundled plugin install path repair", () => {
     expect(warnings[0]).toContain('Run "openclaw doctor --fix"');
   });
 
+  it("repairs stale bundled load paths even when no install record exists", () => {
+    const stalePath = "/pkg/extensions/acpx";
+    const nextPath = "/pkg/dist/extensions/acpx";
+    const bundledSources = new Map([
+      [
+        "acpx",
+        {
+          pluginId: "acpx",
+          localPath: nextPath,
+        },
+      ],
+    ]);
+
+    const hits = scanBundledPluginInstallPathRepairs(
+      {
+        plugins: {
+          load: { paths: [stalePath] },
+        },
+      },
+      {
+        bundledSources,
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    );
+
+    expect(hits).toEqual([
+      {
+        pluginId: "acpx",
+        nextPath,
+        installFieldHits: [],
+        loadPathHits: [{ index: 0, previousPath: stalePath }],
+      },
+    ]);
+
+    const repaired = maybeRepairBundledPluginInstallPaths(
+      {
+        plugins: {
+          load: { paths: [stalePath] },
+        },
+      },
+      {
+        bundledSources,
+        pathExists: (candidatePath) => candidatePath === nextPath,
+      },
+    );
+
+    expect(repaired.config.plugins?.load?.paths).toEqual([nextPath]);
+    expect(repaired.config.plugins?.installs).toBeUndefined();
+    expect(repaired.changes).toEqual([
+      `- plugins.load.paths[0]: updated stale bundled path from ${stalePath} -> ${nextPath}`,
+    ]);
+  });
+
   it("does not rewrite missing custom paths outside the current package root", () => {
     const hits = scanBundledPluginInstallPathRepairs(
       {
@@ -217,7 +270,7 @@ describe("doctor bundled plugin install path repair", () => {
     const bundledPath = path.join(realPkgRoot, "dist", "extensions", "acpx");
     const stalePath = path.join(aliasRoot, "pkg", "extensions", "acpx");
 
-    fs.mkdirSync(path.dirname(bundledPath), { recursive: true });
+    fs.mkdirSync(bundledPath, { recursive: true });
     fs.symlinkSync(path.join(tempRoot, "real"), aliasRoot, "dir");
     fs.mkdirSync(path.dirname(stalePath), { recursive: true });
 
@@ -261,6 +314,56 @@ describe("doctor bundled plugin install path repair", () => {
           loadPathHits: [{ index: 0, previousPath: stalePath }],
         },
       ]);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("dedupes symlink-equivalent load paths after repair", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-paths-"));
+    const realPkgRoot = path.join(tempRoot, "real", "pkg");
+    const aliasRoot = path.join(tempRoot, "alias");
+    const bundledPath = path.join(realPkgRoot, "dist", "extensions", "acpx");
+    const stalePath = path.join(aliasRoot, "pkg", "extensions", "acpx");
+    const equivalentLoadPath = path.join(aliasRoot, "pkg", "dist", "extensions", "acpx");
+
+    fs.mkdirSync(path.dirname(bundledPath), { recursive: true });
+    fs.symlinkSync(path.join(tempRoot, "real"), aliasRoot, "dir");
+    fs.mkdirSync(path.dirname(stalePath), { recursive: true });
+
+    try {
+      const repaired = maybeRepairBundledPluginInstallPaths(
+        {
+          plugins: {
+            load: { paths: [stalePath, equivalentLoadPath] },
+            installs: {
+              acpx: {
+                source: "path",
+                spec: "acpx",
+                sourcePath: stalePath,
+                installPath: stalePath,
+              },
+            },
+          },
+        },
+        {
+          bundledSources: new Map([
+            [
+              "acpx",
+              {
+                pluginId: "acpx",
+                localPath: bundledPath,
+              },
+            ],
+          ]),
+        },
+      );
+
+      expect(repaired.config.plugins?.load?.paths).toEqual([bundledPath]);
+      expect(repaired.config.plugins?.installs?.acpx).toMatchObject({
+        sourcePath: bundledPath,
+        installPath: bundledPath,
+      });
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }

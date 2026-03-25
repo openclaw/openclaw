@@ -128,14 +128,22 @@ function isStaleBundledPluginPath(params: {
 }
 
 function dedupePathEntries(paths: string[], env: NodeJS.ProcessEnv = process.env): string[] {
-  const seen = new Set<string>();
+  const normalizedSeen = new Set<string>();
+  const realPathSeen = new Set<string>();
   const deduped: string[] = [];
   for (const entry of paths) {
     const normalized = resolveFsPath(entry, env);
-    if (seen.has(normalized)) {
+    if (normalizedSeen.has(normalized)) {
       continue;
     }
-    seen.add(normalized);
+    const realPath = resolveExistingRealPath(normalized);
+    if (realPath && realPathSeen.has(realPath)) {
+      continue;
+    }
+    normalizedSeen.add(normalized);
+    if (realPath) {
+      realPathSeen.add(realPath);
+    }
     deduped.push(entry);
   }
   return deduped;
@@ -153,31 +161,25 @@ export function scanBundledPluginInstallPathRepairs(
   const loadPaths = cfg.plugins?.load?.paths ?? [];
   const hits: BundledPluginInstallPathRepairHit[] = [];
 
-  for (const [pluginId, install] of Object.entries(installs)) {
-    if (!install || install.source !== "path") {
-      continue;
-    }
-
-    const bundledSource = bundledSources.get(pluginId);
-    if (!bundledSource) {
-      continue;
-    }
-
+  for (const [pluginId, bundledSource] of bundledSources) {
+    const install = installs[pluginId];
     const installFieldHits: InstallFieldHit[] = [];
-    for (const field of ["sourcePath", "installPath"] as const) {
-      const currentPath = typeof install[field] === "string" ? install[field].trim() : "";
-      if (!currentPath) {
-        continue;
-      }
-      if (
-        isStaleBundledPluginPath({
-          candidatePath: currentPath,
-          bundledPath: bundledSource.localPath,
-          env,
-          pathExists,
-        })
-      ) {
-        installFieldHits.push({ field, previousPath: currentPath });
+    if (install && install.source === "path") {
+      for (const field of ["sourcePath", "installPath"] as const) {
+        const currentPath = typeof install[field] === "string" ? install[field].trim() : "";
+        if (!currentPath) {
+          continue;
+        }
+        if (
+          isStaleBundledPluginPath({
+            candidatePath: currentPath,
+            bundledPath: bundledSource.localPath,
+            env,
+            pathExists,
+          })
+        ) {
+          installFieldHits.push({ field, previousPath: currentPath });
+        }
       }
     }
 
@@ -258,20 +260,18 @@ export function maybeRepairBundledPluginInstallPaths(
 
   for (const hit of hits) {
     const install = next.plugins?.installs?.[hit.pluginId];
-    if (!install || install.source !== "path") {
-      continue;
-    }
-
-    for (const fieldHit of hit.installFieldHits) {
-      const field = fieldHit.field;
-      const previousPath = typeof install[field] === "string" ? install[field] : "(unset)";
-      if (pathsEqual(previousPath, hit.nextPath, env)) {
-        continue;
+    if (install && install.source === "path") {
+      for (const fieldHit of hit.installFieldHits) {
+        const field = fieldHit.field;
+        const previousPath = typeof install[field] === "string" ? install[field] : "(unset)";
+        if (pathsEqual(previousPath, hit.nextPath, env)) {
+          continue;
+        }
+        install[field] = hit.nextPath;
+        changes.push(
+          `- plugins.installs.${hit.pluginId}.${field}: updated stale bundled path from ${previousPath} -> ${hit.nextPath}`,
+        );
       }
-      install[field] = hit.nextPath;
-      changes.push(
-        `- plugins.installs.${hit.pluginId}.${field}: updated stale bundled path from ${previousPath} -> ${hit.nextPath}`,
-      );
     }
 
     for (const loadPathHit of hit.loadPathHits) {
