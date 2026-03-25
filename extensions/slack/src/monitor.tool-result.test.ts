@@ -564,8 +564,12 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Your Slack user id: U1");
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Pairing code: PAIRCODE");
+    const pairingReply = String(sendMock.mock.calls[0]?.[1] ?? "");
+    expect(pairingReply).toContain("OpenClaw: access not configured.");
+    expect(pairingReply).toContain("Your Slack user id: U1");
+    expect(pairingReply).toContain("Pairing code:");
+    expect(pairingReply).toContain("```\nPAIRCODE\n```");
+    expect(pairingReply).toContain("pairing approve slack PAIRCODE");
   });
 
   it("does not resend pairing code when a request is already pending", async () => {
