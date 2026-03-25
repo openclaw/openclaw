@@ -3099,6 +3099,7 @@ description: test skill
       const cfg: OpenClawConfig = {};
       const res = await runSecurityAudit({
         config: cfg,
+        env: {},
         includeFilesystem: true,
         includeChannelSecurity: false,
         stateDir,

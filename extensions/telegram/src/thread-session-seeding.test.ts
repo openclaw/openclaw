@@ -52,6 +52,8 @@ describe("seedTelegramThreadSessionOnTopicCreate", () => {
 
     await updateSessionStore(storePath, (store) => {
       store["agent:main:main"] = {
+        sessionId: "parent-dm-session",
+        updatedAt: Date.now(),
         futureThreadProviderOverride: "anthropic",
         futureThreadModelOverride: "claude-sonnet-4-6",
         futureThreadThinkingLevelOverride: "off",
@@ -82,6 +84,8 @@ describe("seedTelegramThreadSessionOnTopicCreate", () => {
 
     await updateSessionStore(storePath, (store) => {
       store["agent:main:telegram:group:-100123"] = {
+        sessionId: "parent-group-session",
+        updatedAt: Date.now(),
         futureThreadProviderOverride: "anthropic",
         futureThreadModelOverride: "claude-sonnet-4-6",
         futureThreadThinkingLevelOverride: "off",
@@ -117,6 +121,8 @@ describe("seedTelegramThreadSessionOnTopicCreate", () => {
 
     await updateSessionStore(storePath, (store) => {
       store["agent:main:telegram:group:-100123"] = {
+        sessionId: "parent-group-session-adaptive",
+        updatedAt: Date.now(),
         futureThreadProviderOverride: "anthropic",
         futureThreadModelOverride: "claude-sonnet-4-6",
         futureThreadThinkingLevelOverride: "adaptive",

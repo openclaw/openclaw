@@ -42,7 +42,7 @@ export type OnboardingPlan = {
   gatewayState: LocalGatewaySetupState;
   executionPlan: Pick<
     LocalSetupExecutionPlan,
-    "daemonDecision" | "healthExpectation" | "shouldRunHealthCheck"
+    "daemonDecision" | "daemonDecisionReason" | "healthExpectation" | "shouldRunHealthCheck"
   >;
   steps: {
     workspace: OnboardingSimpleStep;
@@ -73,7 +73,7 @@ export function createLocalOnboardingPlan(params: {
   gatewayState: LocalGatewaySetupState;
   executionPlan: Pick<
     LocalSetupExecutionPlan,
-    "daemonDecision" | "healthExpectation" | "shouldRunHealthCheck"
+    "daemonDecision" | "daemonDecisionReason" | "healthExpectation" | "shouldRunHealthCheck"
   >;
   opts: OnboardOptions;
 }): OnboardingPlan {

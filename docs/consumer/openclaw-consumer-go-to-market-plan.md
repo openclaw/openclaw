@@ -214,6 +214,7 @@ Everything else is phase 2.
 Use **one artifact document with embedded visual architecture diagram** (like this file).
 
 Why:
+
 - Easy to share with builders + investors
 - One source of truth
 - You can export to pitch deck later without rewriting

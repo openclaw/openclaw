@@ -2,6 +2,8 @@ import { formatCliCommand } from "../cli/command-format.js";
 import {
   migrateLegacyConfig,
   type ConfigFileSnapshot,
+  type GatewayAuthConfig,
+  type GatewayTailscaleConfig,
   type OpenClawConfig,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -230,8 +232,8 @@ type GatewayStartupAuthBootstrapDeps = {
   ensureGatewayStartupAuth: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
-    authOverride?: unknown;
-    tailscaleOverride?: unknown;
+    authOverride?: GatewayAuthConfig;
+    tailscaleOverride?: GatewayTailscaleConfig;
     persist: true;
   }) => Promise<StartupAuthBootstrapResult>;
   activateRuntimeSecrets: (config: OpenClawConfig) => Promise<{ config: OpenClawConfig }>;
@@ -240,8 +242,8 @@ type GatewayStartupAuthBootstrapDeps = {
     warn: (message: string) => void;
   };
   env?: NodeJS.ProcessEnv;
-  authOverride?: unknown;
-  tailscaleOverride?: unknown;
+  authOverride?: GatewayAuthConfig;
+  tailscaleOverride?: GatewayTailscaleConfig;
 };
 
 type GatewayStartupRuntimePolicyDeps = {

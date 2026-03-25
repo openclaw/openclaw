@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { vi } from "vitest";
 import type {
   PluginHookAgentContext,
@@ -5,6 +6,17 @@ import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+
+type ReplyPayload = {
+  text: string;
+  mediaUrls?: string[];
+  isError?: boolean;
+  isReasoning?: boolean;
+  audioAsVoice?: boolean;
+  replyToId?: string;
+  replyToTag?: boolean;
+  replyToCurrent?: boolean;
+};
 
 type MockCompactionResult =
   | {
@@ -60,8 +72,10 @@ export const mockedContextEngine = {
 
 export const mockedContextEngineCompact = vi.mocked(mockedContextEngine.compact);
 export const mockedEnsureRuntimePluginsLoaded: (...args: unknown[]) => void = vi.fn();
-export const mockedBuildEmbeddedRunPayloads = vi.fn(() => []);
-export const mockedResolveEmbeddedRunPayloadErrorAssistant = vi.fn(() => undefined);
+export const mockedBuildEmbeddedRunPayloads = vi.fn<() => ReplyPayload[]>(() => []);
+export const mockedResolveEmbeddedRunPayloadErrorAssistant = vi.fn<
+  () => AssistantMessage | undefined
+>(() => undefined);
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),

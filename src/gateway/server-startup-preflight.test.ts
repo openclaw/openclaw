@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import type {
+  ConfigFileSnapshot,
+  GatewayAuthConfig,
+  GatewayTailscaleConfig,
+  OpenClawConfig,
+} from "../config/config.js";
 import {
   classifyGatewayStartupPreflightError,
   createGatewayStartupContext,
@@ -79,10 +84,10 @@ describe("runGatewayStartupConfigPreflight", () => {
 
   it("writes auto-enabled plugins and re-reads snapshot on success", async () => {
     const phaseTwo = createSnapshot({
-      config: { plugins: { msteams: { enabled: false } } },
+      config: { plugins: { entries: { msteams: { enabled: false } } } },
     });
     const phaseThree = createSnapshot({
-      config: { plugins: { msteams: { enabled: true } } },
+      config: { plugins: { entries: { msteams: { enabled: true } } } },
     });
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
@@ -144,9 +149,11 @@ describe("runGatewayStartupSecretsPrecheck", () => {
 
   it("prepares config and runs secrets precheck for valid snapshots", async () => {
     const snapshot = createSnapshot({
-      config: { auth: { profile: "default" } },
+      config: { auth: { profiles: { default: { provider: "openai", mode: "api_key" } } } },
     });
-    const preparedConfig: OpenClawConfig = { auth: { profile: "gateway" } };
+    const preparedConfig: OpenClawConfig = {
+      auth: { profiles: { gateway: { provider: "openai", mode: "api_key" } } },
+    };
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValue(snapshot);
     const prepareConfig = vi
       .fn<(config: OpenClawConfig) => OpenClawConfig>()
@@ -196,8 +203,8 @@ describe("runGatewayStartupAuthBootstrap", () => {
     const activateRuntimeSecrets = vi
       .fn<(config: OpenClawConfig) => Promise<{ config: OpenClawConfig }>>()
       .mockResolvedValue({ config: activatedConfig });
-    const authOverride = { mode: "token", token: "override" };
-    const tailscaleOverride = { enabled: true };
+    const authOverride: GatewayAuthConfig = { mode: "token", token: "override" };
+    const tailscaleOverride: GatewayTailscaleConfig = { mode: "serve" };
 
     const result = await runGatewayStartupAuthBootstrap({
       loadConfig: () => initialConfig,
@@ -268,7 +275,7 @@ describe("runGatewayStartupAuthBootstrap", () => {
 
 describe("runGatewayStartupRuntimePolicyPhase", () => {
   it("enables diagnostics and applies runtime policies", async () => {
-    const config: OpenClawConfig = { gateway: { diagnostics: { enabled: true } } };
+    const config: OpenClawConfig = { gateway: {} };
     const seededConfig: OpenClawConfig = {
       ...config,
       gateway: {

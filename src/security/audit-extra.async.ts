@@ -533,9 +533,11 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
 
 export async function collectPluginsTrustFindings(params: {
   cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const env = params.env ?? process.env;
   const { extensionsDir, pluginDirs } = await listInstalledPluginDirs({
     stateDir: params.stateDir,
   });
@@ -567,7 +569,7 @@ export async function collectPluginsTrustFindings(params: {
             hasAccountSecretInputKey(a, "token"),
           ),
         ) ||
-        hasString(process.env.DISCORD_BOT_TOKEN);
+        hasString(env.DISCORD_BOT_TOKEN);
 
       const telegramConfigured =
         hasSecretInput(params.cfg.channels?.telegram?.botToken) ||
@@ -578,7 +580,7 @@ export async function collectPluginsTrustFindings(params: {
             (a) => hasAccountSecretInputKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
           ),
         ) ||
-        hasString(process.env.TELEGRAM_BOT_TOKEN);
+        hasString(env.TELEGRAM_BOT_TOKEN);
 
       const slackConfigured =
         hasSecretInput(params.cfg.channels?.slack?.botToken) ||
@@ -590,8 +592,8 @@ export async function collectPluginsTrustFindings(params: {
               hasAccountSecretInputKey(a, "botToken") || hasAccountSecretInputKey(a, "appToken"),
           ),
         ) ||
-        hasString(process.env.SLACK_BOT_TOKEN) ||
-        hasString(process.env.SLACK_APP_TOKEN);
+        hasString(env.SLACK_BOT_TOKEN) ||
+        hasString(env.SLACK_APP_TOKEN);
 
       const skillCommandsLikelyExposed =
         (discordConfigured &&

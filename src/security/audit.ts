@@ -1249,7 +1249,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execDockerRawFn: context.execDockerRawFn,
       })),
     );
-    findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, stateDir })));
+    findings.push(...(await auditNonDeep.collectPluginsTrustFindings({ cfg, env, stateDir })));
     if (context.deep) {
       const auditDeep = await loadAuditDeepModule();
       findings.push(

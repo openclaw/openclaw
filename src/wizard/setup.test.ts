@@ -101,6 +101,9 @@ const resolveGatewayModeProbeSummary = vi.hoisted(() =>
     credentials: {},
   })),
 );
+const resolveSetupSecretInputString = vi.hoisted(() =>
+  vi.fn<(params: { path: string }) => Promise<string | undefined>>(async () => undefined),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -176,6 +179,10 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 
 vi.mock("../commands/systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
+}));
+
+vi.mock("./setup.secret-input.js", () => ({
+  resolveSetupSecretInputString,
 }));
 
 vi.mock("../daemon/systemd.js", () => ({
@@ -412,8 +419,12 @@ describe("runSetupWizard", () => {
     }
   });
 
-  it("passes the configured local port into the shared gateway mode probe summary", async () => {
-    resolveGatewayModeProbeSummary.mockClear();
+  it("passes the configured local port into the local gateway probe", async () => {
+    probeGatewayReachable.mockClear();
+    resolveSetupSecretInputString.mockClear();
+    resolveSetupSecretInputString.mockImplementation(async (params: { path: string }) =>
+      params.path === "gateway.auth.password" ? "resolved-password" : undefined,
+    );
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -463,16 +474,10 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(resolveGatewayModeProbeSummary).toHaveBeenCalledWith(
+    expect(probeGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              mode: "password",
-            }),
-          }),
-        }),
-        localPort: 18789,
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-password",
       }),
     );
   });
@@ -480,28 +485,36 @@ describe("runSetupWizard", () => {
   it("surfaces gateway probe secret resolution failures through the wizard note channel", async () => {
     const note = vi.fn(async () => {});
     const prompter = buildWizardPrompter({ note });
-    const runtime = createRuntime();
-    resolveGatewayModeProbeSummary.mockImplementationOnce(
-      async (params: {
-        onSecretResolveError?: (args: { path: string; error: Error }) => Promise<void> | void;
-      }) => {
-        await params.onSecretResolveError?.({
-          path: "gateway.auth.password",
-          error: new Error("missing env ref"),
-        });
-        return {
-          localUrl: "ws://127.0.0.1:18789",
-          remoteUrl: "",
-          localProbe: { ok: false },
-          remoteProbe: null,
-          hints: {
-            local: "No gateway detected (ws://127.0.0.1:18789)",
-            remote: "No remote URL configured yet",
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
           },
-          credentials: {},
-        };
+        },
       },
-    );
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+    resolveSetupSecretInputString.mockImplementation(async (params: { path: string }) => {
+      if (params.path === "gateway.auth.password") {
+        throw new Error("missing env ref");
+      }
+      return undefined;
+    });
 
     await runSetupWizard(
       {

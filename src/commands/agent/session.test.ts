@@ -224,7 +224,7 @@ describe("resolveSession", () => {
         session: {
           reset: { mode: "daily", atHour: 4 },
         },
-      } as OpenClawConfig["session"],
+      } as OpenClawConfig,
       to: "+15551234567",
     });
 

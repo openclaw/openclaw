@@ -216,14 +216,15 @@ describe("telegramPlugin duplicate token guard", () => {
     });
 
     await telegramPlugin.gateway!.startAccount!(ctx);
+    const info = ctx.log!.info;
 
-    expect(ctx.log.info).toHaveBeenCalledWith(
+    expect(info).toHaveBeenCalledWith(
       expect.stringContaining(
         "[ops] starting provider (@opsbot) currentLaneBot=@opsbot id=456 tokenSource=config",
       ),
     );
-    expect(ctx.log.info).toHaveBeenCalledWith(expect.stringContaining("tokenFingerprint="));
-    expect(ctx.log.info).toHaveBeenCalledWith(expect.stringContaining("accountName=unnamed"));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("tokenFingerprint="));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("accountName=unnamed"));
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
