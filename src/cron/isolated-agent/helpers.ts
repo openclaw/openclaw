@@ -136,22 +136,10 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  // A non-error payload *before* the last error is also a recovery signal when the payload is
-  // the agent's deliverable output — i.e., the same payload that `pickLastDeliverablePayload`
-  // selects.  Using the deliverable payload as the recovery anchor is more precise than a
-  // character-length threshold: it correctly recovers "Done" / short summaries (which are
-  // valid final outputs), while still treating genuine fatal crashes as fatal even when a
-  // transient status line like "Starting digest…" appeared earlier.
-  const deliveryPayloadIndex =
-    deliveryPayload !== undefined ? params.payloads.indexOf(deliveryPayload) : -1;
-  const hasDeliverablePayloadBeforeLastError =
-    !params.runLevelError &&
-    lastErrorPayloadIndex >= 0 &&
-    deliveryPayloadIndex >= 0 &&
-    deliveryPayloadIndex < lastErrorPayloadIndex;
-  const hasRecoveredFromError =
-    hasSuccessfulPayloadAfterLastError || hasDeliverablePayloadBeforeLastError;
-  const hasFatalErrorPayload = hasErrorPayload && !hasRecoveredFromError;
+  // Tool wrappers can emit transient/false-positive error payloads before a valid final
+  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
+  // did not report a model/context-level error and (b) a non-error payload follows.
+  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
   const lastErrorPayloadText = [...params.payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
