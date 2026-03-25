@@ -325,6 +325,7 @@
     "citations": "on",
     "qmd": {
       "command": "/usr/local/bin/qmd",
+      "includeDefaultMemory": true,
       "paths": [
         {
           "path": "/home/node/.openclaw/state/sre-dossiers",
@@ -351,6 +352,18 @@
         "enabled": true,
         "exportDir": "/home/node/.openclaw/state/sre-index/session-summaries",
         "retentionDays": 14
+      },
+      "scope": {
+        "default": "deny",
+        "rules": [
+          {
+            "action": "allow",
+            "match": {
+              "channel": "slack",
+              "rawKeyPrefix": "agent:sre:slack:"
+            }
+          }
+        ]
       }
     }
   },

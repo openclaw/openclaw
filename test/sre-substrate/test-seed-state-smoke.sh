@@ -67,6 +67,22 @@ test -d "$STATE_DIR/workspace/memory"
 test -d "$STATE_DIR/workspace-sre/memory"
 ls "$STATE_DIR"/workspace/memory/*.md >/dev/null 2>&1
 ls "$STATE_DIR"/workspace-sre/memory/*.md >/dev/null 2>&1
+jq -e '.memory.backend == "qmd"' "$STATE_DIR/openclaw.json" >/dev/null
+jq -e '.memory.qmd.includeDefaultMemory == true' "$STATE_DIR/openclaw.json" >/dev/null
+jq -e '.memory.qmd.scope.default == "deny"' "$STATE_DIR/openclaw.json" >/dev/null
+# Raw session keys look like agent:sre:slack:channel:<channel>:thread:<ts>.
+# Keep the seeded rule exact: Slack-only plus raw SRE session-prefix scoping.
+jq -e '
+  .memory.qmd.scope.rules == [
+    {
+      "action": "allow",
+      "match": {
+        "channel": "slack",
+        "rawKeyPrefix": "agent:sre:slack:"
+      }
+    }
+  ]
+' "$STATE_DIR/openclaw.json" >/dev/null
 # Default (no env override): both channels get cron jobs
 jq -e '
   (.jobs | map(.id) | sort) == ([
