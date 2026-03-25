@@ -1,0 +1,23 @@
+name: Update Registry
+on:
+  push:
+    branches: [main]
+    paths: ['skills/**']
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate registry.json
+        run: node scripts/generate-registry.js
+      - name: Commit if changed
+        run: |
+          git diff --quiet registry.json || {
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add registry.json
+            git commit -m "chore: auto-update registry.json"
+            git push
+          }

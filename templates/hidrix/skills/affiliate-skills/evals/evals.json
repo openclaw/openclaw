@@ -1,0 +1,593 @@
+{
+  "version": "1.1",
+  "description": "Test cases for affiliate-skills. Each case has an input prompt, expected patterns in output, and pass criteria. Run with scripts/run-evals.sh.",
+  "skills": {
+    "affiliate-program-search": {
+      "tests": [
+        {
+          "id": "s1-001",
+          "name": "Category search with filters",
+          "input_prompt": "I want to promote AI video tools, commission recurring, at least 20%",
+          "expected_patterns": [
+            "Programs Found",
+            "Top Pick:",
+            "Score",
+            "Earning Potential",
+            "Content Potential",
+            "cps_recurring",
+            "Next Steps"
+          ],
+          "pass_criteria": "Output contains a comparison table with at least 2 programs, a scored recommendation with all 5 dimensions, and actionable next steps. Programs shown must have recurring commission ≥20%."
+        },
+        {
+          "id": "s1-002",
+          "name": "Head-to-head comparison",
+          "input_prompt": "Compare HeyGen vs Synthesia for my LinkedIn audience",
+          "expected_patterns": ["HeyGen", "Synthesia", "LinkedIn", "Score", "Content Potential"],
+          "pass_criteria": "Output contains side-by-side comparison of both programs with scores. Content Potential and platform fit for LinkedIn are explicitly discussed. Clear winner recommendation."
+        },
+        {
+          "id": "s1-003",
+          "name": "Beginner with no criteria",
+          "input_prompt": "I'm new to affiliate marketing. What should I promote?",
+          "expected_patterns": ["beginner", "free", "recurring", "Top Pick:", "Next Steps"],
+          "pass_criteria": "Output defaults to beginner-friendly criteria (AI/SaaS, recurring, easy to demo). Recommends products with free tiers and low payout thresholds. Includes clear next steps."
+        }
+      ]
+    },
+    "commission-calculator": {
+      "tests": [
+        {
+          "id": "s1-004",
+          "name": "Recurring commission projection",
+          "input_prompt": "Calculate my earnings if I promote HeyGen (30% recurring, $48/mo product) and get 500 visitors/month to my blog",
+          "expected_patterns": ["HeyGen", "recurring", "month", "12", "visitor", "conversion"],
+          "pass_criteria": "Output shows monthly projections with compounding for recurring commissions. Includes month 1, month 3, and month 12 estimates. Shows conversion rate assumptions and cumulative earnings."
+        },
+        {
+          "id": "s1-005",
+          "name": "Goal-based calculation",
+          "input_prompt": "How many sales do I need to make $1000/month with Semrush ($200 per sale)?",
+          "expected_patterns": ["Semrush", "$200", "sales", "traffic", "conversion"],
+          "pass_criteria": "Output calculates 5 sales needed. Shows traffic required at different conversion rates. Includes realistic timeline estimate."
+        }
+      ]
+    },
+    "competitor-spy": {
+      "tests": [
+        {
+          "id": "s1-006",
+          "name": "Analyze competitor site",
+          "input_prompt": "What affiliate programs does authorityhacker.com promote? What can I learn from their strategy?",
+          "expected_patterns": ["program", "content", "strategy", "traffic", "replicability"],
+          "pass_criteria": "Output identifies likely affiliate programs with confidence levels. Analyzes content formats and SEO approach. Provides replicability score and content gaps."
+        },
+        {
+          "id": "s1-007",
+          "name": "Niche competitor landscape",
+          "input_prompt": "Who are the top affiliate sites in the AI tools niche?",
+          "expected_patterns": ["competitor", "niche", "AI", "content", "opportunity"],
+          "pass_criteria": "Output identifies 3+ competitor sites with analysis. Shows content gaps and opportunities. Recommends programs to focus on based on competitor analysis."
+        }
+      ]
+    },
+    "niche-opportunity-finder": {
+      "tests": [
+        {
+          "id": "s1-008",
+          "name": "Beginner niche selection",
+          "input_prompt": "I want to start affiliate marketing but don't know what niche to pick. I like technology and productivity.",
+          "expected_patterns": ["niche", "score", "program", "competition", "content"],
+          "pass_criteria": "Output scores at least 3 niche candidates. Each has demand, competition, and program availability scores. Includes content angle suggestions. Clear recommendation for beginner."
+        },
+        {
+          "id": "s1-009",
+          "name": "Saturated niche pivot",
+          "input_prompt": "Is 'web hosting' still a good affiliate niche or is it too saturated?",
+          "expected_patterns": [
+            "hosting",
+            "competition",
+            "saturated",
+            "micro-niche",
+            "alternative"
+          ],
+          "pass_criteria": "Output honestly assesses competition level. Suggests micro-niche angles within hosting or adjacent niches. Shows data-backed reasoning for recommendations."
+        }
+      ]
+    },
+    "viral-post-writer": {
+      "tests": [
+        {
+          "id": "s2-001",
+          "name": "LinkedIn post for a specific product",
+          "input_prompt": "Write a LinkedIn post promoting HeyGen",
+          "expected_patterns": [
+            "HeyGen",
+            "Post Content",
+            "Link placement",
+            "#ad",
+            "Engagement Tips"
+          ],
+          "pass_criteria": "Output contains a ready-to-copy LinkedIn post with a clear hook in the first line, no external link in the post body (link in comments), FTC disclosure, and posting tips. Must NOT start with 'I'm excited to share'."
+        },
+        {
+          "id": "s2-002",
+          "name": "X thread for SEO tool",
+          "input_prompt": "Create an X thread about Semrush for SEO marketers",
+          "expected_patterns": ["Semrush", "Tweet 1", "Thread", "#ad", "SEO"],
+          "pass_criteria": "Output contains a multi-tweet thread (5+ tweets), numbered or clearly separated. First tweet has a compelling hook. Last tweet contains CTA, link, and #ad disclosure. Content is specific to SEO use cases."
+        },
+        {
+          "id": "s2-003",
+          "name": "Reddit post with personal experience",
+          "input_prompt": "I've been using Notion for 2 years, help me write a Reddit post",
+          "expected_patterns": ["Notion", "pros", "cons", "disclosure", "affiliate"],
+          "pass_criteria": "Output includes both pros and cons (Reddit requires honesty). Uses the user's personal experience. Includes 'Full disclosure: affiliate link' at the bottom. Suggests relevant subreddits. Does NOT read like an ad."
+        },
+        {
+          "id": "s2-004",
+          "name": "All platforms for a single product",
+          "input_prompt": "Promote GetResponse on all platforms",
+          "expected_patterns": ["GetResponse", "LinkedIn", "Reddit"],
+          "pass_criteria": "Output contains at least 3 separate posts for different platforms (LinkedIn, X, Reddit). Each post is formatted differently and tailored to the platform. Each has appropriate FTC disclosure for that platform."
+        }
+      ]
+    },
+    "reddit-post-writer": {
+      "tests": [
+        {
+          "id": "s2-005",
+          "name": "Genuine recommendation post",
+          "input_prompt": "Write a Reddit post for r/productivity recommending Notion as a project management tool",
+          "expected_patterns": ["Notion", "r/productivity", "disclosure", "pros", "cons"],
+          "pass_criteria": "Output is subreddit-appropriate tone. Includes genuine pros AND cons. Affiliate link in comments not body. FTC disclosure present. At least one product limitation mentioned."
+        },
+        {
+          "id": "s2-006",
+          "name": "Comment reply format",
+          "input_prompt": "Someone in r/Entrepreneur asked 'What tools do you use for email marketing?' — write a reply recommending GetResponse",
+          "expected_patterns": ["GetResponse", "email", "reply", "disclosure"],
+          "pass_criteria": "Output is a comment reply (not a standalone post). Adds value beyond just recommending the product. Mentions real features. FTC disclosure at end. Casual, helpful tone."
+        }
+      ]
+    },
+    "tiktok-script-writer": {
+      "tests": [
+        {
+          "id": "s2-007",
+          "name": "Product demo script",
+          "input_prompt": "Write a 45-second TikTok script demoing HeyGen's AI avatar feature",
+          "expected_patterns": ["HeyGen", "hook", "scene", "text overlay", "#ad"],
+          "pass_criteria": "Output has scene-by-scene breakdown with timecodes. Sentences under 10 words. Text overlay on every scene. FTC '#ad' as text overlay (not just caption). Hook in first 3 seconds."
+        },
+        {
+          "id": "s2-008",
+          "name": "Before/after script",
+          "input_prompt": "TikTok script: before and after using Canva Pro for my small business marketing",
+          "expected_patterns": ["Canva", "before", "after", "scene", "hook"],
+          "pass_criteria": "Output follows before/after framework. Clear visual contrast. Specific results shown. Under 60 seconds. Sound-optional (text overlays tell the story)."
+        }
+      ]
+    },
+    "twitter-thread-writer": {
+      "tests": [
+        {
+          "id": "s2-009",
+          "name": "Educational thread",
+          "input_prompt": "Write an X thread teaching 5 SEO tips using Semrush, targeted at freelancers",
+          "expected_patterns": ["Semrush", "Tweet", "SEO", "freelancer", "#ad"],
+          "pass_criteria": "Thread has 7+ tweets. Each tweet under 280 chars. Product mention at 60-70% through. #ad in CTA tweet. Educational value independent of the product pitch."
+        },
+        {
+          "id": "s2-010",
+          "name": "Hot take thread",
+          "input_prompt": "Write a contrarian X thread about why most people use the wrong video tools, then recommend HeyGen",
+          "expected_patterns": ["HeyGen", "Tweet", "thread", "wrong", "#ad"],
+          "pass_criteria": "Hook tweet is bold/contrarian. Thread builds argument before introducing product. Product feels like natural conclusion not forced plug. #ad disclosed."
+        }
+      ]
+    },
+    "affiliate-blog-builder": {
+      "tests": [
+        {
+          "id": "s3-001",
+          "name": "Product review article",
+          "input_prompt": "Write a review blog post for HeyGen targeting content creators",
+          "expected_patterns": ["HeyGen", "review", "Pros", "Cons", "Verdict", "disclosure"],
+          "pass_criteria": "Full article with SEO metadata, pros/cons, pricing section, verdict with CTA, FTC disclosure near top, 2000+ words. Meta description 150-160 chars."
+        },
+        {
+          "id": "s3-002",
+          "name": "Comparison blog post",
+          "input_prompt": "Write a blog post comparing HeyGen vs Synthesia for business video creation",
+          "expected_patterns": ["HeyGen", "Synthesia", "comparison", "Winner", "table"],
+          "pass_criteria": "Output has comparison table with 6+ dimensions, ✅/❌ indicators, clear winner in verdict, FTC disclosure, both products get fair coverage."
+        }
+      ]
+    },
+    "comparison-post-writer": {
+      "tests": [
+        {
+          "id": "s3-003",
+          "name": "Head-to-head comparison",
+          "input_prompt": "Write a 'Semrush vs Ahrefs' comparison blog post for SEO beginners",
+          "expected_patterns": [
+            "Semrush",
+            "Ahrefs",
+            "comparison",
+            "table",
+            "verdict",
+            "disclosure"
+          ],
+          "pass_criteria": "Feature comparison table with 6-10 dimensions. ✅/❌/⚠️ used. Both products get fair, balanced treatment. Clear winner in verdict. FTC disclosure above fold. 2500+ words."
+        },
+        {
+          "id": "s3-004",
+          "name": "Three-way comparison",
+          "input_prompt": "Compare Notion vs ClickUp vs Monday.com for project management — which should I promote as an affiliate?",
+          "expected_patterns": ["Notion", "ClickUp", "Monday", "comparison", "commission"],
+          "pass_criteria": "Comparison covers all 3 products. Affiliate angle considered (which has best commission). Comparison table present. Clear recommendation with reasoning."
+        }
+      ]
+    },
+    "how-to-tutorial-writer": {
+      "tests": [
+        {
+          "id": "s3-005",
+          "name": "Step-by-step tutorial",
+          "input_prompt": "Write a tutorial: How to create your first AI video with HeyGen (step by step for beginners)",
+          "expected_patterns": ["HeyGen", "Step", "tutorial", "Prerequisites", "disclosure"],
+          "pass_criteria": "Numbered steps (not bulleted). Prerequisites section present. FTC disclosure after title. Each step is atomic (one action). No invented UI details. CTA doesn't interrupt steps."
+        },
+        {
+          "id": "s3-006",
+          "name": "Problem-solution tutorial",
+          "input_prompt": "Write a how-to guide: How to automate your social media content creation using AI tools",
+          "expected_patterns": ["Step", "tutorial", "automate", "social media", "tool"],
+          "pass_criteria": "Problem stated clearly in intro. Steps lead to solution. Product recommendation feels natural. Word count 2000+. Includes 'what you'll need' section."
+        }
+      ]
+    },
+    "listicle-generator": {
+      "tests": [
+        {
+          "id": "s3-007",
+          "name": "Top tools listicle",
+          "input_prompt": "Write a 'Top 7 AI Video Tools in 2026' listicle article for my blog",
+          "expected_patterns": ["2026", "HeyGen", "table", "Pros", "Cons", "disclosure"],
+          "pass_criteria": "Title has year. At a Glance table present. 7 entries with pros/cons/pricing/best-for. Primary affiliate ranked #1-3. FTC disclosure before entries. 3000+ words."
+        },
+        {
+          "id": "s3-008",
+          "name": "Niche listicle",
+          "input_prompt": "Write a 'Best 5 Email Marketing Tools for Small Businesses' listicle",
+          "expected_patterns": ["email", "small business", "pricing", "Best For", "table"],
+          "pass_criteria": "5 products with mini-reviews. Pricing tables per entry. Comparison matrix at end. 'How to Choose' section present. Each entry has clear CTA."
+        }
+      ]
+    },
+    "landing-page-creator": {
+      "tests": [
+        {
+          "id": "s4-001",
+          "name": "Single product landing page",
+          "input_prompt": "Create a landing page for HeyGen (30% recurring, AI video tool)",
+          "expected_patterns": ["HeyGen", "html", "viewport", "CTA", "disclosure"],
+          "pass_criteria": "Self-contained HTML file. Has viewport meta tag. 3+ CTAs. FTC disclosure before first affiliate link. No external resources. Affitor footer. Mobile-responsive."
+        },
+        {
+          "id": "s4-002",
+          "name": "Comparison landing page",
+          "input_prompt": "Create a comparison landing page: HeyGen vs Synthesia — which is better for marketers?",
+          "expected_patterns": ["HeyGen", "Synthesia", "html", "comparison", "winner"],
+          "pass_criteria": "HTML with comparison table. Side-by-side layout. Clear winner recommendation. Both products have CTAs. Self-contained, no external resources."
+        }
+      ]
+    },
+    "product-showcase-page": {
+      "tests": [
+        {
+          "id": "s4-003",
+          "name": "Deep dive showcase",
+          "input_prompt": "Build a product showcase page for Semrush — highlight SEO, content marketing, and competitive analysis features",
+          "expected_patterns": ["Semrush", "html", "feature", "pricing", "CTA"],
+          "pass_criteria": "Self-contained HTML. Feature sections for each capability. Pricing breakdown. 4+ CTAs. Testimonials section. noindex meta tag. Affitor footer."
+        },
+        {
+          "id": "s4-004",
+          "name": "SaaS showcase with free tier",
+          "input_prompt": "Create a showcase page for Notion highlighting the free plan as entry point",
+          "expected_patterns": ["Notion", "free", "html", "feature", "CTA"],
+          "pass_criteria": "Free plan emphasized as low-friction entry. Feature comparison between free and paid. Self-contained HTML. Mobile-responsive."
+        }
+      ]
+    },
+    "squeeze-page-builder": {
+      "tests": [
+        {
+          "id": "s4-005",
+          "name": "Lead magnet squeeze page",
+          "input_prompt": "Build a squeeze page offering a free 'AI Video Toolkit' checklist, then redirect to HeyGen affiliate link",
+          "expected_patterns": ["html", "email", "checklist", "form", "HeyGen"],
+          "pass_criteria": "Self-contained HTML. Single email field. No navigation links. Lead magnet mockup present. Form redirects to affiliate URL. FTC disclosure in footer. noindex meta tag. Privacy micro-copy."
+        },
+        {
+          "id": "s4-006",
+          "name": "Minimal squeeze page",
+          "input_prompt": "Create a simple opt-in page for my SEO tips newsletter with Semrush as the affiliate backend",
+          "expected_patterns": ["html", "email", "SEO", "form", "submit"],
+          "pass_criteria": "Minimal, focused design. One clear value proposition. Email capture form. Self-contained HTML. Mobile-first."
+        }
+      ]
+    },
+    "webinar-registration-page": {
+      "tests": [
+        {
+          "id": "s4-007",
+          "name": "Live webinar page",
+          "input_prompt": "Build a registration page for my webinar 'Master AI Video in 60 Minutes' on April 15 2026 at 7pm EST, featuring HeyGen",
+          "expected_patterns": ["html", "webinar", "countdown", "register", "form", "HeyGen"],
+          "pass_criteria": "Self-contained HTML. Countdown timer with correct date. Registration form (name + email). Speaker section. Agenda. FTC disclosure. Urgency bar. Affitor footer."
+        },
+        {
+          "id": "s4-008",
+          "name": "Evergreen webinar page",
+          "input_prompt": "Create an evergreen webinar registration page for 'How to Start Affiliate Marketing' — always available",
+          "expected_patterns": ["html", "webinar", "register", "form", "affiliate"],
+          "pass_criteria": "Evergreen countdown (resets for each visitor). No specific date. Registration form. Self-contained HTML. Mobile-responsive."
+        }
+      ]
+    },
+    "bio-link-deployer": {
+      "tests": [
+        {
+          "id": "s5-001",
+          "name": "Affiliate bio link page",
+          "input_prompt": "Create a bio link page for @techreviewer with links to my HeyGen review blog, Semrush landing page, YouTube channel, and Twitter profile",
+          "expected_patterns": ["html", "techreviewer", "HeyGen", "Semrush", "link"],
+          "pass_criteria": "Self-contained HTML. All 4 links present with labels. Mobile-first layout. Money links ordered first. FTC disclosure if affiliate links. Affitor footer."
+        },
+        {
+          "id": "s5-002",
+          "name": "Themed bio link",
+          "input_prompt": "Make me a dark theme bio link hub for @aimarketer with 5 affiliate product links and my social profiles",
+          "expected_patterns": ["html", "dark", "aimarketer", "link", "affiliate"],
+          "pass_criteria": "Dark theme CSS applied. All links categorized. Affiliate links grouped separately from social. Self-contained HTML. Mobile-optimized."
+        }
+      ]
+    },
+    "email-drip-sequence": {
+      "tests": [
+        {
+          "id": "s5-003",
+          "name": "Welcome sequence for affiliate",
+          "input_prompt": "Write a 5-email welcome sequence for new subscribers promoting HeyGen as the main affiliate product",
+          "expected_patterns": ["Email 1", "Email 2", "Subject", "HeyGen", "disclosure", "CTA"],
+          "pass_criteria": "5 emails with subject lines, preview text, full body, and CTAs. FTC disclosure on affiliate emails. Value emails outnumber pitch emails. Spacing between emails is logical."
+        },
+        {
+          "id": "s5-004",
+          "name": "Product launch drip",
+          "input_prompt": "Create a 7-email drip sequence for promoting Semrush to an SEO-focused email list",
+          "expected_patterns": ["Semrush", "Email", "Subject", "SEO", "CTA"],
+          "pass_criteria": "7 emails with progressive engagement (value → trust → offer). Each email has subject + body + CTA. FTC compliant. Includes setup notes for ESP."
+        }
+      ]
+    },
+    "github-pages-deployer": {
+      "tests": [
+        {
+          "id": "s5-005",
+          "name": "Deploy landing page",
+          "input_prompt": "Help me deploy my HeyGen landing page HTML file to GitHub Pages with a custom domain myaffiliatesite.com",
+          "expected_patterns": ["GitHub", "Pages", "CNAME", "deploy", "domain"],
+          "pass_criteria": "Step-by-step deployment guide. GitHub Actions workflow or manual steps. CNAME file for custom domain. DNS record instructions. All commands copy-paste ready."
+        },
+        {
+          "id": "s5-006",
+          "name": "Simple deploy without custom domain",
+          "input_prompt": "Deploy my bio link page to GitHub Pages for free — no custom domain needed",
+          "expected_patterns": ["GitHub", "Pages", "deploy", "repository", "URL"],
+          "pass_criteria": "Simplified guide without custom domain. Repository setup steps. Expected URL format (username.github.io/repo). README included."
+        }
+      ]
+    },
+    "social-media-scheduler": {
+      "tests": [
+        {
+          "id": "s5-007",
+          "name": "30-day content calendar",
+          "input_prompt": "Create a 30-day social media calendar for promoting HeyGen on LinkedIn and Twitter",
+          "expected_patterns": ["Week", "LinkedIn", "Twitter", "HeyGen", "post"],
+          "pass_criteria": "30 posts across 4 weeks. 80/20 value-to-promo ratio. Platform-specific formatting. FTC disclosure on promo posts. Posting times included."
+        },
+        {
+          "id": "s5-008",
+          "name": "Multi-product calendar",
+          "input_prompt": "Plan my social media for next month promoting HeyGen, Semrush, and Notion across LinkedIn and X",
+          "expected_patterns": ["HeyGen", "Semrush", "Notion", "Week", "schedule"],
+          "pass_criteria": "All 3 products represented. Posts balanced across programs. Value content between promo posts. Platform-adapted formatting."
+        }
+      ]
+    },
+    "conversion-tracker": {
+      "tests": [
+        {
+          "id": "s6-001",
+          "name": "Basic tracking setup",
+          "input_prompt": "Set up tracking for my HeyGen affiliate link (heygen.com/ref/abc123) on blog and Twitter",
+          "expected_patterns": [
+            "utm_source",
+            "utm_medium",
+            "utm_campaign",
+            "heygen",
+            "blog",
+            "twitter"
+          ],
+          "pass_criteria": "Output contains UTM-tagged links for both blog and Twitter. Each link has proper utm_source, utm_medium, and utm_campaign parameters. Includes a naming convention and setup guide."
+        },
+        {
+          "id": "s6-002",
+          "name": "Multi-platform campaign",
+          "input_prompt": "Create tracking links for Semrush across LinkedIn, Twitter, Reddit, blog, and email",
+          "expected_patterns": ["linkedin", "twitter", "reddit", "blog", "email", "utm_source"],
+          "pass_criteria": "Output contains at least 5 distinct UTM-tagged links, one per platform. Naming convention is consistent. Includes tracking setup guide."
+        }
+      ]
+    },
+    "ab-test-generator": {
+      "tests": [
+        {
+          "id": "s6-003",
+          "name": "Headline A/B test",
+          "input_prompt": "Test this headline: 'HeyGen Review: Is It Worth It in 2026?'",
+          "expected_patterns": ["Original", "Variant", "hypothesis", "test"],
+          "pass_criteria": "Output contains the original headline plus at least 3 variants. Each variant has a hypothesis explaining why it might outperform. Includes a test plan with sample size and duration."
+        },
+        {
+          "id": "s6-004",
+          "name": "CTA optimization",
+          "input_prompt": "Optimize this CTA: 'Start Free Trial'",
+          "expected_patterns": ["Original", "Variant", "CTA", "clicks"],
+          "pass_criteria": "Output contains at least 3 CTA alternatives with different approaches (outcome-focused, friction-reducing, urgency). Each has a hypothesis. Test plan included."
+        }
+      ]
+    },
+    "performance-report": {
+      "tests": [
+        {
+          "id": "s6-005",
+          "name": "Multi-program monthly report",
+          "input_prompt": "Monthly report: HeyGen 500 clicks 15 conversions $450, Semrush 1200 clicks 8 conversions $320, Notion 300 clicks 25 conversions $125",
+          "expected_patterns": [
+            "EPC",
+            "Conversion Rate",
+            "HeyGen",
+            "Semrush",
+            "Notion",
+            "Recommendation"
+          ],
+          "pass_criteria": "Output contains KPI calculations (EPC, conversion rate) for each program. Programs are ranked. Labels assigned (Star, Cash Cow, etc.). Actionable recommendations provided."
+        }
+      ]
+    },
+    "seo-audit": {
+      "tests": [
+        {
+          "id": "s6-006",
+          "name": "Blog post SEO audit",
+          "input_prompt": "Audit this blog post for 'best AI video tools': [sample 500-word review without meta description or keyword in H1]",
+          "expected_patterns": [
+            "Score",
+            "keyword",
+            "meta description",
+            "heading",
+            "rel=\"nofollow"
+          ],
+          "pass_criteria": "Output contains a scorecard with at least 8 dimensions scored 1-10. Identifies missing meta description and keyword-less H1 as issues. Includes a prioritized fix-it checklist with quick wins."
+        }
+      ]
+    },
+    "email-automation-builder": {
+      "tests": [
+        {
+          "id": "s7-001",
+          "name": "Welcome flow with branches",
+          "input_prompt": "Build a welcome email automation for HeyGen for content creators who downloaded my AI guide",
+          "expected_patterns": ["Welcome", "Branch", "opened", "Subject", "HeyGen", "disclosure"],
+          "pass_criteria": "Output contains a multi-email flow with at least one branch point (opened/not opened). Each email has subject, preview, body. FTC disclosure present on emails with affiliate links. Flow diagram included."
+        }
+      ]
+    },
+    "content-repurposer": {
+      "tests": [
+        {
+          "id": "s7-002",
+          "name": "Blog to social media",
+          "input_prompt": "Turn my HeyGen review blog post into a tweet thread and LinkedIn post",
+          "expected_patterns": ["Tweet", "LinkedIn", "HeyGen", "#ad", "thread"],
+          "pass_criteria": "Output contains at least 2 distinct formats (tweet thread and LinkedIn post). Each is adapted to the platform's style and length. FTC disclosure present on both. Posting tips included."
+        }
+      ]
+    },
+    "multi-program-manager": {
+      "tests": [
+        {
+          "id": "s7-003",
+          "name": "Portfolio analysis with clear winner",
+          "input_prompt": "I promote HeyGen ($450/mo), Semrush ($320/mo), Notion ($125/mo), Canva ($80/mo). Which should I focus on?",
+          "expected_patterns": ["Portfolio", "Revenue Share", "HeyGen", "Double Down", "action"],
+          "pass_criteria": "Output contains portfolio overview with revenue share percentages. Each program gets an action label. Strategic recommendations with specific next steps. Weekly time allocation plan."
+        }
+      ]
+    },
+    "paid-ad-copy-writer": {
+      "tests": [
+        {
+          "id": "s7-004",
+          "name": "Facebook ad for SaaS",
+          "input_prompt": "Write Facebook ads for HeyGen targeting content creators",
+          "expected_patterns": ["Headline", "Primary Text", "CTA", "HeyGen", "Variant"],
+          "pass_criteria": "Output contains at least 3 ad variants with different angles. Each has primary text, headline, description, CTA. Facebook-specific compliance notes included. Targeting suggestions provided."
+        }
+      ]
+    },
+    "skill-finder": {
+      "tests": [
+        {
+          "id": "s8-001",
+          "name": "Task-based search",
+          "input_prompt": "I want to write a blog review of an AI tool",
+          "expected_patterns": ["affiliate-blog-builder", "S3", "Blog"],
+          "pass_criteria": "Output recommends affiliate-blog-builder as top match. Shows at least 2 related skills. Includes example invocation prompt. Suggests a path if applicable."
+        },
+        {
+          "id": "s8-002",
+          "name": "New user orientation",
+          "input_prompt": "I'm new to Affitor, where do I start?",
+          "expected_patterns": ["S1", "Research", "funnel", "skill"],
+          "pass_criteria": "Output shows available stages and recommends a starting path. Mentions S1 research as the typical starting point. Includes at least 3 skills with descriptions."
+        }
+      ]
+    },
+    "funnel-planner": {
+      "tests": [
+        {
+          "id": "s8-003",
+          "name": "Beginner full funnel plan",
+          "input_prompt": "I want to start affiliate marketing. I have 5 hours a week and I blog.",
+          "expected_patterns": ["Week", "S1", "Roadmap", "blog", "prompt"],
+          "pass_criteria": "Output contains a week-by-week roadmap. References specific skills by name. Includes invocation prompts. Has success metrics. Fits within 5 hours/week constraint."
+        }
+      ]
+    },
+    "compliance-checker": {
+      "tests": [
+        {
+          "id": "s8-004",
+          "name": "Missing disclosure detection",
+          "input_prompt": "Check this tweet: 'Just tried HeyGen and it's incredible. Use my link: heygen.com/ref/abc123'",
+          "expected_patterns": ["FAIL", "disclosure", "#ad", "FTC"],
+          "pass_criteria": "Output identifies missing FTC disclosure as a critical issue. Provides corrected content with #ad added. Scores compliance as FAIL. Explains the FTC requirement."
+        }
+      ]
+    },
+    "self-improver": {
+      "tests": [
+        {
+          "id": "s8-005",
+          "name": "Low conversion diagnosis",
+          "input_prompt": "I wrote 3 blog reviews last month. 2000 visitors but only 2 conversions ($14 total). What went wrong?",
+          "expected_patterns": [
+            "Conversion Rate",
+            "benchmark",
+            "diagnosis",
+            "improvement",
+            "action"
+          ],
+          "pass_criteria": "Output compares 0.1% conversion rate to industry benchmark (1-3%). Identifies root causes. Provides prioritized improvement actions with specific skill references. Includes an iteration plan."
+        }
+      ]
+    }
+  }
+}

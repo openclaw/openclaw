@@ -1,0 +1,5 @@
+interface:
+  display_name: "Affiliate Program Search"
+  short_description: "Find and evaluate the best affiliate programs to promote from list.affitor.com"
+  default_prompt: "Find me the best AI video affiliate programs with recurring commission of at least 20%"
+  allow_implicit_invocation: true

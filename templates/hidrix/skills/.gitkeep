@@ -1,0 +1,14 @@
+# Skills Directory
+
+Create your own skills here. Each skill is a folder with a SKILL.md file.
+
+Example:
+```
+skills/
+  my-skill/
+    SKILL.md      # Instructions for the agent
+    scripts/      # Optional helper scripts
+    references/   # Optional reference docs
+```
+
+See https://docs.evox.sh/skills for the skill format.

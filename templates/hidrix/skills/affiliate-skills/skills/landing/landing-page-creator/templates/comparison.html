@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HeyGen vs Synthesia vs Colossyan — Which AI Video Tool Is Best?</title>
+  <meta name="description" content="Side-by-side comparison of HeyGen, Synthesia, and Colossyan. See pricing, features, and which AI video tool is best for your needs.">
+  <style>
+    /* === CSS VARIABLES — AI: replace based on user's color_scheme === */
+    :root {
+      --color-primary: #2563eb;
+      --color-primary-hover: #1d4ed8;
+      --color-secondary: #7c3aed;
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-text: #1e293b;
+      --color-text-light: #64748b;
+      --color-accent: #f59e0b;
+      --color-border: #e2e8f0;
+      --color-winner: #059669;
+    }
+
+    /* === RESET & BASE === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--color-text);
+      background: var(--color-bg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--color-primary); text-decoration: none; }
+
+    /* === LAYOUT === */
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+    section { padding: 64px 0; }
+
+    /* === FTC DISCLOSURE === */
+    .disclosure {
+      background: var(--color-surface);
+      border-left: 3px solid var(--color-primary);
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--color-text-light);
+      margin-bottom: 32px;
+      max-width: 720px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* === HERO === */
+    .hero {
+      text-align: center;
+      padding: 80px 24px 64px;
+      background: var(--color-surface);
+    }
+    .hero .vs-badge {
+      display: inline-block;
+      background: var(--color-primary);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .hero h1 {
+      font-size: 40px;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+    .hero .subtitle {
+      font-size: 20px;
+      color: var(--color-text-light);
+      max-width: 640px;
+      margin: 0 auto 32px;
+      line-height: 1.5;
+    }
+
+    /* === CTA BUTTON === */
+    .cta {
+      display: inline-block;
+      background: var(--color-primary);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 16px 40px;
+      border-radius: 8px;
+      transition: background 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+    .cta:hover { background: var(--color-primary-hover); color: #fff; }
+    .cta-secondary {
+      background: var(--color-secondary);
+    }
+    .cta-secondary:hover { background: #6d28d9; color: #fff; }
+    .cta-note {
+      display: block;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--color-text-light);
+    }
+
+    /* === COMPARISON TABLE === */
+    .comparison-table { background: var(--color-bg); }
+    .comparison-table h2 {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 40px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 15px;
+    }
+    thead th {
+      background: var(--color-surface);
+      padding: 16px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 16px;
+      border-bottom: 2px solid var(--color-border);
+    }
+    thead th.winner-col {
+      background: #ecfdf5;
+      color: var(--color-winner);
+    }
+    tbody td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--color-border);
+      vertical-align: top;
+    }
+    tbody tr:hover { background: var(--color-surface); }
+    .check { color: var(--color-winner); font-weight: 700; }
+    .cross { color: #ef4444; }
+    .feature-label {
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    /* === PRODUCT SECTIONS === */
+    .product-section { background: var(--color-surface); }
+    .product-section:nth-child(even) { background: var(--color-bg); }
+    .product-card {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .product-card h2 {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .product-card .product-desc {
+      font-size: 16px;
+      color: var(--color-text-light);
+      margin-bottom: 24px;
+      line-height: 1.6;
+    }
+    .pros-cons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    .pros h4, .cons h4 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .pros h4 { color: var(--color-winner); }
+    .cons h4 { color: #ef4444; }
+    .pros ul, .cons ul {
+      list-style: none;
+      padding: 0;
+    }
+    .pros li, .cons li {
+      padding: 6px 0;
+      font-size: 15px;
+      color: var(--color-text-light);
+    }
+    .pros li::before { content: "✓ "; color: var(--color-winner); font-weight: 700; }
+    .cons li::before { content: "✗ "; color: #ef4444; font-weight: 700; }
+
+    /* === WINNER CALLOUT === */
+    .winner-callout {
+      background: #ecfdf5;
+      border: 2px solid var(--color-winner);
+      border-radius: 12px;
+      padding: 32px;
+      text-align: center;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .winner-callout .trophy { font-size: 48px; margin-bottom: 12px; }
+    .winner-callout h2 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--color-winner);
+      margin-bottom: 12px;
+    }
+    .winner-callout p {
+      font-size: 16px;
+      color: var(--color-text-light);
+      margin-bottom: 24px;
+      max-width: 540px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* === FAQ === */
+    .faq { background: var(--color-surface); }
+    .faq h2 {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 32px;
+    }
+    .faq-list { max-width: 640px; margin: 0 auto; }
+    .faq-item {
+      border-bottom: 1px solid var(--color-border);
+      padding: 20px 0;
+    }
+    .faq-item summary {
+      font-size: 17px;
+      font-weight: 600;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .faq-item summary::after {
+      content: "+";
+      font-size: 22px;
+      color: var(--color-text-light);
+    }
+    .faq-item[open] summary::after { content: "−"; }
+    .faq-item p {
+      margin-top: 12px;
+      font-size: 15px;
+      color: var(--color-text-light);
+      line-height: 1.6;
+    }
+
+    /* === DUAL CTA === */
+    .dual-cta {
+      text-align: center;
+      padding: 80px 24px;
+    }
+    .dual-cta h2 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .dual-cta p {
+      font-size: 18px;
+      color: var(--color-text-light);
+      margin-bottom: 32px;
+    }
+    .cta-group {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    /* === FOOTER === */
+    .page-footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 13px;
+      color: #666;
+      border-top: 1px solid var(--color-border);
+    }
+    .page-footer a { color: #155DFC; }
+
+    /* === MOBILE === */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 26px; }
+      .hero .subtitle { font-size: 17px; }
+      .cta { width: 100%; text-align: center; padding: 16px 24px; }
+      .cta-group { flex-direction: column; align-items: stretch; }
+      .pros-cons { grid-template-columns: 1fr; gap: 16px; }
+      section { padding: 48px 0; }
+
+      /* Responsive table */
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { display: none; }
+      tbody td {
+        padding: 8px 16px;
+        text-align: right;
+        position: relative;
+        padding-left: 50%;
+      }
+      tbody td::before {
+        content: attr(data-label);
+        position: absolute;
+        left: 16px;
+        font-weight: 600;
+        text-align: left;
+      }
+      tbody tr { border-bottom: 2px solid var(--color-border); padding: 8px 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- FTC DISCLOSURE -->
+  <div class="container" style="padding-top: 24px;">
+    <div class="disclosure">
+      Disclosure: This page contains affiliate links. If you purchase through these links,
+      I may earn a commission at no extra cost to you. I only recommend products I've
+      personally used or thoroughly evaluated.
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="container">
+      <span class="vs-badge">Comparison</span>
+      <h1>HeyGen vs Synthesia vs Colossyan</h1>
+      <p class="subtitle">We tested all three AI video platforms side by side. Here's which one is actually worth your money in 2026.</p>
+    </div>
+  </section>
+
+  <!-- COMPARISON TABLE -->
+  <section class="comparison-table">
+    <div class="container">
+      <h2>Feature-by-Feature Comparison</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="winner-col">HeyGen ⭐</th>
+            <th>Synthesia</th>
+            <th>Colossyan</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-label="Feature" class="feature-label">Starting Price</td>
+            <td data-label="HeyGen">$29/mo</td>
+            <td data-label="Synthesia">$59/mo</td>
+            <td data-label="Colossyan">$35/mo</td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">AI Avatars</td>
+            <td data-label="HeyGen">100+ <span class="check">✓</span></td>
+            <td data-label="Synthesia">160+</td>
+            <td data-label="Colossyan">50+</td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">Custom Avatar</td>
+            <td data-label="HeyGen"><span class="check">✓</span></td>
+            <td data-label="Synthesia"><span class="check">✓</span></td>
+            <td data-label="Colossyan"><span class="check">✓</span></td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">Languages</td>
+            <td data-label="HeyGen">40+</td>
+            <td data-label="Synthesia">130+</td>
+            <td data-label="Colossyan">70+</td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">Lip Sync Quality</td>
+            <td data-label="HeyGen"><span class="check">Excellent</span></td>
+            <td data-label="Synthesia">Good</td>
+            <td data-label="Colossyan">Good</td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">API Access</td>
+            <td data-label="HeyGen"><span class="check">✓</span></td>
+            <td data-label="Synthesia"><span class="check">✓</span></td>
+            <td data-label="Colossyan"><span class="cross">✗</span></td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">Free Trial</td>
+            <td data-label="HeyGen"><span class="check">✓</span> 1 free video</td>
+            <td data-label="Synthesia"><span class="check">✓</span> Demo only</td>
+            <td data-label="Colossyan"><span class="check">✓</span> 5 min free</td>
+          </tr>
+          <tr>
+            <td data-label="Feature" class="feature-label">Best For</td>
+            <td data-label="HeyGen">Creators & small teams</td>
+            <td data-label="Synthesia">Enterprise L&D</td>
+            <td data-label="Colossyan">Localization</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PRODUCT 1: HEYGEN (PRIMARY) -->
+  <section class="product-section">
+    <div class="container">
+      <div class="product-card">
+        <h2>HeyGen — Best Overall Value</h2>
+        <p class="product-desc">HeyGen is the fastest, most affordable AI video platform for creators and small teams. It offers realistic avatars, excellent lip-syncing, and a generous free plan to test before you buy.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <h4>Pros</h4>
+            <ul>
+              <li>Most affordable starting price ($29/mo)</li>
+              <li>Best lip-sync quality in the category</li>
+              <li>API access for automation</li>
+              <li>Fast rendering (under 5 minutes)</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <h4>Cons</h4>
+            <ul>
+              <li>Fewer avatar options than Synthesia</li>
+              <li>Limited enterprise features</li>
+            </ul>
+          </div>
+        </div>
+        <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Try HeyGen Free →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRODUCT 2: SYNTHESIA -->
+  <section class="product-section">
+    <div class="container">
+      <div class="product-card">
+        <h2>Synthesia — Best for Enterprise</h2>
+        <p class="product-desc">Synthesia is the industry leader for enterprise training and L&D teams. More avatars, more languages, and SOC 2 compliance — but at a higher price point.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <h4>Pros</h4>
+            <ul>
+              <li>160+ avatars — largest selection</li>
+              <li>130+ languages supported</li>
+              <li>SOC 2 Type II compliant</li>
+              <li>Strong enterprise integrations</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <h4>Cons</h4>
+            <ul>
+              <li>2x the price of HeyGen</li>
+              <li>No free video credit</li>
+              <li>Slower rendering times</li>
+            </ul>
+          </div>
+        </div>
+        <a href="https://www.synthesia.io" class="cta cta-secondary">Try Synthesia →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRODUCT 3: COLOSSYAN -->
+  <section class="product-section">
+    <div class="container">
+      <div class="product-card">
+        <h2>Colossyan — Best for Localization</h2>
+        <p class="product-desc">Colossyan focuses on multilingual video creation with strong localization features. Good for teams that need content in many languages but don't need the full enterprise stack.</p>
+        <div class="pros-cons">
+          <div class="pros">
+            <h4>Pros</h4>
+            <ul>
+              <li>Strong multilingual dubbing</li>
+              <li>Mid-range pricing ($35/mo)</li>
+              <li>Good for localization workflows</li>
+            </ul>
+          </div>
+          <div class="cons">
+            <h4>Cons</h4>
+            <ul>
+              <li>Fewer avatars (50+)</li>
+              <li>No API access</li>
+              <li>Smaller community</li>
+            </ul>
+          </div>
+        </div>
+        <a href="https://www.colossyan.com" class="cta cta-secondary">Try Colossyan →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- WINNER CALLOUT -->
+  <section style="padding: 64px 0;">
+    <div class="container">
+      <div class="winner-callout">
+        <div class="trophy">🏆</div>
+        <h2>Our Pick: HeyGen</h2>
+        <p>For most creators and small teams, HeyGen offers the best combination of quality, speed, and price. Start with the free plan and upgrade when you're ready.</p>
+        <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Get Started with HeyGen →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="faq">
+    <div class="container">
+      <h2>Frequently Asked Questions</h2>
+      <div class="faq-list">
+        <details class="faq-item">
+          <summary>Which AI video tool is cheapest?</summary>
+          <p>HeyGen starts at $29/month, making it the most affordable option. Colossyan is $35/month and Synthesia is $59/month. All three offer some form of free trial.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Can I switch between platforms later?</summary>
+          <p>Yes — all three platforms use a monthly subscription model. Your videos are downloadable as MP4 files, so you're never locked in. However, custom avatars are platform-specific.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Which has the most realistic avatars?</summary>
+          <p>HeyGen currently has the best lip-sync technology, making its avatars appear more natural during speech. Synthesia has the largest avatar library (160+). Quality varies — test each platform's free tier.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Do I need technical skills to use these tools?</summary>
+          <p>No. All three platforms are designed for non-technical users. You write a script, choose an avatar, and the platform generates the video. No editing or design skills required.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- DUAL CTA -->
+  <section class="dual-cta">
+    <h2>Ready to Start Creating AI Videos?</h2>
+    <p>Pick the platform that fits your needs and budget. Both offer free trials.</p>
+    <div class="cta-group">
+      <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Try HeyGen Free →</a>
+      <a href="https://www.synthesia.io" class="cta cta-secondary">Try Synthesia →</a>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="page-footer">
+    Built with <a href="https://list.affitor.com">Affiliate Skills by Affitor</a>
+  </footer>
+
+</body>
+</html>

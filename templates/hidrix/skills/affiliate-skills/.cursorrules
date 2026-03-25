@@ -1,0 +1,49 @@
+# Affitor Affiliate Skills — Cursor Rules
+
+## What This Repo Is
+45 AI-powered skills for affiliate marketers. Each skill automates a specific workflow
+(content creation, program research, SEO, outreach, analytics, etc.) using live data
+from the Affitor API.
+
+## How Skills Work
+- Each skill lives in `skills/<stage>/<skill-name>/SKILL.md`
+- `SKILL.md` is a self-contained instruction file: it defines inputs, workflow steps, and expected outputs
+- Skills are designed to be chained — the output of one skill feeds the next
+- Run a skill by reading its `SKILL.md` and executing the documented workflow
+
+## Directory Layout
+```
+skills/          # Skills grouped by stage (research, content, blog, landing, distribution, analytics, automation, meta)
+registry.json    # Master index of all 45 skills with metadata
+API.md           # Full Affitor API reference
+prompts/         # Bootstrap prompt for any AI
+shared/
+  references/    # Cross-skill reference docs (FTC rules, glossary, branding)
+```
+
+## Affitor API
+- Base URL: `https://list.affitor.com/api/v1`
+- Programs endpoint: `GET /programs`
+- Key fields per program:
+  - `reward_value` — commission amount or percentage
+  - `reward_type` — "cps_recurring" | "cps_one_time" | "cps_lifetime" | "cpl" | "cpc"
+  - `cookie_days` — attribution window in days
+  - `stars_count` — community star count (popularity signal)
+  - `slug`, `name`, `tags[]`, `url`, `description`
+- Always fetch real data from the API. Never fabricate program details.
+
+## Key Rules
+1. **FTC disclosure required** — any content that promotes an affiliate program must include
+   a clear disclosure ("I may earn a commission..."). See `shared/references/ftc-compliance.md`.
+2. **Data from API, not guesses** — commission rates, cookie windows, and program names
+   must come from live API responses.
+3. **Portable output** — skill outputs must work standalone (markdown, plain text, CSV).
+   No platform-specific formatting unless the skill explicitly targets one.
+4. **Follow the SKILL.md workflow exactly** — each step is intentional. Don't skip steps.
+5. **Chain outputs** — skills are composable. Pass structured output from one skill as
+   input to the next when building multi-step workflows.
+
+## Adding or Editing Skills
+- Register new skills in `registry.json` (stage, name, description, inputs, outputs)
+- Keep `SKILL.md` under 150 lines — concise instruction, not documentation
+- Use frontmatter at the top of `SKILL.md` for metadata (stage, version, inputs, outputs)

@@ -1,0 +1,12 @@
+{
+  "name": "affiliate-skills",
+  "version": "1.0.0",
+  "description": "AI-powered affiliate marketing skills for any AI agent",
+  "license": "MIT",
+  "scripts": {
+    "build": "bun build --compile tools/src/cli.ts --outfile tools/dist/affiliate-check",
+    "dev": "bun run tools/src/cli.ts",
+    "test": "bun test tools/test/"
+  },
+  "devDependencies": {}
+}

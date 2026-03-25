@@ -1,0 +1,126 @@
+{
+  "_comment": "Sample response from GET /api/v1/programs?type=affiliate_program&q=AI+video&sort=trending&limit=5. Use for offline development and testing. Field names match the live list.affitor.com API exactly.",
+  "data": [
+    {
+      "id": "sample-uuid-001",
+      "slug": "heygen",
+      "name": "HeyGen",
+      "url": "https://heygen.com",
+      "description": "AI video generation platform. Create studio-quality videos with AI avatars, voice cloning, and video translation in 175+ languages.",
+      "reward_type": "cps_recurring",
+      "reward_value": "30%",
+      "reward_duration": "12 months",
+      "cookie_days": 60,
+      "stars_count": 42,
+      "views_count": 1200,
+      "comments_count": 5,
+      "tags": ["ai", "video", "marketing"],
+      "type": "affiliate_program",
+      "source": "user",
+      "created_at": "2026-01-15T10:00:00.000Z",
+      "updated_at": "2026-03-10T14:30:00.000Z",
+      "profiles": {
+        "handle": "sonpiaz",
+        "avatar_url": "https://example.com/avatar.jpg",
+        "name": "Son Piaz"
+      }
+    },
+    {
+      "id": "sample-uuid-002",
+      "slug": "synthesia",
+      "name": "Synthesia",
+      "url": "https://synthesia.io",
+      "description": "AI video creation platform for enterprise. Create professional training videos, marketing content, and presentations with AI avatars.",
+      "reward_type": "cps_one_time",
+      "reward_value": "$150",
+      "reward_duration": null,
+      "cookie_days": 90,
+      "stars_count": 28,
+      "views_count": 890,
+      "comments_count": 3,
+      "tags": ["ai", "video", "enterprise"],
+      "type": "affiliate_program",
+      "source": "user",
+      "created_at": "2026-01-20T08:00:00.000Z",
+      "updated_at": "2026-03-05T11:00:00.000Z",
+      "profiles": {
+        "handle": "affiliate_pro",
+        "avatar_url": "https://example.com/avatar2.jpg",
+        "name": "Affiliate Pro"
+      }
+    },
+    {
+      "id": "sample-uuid-003",
+      "slug": "descript",
+      "name": "Descript",
+      "url": "https://descript.com",
+      "description": "All-in-one AI video and podcast editor. Edit video by editing text, AI voice cloning, screen recording, and transcription.",
+      "reward_type": "cps_recurring",
+      "reward_value": "15%",
+      "reward_duration": "lifetime",
+      "cookie_days": 30,
+      "stars_count": 15,
+      "views_count": 450,
+      "comments_count": 2,
+      "tags": ["ai", "video", "podcast", "editing"],
+      "type": "affiliate_program",
+      "source": "user",
+      "created_at": "2026-02-01T12:00:00.000Z",
+      "updated_at": "2026-03-01T09:00:00.000Z",
+      "profiles": {
+        "handle": "creator_tools",
+        "avatar_url": "https://example.com/avatar3.jpg",
+        "name": "Creator Tools"
+      }
+    },
+    {
+      "id": "sample-uuid-004",
+      "slug": "invideo-ai",
+      "name": "InVideo AI",
+      "url": "https://invideo.io",
+      "description": "AI-powered video creation from text prompts. Turn any idea into a publish-ready video with AI script, stock footage, and voiceover.",
+      "reward_type": "cps_recurring",
+      "reward_value": "25%",
+      "reward_duration": "12 months",
+      "cookie_days": 120,
+      "stars_count": 19,
+      "views_count": 620,
+      "comments_count": 4,
+      "tags": ["ai", "video", "content-creation"],
+      "type": "affiliate_program",
+      "source": "user",
+      "created_at": "2026-01-25T15:00:00.000Z",
+      "updated_at": "2026-03-08T16:00:00.000Z",
+      "profiles": {
+        "handle": "vid_marketer",
+        "avatar_url": "https://example.com/avatar4.jpg",
+        "name": "Vid Marketer"
+      }
+    },
+    {
+      "id": "sample-uuid-005",
+      "slug": "pictory",
+      "name": "Pictory",
+      "url": "https://pictory.ai",
+      "description": "AI video summarization and creation. Turn blog posts and long-form content into short branded videos with automatic captions.",
+      "reward_type": "cps_recurring",
+      "reward_value": "20%",
+      "reward_duration": "12 months",
+      "cookie_days": 45,
+      "stars_count": 8,
+      "views_count": 280,
+      "comments_count": 1,
+      "tags": ["ai", "video", "repurposing"],
+      "type": "affiliate_program",
+      "source": "user",
+      "created_at": "2026-02-10T10:00:00.000Z",
+      "updated_at": "2026-02-28T13:00:00.000Z",
+      "profiles": {
+        "handle": "content_scale",
+        "avatar_url": "https://example.com/avatar5.jpg",
+        "name": "Content Scale"
+      }
+    }
+  ],
+  "count": 5
+}

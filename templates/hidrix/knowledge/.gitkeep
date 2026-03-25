@@ -1,0 +1,16 @@
+# Knowledge Directory
+
+Store reference documents, project notes, and context here.
+
+Example:
+```
+knowledge/
+  project-alpha/
+    requirements.md
+    architecture.md
+  company/
+    team.md
+    processes.md
+```
+
+The agent can read these files for context and reference.

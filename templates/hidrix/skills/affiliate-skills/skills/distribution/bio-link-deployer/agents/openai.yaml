@@ -1,0 +1,5 @@
+name: bio-link-deployer
+description: Create a Linktree-style bio link hub page as a single self-contained HTML file — link all your affiliate content in one place
+instructions_file: ../SKILL.md
+tools:
+  - web_search

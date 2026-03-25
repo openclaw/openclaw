@@ -1,0 +1,3 @@
+name: performance-report
+description: Generate affiliate performance reports with KPIs and recommendations
+instructions_file: ../SKILL.md

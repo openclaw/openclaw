@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>@alexcreator — Tools & Resources I Recommend</title>
+  <meta name="description" content="Curated tools, resources, and content from @alexcreator. Find the best AI, productivity, and marketing tools.">
+  <style>
+    /* ================================================================
+       BIO LINK PAGE — 3 Theme Variants
+       AI: Choose one theme block and delete the other two.
+       Set the active theme's variables in :root.
+       ================================================================ */
+
+    /* --- THEME: MINIMAL (default) --- */
+    /*
+    :root {
+      --color-primary: #1e293b;
+      --color-primary-hover: #0f172a;
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-text: #1e293b;
+      --color-text-light: #64748b;
+      --color-border: #e2e8f0;
+      --color-link-bg: #ffffff;
+      --color-link-border: #e2e8f0;
+      --color-link-hover: #f1f5f9;
+      --avatar-border: #e2e8f0;
+      --radius: 12px;
+    }
+    */
+
+    /* --- THEME: DARK --- */
+    /*
+    :root {
+      --color-primary: #3b82f6;
+      --color-primary-hover: #60a5fa;
+      --color-bg: #0f172a;
+      --color-surface: #1e293b;
+      --color-text: #f1f5f9;
+      --color-text-light: #94a3b8;
+      --color-border: #334155;
+      --color-link-bg: #1e293b;
+      --color-link-border: #334155;
+      --color-link-hover: #334155;
+      --avatar-border: #334155;
+      --radius: 12px;
+    }
+    */
+
+    /* --- THEME: GRADIENT --- */
+    /*
+    :root {
+      --color-primary: #ffffff;
+      --color-primary-hover: #f0f0f0;
+      --color-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --color-surface: rgba(255,255,255,0.1);
+      --color-text: #ffffff;
+      --color-text-light: rgba(255,255,255,0.75);
+      --color-border: rgba(255,255,255,0.2);
+      --color-link-bg: rgba(255,255,255,0.15);
+      --color-link-border: rgba(255,255,255,0.2);
+      --color-link-hover: rgba(255,255,255,0.25);
+      --avatar-border: rgba(255,255,255,0.3);
+      --radius: 24px;
+    }
+    */
+
+    /* === ACTIVE THEME — AI: set the chosen theme's values here === */
+    :root {
+      --color-primary: #1e293b;
+      --color-primary-hover: #0f172a;
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-text: #1e293b;
+      --color-text-light: #64748b;
+      --color-border: #e2e8f0;
+      --color-link-bg: #ffffff;
+      --color-link-border: #e2e8f0;
+      --color-link-hover: #f1f5f9;
+      --avatar-border: #e2e8f0;
+      --radius: 12px;
+    }
+
+    /* === RESET & BASE === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--color-text);
+      background: var(--color-bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+
+    /* === MAIN CONTAINER === */
+    .bio-container {
+      width: 100%;
+      max-width: 480px;
+      padding: 48px 20px 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    /* === AVATAR === */
+    .avatar {
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      border: 3px solid var(--avatar-border);
+      object-fit: cover;
+      margin-bottom: 16px;
+    }
+    .avatar-placeholder {
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      border: 3px solid var(--avatar-border);
+      background: var(--color-surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+      margin-bottom: 16px;
+    }
+
+    /* === PROFILE INFO === */
+    .profile-name {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      text-align: center;
+    }
+    .profile-tagline {
+      font-size: 15px;
+      color: var(--color-text-light);
+      text-align: center;
+      margin-bottom: 32px;
+      line-height: 1.4;
+      max-width: 360px;
+    }
+
+    /* === CATEGORY LABEL === */
+    .category-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--color-text-light);
+      margin-bottom: 12px;
+      margin-top: 8px;
+      width: 100%;
+      text-align: left;
+      padding-left: 4px;
+    }
+
+    /* === LINK BUTTON === */
+    .link-list {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .link-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 14px 20px;
+      background: var(--color-link-bg);
+      border: 1px solid var(--color-link-border);
+      border-radius: var(--radius);
+      transition: background 0.15s, transform 0.1s;
+      cursor: pointer;
+    }
+    .link-item:hover {
+      background: var(--color-link-hover);
+      transform: translateY(-1px);
+    }
+    .link-item:active {
+      transform: translateY(0);
+    }
+    .link-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+    .link-label {
+      font-size: 15px;
+      font-weight: 500;
+      flex-grow: 1;
+    }
+    .link-arrow {
+      font-size: 14px;
+      color: var(--color-text-light);
+      flex-shrink: 0;
+    }
+
+    /* === SPACER === */
+    .spacer { height: 16px; }
+
+    /* === FOOTER === */
+    .bio-footer {
+      margin-top: 40px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--color-text-light);
+      line-height: 1.6;
+    }
+    .bio-footer a {
+      color: #155DFC;
+    }
+    .disclosure-text {
+      font-size: 11px;
+      color: var(--color-text-light);
+      margin-bottom: 8px;
+      max-width: 360px;
+    }
+
+    /* === MOBILE OPTIMIZATIONS === */
+    @media (max-width: 480px) {
+      .bio-container { padding: 32px 16px 24px; }
+      .link-item { padding: 14px 16px; }
+    }
+
+    /* Ensure full height on mobile browsers */
+    @supports (-webkit-touch-callout: none) {
+      body { min-height: -webkit-fill-available; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="bio-container">
+
+    <!-- AVATAR — AI: replace with user's avatar_url or use placeholder -->
+    <!-- Option A: Image avatar -->
+    <!-- <img class="avatar" src="https://example.com/avatar.jpg" alt="Alex Creator"> -->
+    <!-- Option B: Emoji/initial placeholder (use when no avatar_url provided) -->
+    <div class="avatar-placeholder">🚀</div>
+
+    <!-- PROFILE INFO -->
+    <h1 class="profile-name">@alexcreator</h1>
+    <p class="profile-tagline">AI tools enthusiast. Sharing the best products I use to create content faster and earn affiliate income.</p>
+
+    <!-- LINKS BY CATEGORY -->
+
+    <!-- Category: Featured Tools -->
+    <div class="category-label">Featured Tools</div>
+    <div class="link-list">
+      <a href="https://www.heygen.com/?ref=YOUR_ID" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">🎬</span>
+        <span class="link-label">HeyGen — AI Video Creator</span>
+        <span class="link-arrow">→</span>
+      </a>
+      <a href="https://www.semrush.com/?ref=YOUR_ID" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">🔍</span>
+        <span class="link-label">Semrush — SEO & Marketing</span>
+        <span class="link-arrow">→</span>
+      </a>
+      <a href="https://www.jasper.ai/?ref=YOUR_ID" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">✍️</span>
+        <span class="link-label">Jasper — AI Writing Assistant</span>
+        <span class="link-arrow">→</span>
+      </a>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- Category: My Content -->
+    <div class="category-label">My Content</div>
+    <div class="link-list">
+      <a href="https://yourblog.com/best-ai-video-tools" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">📝</span>
+        <span class="link-label">Best AI Video Tools (2026)</span>
+        <span class="link-arrow">→</span>
+      </a>
+      <a href="https://yourblog.com/heygen-review" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">⭐</span>
+        <span class="link-label">My HeyGen Review</span>
+        <span class="link-arrow">→</span>
+      </a>
+    </div>
+
+    <div class="spacer"></div>
+
+    <!-- Category: Connect -->
+    <div class="category-label">Connect</div>
+    <div class="link-list">
+      <a href="https://twitter.com/alexcreator" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">𝕏</span>
+        <span class="link-label">Follow me on X</span>
+        <span class="link-arrow">→</span>
+      </a>
+      <a href="https://youtube.com/@alexcreator" target="_blank" rel="noopener" class="link-item">
+        <span class="link-icon">▶️</span>
+        <span class="link-label">YouTube Channel</span>
+        <span class="link-arrow">→</span>
+      </a>
+      <a href="mailto:alex@example.com" class="link-item">
+        <span class="link-icon">✉️</span>
+        <span class="link-label">Email Me</span>
+        <span class="link-arrow">→</span>
+      </a>
+    </div>
+
+    <!-- FOOTER — FTC disclosure + Affitor branding -->
+    <div class="bio-footer">
+      <p class="disclosure-text">Some links on this page are affiliate links. I may earn a commission if you purchase through them, at no extra cost to you.</p>
+      <p>Built with <a href="https://list.affitor.com">Affiliate Skills by Affitor</a></p>
+    </div>
+
+  </div>
+
+</body>
+</html>

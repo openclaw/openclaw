@@ -1,0 +1,6 @@
+name: affiliate-blog-builder
+description: Write SEO-optimized affiliate blog articles — reviews, comparisons, listicles, and how-to guides that rank on Google and drive passive affiliate revenue
+instructions_file: ../SKILL.md
+tools:
+  - web_search
+  - web_browse

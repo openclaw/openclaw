@@ -1,0 +1,109 @@
+{
+  "name": "affiliate-skills",
+  "owner": {
+    "name": "Son Piaz",
+    "email": "son@affitor.com"
+  },
+  "metadata": {
+    "description": "AI-powered skills for affiliate marketers. Full funnel: research, content, blog, landing, deploy.",
+    "version": "2.0.0"
+  },
+  "plugins": [
+    {
+      "name": "research-skills",
+      "description": "Find and evaluate affiliate programs to promote",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/research/affiliate-program-search",
+        "./skills/research/niche-opportunity-finder",
+        "./skills/research/competitor-spy",
+        "./skills/research/commission-calculator"
+      ]
+    },
+    {
+      "name": "content-skills",
+      "description": "Create viral social media content for affiliate products",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/content/viral-post-writer",
+        "./skills/content/tiktok-script-writer",
+        "./skills/content/twitter-thread-writer",
+        "./skills/content/reddit-post-writer"
+      ]
+    },
+    {
+      "name": "blog-skills",
+      "description": "Write SEO-optimized blog articles for affiliate marketing",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/blog/affiliate-blog-builder",
+        "./skills/blog/comparison-post-writer",
+        "./skills/blog/listicle-generator",
+        "./skills/blog/how-to-tutorial-writer"
+      ]
+    },
+    {
+      "name": "landing-skills",
+      "description": "Build high-converting affiliate landing pages",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/landing/landing-page-creator",
+        "./skills/landing/squeeze-page-builder",
+        "./skills/landing/product-showcase-page",
+        "./skills/landing/webinar-registration-page"
+      ]
+    },
+    {
+      "name": "distribution-skills",
+      "description": "Deploy bio link hubs and distribute affiliate content",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/distribution/bio-link-deployer",
+        "./skills/distribution/email-drip-sequence",
+        "./skills/distribution/social-media-scheduler",
+        "./skills/distribution/github-pages-deployer"
+      ]
+    },
+    {
+      "name": "analytics-skills",
+      "description": "Track performance, audit SEO, and run A/B tests for affiliate campaigns",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/analytics/ab-test-generator",
+        "./skills/analytics/conversion-tracker",
+        "./skills/analytics/performance-report",
+        "./skills/analytics/seo-audit"
+      ]
+    },
+    {
+      "name": "automation-skills",
+      "description": "Automate content repurposing, email workflows, ads, and multi-program management",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/automation/content-repurposer",
+        "./skills/automation/email-automation-builder",
+        "./skills/automation/multi-program-manager",
+        "./skills/automation/paid-ad-copy-writer"
+      ]
+    },
+    {
+      "name": "meta-skills",
+      "description": "Plan funnels, check compliance, discover skills, and improve agent performance",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/meta/compliance-checker",
+        "./skills/meta/funnel-planner",
+        "./skills/meta/self-improver",
+        "./skills/meta/skill-finder"
+      ]
+    }
+  ]
+}

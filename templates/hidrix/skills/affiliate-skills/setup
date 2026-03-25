@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Setup script for affiliate-skills
+# Builds the affiliate-check binary and creates skill symlinks
+# Pattern: gstack/setup
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo "[affiliate-skills] Setting up..."
+
+# 1. Check Bun
+if ! command -v bun &>/dev/null; then
+  echo "[affiliate-skills] Bun is required but not installed."
+  echo "  Install: curl -fsSL https://bun.sh/install | bash"
+  exit 1
+fi
+
+# 2. Install dependencies (if any)
+if [ -f package.json ]; then
+  bun install --frozen-lockfile 2>/dev/null || bun install
+fi
+
+# 3. Build affiliate-check binary
+NEEDS_BUILD=false
+if [ ! -f tools/dist/affiliate-check ]; then
+  NEEDS_BUILD=true
+else
+  # Check if source is newer than binary
+  for src in tools/src/*.ts; do
+    if [ "$src" -nt tools/dist/affiliate-check ]; then
+      NEEDS_BUILD=true
+      break
+    fi
+  done
+  if [ package.json -nt tools/dist/affiliate-check ]; then
+    NEEDS_BUILD=true
+  fi
+fi
+
+if [ "$NEEDS_BUILD" = true ]; then
+  echo "[affiliate-skills] Building affiliate-check binary..."
+  mkdir -p tools/dist
+  bun build --compile tools/src/cli.ts --outfile tools/dist/affiliate-check
+  echo "[affiliate-skills] Binary built: tools/dist/affiliate-check"
+else
+  echo "[affiliate-skills] Binary up to date."
+fi
+
+# 4. Platform-specific setup
+PLATFORM="generic"
+
+if [[ "$SCRIPT_DIR" == *".claude/skills/"* ]]; then
+  PLATFORM="claude-code"
+  SKILLS_DIR="$(dirname "$SCRIPT_DIR")"
+  REPO_NAME="$(basename "$SCRIPT_DIR")"
+
+  # Symlink affiliate-check as a top-level skill
+  if [ -f "$SCRIPT_DIR/SKILL.md" ]; then
+    ln -snf "$REPO_NAME" "$SKILLS_DIR/affiliate-check" 2>/dev/null || true
+  fi
+
+  echo "[affiliate-skills] Claude Code detected — symlinks created in $SKILLS_DIR"
+elif command -v cursor &>/dev/null || [[ "$SCRIPT_DIR" == *"cursor"* ]]; then
+  PLATFORM="cursor"
+  echo "[affiliate-skills] Cursor detected — .cursorrules is ready"
+elif [[ -n "${WINDSURF_HOME:-}" ]]; then
+  PLATFORM="windsurf"
+  echo "[affiliate-skills] Windsurf detected — skill files are ready"
+else
+  echo "[affiliate-skills] Generic setup — use prompts/bootstrap.md with any AI"
+fi
+
+# 5. Generate registry
+if [ -f scripts/generate-registry.js ]; then
+  node scripts/generate-registry.js 2>/dev/null || true
+fi
+
+echo "[affiliate-skills] Setup complete! (platform: $PLATFORM)"
+echo ""
+echo "  Binary:  $SCRIPT_DIR/tools/dist/affiliate-check"
+echo "  Skills:  45 skills across 8 stages"
+echo ""
+if [ "$PLATFORM" = "claude-code" ]; then
+  echo "  Quick start (Claude Code):"
+  echo "    affiliate-check search \"AI video tools\""
+  echo "    affiliate-check top"
+  echo "    affiliate-check compare heygen synthesia"
+elif [ "$PLATFORM" = "cursor" ] || [ "$PLATFORM" = "windsurf" ]; then
+  echo "  Quick start ($PLATFORM):"
+  echo "    Open this folder in $PLATFORM — skills are auto-discovered."
+  echo "    For CLI: ./tools/dist/affiliate-check search \"AI video tools\""
+else
+  echo "  Quick start (any AI):"
+  echo "    1. Copy prompts/bootstrap.md into your AI"
+  echo "    2. Start: \"Find me the best AI affiliate programs\""
+  echo "    3. CLI: ./tools/dist/affiliate-check search \"AI video tools\""
+fi
+echo ""
+echo "  Set AFFITOR_API_KEY for unlimited access:"
+echo "    export AFFITOR_API_KEY=afl_..."
+echo "    Get one: list.affitor.com/settings → API Keys (free)"
+echo ""

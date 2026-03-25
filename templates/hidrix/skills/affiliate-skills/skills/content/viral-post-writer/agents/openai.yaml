@@ -1,0 +1,6 @@
+name: viral-post-writer
+description: Write viral social media posts that promote affiliate products naturally
+instructions_file: ../SKILL.md
+tools:
+  - web_search
+  - web_browse

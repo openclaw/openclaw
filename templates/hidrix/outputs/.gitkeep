@@ -1,0 +1,14 @@
+# Outputs Directory
+
+Agent-generated files go here.
+
+Example:
+```
+outputs/
+  reports/
+    2026-03-report.md
+  exports/
+    data.csv
+```
+
+Keep your workspace organized!

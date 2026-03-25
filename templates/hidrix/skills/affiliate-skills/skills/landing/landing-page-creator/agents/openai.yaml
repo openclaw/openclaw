@@ -1,0 +1,6 @@
+name: landing-page-creator
+description: Build high-converting affiliate landing pages as single self-contained HTML files — single product spotlight or multi-product comparison pages
+instructions_file: ../SKILL.md
+tools:
+  - web_search
+  - web_browse

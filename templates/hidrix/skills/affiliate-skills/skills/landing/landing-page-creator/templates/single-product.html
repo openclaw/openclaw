@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HeyGen Review — Create Professional AI Videos in Minutes</title>
+  <meta name="description" content="HeyGen lets you create studio-quality AI videos without cameras or actors. See pricing, features, and our honest take.">
+  <style>
+    /* === CSS VARIABLES — AI: replace these values based on user's color_scheme === */
+    :root {
+      --color-primary: #2563eb;
+      --color-primary-hover: #1d4ed8;
+      --color-bg: #ffffff;
+      --color-surface: #f8fafc;
+      --color-text: #1e293b;
+      --color-text-light: #64748b;
+      --color-accent: #f59e0b;
+      --color-border: #e2e8f0;
+    }
+
+    /* === RESET & BASE === */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: var(--color-text);
+      background: var(--color-bg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--color-primary); text-decoration: none; }
+    img { max-width: 100%; height: auto; }
+
+    /* === LAYOUT === */
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+    .narrow { max-width: 720px; margin: 0 auto; }
+    section { padding: 64px 0; }
+
+    /* === FTC DISCLOSURE === */
+    .disclosure {
+      background: var(--color-surface);
+      border-left: 3px solid var(--color-primary);
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--color-text-light);
+      margin-bottom: 32px;
+      max-width: 720px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* === HERO === */
+    .hero {
+      text-align: center;
+      padding: 80px 24px 64px;
+      background: var(--color-surface);
+    }
+    .hero h1 {
+      font-size: 42px;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 16px;
+      letter-spacing: -0.02em;
+    }
+    .hero .subtitle {
+      font-size: 20px;
+      color: var(--color-text-light);
+      max-width: 600px;
+      margin: 0 auto 32px;
+      line-height: 1.5;
+    }
+
+    /* === CTA BUTTON === */
+    .cta {
+      display: inline-block;
+      background: var(--color-primary);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 600;
+      padding: 16px 40px;
+      border-radius: 8px;
+      transition: background 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+    .cta:hover { background: var(--color-primary-hover); color: #fff; }
+    .cta-note {
+      display: block;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--color-text-light);
+    }
+
+    /* === TRUST BAR === */
+    .trust-bar {
+      display: flex;
+      justify-content: center;
+      gap: 32px;
+      flex-wrap: wrap;
+      padding: 24px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .trust-item {
+      font-size: 14px;
+      color: var(--color-text-light);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .stars { color: var(--color-accent); }
+
+    /* === FEATURES GRID === */
+    .features { background: var(--color-bg); }
+    .features h2 {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 48px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 32px;
+    }
+    .feature-card {
+      text-align: center;
+      padding: 24px;
+    }
+    .feature-icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+    }
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 15px;
+      color: var(--color-text-light);
+      line-height: 1.5;
+    }
+
+    /* === PRICING === */
+    .pricing {
+      background: var(--color-surface);
+      text-align: center;
+    }
+    .pricing h2 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .pricing .price-highlight {
+      font-size: 48px;
+      font-weight: 800;
+      color: var(--color-primary);
+      margin: 16px 0 8px;
+    }
+    .pricing .price-note {
+      font-size: 16px;
+      color: var(--color-text-light);
+      margin-bottom: 32px;
+    }
+
+    /* === TESTIMONIAL === */
+    .testimonial {
+      background: var(--color-bg);
+    }
+    .testimonial-card {
+      max-width: 640px;
+      margin: 0 auto;
+      text-align: center;
+      padding: 32px;
+    }
+    .testimonial-card blockquote {
+      font-size: 20px;
+      font-style: italic;
+      line-height: 1.6;
+      margin-bottom: 16px;
+      color: var(--color-text);
+    }
+    .testimonial-card cite {
+      font-size: 14px;
+      color: var(--color-text-light);
+      font-style: normal;
+    }
+
+    /* === WHO IS THIS FOR === */
+    .audience h2 {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 32px;
+    }
+    .audience-list {
+      max-width: 640px;
+      margin: 0 auto;
+      list-style: none;
+    }
+    .audience-list li {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .audience-list li::before {
+      content: "✓";
+      color: var(--color-primary);
+      font-weight: 700;
+      font-size: 18px;
+    }
+
+    /* === FAQ === */
+    .faq { background: var(--color-surface); }
+    .faq h2 {
+      text-align: center;
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 32px;
+    }
+    .faq-list {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .faq-item {
+      border-bottom: 1px solid var(--color-border);
+      padding: 20px 0;
+    }
+    .faq-item summary {
+      font-size: 17px;
+      font-weight: 600;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .faq-item summary::after {
+      content: "+";
+      font-size: 22px;
+      color: var(--color-text-light);
+      transition: transform 0.2s;
+    }
+    .faq-item[open] summary::after {
+      content: "−";
+    }
+    .faq-item p {
+      margin-top: 12px;
+      font-size: 15px;
+      color: var(--color-text-light);
+      line-height: 1.6;
+    }
+
+    /* === FINAL CTA === */
+    .final-cta {
+      text-align: center;
+      background: var(--color-bg);
+      padding: 80px 24px;
+    }
+    .final-cta h2 {
+      font-size: 36px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .final-cta p {
+      font-size: 18px;
+      color: var(--color-text-light);
+      margin-bottom: 32px;
+      max-width: 540px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* === FOOTER === */
+    .page-footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 13px;
+      color: #666;
+      border-top: 1px solid var(--color-border);
+    }
+    .page-footer a { color: #155DFC; }
+
+    /* === MOBILE === */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 28px; }
+      .hero .subtitle { font-size: 17px; }
+      .feature-grid { grid-template-columns: 1fr; gap: 16px; }
+      .cta { width: 100%; text-align: center; padding: 16px 24px; }
+      .trust-bar { gap: 16px; }
+      .pricing .price-highlight { font-size: 36px; }
+      section { padding: 48px 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- FTC DISCLOSURE — required, visible before first affiliate link -->
+  <div class="container" style="padding-top: 24px;">
+    <div class="disclosure">
+      Disclosure: This page contains affiliate links. If you purchase through these links,
+      I may earn a commission at no extra cost to you. I only recommend products I've
+      personally used or thoroughly evaluated.
+    </div>
+  </div>
+
+  <!-- HERO — above the fold: headline + subtitle + CTA + trust signal -->
+  <section class="hero">
+    <div class="container">
+      <h1>Create Professional AI Videos Without a Camera</h1>
+      <p class="subtitle">HeyGen turns your script into a studio-quality video with realistic AI avatars — in under 5 minutes.</p>
+      <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Start Creating Free →</a>
+      <span class="cta-note">No credit card required · Free plan available</span>
+    </div>
+  </section>
+
+  <!-- TRUST BAR — social proof immediately after hero -->
+  <div class="trust-bar">
+    <div class="trust-item">
+      <span class="stars">★★★★★</span> 4.8/5 on G2
+    </div>
+    <div class="trust-item">
+      40,000+ creators
+    </div>
+    <div class="trust-item">
+      Featured in TechCrunch
+    </div>
+  </div>
+
+  <!-- FEATURES — 3-column grid, features as benefits -->
+  <section class="features">
+    <div class="container">
+      <h2>Why Creators Choose HeyGen</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🎬</div>
+          <h3>AI Avatars That Look Real</h3>
+          <p>Choose from 100+ realistic AI avatars or create your own. Your audience won't know it's AI — they'll just see a polished, professional presenter.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🌍</div>
+          <h3>Speak 40+ Languages</h3>
+          <p>Translate your videos into any language with lip-synced dubbing. Reach global audiences without hiring voice actors or recording studios.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <h3>Script to Video in 5 Minutes</h3>
+          <p>Paste your script, pick an avatar, and hit generate. No filming, no editing, no expensive equipment. Just professional video, fast.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING — clear pricing with CTA -->
+  <section class="pricing">
+    <div class="container">
+      <h2>Simple, Transparent Pricing</h2>
+      <p style="color: var(--color-text-light); font-size: 16px;">Start free. Scale when you're ready.</p>
+      <div class="price-highlight">$29/mo</div>
+      <p class="price-note">Creator plan · 15 videos/month · All avatars included</p>
+      <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Get Started at $29/mo →</a>
+      <span class="cta-note">Free plan available · Cancel anytime</span>
+    </div>
+  </section>
+
+  <!-- TESTIMONIAL -->
+  <section class="testimonial">
+    <div class="container">
+      <div class="testimonial-card">
+        <blockquote>"HeyGen replaced our entire video production workflow. We went from spending $2,000 per video to $29/month — and the quality is honestly better."</blockquote>
+        <cite>— Sarah Chen, Content Manager at ScaleUp Agency</cite>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHO IS THIS FOR -->
+  <section class="audience">
+    <div class="container">
+      <h2>Perfect For</h2>
+      <ul class="audience-list">
+        <li>Content creators who want professional videos without filming</li>
+        <li>SaaS companies needing product demos and tutorials at scale</li>
+        <li>Course creators turning written content into video lessons</li>
+        <li>Marketing teams producing multilingual campaigns</li>
+        <li>Solo founders who hate being on camera</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- FAQ — addresses buying objections -->
+  <section class="faq">
+    <div class="container">
+      <h2>Frequently Asked Questions</h2>
+      <div class="faq-list">
+        <details class="faq-item">
+          <summary>Do the AI avatars look realistic?</summary>
+          <p>Yes — HeyGen's latest avatars use neural rendering that matches lip movements to speech naturally. Most viewers can't tell they're AI-generated. You can also create a custom avatar from a 2-minute video of yourself.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Is there a free plan?</summary>
+          <p>Yes. HeyGen offers a free plan with 1 video credit so you can test the quality before committing. No credit card required to sign up.</p>
+        </details>
+        <details class="faq-item">
+          <summary>Can I use HeyGen videos commercially?</summary>
+          <p>Absolutely. All paid plans include full commercial rights. You can use HeyGen videos for marketing, sales, courses, social media — anything business-related.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How does it compare to Synthesia?</summary>
+          <p>HeyGen is generally more affordable and has a faster rendering pipeline. Synthesia has a larger enterprise focus. For individual creators and small teams, HeyGen offers better value.</p>
+        </details>
+        <details class="faq-item">
+          <summary>What if I'm not satisfied?</summary>
+          <p>HeyGen offers a money-back guarantee on annual plans. Monthly plans can be cancelled anytime — no contracts, no hidden fees.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA — bottom of page, after all objections addressed -->
+  <section class="final-cta">
+    <h2>Ready to Create Your First AI Video?</h2>
+    <p>Join 40,000+ creators who replaced expensive video production with HeyGen. Start free today.</p>
+    <a href="https://www.heygen.com/?ref=YOUR_AFFILIATE_ID" class="cta">Try HeyGen Free →</a>
+    <span class="cta-note">No credit card required · Takes 2 minutes</span>
+  </section>
+
+  <!-- FOOTER — Affitor branding -->
+  <footer class="page-footer">
+    Built with <a href="https://list.affitor.com">Affiliate Skills by Affitor</a>
+  </footer>
+
+</body>
+</html>

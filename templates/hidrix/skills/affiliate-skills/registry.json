@@ -1,0 +1,565 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-03-18T04:22:47.923Z",
+  "stages": {
+    "research": {
+      "label": "Research & Discovery",
+      "description": "Find and evaluate affiliate programs",
+      "order": 1
+    },
+    "content": {
+      "label": "Content Creation",
+      "description": "Create viral social media content",
+      "order": 2
+    },
+    "blog": {
+      "label": "Blog & SEO",
+      "description": "Long-form SEO-optimized articles",
+      "order": 3
+    },
+    "landing": {
+      "label": "Landing Pages",
+      "description": "High-converting affiliate pages",
+      "order": 4
+    },
+    "distribution": {
+      "label": "Distribution & Deployment",
+      "description": "Link hubs, bio pages, deployment",
+      "order": 5
+    },
+    "analytics": {
+      "label": "Analytics & Optimization",
+      "description": "Track, measure, and optimize affiliate performance",
+      "order": 6
+    },
+    "automation": {
+      "label": "Automation & Scale",
+      "description": "Automate workflows and scale what's working",
+      "order": 7
+    },
+    "meta": {
+      "label": "Meta",
+      "description": "Cross-cutting skills for discovery, planning, compliance, and self-improvement",
+      "order": 8
+    }
+  },
+  "skills": [
+    {
+      "name": "affiliate-program-search",
+      "slug": "affiliate-program-search",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Research and evaluate affiliate programs to find the best ones to promote. Use this skill when the user asks anything about finding affiliate programs, comparing commission rates, evaluating affiliate opportunities, searching for products to promote, picking a niche, or mentions list.affitor.com. Also trigger for: \"which SaaS should I promote\", \"best affiliate programs for X\", \"high commission programs\", \"recurring commission affiliate\", \"compare these affiliate programs\", \"is X affiliate program worth it\", \"find me something to promote\", \"what pays the most\", \"affiliate programs with long cookie duration\".",
+      "path": "skills/research/affiliate-program-search",
+      "agent_compatible": true,
+      "tools": ["web_fetch", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "commission-calculator",
+      "slug": "commission-calculator",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Calculate realistic affiliate earnings projections before committing to a program. Use this skill when the user asks about affiliate earnings, projecting income, calculating commissions, estimating how much they can make, comparing program payouts, or says \"how much can I make promoting X\", \"calculate my affiliate income\", \"is this commission worth it\", \"how long to first $1000\", \"compare earnings between programs\", \"traffic to income calculator\", \"what conversion rate should I expect\", \"earnings estimate for affiliate program\", \"how many sales do I need\".",
+      "path": "skills/research/commission-calculator",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "competitor-spy",
+      "slug": "competitor-spy",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Reverse-engineer successful affiliate strategies from competitors. Use this skill when the user asks about spying on competitors, researching what other affiliates promote, analyzing competitor affiliate sites, understanding how top affiliates in a niche make money, or says \"what programs does X promote\", \"how does [site] make money\", \"what affiliate strategy does this site use\", \"spy on competitor affiliates\", \"reverse engineer affiliate site\", \"copy what works in my niche\", \"who are the top affiliates in X niche\", \"what content gets traffic in my niche\", \"competitor affiliate analysis\".",
+      "path": "skills/research/competitor-spy",
+      "agent_compatible": true,
+      "tools": ["web_fetch", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "list-affitor-program",
+      "slug": "list-affitor-program",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Research an affiliate program and create a verified listing for list.affitor.com. Use this skill when the user asks anything about listing a program, adding an affiliate program to the directory, submitting a program to list, creating a listing, documenting an affiliate program, sharing an affiliate program, writing a program profile, posting a program to list.affitor.com, or contributing a new program. Also trigger for: \"list a program\", \"add affiliate program\", \"submit program to list\", \"create listing for X\", \"document affiliate program\", \"share affiliate program\", \"write a listing\", \"post to list.affitor.com\", \"add X to the directory\", \"register an affiliate program\", \"publish affiliate program\", \"new program listing\", \"profile this affiliate program\", \"catalog this program\".",
+      "path": "skills/research/list-affitor-program",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "monopoly-niche-finder",
+      "slug": "monopoly-niche-finder",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Find intersection niches where you're the ONLY voice. Thiel's \"competition is for losers\" lens. Triggers on: \"find my monopoly niche\", \"blue ocean niche\", \"unique niche\", \"niche intersection\", \"where am I the only one\", \"zero competition niche\", \"untapped niche\", \"category of one\", \"Thiel monopoly\", \"dominate a niche\", \"niche nobody else covers\", \"cross two domains\", \"find a niche with no competition\", \"monopoly positioning\", \"unique angle for affiliate\".",
+      "path": "skills/research/monopoly-niche-finder",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "niche-opportunity-finder",
+      "slug": "niche-opportunity-finder",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Find untapped affiliate niches with real earning potential. Use this skill when the user asks about picking a niche, finding a niche to start affiliate marketing, what niche to get into, niche research, niche ideas, beginner niche selection, low competition niches, profitable niches, or says \"I don't know what to promote\", \"help me pick a niche\", \"what niche should I start with\", \"find me a niche with less competition\", \"niche ideas for affiliate\", \"is X a good niche for affiliate marketing\", \"best niches 2024\", \"untapped niches\".",
+      "path": "skills/research/niche-opportunity-finder",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "purple-cow-audit",
+      "slug": "purple-cow-audit",
+      "stage": "research",
+      "version": "1.0.0",
+      "description": "> Score product remarkability 1-10 to decide if it's worth promoting. Seth Godin's Purple Cow test. Triggers on: \"is this product worth promoting\", \"should I promote\", \"product audit\", \"purple cow\", \"remarkable product\", \"is it remarkable\", \"rate this product\", \"product quality check\", \"worth my reputation\", \"product evaluation\", \"would I recommend without commission\", \"product remarkability score\", \"evaluate this affiliate product\", \"quality gate for promotion\".",
+      "path": "skills/research/purple-cow-audit",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "content-pillar-atomizer",
+      "slug": "content-pillar-atomizer",
+      "stage": "content",
+      "version": "1.0.0",
+      "description": "> Take 1 blog post or article and generate 15-30 platform-native micro-content pieces. Not reformatting — re-contextualizing for each platform's culture. Triggers on: \"atomize this content\", \"repurpose my blog post\", \"turn this into social posts\", \"content atomizer\", \"pillar content\", \"one to many content\", \"repurpose content\", \"multiply my content\", \"content explosion\", \"turn article into posts\", \"break down this article\", \"micro content from blog\", \"content pillar strategy\", \"10x my content\", \"platform-native content\", \"atomize\", \"content multiplication\".",
+      "path": "skills/content/content-pillar-atomizer",
+      "agent_compatible": true,
+      "tools": ["web_fetch"],
+      "author": "Affitor"
+    },
+    {
+      "name": "reddit-post-writer",
+      "slug": "reddit-post-writer",
+      "stage": "content",
+      "version": "1.0.0",
+      "description": "> Write Reddit posts and comments that recommend affiliate products without getting banned or flagged as spam. Subreddit-native content that adds value first. Use this skill when the user asks about Reddit posts for affiliate marketing, writing Reddit comments that mention products, how to promote affiliate links on Reddit, or says \"write a Reddit post for X\", \"how to mention affiliate on Reddit\", \"Reddit comment promoting product\", \"Reddit-friendly affiliate content\", \"post for r/[subreddit] about X\", \"share affiliate link on Reddit without getting banned\", \"genuine Reddit recommendation\", \"organic Reddit affiliate post\", \"Reddit thread idea for product\".",
+      "path": "skills/content/reddit-post-writer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "tiktok-script-writer",
+      "slug": "tiktok-script-writer",
+      "stage": "content",
+      "version": "1.0.0",
+      "description": "> Write short-form video scripts for TikTok, Instagram Reels, and YouTube Shorts that promote affiliate products with strong hooks, demos, and CTAs. Use this skill when the user asks about TikTok scripts, Reels scripts, Shorts scripts, short-form video for affiliate marketing, or says \"write a TikTok for X\", \"script a Reel promoting X\", \"YouTube Shorts script affiliate\", \"60-second video script\", \"hook for TikTok affiliate\", \"write a video promoting X\", \"TikTok script that converts\", \"short video script for product review\", \"viral TikTok affiliate script\", \"how to promote X on TikTok\".",
+      "path": "skills/content/tiktok-script-writer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "twitter-thread-writer",
+      "slug": "twitter-thread-writer",
+      "stage": "content",
+      "version": "1.0.0",
+      "description": "> Write X/Twitter threads that get bookmarked, shared, and drive affiliate clicks. Use this skill when the user asks about writing Twitter threads, X threads, tweet threads for affiliate marketing, or says \"write a thread about X\", \"Twitter thread promoting X\", \"X thread for affiliate\", \"write tweets that go viral\", \"thread that sells without selling\", \"educational thread with affiliate CTA\", \"Twitter content for affiliate marketing\", \"how to promote X on Twitter\", \"write a thread my audience will bookmark\", \"tweet storm about affiliate product\".",
+      "path": "skills/content/twitter-thread-writer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "viral-post-writer",
+      "slug": "viral-post-writer",
+      "stage": "content",
+      "version": "1.0.0",
+      "description": "> Write viral social media posts that promote affiliate products naturally. Use this skill when the user asks anything about writing social media content for affiliate marketing, creating posts for LinkedIn/X/Reddit/Facebook, promoting a product on social media, writing affiliate content, or mentions \"viral post\", \"social media post\", \"content for affiliate\". Also trigger for: \"write a post about X\", \"help me promote X on LinkedIn\", \"create a thread about X\", \"make a Reddit post for X\", \"draft tweets for X\", \"social media content for affiliate program\", \"how to promote X on social\", \"write something that goes viral\", \"LinkedIn post for affiliate\", \"X thread about this tool\", \"help me sell X naturally on social media\".",
+      "path": "skills/content/viral-post-writer",
+      "agent_compatible": true,
+      "tools": ["web_browse", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "affiliate-blog-builder",
+      "slug": "affiliate-blog-builder",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Write SEO-optimized affiliate blog articles, product reviews, comparison posts, listicles, and how-to guides. Triggers on: \"write a blog post about\", \"review of [product]\", \"best [category] article\", \"comparison blog\", \"affiliate blog\", \"SEO article\", \"write a review\", \"product roundup\", \"blog content for affiliate\", \"how to use [product] blog post\", \"listicle about [category]\", \"[product] vs [product] blog\", \"content for my affiliate site\".",
+      "path": "skills/blog/affiliate-blog-builder",
+      "agent_compatible": true,
+      "tools": ["web_browse", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "comparison-post-writer",
+      "slug": "comparison-post-writer",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Write \"X vs Y\" comparison blog posts that help readers choose between two competing products. Triggers on: \"write a comparison post\", \"X vs Y blog post\", \"compare [product A] and [product B]\", \"which is better [A] or [B]\", \"head to head comparison\", \"[product] vs [product] article\", \"comparison review\", \"write a versus article\", \"side by side comparison blog\", \"which should I choose [A] or [B]\", \"compare these two products for my blog\".",
+      "path": "skills/blog/comparison-post-writer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "content-decay-detector",
+      "slug": "content-decay-detector",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Monitor existing content for ranking drops and trigger refresh workflows. Triggers on: \"check for content decay\", \"which content needs updating\", \"content refresh\", \"ranking drops\", \"traffic decline\", \"stale content\", \"content audit\", \"what to refresh\", \"outdated content\", \"content performance check\", \"update old articles\", \"declining rankings\", \"content maintenance\", \"refresh priority list\", \"which articles are losing traffic\", \"SEO content audit\".",
+      "path": "skills/blog/content-decay-detector",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "content-moat-calculator",
+      "slug": "content-moat-calculator",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Estimate pages needed for topical authority. Go/no-go decision before investing months in content. Triggers on: \"how much content do I need\", \"topical authority estimate\", \"content moat\", \"how many articles\", \"content gap analysis\", \"can I compete in this niche\", \"content investment calculator\", \"is this niche worth the effort\", \"SEO feasibility\", \"how many pages to rank\", \"content volume needed\", \"competitive content analysis\", \"moat calculation\", \"authority gap\", \"should I invest in this niche\".",
+      "path": "skills/blog/content-moat-calculator",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "how-to-tutorial-writer",
+      "slug": "how-to-tutorial-writer",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Write how-to guides and tutorials that naturally integrate affiliate product recommendations. Triggers on: \"write a how-to guide\", \"tutorial for [task]\", \"step by step guide to [goal]\", \"how to [verb] with [product]\", \"write a tutorial blog post\", \"guide on how to [task]\", \"beginner guide to [topic]\", \"walkthrough for [product]\", \"write an educational article\", \"how do I [task] blog post\", \"write a tutorial that promotes [product]\".",
+      "path": "skills/blog/how-to-tutorial-writer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "keyword-cluster-architect",
+      "slug": "keyword-cluster-architect",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Map 50-200+ keywords into topical clusters for SEO domination. Build content roadmaps for topical authority. Triggers on: \"keyword research\", \"keyword clustering\", \"topical authority\", \"keyword map\", \"keyword strategy\", \"content roadmap for SEO\", \"keyword grouping\", \"topic clusters\", \"SEO keyword plan\", \"map my keywords\", \"keyword cluster\", \"hub and spoke content\", \"build topical authority\", \"SEO content plan\", \"keyword universe\".",
+      "path": "skills/blog/keyword-cluster-architect",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "listicle-generator",
+      "slug": "listicle-generator",
+      "stage": "blog",
+      "version": "1.0.0",
+      "description": "> Write \"Top N best...\" listicle articles for affiliate marketing with mini-reviews, pricing, pros/cons, and CTAs per entry. Triggers on: \"write a best of list\", \"top 10 [category] tools\", \"best [product category] article\", \"roundup post\", \"listicle about [category]\", \"write a top tools article\", \"best [N] alternatives to [product]\", \"product roundup\", \"write a tools comparison list\", \"best software for [use case]\", \"top picks for [category]\".",
+      "path": "skills/blog/listicle-generator",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "bonus-stack-builder",
+      "slug": "bonus-stack-builder",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Design exclusive bonus packages that make YOUR affiliate link the obvious choice. Triggers on: \"create bonuses for\", \"bonus stack\", \"what bonuses should I offer\", \"bonus ideas for\", \"exclusive bonuses\", \"differentiate my affiliate link\", \"why buy through my link\", \"affiliate bonuses\", \"bonus package\", \"what can I offer as a bonus\", \"design bonuses\", \"build a bonus stack\".",
+      "path": "skills/landing/bonus-stack-builder",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "grand-slam-offer",
+      "slug": "grand-slam-offer",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Design irresistible affiliate offers using the Hormozi Grand Slam framework. Triggers on: \"create an offer for\", \"design my offer\", \"grand slam offer\", \"make an irresistible offer\", \"why should someone buy through my link\", \"offer framework\", \"value proposition for\", \"Hormozi offer\", \"offer stack\", \"make my offer irresistible\", \"craft an offer\", \"what makes my offer different\", \"offer design\", \"increase perceived value\".",
+      "path": "skills/landing/grand-slam-offer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "guarantee-generator",
+      "slug": "guarantee-generator",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Create YOUR personal guarantee on top of the product's guarantee for risk reversal. Triggers on: \"create a guarantee\", \"guarantee for my affiliate\", \"risk reversal\", \"money back guarantee\", \"what guarantee can I offer\", \"reduce buyer risk\", \"guarantee copy\", \"how to guarantee\", \"affiliate guarantee\", \"personal guarantee\", \"risk-free offer\", \"satisfaction guarantee\", \"results guarantee\".",
+      "path": "skills/landing/guarantee-generator",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "landing-page-creator",
+      "slug": "landing-page-creator",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Build high-converting affiliate landing pages as single self-contained HTML files. Triggers on: \"create a landing page for\", \"build a landing page\", \"product landing page\", \"affiliate landing page\", \"comparison page for\", \"vs page\", \"single product page\", \"conversion page\", \"sales page for affiliate\", \"landing page HTML\", \"build me a page for\", \"create a page to promote [product]\", \"I need a landing page\", \"make a page for [product]\".",
+      "path": "skills/landing/landing-page-creator",
+      "agent_compatible": true,
+      "tools": ["web_browse", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "product-showcase-page",
+      "slug": "product-showcase-page",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Build a single-product deep-dive showcase page as a self-contained HTML file. Triggers on: \"build a product showcase page\", \"deep dive landing page for [product]\", \"create a product spotlight page\", \"product feature page\", \"single product page\", \"detailed page about [product]\", \"build a page showing everything about [product]\", \"create a long-form product page\", \"build a sales page for [product]\", \"product deep dive page\", \"make a feature breakdown page for [product]\".",
+      "path": "skills/landing/product-showcase-page",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "squeeze-page-builder",
+      "slug": "squeeze-page-builder",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Build email capture landing pages (squeeze pages) as single self-contained HTML files. Triggers on: \"build a squeeze page\", \"email capture page\", \"lead magnet page\", \"create an opt-in page\", \"build an email list page\", \"lead capture landing page\", \"create a freebie page\", \"build a page to collect emails\", \"opt-in landing page\", \"email signup page for [product/niche]\", \"create a lead magnet landing page\", \"build a page that captures emails before sending to affiliate offer\".",
+      "path": "skills/landing/squeeze-page-builder",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "value-ladder-architect",
+      "slug": "value-ladder-architect",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Design the complete free-to-premium value ladder for affiliate promotions. Triggers on: \"value ladder\", \"customer journey\", \"upsell path\", \"ascension model\", \"free to paid funnel\", \"tripwire offer\", \"upsell strategy\", \"downsell\", \"product ladder\", \"price ladder\", \"customer ascension\", \"funnel architecture\", \"map my funnel\", \"design my funnel stages\", \"monetization path\".",
+      "path": "skills/landing/value-ladder-architect",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "webinar-registration-page",
+      "slug": "webinar-registration-page",
+      "stage": "landing",
+      "version": "1.0.0",
+      "description": "> Build a webinar or live event registration page as a self-contained HTML file with countdown timer, speaker bio, agenda, and registration form. Triggers on: \"build a webinar registration page\", \"create a webinar sign-up page\", \"event registration landing page\", \"live training registration page\", \"workshop sign-up page\", \"create a webinar page\", \"build an event page\", \"free webinar landing page\", \"live demo registration page\", \"online event page\", \"create a registration page for my webinar\", \"build a training event page\".",
+      "path": "skills/landing/webinar-registration-page",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "bio-link-deployer",
+      "slug": "bio-link-deployer",
+      "stage": "distribution",
+      "version": "1.0.0",
+      "description": "> Create a Linktree-style bio link hub page as a single self-contained HTML file. Triggers on: \"create a bio link page\", \"make a linktree\", \"link in bio page\", \"bio link\", \"link hub\", \"create my link page\", \"all my links on one page\", \"linktree alternative\", \"build a link page\", \"bio page for my affiliate links\", \"I need a link in bio\", \"make a page with all my links\", \"link aggregator page\".",
+      "path": "skills/distribution/bio-link-deployer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "email-drip-sequence",
+      "slug": "email-drip-sequence",
+      "stage": "distribution",
+      "version": "1.0.0",
+      "description": "> Write an email drip sequence for affiliate marketing. Triggers on: \"write me an email sequence\", \"create a drip campaign\", \"email nurture sequence\", \"affiliate email funnel\", \"welcome email series\", \"email onboarding sequence\", \"write emails for my list\", \"set up a drip sequence\", \"email campaign for [product]\", \"nurture my subscribers\", \"email follow-up sequence\", \"build my email funnel\", \"write 5 emails promoting [product]\", \"email automation sequence\".",
+      "path": "skills/distribution/email-drip-sequence",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "github-pages-deployer",
+      "slug": "github-pages-deployer",
+      "stage": "distribution",
+      "version": "1.0.0",
+      "description": "> Deploy affiliate content to GitHub Pages for free hosting. Triggers on: \"deploy to GitHub Pages\", \"host on GitHub Pages\", \"free hosting for my affiliate site\", \"push to GitHub Pages\", \"GitHub Pages setup\", \"deploy my landing page to GitHub\", \"host my bio link on GitHub\", \"free affiliate website hosting\", \"github pages affiliate\", \"set up GitHub Pages for my site\", \"deploy HTML to GitHub\", \"free static hosting\", \"publish my affiliate page for free\", \"github pages custom domain\".",
+      "path": "skills/distribution/github-pages-deployer",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "social-media-scheduler",
+      "slug": "social-media-scheduler",
+      "stage": "distribution",
+      "version": "1.0.0",
+      "description": "> Create a 30-day social media content calendar for affiliate marketing. Triggers on: \"create a social media calendar\", \"30-day content plan\", \"social media schedule\", \"content calendar for [product]\", \"plan my social posts\", \"social media strategy\", \"schedule my affiliate posts\", \"content plan for LinkedIn\", \"30 days of content\", \"social posting schedule\", \"what should I post this month\", \"write my social content\", \"create posts for LinkedIn X Facebook\", \"affiliate content calendar\", \"social media plan for my affiliate program\".",
+      "path": "skills/distribution/social-media-scheduler",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "ab-test-generator",
+      "slug": "ab-test-generator",
+      "stage": "analytics",
+      "version": "1.0.0",
+      "description": "> Generate A/B test variants for affiliate content. Triggers on: \"create A/B test\", \"test my headline\", \"optimize my CTA\", \"generate variants\", \"split test ideas\", \"improve click-through rate\", \"test my landing page copy\", \"headline alternatives\", \"CTA variations\", \"which version is better\", \"optimize conversions\", \"test my email subject line\", \"compare approaches\".",
+      "path": "skills/analytics/ab-test-generator",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "conversion-tracker",
+      "slug": "conversion-tracker",
+      "stage": "analytics",
+      "version": "1.0.0",
+      "description": "> Set up affiliate conversion tracking with UTM parameters and link tagging. Triggers on: \"set up tracking\", \"create UTM links\", \"track my affiliate links\", \"tracking pixels\", \"click attribution\", \"organize my links\", \"UTM parameters\", \"tag my links\", \"campaign tracking\", \"link tracking setup\", \"prepare for launch\", \"debug attribution\", \"tracking spreadsheet\".",
+      "path": "skills/analytics/conversion-tracker",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "internal-linking-optimizer",
+      "slug": "internal-linking-optimizer",
+      "stage": "analytics",
+      "version": "1.0.0",
+      "description": "> Analyze site's internal link structure and optimize for hub-and-spoke SEO architecture. Triggers on: \"optimize internal links\", \"internal linking\", \"link structure\", \"hub and spoke links\", \"orphan pages\", \"link equity\", \"internal link audit\", \"fix my internal links\", \"link architecture\", \"site structure optimization\", \"internal linking strategy\", \"link flow\", \"improve site structure\", \"find orphan pages\", \"maximize link equity\", \"internal link map\".",
+      "path": "skills/analytics/internal-linking-optimizer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "performance-report",
+      "slug": "performance-report",
+      "stage": "analytics",
+      "version": "1.0.0",
+      "description": "> Generate affiliate performance reports with KPIs and recommendations. Triggers on: \"show my affiliate report\", \"how are my programs doing\", \"performance review\", \"earnings report\", \"monthly affiliate report\", \"weekly report\", \"analyze my affiliate earnings\", \"which program is best\", \"EPC report\", \"conversion rate analysis\", \"revenue breakdown\", \"campaign performance\".",
+      "path": "skills/analytics/performance-report",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "seo-audit",
+      "slug": "seo-audit",
+      "stage": "analytics",
+      "version": "1.0.0",
+      "description": "> Audit affiliate blog posts and landing pages for SEO issues. Triggers on: \"audit my blog post for SEO\", \"check my SEO\", \"SEO review\", \"improve my rankings\", \"SEO checklist\", \"on-page SEO audit\", \"keyword optimization check\", \"why isn't my page ranking\", \"SEO score\", \"content quality audit\", \"check my meta tags\", \"internal linking audit\", \"quick SEO wins\".",
+      "path": "skills/analytics/seo-audit",
+      "agent_compatible": true,
+      "tools": ["web_browse", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "content-repurposer",
+      "slug": "content-repurposer",
+      "stage": "automation",
+      "version": "1.0.0",
+      "description": "> Repurpose one piece of affiliate content into multiple formats. Triggers on: \"repurpose my content\", \"turn my blog into tweets\", \"cross-post this\", \"content recycling\", \"convert to newsletter\", \"make a tweet thread from this\", \"adapt for TikTok\", \"omnichannel content\", \"scale my content\", \"turn this into a LinkedIn post\", \"repurpose for email\", \"content multiplication\".",
+      "path": "skills/automation/content-repurposer",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "email-automation-builder",
+      "slug": "email-automation-builder",
+      "stage": "automation",
+      "version": "1.0.0",
+      "description": "> Build multi-sequence email automation flows with branching logic. Triggers on: \"build email automation\", \"create email funnel\", \"email automation flow\", \"welcome series with branches\", \"conditional email sequence\", \"set up automation\", \"email workflow builder\", \"segmented email flow\", \"advanced email sequence\", \"nurture funnel\", \"cart abandonment sequence\", \"win-back email flow\".",
+      "path": "skills/automation/email-automation-builder",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "multi-program-manager",
+      "slug": "multi-program-manager",
+      "stage": "automation",
+      "version": "1.0.0",
+      "description": "> Manage and compare multiple affiliate programs as a portfolio. Triggers on: \"manage my affiliate programs\", \"compare my programs\", \"portfolio overview\", \"which program should I focus on\", \"diversify my affiliate income\", \"program switching\", \"affiliate portfolio\", \"program comparison\", \"revenue allocation\", \"which programs to drop\", \"add new programs\", \"affiliate program strategy\".",
+      "path": "skills/automation/multi-program-manager",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "paid-ad-copy-writer",
+      "slug": "paid-ad-copy-writer",
+      "stage": "automation",
+      "version": "1.0.0",
+      "description": "> Write paid ad copy for affiliate offers across ad platforms. Triggers on: \"write ad copy\", \"Facebook ad for affiliate\", \"Google Ads copy\", \"TikTok ad script\", \"Pinterest ad\", \"paid traffic to affiliate\", \"create ad campaign\", \"ad headlines\", \"ad descriptions\", \"scale with paid ads\", \"run ads for my affiliate link\", \"write Facebook ad\", \"Google Search ad copy\".",
+      "path": "skills/automation/paid-ad-copy-writer",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "proprietary-data-generator",
+      "slug": "proprietary-data-generator",
+      "stage": "automation",
+      "version": "1.0.0",
+      "description": "> Create original surveys, benchmarks, and aggregated data nobody else has. Automate data collection for content moats. Triggers on: \"create original data\", \"proprietary data\", \"survey design\", \"benchmark study\", \"original research\", \"data-driven content\", \"create a survey\", \"industry benchmark\", \"aggregated data\", \"unique data\", \"first-party data\", \"data moat\", \"generate research data\", \"create a study\", \"original statistics\", \"data nobody else has\", \"competitive data advantage\".",
+      "path": "skills/automation/proprietary-data-generator",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "category-designer",
+      "slug": "category-designer",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Define a new category where your product wins by default. Reframe the buying decision. Triggers on: \"create a category\", \"category design\", \"define my category\", \"category of one\", \"reframe the market\", \"position as category king\", \"new category\", \"category creation\", \"own a category\", \"category strategy\", \"competitive positioning\", \"strategic positioning\", \"market reframing\", \"be the only option\", \"change the buying criteria\", \"category king\".",
+      "path": "skills/meta/category-designer",
+      "agent_compatible": true,
+      "tools": ["web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "compliance-checker",
+      "slug": "compliance-checker",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Check affiliate content for FTC compliance and platform rules. Triggers on: \"check my content for compliance\", \"FTC disclosure check\", \"is this legal\", \"review for compliance\", \"check affiliate disclosure\", \"am I FTC compliant\", \"audit my content\", \"compliance review\", \"legal check\", \"platform rules check\", \"check before publishing\", \"disclosure audit\", \"review my ad copy\".",
+      "path": "skills/meta/compliance-checker",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "funnel-planner",
+      "slug": "funnel-planner",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Plan a complete affiliate funnel from research to revenue. Triggers on: \"plan my affiliate funnel\", \"create a funnel strategy\", \"affiliate business plan\", \"how to start affiliate marketing\", \"full funnel roadmap\", \"plan from scratch\", \"week by week affiliate plan\", \"chain skills together\", \"build my funnel\", \"affiliate marketing roadmap\", \"step by step affiliate plan\", \"onboarding plan\".",
+      "path": "skills/meta/funnel-planner",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "list-affitor-skill",
+      "slug": "list-affitor-skill",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Turn a repeatable AI prompt or workflow into a structured, publish-ready skill for list.affitor.com. Use this skill when the user wants to create a new skill, write a SKILL.md, convert a prompt to a skill, publish a skill to the directory, or document an AI workflow. Also trigger for: \"create a skill\", \"write a skill\", \"make this a skill\", \"turn this into a skill\", \"publish skill\", \"add skill to list\", \"write SKILL.md\", \"skill from prompt\", \"document this workflow\", \"package this as a skill\".",
+      "path": "skills/meta/list-affitor-skill",
+      "agent_compatible": true,
+      "tools": ["web_fetch", "web_search"],
+      "author": "Affitor"
+    },
+    {
+      "name": "self-improver",
+      "slug": "self-improver",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Review affiliate campaign results and improve strategy. Triggers on: \"review my results\", \"what went wrong\", \"how to improve conversions\", \"analyze my campaign\", \"affiliate retrospective\", \"why am I not converting\", \"improve my strategy\", \"what should I change\", \"campaign review\", \"optimize my approach\", \"learn from my results\", \"post-mortem on my campaign\".",
+      "path": "skills/meta/self-improver",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    },
+    {
+      "name": "skill-finder",
+      "slug": "skill-finder",
+      "stage": "meta",
+      "version": "1.0.0",
+      "description": "> Find the right Affitor skill for your goal. Triggers on: \"which skill should I use\", \"find me a skill\", \"what skills are available\", \"help me choose a skill\", \"skill for SEO\", \"skill for email\", \"explore skills\", \"I'm new to Affitor\", \"what can Affitor do\", \"search skills\", \"skill for blog writing\", \"skill for landing pages\", \"skill for analytics\".",
+      "path": "skills/meta/skill-finder",
+      "agent_compatible": true,
+      "tools": [],
+      "author": "Affitor"
+    }
+  ]
+}
