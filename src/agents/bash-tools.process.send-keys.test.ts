@@ -1,7 +1,18 @@
 import { afterEach, expect, test } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { addSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { createProcessTool } from "./bash-tools.process.js";
+
+function createWritableStdinStub() {
+  return {
+    write(_data: string, cb?: (err?: Error | null) => void) {
+      cb?.();
+    },
+    end() {},
+    destroyed: false,
+  };
+}
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -75,4 +86,48 @@ test("process submit sends Enter for pty sessions", async () => {
   });
 
   await waitForSessionCompletion({ processTool, sessionId, expectedText: "submitted" });
+});
+
+test("process send-keys fails loud for unknown cursor mode when arrows depend on it", async () => {
+  const session = createProcessSessionFixture({
+    id: "sess-unknown-mode",
+    command: "vim",
+    backgrounded: true,
+    cursorKeyMode: "unknown",
+  });
+  session.stdin = createWritableStdinStub();
+  addSession(session);
+
+  const processTool = createProcessTool();
+  const result = await processTool.execute("toolcall", {
+    action: "send-keys",
+    sessionId: "sess-unknown-mode",
+    keys: ["up"],
+  });
+
+  expect(result.details).toMatchObject({ status: "failed" });
+  expect(result.content[0]).toMatchObject({
+    type: "text",
+    text: expect.stringContaining("cursor key mode is not known yet"),
+  });
+});
+
+test("process send-keys still sends non-cursor keys while mode is unknown", async () => {
+  const session = createProcessSessionFixture({
+    id: "sess-unknown-enter",
+    command: "vim",
+    backgrounded: true,
+    cursorKeyMode: "unknown",
+  });
+  session.stdin = createWritableStdinStub();
+  addSession(session);
+
+  const processTool = createProcessTool();
+  const result = await processTool.execute("toolcall", {
+    action: "send-keys",
+    sessionId: "sess-unknown-enter",
+    keys: ["Enter"],
+  });
+
+  expect(result.details).toMatchObject({ status: "running" });
 });
