@@ -992,14 +992,6 @@ export function buildToolsMessage(
       "",
       `Profile: ${result.profile}`,
     ];
-    if (result.unavailableCount > 0) {
-      lines.push(
-        "",
-        `${result.unavailableCount} cataloged tool${
-          result.unavailableCount === 1 ? "" : "s"
-        } unavailable right now.`,
-      );
-    }
     return lines.join("\n");
   }
 
@@ -1023,14 +1015,6 @@ export function buildToolsMessage(
     lines.push("", "Tool availability depends on this agent's configuration.");
   } else {
     lines.push("", "Use /tools verbose for descriptions.");
-  }
-  if (result.unavailableCount > 0) {
-    lines.push(
-      "",
-      `${result.unavailableCount} cataloged tool${
-        result.unavailableCount === 1 ? "" : "s"
-      } unavailable right now.`,
-    );
   }
   return lines.join("\n");
 }

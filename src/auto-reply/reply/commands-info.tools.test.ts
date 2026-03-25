@@ -128,7 +128,7 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("exec");
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
-    expect(result?.reply?.text).toContain("2 cataloged tools unavailable right now.");
+    expect(result?.reply?.text).not.toContain("unavailable right now");
     expect(resolveToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         senderIsOwner: false,

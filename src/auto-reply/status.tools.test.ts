@@ -69,7 +69,7 @@ describe("tools product copy", () => {
     expect(text).toContain("Connected tools");
     expect(text).toContain("docs_lookup (docs)");
     expect(text).toContain("Use /tools verbose for descriptions.");
-    expect(text).toContain("2 cataloged tools unavailable right now.");
+    expect(text).not.toContain("unavailable right now");
   });
 
   it("keeps detailed descriptions in verbose mode", () => {
@@ -102,7 +102,7 @@ describe("tools product copy", () => {
     expect(text).toContain("Profile: minimal");
     expect(text).toContain("Exec - Run shell commands");
     expect(text).toContain("Tool availability depends on this agent's configuration.");
-    expect(text).toContain("1 cataloged tool unavailable right now.");
+    expect(text).not.toContain("unavailable right now");
   });
 
   it("trims verbose output before schema-like doc blocks", () => {
@@ -145,8 +145,6 @@ describe("tools product copy", () => {
         unavailableCount: 3,
         groups: [],
       }),
-    ).toBe(
-      "No tools are available for this agent right now.\n\nProfile: full\n\n3 cataloged tools unavailable right now.",
-    );
+    ).toBe("No tools are available for this agent right now.\n\nProfile: full");
   });
 });
