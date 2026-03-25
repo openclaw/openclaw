@@ -249,10 +249,10 @@ async function runAutoUpdateCommand(params: {
     argv.push(execPath, ...baseArgs);
   } else if (execPath && params.root) {
     const candidates = [
-      path.join(params.root, "dist", "entry.js"),
-      path.join(params.root, "dist", "entry.mjs"),
       path.join(params.root, "dist", "index.js"),
       path.join(params.root, "dist", "index.mjs"),
+      path.join(params.root, "dist", "entry.js"),
+      path.join(params.root, "dist", "entry.mjs"),
     ];
     for (const candidate of candidates) {
       try {
