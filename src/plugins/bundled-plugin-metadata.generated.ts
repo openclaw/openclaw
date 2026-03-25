@@ -1157,6 +1157,29 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "google-gemini-cli-auth",
+    idHint: "google-gemini-cli-auth",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/google-gemini-cli-auth",
+    packageVersion: "2026.3.13",
+    packageDescription: "OpenClaw Gemini CLI OAuth provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "google-gemini-cli-auth",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["google-gemini-cli"],
+    },
+  },
+  {
     dirName: "googlechat",
     idHint: "googlechat",
     source: {
@@ -1859,6 +1882,29 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "MiniMax API key",
         },
       ],
+    },
+  },
+  {
+    dirName: "minimax-portal-auth",
+    idHint: "minimax-portal-auth",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/minimax-portal-auth",
+    packageVersion: "2026.3.13",
+    packageDescription: "OpenClaw MiniMax Portal OAuth provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "minimax-portal-auth",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["minimax-portal"],
     },
   },
   {
