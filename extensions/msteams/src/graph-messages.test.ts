@@ -38,10 +38,10 @@ describe("getMessageMSTeams", () => {
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("resolves user: target to conversation ID via store", async () => {
+  it("resolves user: target using graphChatId from store", async () => {
     mockState.findByUserId.mockResolvedValue({
-      conversationId: "19:resolved-chat@thread.tacv2",
-      reference: {},
+      conversationId: "a:bot-framework-dm-id",
+      reference: { graphChatId: "19:graph-native-chat@thread.tacv2" },
     });
     mockState.fetchGraphJson.mockResolvedValue({
       id: "msg-1",
@@ -56,6 +56,30 @@ describe("getMessageMSTeams", () => {
     });
 
     expect(mockState.findByUserId).toHaveBeenCalledWith("aad-object-id-123");
+    // Must use the graphChatId, not the Bot Framework conversation ID
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent("19:graph-native-chat@thread.tacv2")}/messages/msg-1`,
+    });
+  });
+
+  it("falls back to conversationId when it starts with 19:", async () => {
+    mockState.findByUserId.mockResolvedValue({
+      conversationId: "19:resolved-chat@thread.tacv2",
+      reference: {},
+    });
+    mockState.fetchGraphJson.mockResolvedValue({
+      id: "msg-1",
+      body: { content: "Hello" },
+      createdDateTime: "2026-03-23T10:00:00Z",
+    });
+
+    await getMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "user:aad-id",
+      messageId: "msg-1",
+    });
+
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent("19:resolved-chat@thread.tacv2")}/messages/msg-1`,
@@ -72,6 +96,21 @@ describe("getMessageMSTeams", () => {
         messageId: "msg-1",
       }),
     ).rejects.toThrow("No conversation found for user:unknown-user");
+  });
+
+  it("throws when user: target has Bot Framework ID and no graphChatId", async () => {
+    mockState.findByUserId.mockResolvedValue({
+      conversationId: "a:bot-framework-dm-id",
+      reference: {},
+    });
+
+    await expect(
+      getMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "user:some-user",
+        messageId: "msg-1",
+      }),
+    ).rejects.toThrow("Bot Framework ID");
   });
 
   it("strips conversation: prefix from target", async () => {
@@ -253,8 +292,8 @@ describe("listPinsMSTeams", () => {
     });
 
     expect(result.pins).toEqual([
-      { pinnedMessageId: "pinned-1", messageId: "msg-1", text: "Pinned msg" },
-      { pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Another pin" },
+      { id: "pinned-1", pinnedMessageId: "pinned-1", messageId: "msg-1", text: "Pinned msg" },
+      { id: "pinned-2", pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Another pin" },
     ]);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,

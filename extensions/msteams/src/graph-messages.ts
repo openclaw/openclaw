@@ -73,7 +73,20 @@ async function resolveGraphConversationId(to: string): Promise<string> {
         "The bot must receive a message from this user before Graph API operations work.",
     );
   }
-  return found.conversationId;
+
+  // Prefer the cached Graph-native chat ID (19:xxx format) over the Bot Framework
+  // conversation ID, which may be in a non-Graph format (a:xxx / 8:orgid:xxx) for
+  // personal DMs. send-context.ts resolves and caches this on first send.
+  if (found.reference.graphChatId) {
+    return found.reference.graphChatId;
+  }
+  if (found.conversationId.startsWith("19:")) {
+    return found.conversationId;
+  }
+  throw new Error(
+    `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
+      "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
+  );
 }
 
 function resolveConversationPath(to: string): {
@@ -197,7 +210,7 @@ export type ListPinsMSTeamsParams = {
 };
 
 export type ListPinsMSTeamsResult = {
-  pins: Array<{ pinnedMessageId: string; messageId?: string; text?: string }>;
+  pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
 /**
@@ -212,6 +225,7 @@ export async function listPinsMSTeams(
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
   const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
   const pins = (res.value ?? []).map((pin) => ({
+    id: pin.id ?? "",
     pinnedMessageId: pin.id ?? "",
     messageId: pin.message?.id,
     text: pin.message?.body?.content,
