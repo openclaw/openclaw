@@ -106,4 +106,25 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
+
+  it("fails fast when Twilio streaming is enabled without telephony TTS runtime", async () => {
+    const twilioConfig = createVoiceCallBaseConfig({ provider: "twilio" });
+    twilioConfig.twilio = {
+      accountSid: "AC123",
+      authToken: "secret",
+    };
+    twilioConfig.streaming = {
+      ...twilioConfig.streaming,
+      enabled: true,
+      openaiApiKey: "test-key",
+    };
+
+    await expect(
+      createVoiceCallRuntime({
+        config: twilioConfig,
+        coreConfig: {} as CoreConfig,
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toThrow("voice-call telephony TTS is required when Twilio streaming is enabled");
+  });
 });

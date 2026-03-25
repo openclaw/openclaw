@@ -244,25 +244,17 @@ export async function createVoiceCallRuntime(params: {
 
     if (provider.name === "twilio" && config.streaming?.enabled) {
       const twilioProvider = provider as TwilioProvider;
-      if (ttsRuntime?.textToSpeechTelephony) {
-        try {
-          const ttsProvider = createTelephonyTtsProvider({
-            coreConfig,
-            ttsOverride: config.tts,
-            runtime: ttsRuntime,
-          });
-          twilioProvider.setTTSProvider(ttsProvider);
-          log.info("[voice-call] Telephony TTS provider configured");
-        } catch (err) {
-          log.warn(
-            `[voice-call] Failed to initialize telephony TTS: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        }
-      } else {
-        log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");
+      if (!ttsRuntime?.textToSpeechTelephony) {
+        throw new Error("voice-call telephony TTS is required when Twilio streaming is enabled");
       }
+
+      const ttsProvider = createTelephonyTtsProvider({
+        coreConfig,
+        ttsOverride: config.tts,
+        runtime: ttsRuntime,
+      });
+      twilioProvider.setTTSProvider(ttsProvider);
+      log.info("[voice-call] Telephony TTS provider configured");
 
       const mediaHandler = webhookServer.getMediaStreamHandler();
       if (mediaHandler) {

@@ -92,6 +92,8 @@ export class VoiceCallWebhookServer {
   private mediaStreamHandler: MediaStreamHandler | null = null;
   /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
   private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Delayed farewell hangups keyed by call ID after [END_CALL] responses. */
+  private pendingFarewellHangups = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** Silence filler — plays ambient SFX while agent is working */
   private silenceFiller: SilenceFiller | null = null;
@@ -132,6 +134,15 @@ export class VoiceCallWebhookServer {
     }
     clearTimeout(existing);
     this.pendingDisconnectHangups.delete(providerCallId);
+  }
+
+  private clearPendingFarewellHangup(callId: string): void {
+    const existing = this.pendingFarewellHangups.get(callId);
+    if (!existing) {
+      return;
+    }
+    clearTimeout(existing);
+    this.pendingFarewellHangups.delete(callId);
   }
 
   private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
@@ -242,6 +253,7 @@ export class VoiceCallWebhookServer {
           console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
         }
+        this.clearPendingFarewellHangup(call.callId);
         const suppressBargeIn = this.shouldSuppressBargeInForInitialMessage(call);
         if (suppressBargeIn) {
           console.log(
@@ -277,6 +289,10 @@ export class VoiceCallWebhookServer {
         }
       },
       onSpeechStart: (providerCallId) => {
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (call) {
+          this.clearPendingFarewellHangup(call.callId);
+        }
         // Only stop silence filler on VAD speech start (not TTS — too noise-sensitive)
         const streamSid = this.callStreamSids.get(providerCallId);
         if (streamSid) {
@@ -286,9 +302,12 @@ export class VoiceCallWebhookServer {
       onPartialTranscript: (callId, partial) => {
         const safePartial = sanitizeTranscriptForLog(partial);
         console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
+        const call = this.manager.getCallByProviderCallId(callId);
+        if (call) {
+          this.clearPendingFarewellHangup(call.callId);
+        }
         // Barge-in: clear TTS when actual speech is recognized (not just VAD noise)
         if (this.provider.name === "twilio") {
-          const call = this.manager.getCallByProviderCallId(callId);
           if (this.shouldSuppressBargeInForInitialMessage(call)) {
             return;
           }
@@ -443,6 +462,10 @@ export class VoiceCallWebhookServer {
     this.silenceFiller?.dispose();
     this.silenceFiller = null;
     this.callStreamSids.clear();
+    for (const timer of this.pendingFarewellHangups.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingFarewellHangups.clear();
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => {
@@ -731,11 +754,15 @@ export class VoiceCallWebhookServer {
         // based on text length to avoid truncating the goodbye message.
         const delayMs = result.text ? Math.max(1000, result.text.length * 80) : 1000;
         console.log(`[voice-call] Agent requested end_call for ${callId} (delay: ${delayMs}ms)`);
-        setTimeout(() => {
+        this.clearPendingFarewellHangup(callId);
+        const timer = setTimeout(() => {
+          this.pendingFarewellHangups.delete(callId);
           this.manager.endCall(callId).catch((err: unknown) => {
             console.warn(`[voice-call] Hangup failed:`, err);
           });
         }, delayMs);
+        timer.unref?.();
+        this.pendingFarewellHangups.set(callId, timer);
         return;
       }
     } catch (err) {
