@@ -238,7 +238,7 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
+      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
     );
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
@@ -258,7 +258,28 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow(
-      "INVALID_REQUEST: browser.proxy cannot create or delete persistent browser profiles when allowProfiles is configured",
+      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
+    );
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects persistent profile reset when allowProfiles is configured", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/reset-profile",
+          body: { profile: "openclaw", name: "openclaw" },
+          timeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow(
+      "INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles when allowProfiles is configured",
     );
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });

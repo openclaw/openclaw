@@ -158,7 +158,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "browser.request cannot create or delete persistent browser profiles",
+          "browser.request cannot mutate persistent browser profiles",
         ),
       );
       return;
