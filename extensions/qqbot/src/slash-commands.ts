@@ -30,6 +30,7 @@ try {
 }
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
+const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
 
 // ============ 类型定义 ============
 
@@ -154,6 +155,17 @@ registerCommand({
     lines.push(`🌟官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`);
     return lines.join("\n");
   },
+});
+
+/**
+ * /bot-upgrade — 查看升级指引
+ */
+registerCommand({
+  name: "bot-upgrade",
+  description: "查看 QQBot 插件升级指引",
+  usage: [`/bot-upgrade`, ``, `查看 QQBot 插件升级说明和操作指引。`].join("\n"),
+  handler: () =>
+    [`📘 QQBot 升级指引：`, `[点击查看升级说明](${QQBOT_UPGRADE_GUIDE_URL})`].join("\n"),
 });
 
 /**
