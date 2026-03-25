@@ -142,28 +142,16 @@ function shouldEnableOpenAIResponsesServerCompaction(
 }
 
 function shouldStripResponsesStore(
-  model: { api?: unknown; baseUrl?: unknown; compat?: { supportsStore?: boolean } },
+  model: { api?: unknown; compat?: { supportsStore?: boolean } },
   forceStore: boolean,
 ): boolean {
   if (forceStore) {
     return false;
   }
-  if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+  if (typeof model.api !== "string") {
     return false;
   }
-  // Explicit compat declaration takes priority.
-  if (model.compat?.supportsStore === false) {
-    return true;
-  }
-  if (model.compat?.supportsStore === true) {
-    return false;
-  }
-  // No baseUrl means pi-ai uses the default OpenAI endpoint — keep store.
-  if (typeof model.baseUrl !== "string" || !model.baseUrl.trim()) {
-    return false;
-  }
-  // Strip store for non-OpenAI/Azure domains (custom providers likely don't support it).
-  return !isDirectOpenAIBaseUrl(model.baseUrl);
+  return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
 function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
