@@ -1,0 +1,22 @@
+{
+  "name": "@openclaw/channel-diagnostics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Channel diagnostics toolkit for OpenClaw",
+  "keywords": [
+    "channels",
+    "debugging",
+    "diagnostics",
+    "openclaw"
+  ],
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "type": "module",
+  "scripts": {
+    "all": "npm run health-check && npm run error-analyzer",
+    "debug-assistant": "node --import tsx debug-assistant.ts",
+    "error-analyzer": "node --import tsx error-analyzer.ts",
+    "health-check": "node --import tsx health-check.ts",
+    "test-generator": "node --import tsx test-generator.ts"
+  }
+}
