@@ -1,0 +1,125 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-upstream:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure upstream remote
+        run: |
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/openclaw/openclaw.git
+          else
+            git remote add upstream https://github.com/openclaw/openclaw.git
+          fi
+
+      - name: Fetch origin and upstream
+        run: |
+          git fetch origin main --prune --tags
+          git fetch upstream main --prune --tags
+
+      - name: Prepare sync branch
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          branch="sync/upstream-$(date -u +%Y-%m-%d)"
+          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
+
+          base_sha="$(git rev-parse origin/main)"
+          upstream_sha="$(git rev-parse upstream/main)"
+          echo "base_sha=${base_sha}" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=${upstream_sha}" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "${branch}" origin/main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git merge --no-ff --no-edit upstream/main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push sync branch
+        if: steps.prepare.outputs.changed == 'true'
+        run: git push --force-with-lease origin "${{ steps.prepare.outputs.branch }}"
+
+      - name: Create or update sync PR
+        if: steps.prepare.outputs.changed == 'true'
+        uses: actions/github-script@v8
+        env:
+          BRANCH_NAME: ${{ steps.prepare.outputs.branch }}
+          BASE_SHA: ${{ steps.prepare.outputs.base_sha }}
+          UPSTREAM_SHA: ${{ steps.prepare.outputs.upstream_sha }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = `${owner}:${process.env.BRANCH_NAME}`;
+            const base = "main";
+            const bodyTemplate = fs.readFileSync(".github/upstream_sync_pr_template.md", "utf8");
+            const body = bodyTemplate
+              .replaceAll("{{UPSTREAM_SHA}}", process.env.UPSTREAM_SHA)
+              .replaceAll("{{BASE_SHA}}", process.env.BASE_SHA);
+
+            const existing = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: "open",
+              head,
+              base,
+              per_page: 100,
+            });
+
+            if (existing.length > 0) {
+              const pr = existing[0];
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number: pr.number,
+                title: `chore(sync): merge upstream/main into main (${process.env.BRANCH_NAME})`,
+                body,
+              });
+              core.info(`Updated PR #${pr.number}`);
+              return;
+            }
+
+            const pr = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: `chore(sync): merge upstream/main into main (${process.env.BRANCH_NAME})`,
+              head,
+              base,
+              body,
+              maintainer_can_modify: true,
+            });
+            core.info(`Created PR #${pr.data.number}`);
