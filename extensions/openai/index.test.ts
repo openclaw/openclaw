@@ -157,6 +157,10 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
         speed: 1,
       },
     },
+    gemini: {
+      model: "gemini-2.5-flash-preview-tts",
+      voice: "Kore",
+    },
     openai: {
       apiKey: OPENAI_API_KEY,
       baseUrl: "https://api.openai.com/v1",

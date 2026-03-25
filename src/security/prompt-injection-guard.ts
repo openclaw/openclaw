@@ -18,8 +18,9 @@ const BLOCKED_PATTERNS = [
   /forget.*prompt/gi,
 ];
 
-// Control characters and delimiters to strip
-const DANGEROUS_CHARS = /[\x00-\x1F\x7F\u200B-\u200D\uFEFF\\`[\]]/g;
+// Control characters and delimiters to strip (intentional control-char matching)
+// oxlint-disable-next-line no-control-regex
+const DANGEROUS_CHARS = /[\u0000-\u001F\u007F\u200B-\u200D\uFEFF\\`[\]]/g;
 
 /**
  * Sanitize user input before processing

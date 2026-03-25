@@ -24,7 +24,9 @@ const DEFAULT_COOLDOWN_MS = 30_000;
  */
 export function getProviderCooldownMs(provider: string): number {
   const until = providerCooldowns.get(provider);
-  if (!until) return 0;
+  if (!until) {
+    return 0;
+  }
   const remaining = until - Date.now();
   if (remaining <= 0) {
     providerCooldowns.delete(provider);
@@ -55,7 +57,9 @@ function parseCooldownFromError(errMsg: string): number {
   const match = errMsg.match(/retry[_ ]?after[:\s]*(\d+)/i);
   if (match) {
     const seconds = parseInt(match[1], 10);
-    if (seconds > 0 && seconds < 600) return seconds * 1000;
+    if (seconds > 0 && seconds < 600) {
+      return seconds * 1000;
+    }
   }
   return DEFAULT_COOLDOWN_MS;
 }

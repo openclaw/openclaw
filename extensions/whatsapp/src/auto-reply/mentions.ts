@@ -60,10 +60,7 @@ export function isBotMentionedFromTargets(
     // this handles @mentions via LID that resolve to the bot's phone number.
     // We just skip the early `return false` below so regex/digit fallbacks
     // remain reachable when someone else is mentioned.
-    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) {
-      return true;
-    }
-    if (targets.selfJid && targets.normalizedMentions.includes(targets.selfJid)) {
+    if (targets.normalizedMentions.some((m) => identitiesOverlap(m, targets.self))) {
       return true;
     }
   }
