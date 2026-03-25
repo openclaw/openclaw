@@ -4,7 +4,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
-import { describeGatewayServiceRestart } from "../../daemon/service.js";
+import { describeGatewayServiceRestart, startGatewayService } from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
@@ -75,6 +75,17 @@ function createActionIO(params: { action: DaemonAction; json: boolean }) {
     defaultRuntime.exit(1);
   };
   return { stdout, emit, fail };
+}
+
+function emitActionMessage(params: {
+  json: boolean;
+  emit: ReturnType<typeof createActionIO>["emit"];
+  payload: Omit<DaemonActionResponse, "action">;
+}) {
+  params.emit(params.payload);
+  if (!params.json && params.payload.message) {
+    defaultRuntime.log(params.payload.message);
+  }
 }
 
 async function handleServiceNotLoaded(params: {
@@ -200,12 +211,13 @@ export async function runServiceStart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createActionIO({ action: "start", json });
 
-  const loaded = await resolveServiceLoadedOrFail({
-    serviceNoun: params.serviceNoun,
-    service: params.service,
-    fail,
-  });
-  if (loaded === null) {
+  if (
+    (await resolveServiceLoadedOrFail({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      fail,
+    })) === null
+  ) {
     return;
   }
   // Pre-flight config validation (#35862) — run for both loaded and not-loaded
@@ -219,71 +231,45 @@ export async function runServiceStart(params: {
       return;
     }
   }
-  if (!loaded) {
-    // Service was stopped (e.g. `gateway stop` booted out the LaunchAgent).
-    // Attempt a restart, which handles re-bootstrapping the service. Without
-    // this, `start` after `stop` just prints hints and does nothing (#53878).
-    try {
-      const restartResult = await params.service.restart({ env: process.env, stdout });
-      const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
-      const postLoaded = await params.service.isLoaded({ env: process.env }).catch(() => true);
-      emit({
-        ok: true,
-        result: restartStatus.daemonActionResult,
-        message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, postLoaded),
-      });
-      if (!json) {
-        defaultRuntime.log(restartStatus.message);
-      }
-      return;
-    } catch {
-      // Bootstrap failed (e.g. plist was deleted, not just booted out).
-      // Fall through to the not-loaded hints.
+  try {
+    const startResult = await startGatewayService(params.service, { env: process.env, stdout });
+    if (startResult.outcome === "missing-install") {
       await handleServiceNotLoaded({
         serviceNoun: params.serviceNoun,
         service: params.service,
-        loaded,
+        loaded: startResult.state.loaded,
         renderStartHints: params.renderStartHints,
         json,
         emit,
       });
       return;
     }
-  }
-
-  try {
-    const restartResult = await params.service.restart({ env: process.env, stdout });
-    const restartStatus = describeGatewayServiceRestart(params.serviceNoun, restartResult);
-    if (restartStatus.scheduled) {
-      emit({
-        ok: true,
-        result: restartStatus.daemonActionResult,
-        message: restartStatus.message,
-        service: buildDaemonServiceSnapshot(params.service, loaded),
+    if (startResult.outcome === "scheduled") {
+      const restartStatus = describeGatewayServiceRestart(params.serviceNoun, {
+        outcome: "scheduled",
       });
-      if (!json) {
-        defaultRuntime.log(restartStatus.message);
-      }
+      emitActionMessage({
+        json,
+        emit,
+        payload: {
+          ok: true,
+          result: "scheduled",
+          message: restartStatus.message,
+          service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+        },
+      });
       return;
     }
+    emit({
+      ok: true,
+      result: "started",
+      service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+    });
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
     return;
   }
-
-  let started = true;
-  try {
-    started = await params.service.isLoaded({ env: process.env });
-  } catch {
-    started = true;
-  }
-  emit({
-    ok: true,
-    result: "started",
-    service: buildDaemonServiceSnapshot(params.service, started),
-  });
 }
 
 export async function runServiceStop(params: {
@@ -371,16 +357,17 @@ export async function runServiceRestart(params: {
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
   ) => {
-    emit({
-      ok: true,
-      result: restartStatus.daemonActionResult,
-      message: restartStatus.message,
-      service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
-      warnings: warnings.length ? warnings : undefined,
+    emitActionMessage({
+      json,
+      emit,
+      payload: {
+        ok: true,
+        result: restartStatus.daemonActionResult,
+        message: restartStatus.message,
+        service: buildDaemonServiceSnapshot(params.service, serviceLoaded),
+        warnings: warnings.length ? warnings : undefined,
+      },
     });
-    if (!json) {
-      defaultRuntime.log(restartStatus.message);
-    }
     return true;
   };
 

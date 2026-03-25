@@ -1,5 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { describeGatewayServiceRestart, resolveGatewayService } from "./service.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayService } from "./service.js";
+import {
+  describeGatewayServiceRestart,
+  readGatewayServiceState,
+  resolveGatewayService,
+  startGatewayService,
+} from "./service.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -20,6 +26,23 @@ afterEach(() => {
   }
   Object.defineProperty(process, "platform", originalPlatformDescriptor);
 });
+
+function createService(overrides: Partial<GatewayService> = {}): GatewayService {
+  return {
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    stage: vi.fn(async () => {}),
+    install: vi.fn(async () => {}),
+    uninstall: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    restart: vi.fn(async () => ({ outcome: "completed" as const })),
+    isLoaded: vi.fn(async () => false),
+    readCommand: vi.fn(async () => null),
+    readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
+    ...overrides,
+  };
+}
 
 describe("resolveGatewayService", () => {
   it.each([
@@ -45,5 +68,95 @@ describe("resolveGatewayService", () => {
       message: "restart scheduled, gateway will restart momentarily",
       progressMessage: "Gateway service restart scheduled.",
     });
+  });
+});
+
+describe("readGatewayServiceState", () => {
+  it("tracks installed, loaded, and running separately", async () => {
+    const service = createService({
+      isLoaded: vi.fn(async () => true),
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      })),
+      readRuntime: vi.fn(async () => ({ status: "running" })),
+    });
+
+    const state = await readGatewayServiceState(service, {
+      env: { OPENCLAW_GATEWAY_PORT: "1" },
+    });
+
+    expect(state.installed).toBe(true);
+    expect(state.loaded).toBe(true);
+    expect(state.running).toBe(true);
+    expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+  });
+});
+
+describe("startGatewayService", () => {
+  it("returns missing-install without attempting restart", async () => {
+    const service = createService();
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("missing-install");
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("restarts stopped installed services and returns post-start state", async () => {
+    const readCommand = vi.fn(async () => ({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    }));
+    const isLoaded = vi
+      .fn<GatewayService["isLoaded"]>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const readRuntime = vi
+      .fn<GatewayService["readRuntime"]>()
+      .mockResolvedValueOnce({ status: "stopped" })
+      .mockResolvedValueOnce({ status: "running" });
+    const service = createService({
+      readCommand,
+      isLoaded,
+      readRuntime,
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("started");
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(result.state.installed).toBe(true);
+    expect(result.state.loaded).toBe(true);
+    expect(result.state.running).toBe(true);
+  });
+
+  it("falls back to missing-install when restart fails and install artifacts are gone", async () => {
+    const readCommand = vi
+      .fn<GatewayService["readCommand"]>()
+      .mockResolvedValueOnce({
+        programArguments: ["openclaw", "gateway", "run"],
+      })
+      .mockResolvedValueOnce(null);
+    const service = createService({
+      readCommand,
+      restart: vi.fn(async () => {
+        throw new Error("launchctl bootstrap failed");
+      }),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("missing-install");
+    expect(result.state.installed).toBe(false);
   });
 });
