@@ -1246,9 +1246,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * QMD 1.5+ unified all search modes under a single "query" MCP tool
+   * QMD 1.1+ unified all search modes under a single "query" MCP tool
    * that accepts a `searches` array with typed sub-queries (lex, vec, hyde).
-   * QMD <1.5 exposed separate tools: search, vector_search, deep_search.
+   * QMD <1.1 exposed separate tools: search, vector_search, deep_search.
    *
    * This method probes the MCP server once to detect which interface is
    * available and caches the result for subsequent calls.
@@ -1285,7 +1285,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   /**
-   * Build the `searches` array for QMD 1.5+ `query` tool, respecting
+   * Build the `searches` array for QMD 1.1+ `query` tool, respecting
    * the configured searchMode so lexical-only or vector-only modes
    * don't trigger unnecessary LLM/embedding work.
    */
@@ -1389,7 +1389,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const callArgs: Record<string, unknown> =
       effectiveTool === "query"
         ? {
-            // QMD 1.5+ "query" tool accepts typed sub-queries via `searches` array.
+            // QMD 1.1+ "query" tool accepts typed sub-queries via `searches` array.
             // Derive sub-query types from searchCommand to respect searchMode config.
             searches: this.buildV2Searches(params.query, params.searchCommand),
             limit: params.limit,

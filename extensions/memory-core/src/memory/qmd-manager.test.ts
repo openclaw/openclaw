@@ -1636,7 +1636,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses QMD 1.5+ query tool with searches array via mcporter", async () => {
+  it("uses QMD 1.1+ query tool with searches array via mcporter", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1657,7 +1657,7 @@ describe("QmdMemoryManager", () => {
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
-        // Verify QMD 1.5+ searches array format
+        // Verify QMD 1.1+ searches array format
         expect(callArgs).toHaveProperty("searches");
         expect(Array.isArray(callArgs.searches)).toBe(true);
         expect(callArgs.searches).toEqual(
@@ -1682,7 +1682,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("falls back to QMD <1.5 tool names when query tool is not found", async () => {
+  it("falls back to QMD <1.1 tool names when query tool is not found", async () => {
     // qmdMcpToolVersion is an instance field — each createManager() starts fresh.
 
     cfg = {
@@ -1706,7 +1706,7 @@ describe("QmdMemoryManager", () => {
         callCount++;
         const toolSelector = args[1];
         if (toolSelector === "qmd.query") {
-          // Simulate QMD <1.5 — "query" tool does not exist
+          // Simulate QMD <1.1 — "query" tool does not exist
           // The error message appears in stdout (mcporter wraps MCP errors in JSON output)
           queueMicrotask(() => {
             child.stderr.emit("data", "MCP error -32602: Tool query not found");
