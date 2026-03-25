@@ -272,6 +272,12 @@ function resolveCronAwarenessMainTarget(params: { cfg: OpenClawConfig; agentId: 
   };
 }
 
+function shouldMirrorCronAwareness(job: CronJob): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs should
+  // keep their existing transcript semantics instead of being rewritten here.
+  return job.sessionTarget === "isolated";
+}
+
 async function persistCronAwarenessMirror(params: {
   cfg: OpenClawConfig;
   jobId: string;
@@ -507,15 +513,17 @@ export async function dispatchCronDelivery(
         : await runDelivery();
       delivered = deliveryResults.length > 0;
       if (delivered) {
-        await persistCronAwarenessMirror({
-          cfg: params.cfgWithAgentDefaults,
-          jobId: params.job.id,
-          agentId: params.agentId,
-          deliveryIdempotencyKey,
-          payloads: payloadsForDelivery,
-          outputText,
-          synthesizedText,
-        });
+        if (shouldMirrorCronAwareness(params.job)) {
+          await persistCronAwarenessMirror({
+            cfg: params.cfgWithAgentDefaults,
+            jobId: params.job.id,
+            agentId: params.agentId,
+            deliveryIdempotencyKey,
+            payloads: payloadsForDelivery,
+            outputText,
+            synthesizedText,
+          });
+        }
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
       return null;

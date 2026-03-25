@@ -107,6 +107,7 @@ function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runSessionId?: string;
+  sessionTarget?: string;
 }) {
   const resolvedDelivery = makeResolvedDelivery();
   return {
@@ -116,6 +117,7 @@ function makeBaseParams(overrides: {
     job: {
       id: "test-job",
       name: "Test Job",
+      sessionTarget: overrides.sessionTarget ?? "isolated",
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
@@ -283,6 +285,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips main-session awareness mirroring for session-bound cron jobs", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Session-bound cron update.",
+      sessionTarget: "session:agent:main:main:thread:9999",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
