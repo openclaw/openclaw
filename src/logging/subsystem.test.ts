@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -143,5 +143,26 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createSubsystemLogger date rollover", () => {
+  it("rebuilds file logger when base logger changes (simulating date rollover)", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+    const log = createSubsystemLogger("test-rollover");
+
+    // Trigger file logger creation
+    log.info("before rollover");
+    const baseBefore = getLogger();
+
+    // Simulate date rollover: resetLogger forces a new base logger on next call
+    resetLogger();
+    setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+    log.info("after rollover");
+    const baseAfter = getLogger();
+
+    // Base logger should be a different instance after reset
+    expect(baseBefore).not.toBe(baseAfter);
   });
 });

@@ -9,7 +9,7 @@ import {
   shouldLogSubsystemToConsole,
 } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
+import { getChildLogger, getLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -307,8 +307,15 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerBase: TsLogger<LogObj> | null = null;
   const getFileLogger = (): TsLogger<LogObj> => {
-    if (!fileLogger) {
+    // Re-check the base logger on each call so that date-rolling (or any
+    // settings change) causes the child logger to be rebuilt.  getLogger()
+    // is cheaply cached internally, so this is a fast reference comparison
+    // on the hot path.
+    const currentBase = getLogger();
+    if (!fileLogger || currentBase !== fileLoggerBase) {
+      fileLoggerBase = currentBase;
       fileLogger = getChildLogger({ subsystem });
     }
     return fileLogger;
