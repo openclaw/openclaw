@@ -757,11 +757,12 @@ export function attachGatewayWsMessageHandler(params: {
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
-              silent: allowSilentLocalPairing,
+              silent: reason === "scope-upgrade" ? false : allowSilentLocalPairing,
             });
             const context = buildRequestContext();
+            let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             if (pairing.request.silent === true) {
-              const approved = await approveDevicePairing(pairing.request.requestId);
+              approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -776,11 +777,13 @@ export function attachGatewayWsMessageHandler(params: {
                   },
                   { dropIfSlow: true },
                 );
+              } else if (pairing.created) {
+                context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
               }
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
-            if (pairing.request.silent !== true) {
+            if (!(pairing.request.silent === true && approved)) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
