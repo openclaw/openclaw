@@ -1633,6 +1633,7 @@ export function renderApp(state: AppViewState) {
                 includeUnknown: state.sessionsIncludeUnknown,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
+                agentIdentityById: state.agentIdentityById,
                 sortColumn: state.sessionsSortColumn,
                 sortDir: state.sessionsSortDir,
                 page: state.sessionsPage,

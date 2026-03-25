@@ -36,6 +36,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeUnknown: false,
     basePath: "",
     searchQuery: "",
+    agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
     page: 0,
@@ -167,6 +168,95 @@ describe("sessions view", () => {
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "low" });
+  });
+
+  it("shows agent identity name and emoji for matching session keys", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        agentIdentityById: {
+          "data-expert": {
+            agentId: "data-expert",
+            name: "Data Expert",
+            avatar: "",
+            emoji: "📊",
+          },
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyCell = container.querySelector(".session-key-cell");
+    expect(keyCell?.textContent).toContain("📊 Data Expert (dingtalk)");
+    expect(keyCell?.getAttribute("title")).toBe(
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+    );
+  });
+
+  it("keeps raw keys when identity data is unavailable", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:unknown-agent:telegram:abc123",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
+      "agent:unknown-agent:telegram:abc123",
+    );
+  });
+
+  it("filters rows by agent identity name", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+              kind: "direct",
+              updatedAt: 20,
+            },
+            {
+              key: "agent:code-agent:telegram:abc123",
+              kind: "direct",
+              updatedAt: 10,
+            },
+          ]),
+        ),
+        searchQuery: "data expert",
+        agentIdentityById: {
+          "data-expert": {
+            agentId: "data-expert",
+            name: "Data Expert",
+            avatar: "",
+          },
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
+      "Data Expert (dingtalk)",
+    );
+    expect(container.textContent).not.toContain("code-agent");
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
