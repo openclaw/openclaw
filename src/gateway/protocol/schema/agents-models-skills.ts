@@ -327,7 +327,6 @@ export const ToolsEffectiveResultSchema = Type.Object(
     agentId: NonEmptyString,
     profile: NonEmptyString,
     groups: Type.Array(ToolsEffectiveGroupSchema),
-    unavailableCount: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
 );

@@ -22,7 +22,6 @@ vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: vi.fn(() => ({
     agentId: "main",
     profile: "coding",
-    unavailableCount: 2,
     groups: [
       {
         id: "core",
@@ -171,7 +170,6 @@ describe("tools.effective handler", () => {
     expect(call?.[1]).toMatchObject({
       agentId: "main",
       profile: "coding",
-      unavailableCount: 2,
       groups: [
         {
           id: "core",

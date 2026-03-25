@@ -162,7 +162,6 @@ describe("loadToolsEffective", () => {
     const payload = {
       agentId: "main",
       profile: "coding",
-      unavailableCount: 1,
       groups: [
         {
           id: "core",

@@ -6,7 +6,6 @@ async function loadToolsHarness(options?: {
   resolveTools?: () => {
     agentId: string;
     profile: string;
-    unavailableCount: number;
     groups: Array<{
       id: "core" | "plugin" | "channel";
       label: string;
@@ -39,7 +38,6 @@ async function loadToolsHarness(options?: {
         (() => ({
           agentId: "main",
           profile: "coding",
-          unavailableCount: 2,
           groups: [
             {
               id: "core" as const,

@@ -2850,25 +2850,21 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     public let agentid: String
     public let profile: String
     public let groups: [ToolsEffectiveGroup]
-    public let unavailablecount: Int
 
     public init(
         agentid: String,
         profile: String,
-        groups: [ToolsEffectiveGroup],
-        unavailablecount: Int)
+        groups: [ToolsEffectiveGroup])
     {
         self.agentid = agentid
         self.profile = profile
         self.groups = groups
-        self.unavailablecount = unavailablecount
     }
 
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case profile
         case groups
-        case unavailablecount = "unavailableCount"
     }
 }
 

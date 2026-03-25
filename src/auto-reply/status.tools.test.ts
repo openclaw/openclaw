@@ -21,7 +21,6 @@ describe("tools product copy", () => {
     const text = buildToolsMessage({
       agentId: "main",
       profile: "coding",
-      unavailableCount: 2,
       groups: [
         {
           id: "core",
@@ -77,7 +76,6 @@ describe("tools product copy", () => {
       {
         agentId: "main",
         profile: "minimal",
-        unavailableCount: 1,
         groups: [
           {
             id: "core",
@@ -110,7 +108,6 @@ describe("tools product copy", () => {
       {
         agentId: "main",
         profile: "coding",
-        unavailableCount: 0,
         groups: [
           {
             id: "core",
@@ -142,7 +139,6 @@ describe("tools product copy", () => {
       buildToolsMessage({
         agentId: "main",
         profile: "full",
-        unavailableCount: 3,
         groups: [],
       }),
     ).toBe("No tools are available for this agent right now.\n\nProfile: full");
