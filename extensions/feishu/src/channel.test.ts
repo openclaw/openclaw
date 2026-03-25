@@ -576,6 +576,34 @@ describe("feishuPlugin actions", () => {
     ).rejects.toThrow("Feishu thread-reply requires messageId.");
   });
 
+  it("sends media-only messages without requiring card", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media_only",
+      details: { messageId: "om_media_only", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        media: "https://example.com/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_group_1",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    );
+    expect(result?.details).toMatchObject({ messageId: "om_media_only" });
+  });
+
   it("fails for unsupported action names", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({

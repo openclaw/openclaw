@@ -5,8 +5,8 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-bun-push-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: ci-bun-push-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
