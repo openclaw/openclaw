@@ -160,6 +160,7 @@ export function parseFeishuMessageEvent(
     threadId: event.message.thread_id || undefined,
     content,
     contentType: event.message.message_type,
+    senderType: event.sender.sender_type,
   };
 
   // Detect mention forward request: message mentions bot + at least one other user
@@ -1112,20 +1113,46 @@ export async function handleFeishuMessage(params: {
         messageCreateTimeMs,
       });
 
-      log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-        dispatcher,
-        onSettled: () => {
-          markDispatchIdle();
-        },
-        run: () =>
-          core.channel.reply.dispatchReplyFromConfig({
-            ctx: ctxPayload,
-            cfg,
+      // Fire-and-forget for cross-bot relay messages: relay messages don't need to
+      // block the dispatcher queue since the relay bot's reply is sent independently.
+      if (ctx.senderType === "bot") {
+        log(
+          `feishu[${account.accountId}]: relay dispatch (non-blocking) session=${route.sessionKey}`,
+        );
+        core.channel.reply
+          .withReplyDispatcher({
             dispatcher,
-            replyOptions,
-          }),
-      });
+            onSettled: () => markDispatchIdle(),
+            run: () =>
+              core.channel.reply.dispatchReplyFromConfig({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions,
+              }),
+          })
+          .catch((err) => {
+            error(`feishu[${account.accountId}]: relay dispatch failed: ${String(err)}`);
+          });
+      } else {
+        log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+        const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+          dispatcher,
+          onSettled: () => {
+            markDispatchIdle();
+          },
+          run: () =>
+            core.channel.reply.dispatchReplyFromConfig({
+              ctx: ctxPayload,
+              cfg,
+              dispatcher,
+              replyOptions,
+            }),
+        });
+        log(
+          `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
+        );
+      }
 
       if (isGroup && historyKey && chatHistories) {
         clearHistoryEntriesIfEnabled({
@@ -1134,10 +1161,6 @@ export async function handleFeishuMessage(params: {
           limit: historyLimit,
         });
       }
-
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
     }
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);

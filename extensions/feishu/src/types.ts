@@ -51,6 +51,7 @@ export type FeishuMessageContext = {
   threadId?: string;
   content: string;
   contentType: string;
+  senderType?: string;
   /** Mention forward targets (excluding the bot itself) */
   mentionTargets?: MentionTarget[];
 };
