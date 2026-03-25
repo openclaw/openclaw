@@ -1,7 +1,7 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
+import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/types.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
@@ -113,6 +113,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set group activation",
       getArgumentCompletions: activationCompletions,
     },
+    { name: "image", description: "Attach an image file" },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
@@ -156,6 +157,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",
+    "/image <path>",
     "/new or /reset",
     "/abort",
     "/settings",

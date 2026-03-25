@@ -1,29 +1,30 @@
-import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
-import {
-  formatThinkingLevels,
-  normalizeUsageDisplay,
-  resolveResponseUsageMode,
-} from "../auto-reply/thinking.js";
+import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
-import {
-  createFilterableSelectList,
-  createSearchableSelectList,
-  createSettingsList,
-} from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
-import { sanitizeRenderableText } from "./tui-formatters.js";
-import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
   TuiOptions,
   TuiStateAccess,
 } from "./tui-types.js";
+import {
+  formatThinkingLevels,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../auto-reply/thinking.js";
+import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { helpText, parseCommand } from "./commands.js";
+import {
+  createFilterableSelectList,
+  createSearchableSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
+import { extractImagePaths, loadImageAttachments } from "./tui-image-extract.js";
+import { formatStatusSummary } from "./tui-status-summary.js";
 
 type CommandHandlerContext = {
   client: GatewayChatClient;
@@ -485,6 +486,43 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
+      case "image":
+        if (!args) {
+          chatLog.addSystem("usage: /image <path>");
+          break;
+        }
+        {
+          const previousRunId = state.activeChatRunId;
+          let imgRunId: string | undefined;
+          try {
+            const attachments = await loadImageAttachments([args]);
+            chatLog.addSystem(`\u{1F4CE} 1 image attached: ${attachments[0].fileName}`);
+            chatLog.addUser(`[image: ${attachments[0].fileName}]`);
+            tui.requestRender();
+            imgRunId = randomUUID();
+            noteLocalRunId(imgRunId);
+            state.activeChatRunId = imgRunId;
+            setActivityStatus("sending");
+            await client.sendChat({
+              sessionKey: state.currentSessionKey,
+              message: `[image: ${attachments[0].fileName}]`,
+              thinking: opts.thinking,
+              deliver: deliverDefault,
+              timeoutMs: opts.timeoutMs,
+              runId: imgRunId,
+              attachments,
+            });
+            setActivityStatus("waiting");
+          } catch (err) {
+            if (imgRunId && state.activeChatRunId === imgRunId) {
+              forgetLocalRunId?.(imgRunId);
+              state.activeChatRunId = previousRunId;
+            }
+            chatLog.addSystem(`image failed: ${String(err)}`);
+            setActivityStatus("error");
+          }
+        }
+        break;
       case "abort":
         await abortActive();
         break;
@@ -510,10 +548,25 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
-    const runId = randomUUID();
+    const previousRunId = state.activeChatRunId;
+    let runId: string | undefined;
     try {
+      // Extract image attachments for non-btw messages
+      let attachments: Array<{ content: string; mimeType: string; fileName: string }> | undefined;
+      let message = text;
       if (!isBtw) {
-        chatLog.addUser(text);
+        const { cleanText, paths } = extractImagePaths(text);
+        if (paths.length > 0) {
+          attachments = await loadImageAttachments(paths);
+          chatLog.addSystem(
+            `\u{1F4CE} ${attachments.length} image${attachments.length === 1 ? "" : "s"} attached`,
+          );
+        }
+        message = cleanText || text;
+      }
+      runId = randomUUID();
+      if (!isBtw) {
+        chatLog.addUser(message);
         noteLocalRunId(runId);
         state.activeChatRunId = runId;
         setActivityStatus("sending");
@@ -523,30 +576,29 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
-        message: text,
+        message,
         thinking: opts.thinking,
         deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
         runId,
+        attachments,
       });
       if (!isBtw) {
         setActivityStatus("waiting");
         tui.requestRender();
       }
     } catch (err) {
-      if (isBtw) {
+      if (isBtw && runId) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
       if (!isBtw) {
-        state.activeChatRunId = null;
-      }
-      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
-      if (!isBtw) {
+        if (runId && state.activeChatRunId === runId) {
+          forgetLocalRunId?.(runId);
+          state.activeChatRunId = previousRunId;
+        }
         setActivityStatus("error");
       }
+      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
       tui.requestRender();
     }
   };
