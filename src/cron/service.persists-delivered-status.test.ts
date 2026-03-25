@@ -151,14 +151,15 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
-  it("persists lastDelivered=false when isolated job explicitly reports not delivered", async () => {
+  it("persists not-requested when mode=none job reports delivered=false", async () => {
     const updated = await runIsolatedJobAndReadState({
       job: buildIsolatedAgentTurnJob("delivered-false"),
       delivered: false,
     });
     expectSuccessfulCronRun(updated);
     expect(updated?.state.lastDelivered).toBe(false);
-    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    // mode='none' means delivery was never requested — not "not-delivered"
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
   });
 
