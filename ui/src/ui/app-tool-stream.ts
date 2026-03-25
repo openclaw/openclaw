@@ -37,7 +37,6 @@ type ToolStreamHost = {
   toolStreamSyncTimer: number | null;
   showClawComputer: boolean;
   activeClawTool: string;
-  activeImageUrl: string | null;
   requestUpdate: () => void;
 };
 
@@ -466,32 +465,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (output !== undefined) {
       entry.output = output || undefined;
-
-      // Handle follow_focus tool result
-      if (phase === "result" && name === "follow_focus") {
-        try {
-          const result = data.result as Record<string, unknown>;
-          if (result && (result.status === "ok" || result.tool)) {
-            const targetTool = (result.tool as string) || (result.focus_requested as string);
-            if (targetTool) {
-              host.showClawComputer = true;
-              host.activeClawTool = targetTool;
-
-              // If it's the images tool, handle the dynamic path
-              if (targetTool === "images") {
-                const params = (result.params as Record<string, unknown>) || result;
-                const imagePath = (params.path as string) || (result.imageUrl as string);
-                if (imagePath) {
-                  host.activeImageUrl = imagePath;
-                }
-              }
-              host.requestUpdate();
-            }
-          }
-        } catch (e) {
-          console.error("Failed to handle follow_focus result", e);
-        }
-      }
     }
     entry.updatedAt = now;
   }

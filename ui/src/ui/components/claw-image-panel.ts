@@ -39,7 +39,6 @@ export class ClawImagePanel extends LitElement {
 
   @property({ type: String }) activeTool = "images"; // vnc, browser, images
   @property({ type: String }) imageUrl = "";
-  @property({ type: String }) activeImageUrl = "";
   @property({ type: String }) gatewayUrl = "";
 
   @property({ type: Boolean }) enabled = false;
@@ -423,11 +422,7 @@ export class ClawImagePanel extends LitElement {
       ? `transform: translate(${this.floatingRect.x}px, ${this.floatingRect.y}px); width: ${this.floatingRect.width}px; height: ${this.floatingRect.height}px;`
       : `transform: translate(${this.dockedOffsetX}px, ${this.dockedOffsetY}px);`;
 
-    let finalImageUrl = this.imageUrl;
-    if (this.activeImageUrl) {
-      const httpBase = this.gatewayUrl.replace(/^ws/i, "http").replace(/\/+$/, "");
-      finalImageUrl = `${httpBase}/api/debug-image?path=${encodeURIComponent(this.activeImageUrl)}`;
-    }
+    const finalImageUrl = this.imageUrl;
 
     return html`
       <div class="container">

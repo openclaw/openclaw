@@ -26,7 +26,6 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     fallbackClearTimer: null,
     showClawComputer: false,
     activeClawTool: "vnc",
-    activeImageUrl: null,
     requestUpdate: () => {},
     ...overrides,
   };

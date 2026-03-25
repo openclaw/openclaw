@@ -181,7 +181,6 @@ export class OpenClawApp extends LitElement {
   @state() showClawComputer = false;
   @state() clawComputerWidth = 600;
   @state() activeClawTool = "vnc"; // vnc, browser, images
-  @state() activeImageUrl: string | null = null; // Path for image panel to display
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -267,8 +266,7 @@ export class OpenClawApp extends LitElement {
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
-    "overview";
+  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" = "files";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -296,8 +294,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";
   @state() sessionsPage = 0;
-  @state() sessionsPageSize = 10;
-  @state() sessionsActionsOpenKey: string | null = null;
+  @state() sessionsPageSize = 25;
+  @state() sessionsSelectedKeys: Set<string> = new Set();
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

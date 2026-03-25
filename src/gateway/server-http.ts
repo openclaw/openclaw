@@ -803,42 +803,6 @@ export function createGatewayHttpServer(opts: {
             }),
         },
         {
-          name: "debug-image",
-          run: async () => {
-            const url = new URL(req.url ?? "/", "http://localhost");
-            if (url.pathname === "/api/debug-image") {
-              const imagePath = url.searchParams.get("path");
-              if (!imagePath) {
-                res.statusCode = 400;
-                res.end("Missing path parameter");
-                return true;
-              }
-
-              // Basic security check: ensure path is within allowed directories or is a valid absolute path
-              // For now, we allow absolute paths as the user specified, but we could restrict it later.
-              try {
-                const fs = await import("node:fs");
-                if (!fs.existsSync(imagePath)) {
-                  res.statusCode = 404;
-                  res.end("Image not found");
-                  return true;
-                }
-
-                const img = fs.readFileSync(imagePath);
-                res.statusCode = 200;
-                res.setHeader("Content-Type", "image/png");
-                res.setHeader("Access-Control-Allow-Origin", "*");
-                res.end(img);
-              } catch {
-                res.statusCode = 500;
-                res.end("Error reading image");
-              }
-              return true;
-            }
-            return false;
-          },
-        },
-        {
           name: "sessions-kill",
           run: () =>
             handleSessionKillHttpRequest(req, res, {
