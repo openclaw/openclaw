@@ -31,3 +31,6 @@ export type PluginApprovalResolved = {
 };
 
 export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
+export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
+export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
+export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;

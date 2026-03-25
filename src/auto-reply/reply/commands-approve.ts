@@ -136,27 +136,41 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     });
   };
 
-  try {
-    await callApprovalMethod("exec.approval.resolve");
-  } catch (err) {
-    const isNotFound =
-      err instanceof Error &&
-      "gatewayCode" in err &&
-      (err as { gatewayCode: string }).gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND;
-    if (isNotFound) {
-      try {
-        await callApprovalMethod("plugin.approval.resolve");
-      } catch (pluginErr) {
-        return {
-          shouldContinue: false,
-          reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
-        };
-      }
-    } else {
+  // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
+  // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
+  const isPluginId = parsed.id.startsWith("plugin:");
+  if (isPluginId) {
+    try {
+      await callApprovalMethod("plugin.approval.resolve");
+    } catch (err) {
       return {
         shouldContinue: false,
         reply: { text: `❌ Failed to submit approval: ${String(err)}` },
       };
+    }
+  } else {
+    try {
+      await callApprovalMethod("exec.approval.resolve");
+    } catch (err) {
+      const isNotFound =
+        err instanceof Error &&
+        "gatewayCode" in err &&
+        (err as { gatewayCode: string }).gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND;
+      if (isNotFound) {
+        try {
+          await callApprovalMethod("plugin.approval.resolve");
+        } catch (pluginErr) {
+          return {
+            shouldContinue: false,
+            reply: { text: `❌ Failed to submit approval: ${String(pluginErr)}` },
+          };
+        }
+      } else {
+        return {
+          shouldContinue: false,
+          reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+        };
+      }
     }
   }
 
