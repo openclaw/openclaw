@@ -3009,7 +3009,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 163,
+            "line": 164,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3045,7 +3045,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 437,
+            "line": 438,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 414,
+            "line": 415,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 246,
+            "line": 247,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3081,7 +3081,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 277,
+            "line": 278,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3239,6 +3239,15 @@
           }
         },
         {
+          "declaration": "export function resolveSecretInputString(params: { config: OpenClawConfig; value: unknown; env: ProcessEnv; defaults?: { env?: string | undefined; file?: string | undefined; exec?: string | undefined; } | undefined; normalize?: ((value: unknown) => string | undefined) | undefined; onResolveRefError?: ((error: unknown, ref: SecretRef) => never) | undefined; }): Promise<...>;",
+          "exportName": "resolveSecretInputString",
+          "kind": "function",
+          "source": {
+            "line": 11,
+            "path": "src/secrets/resolve-secret-input-string.ts"
+          }
+        },
+        {
           "declaration": "export function resolveTailnetHostWithRunner(runCommandWithTimeout?: TailscaleStatusCommandRunner | undefined): Promise<string | null>;",
           "exportName": "resolveTailnetHostWithRunner",
           "kind": "function",
@@ -3279,7 +3288,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 143,
+            "line": 144,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3288,7 +3297,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 155,
+            "line": 156,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3360,7 +3369,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 138,
+            "line": 139,
             "path": "src/plugin-sdk/core.ts"
           }
         },

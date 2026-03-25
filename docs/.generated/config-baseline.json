@@ -56433,7 +56433,6 @@
     {
       "path": "plugins.entries.voice-call.config.plivo.authToken",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -56699,7 +56698,6 @@
     {
       "path": "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -56762,7 +56760,6 @@
     {
       "path": "plugins.entries.voice-call.config.streaming.openaiApiKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -56934,7 +56931,6 @@
     {
       "path": "plugins.entries.voice-call.config.telnyx.apiKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -56961,7 +56957,6 @@
     {
       "path": "plugins.entries.voice-call.config.telnyx.publicKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -57143,7 +57138,6 @@
     {
       "path": "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -57431,7 +57425,6 @@
     {
       "path": "plugins.entries.voice-call.config.tts.openai.apiKey",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -57575,7 +57568,6 @@
     {
       "path": "plugins.entries.voice-call.config.tunnel.ngrokAuthToken",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -57645,7 +57637,6 @@
     {
       "path": "plugins.entries.voice-call.config.twilio.authToken",
       "kind": "plugin",
-      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": true,
