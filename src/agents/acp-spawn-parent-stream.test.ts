@@ -356,4 +356,62 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     relay.dispose();
   });
+
+  it("does not treat the initial same-millisecond persisted idle state as completion", () => {
+    readAcpSessionEntryMock.mockReturnValue({
+      acp: {
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-9",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-9",
+      agentId: "codex",
+      noOutputNoticeMs: 0,
+      noOutputPollMs: 250,
+      maxRelayLifetimeMs: 1_000,
+    });
+
+    vi.advanceTimersByTime(750);
+
+    expect(collectedTexts().some((text) => text.includes("run completed"))).toBe(false);
+    expect(collectedTexts().some((text) => text.includes("run failed"))).toBe(false);
+
+    relay.dispose();
+  });
+
+  it("accepts a later idle-state update after ignoring the initial same-millisecond idle snapshot", () => {
+    readAcpSessionEntryMock
+      .mockReturnValueOnce({
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      })
+      .mockReturnValueOnce({
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now() + 250,
+        },
+      });
+
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-10",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-10",
+      agentId: "codex",
+      noOutputNoticeMs: 0,
+      noOutputPollMs: 250,
+      maxRelayLifetimeMs: 1_000,
+    });
+
+    vi.advanceTimersByTime(500);
+
+    expect(collectedTexts().some((text) => text.includes("codex run completed."))).toBe(true);
+
+    relay.dispose();
+  });
 });

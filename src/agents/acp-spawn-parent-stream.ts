@@ -232,8 +232,9 @@ export function startAcpSpawnParentStreamRelay(params: {
   let pendingText = "";
   let lastProgressAt = Date.now();
   const relayStartedAt = lastProgressAt;
+  const initialPersistedRelayState = readPersistedAcpRelayState(params.childSessionKey);
   let stallNotified = false;
-  let sawPersistedRunningState = false;
+  let sawPersistedRunningState = initialPersistedRelayState?.state === "running";
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
 
@@ -275,6 +276,23 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const didPersistedRelayStateAdvance = (
+    persistedRelayState: ReturnType<typeof readPersistedAcpRelayState>,
+  ) => {
+    if (!persistedRelayState) {
+      return false;
+    }
+    if (!initialPersistedRelayState) {
+      const persistedActivityAt = persistedRelayState.lastActivityAt;
+      return persistedActivityAt != null ? persistedActivityAt > relayStartedAt : true;
+    }
+    return (
+      persistedRelayState.state !== initialPersistedRelayState.state ||
+      persistedRelayState.lastActivityAt !== initialPersistedRelayState.lastActivityAt ||
+      persistedRelayState.lastError !== initialPersistedRelayState.lastError
+    );
+  };
+
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed) {
       return;
@@ -282,15 +300,13 @@ export function startAcpSpawnParentStreamRelay(params: {
     // ACP children can finish in a different gateway process, so the local
     // in-memory event bus may never receive their terminal lifecycle event.
     const persistedRelayState = readPersistedAcpRelayState(params.childSessionKey);
-    const persistedActivityAt = persistedRelayState?.lastActivityAt;
-    const persistedStateBecameCurrent =
-      persistedActivityAt != null && persistedActivityAt >= relayStartedAt;
-    if (persistedRelayState?.state === "running" && persistedStateBecameCurrent) {
+    const persistedStateAdvanced = didPersistedRelayStateAdvance(persistedRelayState);
+    if (persistedRelayState?.state === "running" && persistedStateAdvanced) {
       sawPersistedRunningState = true;
     }
     if (
       persistedRelayState?.state === "idle" &&
-      (sawPersistedRunningState || persistedStateBecameCurrent)
+      (sawPersistedRunningState || persistedStateAdvanced)
     ) {
       flushPending();
       emit(`${relayLabel} run completed.`, `${contextPrefix}:done:persisted`);
@@ -299,7 +315,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
     if (
       persistedRelayState?.state === "error" &&
-      (sawPersistedRunningState || persistedStateBecameCurrent)
+      (sawPersistedRunningState || persistedStateAdvanced)
     ) {
       flushPending();
       const errorText = persistedRelayState.lastError;
