@@ -237,7 +237,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
     const approveSpy = vi
       .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (requestId: string) => {
+      .mockImplementation(async (_requestId: string) => {
         const replacement = await devicePairingModule.requestDevicePairing({
           deviceId: loaded.identity.deviceId,
           publicKey: loaded.publicKey,
