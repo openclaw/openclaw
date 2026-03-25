@@ -22,6 +22,7 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import {
   ConnectErrorDetailCodes,
@@ -77,6 +78,8 @@ class GatewayClientRequestError extends Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
+  connectChallengeTimeoutMs?: number;
+  /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
@@ -119,9 +122,29 @@ export function describeGatewayCloseCode(code: number): string | undefined {
   return GATEWAY_CLOSE_CODE_HINTS[code];
 }
 
+function readConnectChallengeTimeoutOverride(
+  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+): number | undefined {
+  if (
+    typeof opts.connectChallengeTimeoutMs === "number" &&
+    Number.isFinite(opts.connectChallengeTimeoutMs)
+  ) {
+    return opts.connectChallengeTimeoutMs;
+  }
+  if (typeof opts.connectDelayMs === "number" && Number.isFinite(opts.connectDelayMs)) {
+    return opts.connectDelayMs;
+  }
+  return undefined;
+}
+
+export function resolveGatewayClientConnectChallengeTimeoutMs(
+  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+): number {
+  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts));
+}
+
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
-const DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS = 5_000;
 
 type PendingStop = {
   ws: WebSocket;
@@ -238,7 +261,7 @@ export class GatewayClient {
           return;
         }
       }
-      this.queueConnect();
+      this.beginPreauthHandshake();
     });
     ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     ws.on("close", (code, reason) => {
@@ -328,10 +351,7 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    if (this.connectTimer) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectChallengeTimeout();
     if (this.pendingStop) {
       this.flushPendingErrors(new Error("gateway client stopped"));
       return this.pendingStop.promise;
@@ -387,10 +407,7 @@ export class GatewayClient {
       return;
     }
     this.connectSent = true;
-    if (this.connectTimer) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectChallengeTimeout();
     const role = this.opts.role ?? "operator";
     const {
       authToken,
@@ -695,17 +712,22 @@ export class GatewayClient {
     }
   }
 
-  private queueConnect() {
+  private beginPreauthHandshake() {
     this.connectNonce = null;
     this.connectSent = false;
-    const rawConnectDelayMs = this.opts.connectDelayMs;
-    const connectChallengeTimeoutMs =
-      typeof rawConnectDelayMs === "number" && Number.isFinite(rawConnectDelayMs)
-        ? Math.max(250, Math.min(10_000, rawConnectDelayMs))
-        : DEFAULT_CONNECT_CHALLENGE_TIMEOUT_MS;
+    this.armConnectChallengeTimeout();
+  }
+
+  private clearConnectChallengeTimeout() {
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
+      this.connectTimer = null;
     }
+  }
+
+  private armConnectChallengeTimeout() {
+    const connectChallengeTimeoutMs = resolveGatewayClientConnectChallengeTimeoutMs(this.opts);
+    this.clearConnectChallengeTimeout();
     this.connectTimer = setTimeout(() => {
       if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
         return;
