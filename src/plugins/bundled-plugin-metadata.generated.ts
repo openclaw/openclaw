@@ -1655,6 +1655,186 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "memory-episodes",
+    idHint: "memory-episodes",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/memory-episodes",
+    packageVersion: "1.0.0",
+    packageDescription:
+      "Mid-term episodic memory with session summaries and custom memory commands",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "memory-episodes",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          postgres: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              connectionString: {
+                type: "string",
+              },
+            },
+            required: ["connectionString"],
+          },
+          embedding: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseUrl: {
+                type: "string",
+              },
+              model: {
+                type: "string",
+              },
+              dimensions: {
+                type: "number",
+              },
+            },
+          },
+          extraction: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              model: {
+                type: "string",
+              },
+              baseUrl: {
+                type: "string",
+              },
+              apiKey: {
+                type: "string",
+              },
+              maxSummaryTokens: {
+                type: "number",
+              },
+            },
+          },
+          retrieval: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              maxResults: {
+                type: "number",
+              },
+              maxTokens: {
+                type: "number",
+              },
+              similarityThreshold: {
+                type: "number",
+              },
+              maxAgeDays: {
+                type: "number",
+              },
+              preferSameChannel: {
+                type: "boolean",
+              },
+            },
+          },
+          retention: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              maxAgeDays: {
+                type: "number",
+              },
+            },
+          },
+          mem0: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              baseUrl: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+            },
+          },
+        },
+        required: ["postgres"],
+      },
+      name: "Episode Memory",
+      description: "Mid-term episodic memory with session summaries and custom memory commands",
+      version: "1.0.0",
+      uiHints: {
+        "postgres.connectionString": {
+          label: "Postgres Connection String",
+          sensitive: true,
+          placeholder: "postgresql://openclaw:openclaw_memory@localhost:5433/openclaw_episodes",
+          help: "Connection string for pgvector-enabled Postgres (or use ${EPISODES_PG_URL})",
+        },
+        "embedding.baseUrl": {
+          label: "Ollama URL",
+          placeholder: "http://127.0.0.1:11434",
+          help: "Ollama API base URL for embeddings",
+        },
+        "embedding.model": {
+          label: "Embedding Model",
+          placeholder: "nomic-embed-text",
+          help: "Ollama embedding model to use",
+        },
+        "embedding.dimensions": {
+          label: "Dimensions",
+          placeholder: "768",
+          help: "Vector dimensions (must match pgvector column and embedding model)",
+          advanced: true,
+        },
+        "extraction.model": {
+          label: "Extraction Model",
+          placeholder: "llama3.1:8b",
+          help: "Ollama model for episode summarization",
+          advanced: true,
+        },
+        "extraction.baseUrl": {
+          label: "Extraction Base URL",
+          placeholder: "http://127.0.0.1:11434",
+          help: "Ollama API base URL for extraction LLM",
+          advanced: true,
+        },
+        "retrieval.maxResults": {
+          label: "Max Results",
+          placeholder: "3",
+          help: "Maximum episodes returned per query",
+          advanced: true,
+        },
+        "retrieval.similarityThreshold": {
+          label: "Similarity Threshold",
+          placeholder: "0.30",
+          help: "Minimum cosine similarity for episode retrieval",
+          advanced: true,
+        },
+        "retrieval.maxAgeDays": {
+          label: "Max Age (Days)",
+          placeholder: "30",
+          help: "Only retrieve episodes newer than this",
+          advanced: true,
+        },
+        "mem0.baseUrl": {
+          label: "Mem0 Base URL",
+          placeholder: "http://127.0.0.1:8420",
+          help: "Mem0 REST API base URL",
+          advanced: true,
+        },
+        "mem0.enabled": {
+          label: "Mem0 Integration",
+          help: "Enable Mem0 long-term memory coordination",
+        },
+      },
+    },
+  },
+  {
     dirName: "memory-lancedb",
     idHint: "memory-lancedb",
     source: {
@@ -1760,6 +1940,60 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           placeholder: "500",
         },
       },
+    },
+  },
+  {
+    dirName: "memory-mem0",
+    idHint: "memory-mem0",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/memory-mem0",
+    packageVersion: "1.0.0",
+    packageDescription: "OpenClaw memory plugin backed by a self-hosted Mem0 REST API",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "memory-mem0",
+      configSchema: {
+        baseUrl: {
+          type: "string",
+          default: "http://127.0.0.1:8420",
+          description: "Mem0 REST API base URL",
+        },
+        userId: {
+          type: "string",
+          default: "openclaw",
+          description:
+            "Default user ID for memory storage (overridden by session context when available)",
+        },
+        autoCapture: {
+          type: "boolean",
+          default: true,
+          description: "Automatically capture conversation context after agent execution",
+        },
+        autoRecall: {
+          type: "boolean",
+          default: true,
+          description: "Automatically inject relevant memories before agent execution",
+        },
+        recallLimit: {
+          type: "number",
+          default: 5,
+          description: "Maximum memories to recall per query",
+        },
+        recallThreshold: {
+          type: "number",
+          default: 0.4,
+          description: "Minimum relevance score for auto-recall (0.0-1.0)",
+        },
+      },
+      kind: "memory",
+      name: "Mem0 Memory",
+      description: "Long-term semantic memory via a self-hosted Mem0 REST API",
+      version: "1.0.0",
     },
   },
   {

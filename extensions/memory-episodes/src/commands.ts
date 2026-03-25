@@ -5,6 +5,9 @@
  * These bypass the LLM agent and return direct replies.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/memory-episodes";
 import type { EpisodesConfig } from "./config.js";
 import type { EpisodeDb, EpisodeSearchResult } from "./db.js";
@@ -308,109 +311,54 @@ export function registerCommands(api: OpenClawPluginApi, deps: CommandDeps): voi
   });
 
   // =========================================================================
-  // /reset-all — reset all active sessions
-  //   --fast    skip hooks/episode capture, exclude crons, run in parallel
-  //   --discard skip episode capture (but still runs hooks sequentially)
+  // /reset-all — delete all active session .jsonl files
+  //   Nukes session files directly. No hooks, no LLM calls, no waiting.
+  //   Crons (stored in ~/.openclaw/cron/) are never touched.
   // =========================================================================
   api.registerCommand({
     name: "reset-all",
-    description: "Reset all active agent sessions",
-    acceptsArgs: true,
-    handler: async (ctx) => {
-      const { discard, fast } = parseFlags(ctx.args ?? "");
-
+    description: "Delete all active session files (no hooks, instant)",
+    acceptsArgs: false,
+    handler: async () => {
       try {
-        // Access gateway internals via globalThis symbols (same process).
-        // The gateway server exposes its method handlers on a well-known symbol.
-        const handlersKey = Symbol.for("openclaw.gatewayHandlers");
-        const handlers = (globalThis as Record<symbol, unknown>)[handlersKey] as
-          | Record<string, (ctx: unknown) => void | Promise<void>>
-          | undefined;
+        const agentsDir = path.join(os.homedir(), ".openclaw", "agents");
 
-        if (!handlers?.["sessions.list"] || !handlers["sessions.reset"]) {
-          return {
-            text: "Gateway session handlers not available. This command must run inside the gateway.",
-          };
+        if (!fs.existsSync(agentsDir)) {
+          return { text: "No agents directory found." };
         }
 
-        // List sessions
-        const sessions = await new Promise<Array<{ key: string }>>((resolve, reject) => {
-          handlers["sessions.list"]({
-            params: { includeGlobal: false, includeUnknown: false },
-            respond: (ok: boolean, result: unknown, error: unknown) => {
-              if (ok && result && typeof result === "object" && "sessions" in result) {
-                resolve((result as { sessions: Array<{ key: string }> }).sessions);
-              } else {
-                reject(new Error(String(error ?? "list failed")));
-              }
-            },
-          });
-        });
+        const agentDirs = fs
+          .readdirSync(agentsDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory());
 
-        let keys = sessions.map((s) => s.key).filter((k) => k && k !== "global" && k !== "unknown");
+        let deleted = 0;
+        const errors: string[] = [];
 
-        // --fast: exclude cron sessions (they should persist across resets)
-        if (fast) {
-          keys = keys.filter((k) => !k.includes(":cron:"));
-        }
+        for (const agent of agentDirs) {
+          const sessionsDir = path.join(agentsDir, agent.name, "sessions");
+          if (!fs.existsSync(sessionsDir)) continue;
 
-        if (keys.length === 0) {
-          return { text: "No active sessions to reset." };
-        }
+          const files = fs
+            .readdirSync(sessionsDir)
+            .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."));
 
-        const resetOne = (key: string, reason: "new" | "reset") =>
-          new Promise<void>((resolve, reject) => {
-            handlers["sessions.reset"]({
-              params: { key, reason },
-              respond: (ok: boolean, _result: unknown, error: unknown) => {
-                if (ok) resolve();
-                else reject(new Error(String(error ?? "reset failed")));
-              },
-            });
-          });
-
-        let resetCount = 0;
-        let errorCount = 0;
-
-        if (fast) {
-          // --fast: suppress before_reset hooks and run all resets in parallel
-          const skipKey = Symbol.for("openclaw.skipBeforeResetHook");
-          (globalThis as Record<symbol, unknown>)[skipKey] = true;
-          try {
-            const results = await Promise.allSettled(keys.map((key) => resetOne(key, "reset")));
-            for (const r of results) {
-              if (r.status === "fulfilled") resetCount++;
-              else errorCount++;
-            }
-          } finally {
-            (globalThis as Record<symbol, unknown>)[skipKey] = false;
-          }
-        } else {
-          // Normal: sequential resets with episode capture
-          const reason = discard ? "reset" : "new";
-          for (const key of keys) {
+          for (const file of files) {
             try {
-              await resetOne(key, reason);
-              resetCount++;
-            } catch {
-              errorCount++;
+              fs.unlinkSync(path.join(sessionsDir, file));
+              deleted++;
+            } catch (err) {
+              errors.push(`${agent.name}/${file}: ${String(err)}`);
             }
           }
         }
 
-        const modeLabel = fast
-          ? "fast, no episodes, crons preserved"
-          : discard
-            ? "discarded, no episodes"
-            : "episodes captured";
-        const summary = `Reset ${resetCount}/${keys.length} sessions (${modeLabel}).`;
-
+        const msg = `Deleted ${deleted} session file(s) across ${agentDirs.length} agents.`;
         return {
-          text: errorCount > 0 ? `${summary}\n${errorCount} failed.` : summary,
+          text: errors.length > 0 ? `${msg}\n${errors.length} failed:\n${errors.join("\n")}` : msg,
         };
       } catch (err) {
         api.logger.warn(`memory-episodes: /reset-all error: ${String(err)}`);
-        return { text: `Failed to reset sessions: ${String(err)}` };
+        return { text: `Failed: ${String(err)}` };
       }
     },
   });

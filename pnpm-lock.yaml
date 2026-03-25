@@ -498,10 +498,14 @@ importers:
         version: 0.34.48
     devDependencies:
       openclaw:
-        specifier: '*'
-        version: 2026.3.13(@discordjs/opus@0.10.0)(@napi-rs/canvas@0.1.95)(@types/express@5.0.6)(audio-decode@2.2.3)(jimp@1.6.0)(node-llama-cpp@3.16.2(typescript@5.9.3))
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/microsoft: {}
+  extensions/microsoft:
+    dependencies:
+      node-edge-tts:
+        specifier: ^1.2.10
+        version: 1.2.10
 
   extensions/minimax: {}
 
