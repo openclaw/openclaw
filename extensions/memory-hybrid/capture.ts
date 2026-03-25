@@ -39,12 +39,14 @@ const MEMORY_TRIGGERS = [
 ];
 
 const PROMPT_INJECTION_PATTERNS = [
-  /ignore\s+(all\s+|any\s+|previous\s+|above\s+|prior\s+)*instructions/i,
-  /do not follow (the )?(system|developer)/i,
+  /ignore\s+(all\s+|any\s+|previous\s+|above\s+|prior\s+|system\s+)*instructions/i,
+  /do not\s+(follow|obey)\s+(the\s+)?(system|developer|hidden|prior)/i,
   /system prompt/i,
   /developer message/i,
-  /<\s*(system|assistant|developer|tool|function|relevant-memories)\b/i,
-  /\b(run|execute|call|invoke)\b.{0,40}\b(tool|command)\b/i,
+  /<\s*(system|assistant|developer|tool|function|relevant-memories|star-map)\b/i,
+  /\b(run|execute|call|invoke|start)\b.{0,60}\b(tool|command|script|shell)\b/i,
+  /stop\s+current\s+task/i,
+  /you\s+must\s+now\s+act\s+as/i,
 ];
 
 const PROMPT_ESCAPE_MAP: Record<string, string> = {

@@ -17,6 +17,7 @@ import type { GraphDB } from "./graph.js";
 import { extractGraphFromBatch } from "./graph.js";
 import { MemoryQueue } from "./queue.js";
 import { hybridScore, getGraphEnrichment } from "./recall.js";
+import { validateMemoryInput } from "./security.js";
 import type { ConversationStack } from "./stack.js";
 import { tracer } from "./tracer.js";
 
@@ -30,9 +31,6 @@ export interface HookDeps {
   workingMemory: WorkingMemoryBuffer;
   cfg: any;
 }
-
-const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
-let lastPruneTime = 0;
 
 export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
   const {
@@ -208,9 +206,17 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
                 lastUserMsg.trim(),
               );
 
-            const result = isTrivial
-              ? { shouldStore: false as const, facts: [] }
-              : await smartCapture(lastUserMsg, lastAssistantMsg || undefined, chatModel);
+            const validation = validateMemoryInput(lastUserMsg, cfg.captureMaxChars);
+            if (!validation.isValid) {
+              api.logger.info(
+                `memory-hybrid: smart-capture skipped: ${validation.reason ?? "unknown reason"}`,
+              );
+            }
+
+            const result =
+              isTrivial || !validation.isValid
+                ? { shouldStore: false as const, facts: [] }
+                : await smartCapture(lastUserMsg, lastAssistantMsg || undefined, chatModel);
 
             if (result.shouldStore && result.facts.length > 0) {
               const factsToProcess = result.facts.slice(0, 5);
@@ -299,6 +305,9 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
             if (toCapture.length > 0) {
               let storedRuleBased = 0;
               for (const text of toCapture.slice(0, 3)) {
+                const validation = validateMemoryInput(text, cfg.captureMaxChars);
+                if (!validation.isValid) continue;
+
                 const category = detectCategory(text);
                 const importance = category === "entity" || category === "decision" ? 0.85 : 0.7;
 
@@ -325,25 +334,45 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
           api.logger.warn(`memory-hybrid: background capture failed: ${String(err)}`);
         }
       });
+    }
+  });
 
-      if (Date.now() - lastPruneTime > PRUNE_INTERVAL_MS) {
-        lastPruneTime = Date.now();
+  const FLUSH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+  let lastFlushTime = 0;
+  const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  let lastPruneTime = 0;
+
+  // Background Periodic Tasks (Flush & Prune)
+  setInterval(
+    async () => {
+      const now = Date.now();
+
+      // 1. Periodic Flush of Recall Counts
+      if (now - lastFlushTime > FLUSH_INTERVAL_MS) {
+        lastFlushTime = now;
         try {
           const flushed = await db.flushRecallCounts();
           if (flushed > 0) {
-            api.logger.info(`memory-hybrid: flushed ${flushed} recall count deltas`);
+            api.logger.info(`memory-hybrid: periodically flushed ${flushed} recall count deltas`);
           }
+        } catch (err) {
+          api.logger.warn(`memory-hybrid: periodic flush failed: ${String(err)}`);
+        }
+      }
 
+      // 2. Periodic Pruning (every 24h)
+      if (now - lastPruneTime > PRUNE_INTERVAL_MS) {
+        lastPruneTime = now;
+        try {
           const deleted = await db.deleteOldUnused(90);
           if (deleted > 0) {
             api.logger.info(`memory-hybrid: auto-pruned ${deleted} unused memories (>90 days)`);
           }
         } catch (err) {
-          api.logger.warn(
-            `memory-hybrid: pruning/flush failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          api.logger.warn(`memory-hybrid: periodic pruning failed: ${String(err)}`);
         }
       }
-    }
-  });
+    },
+    5 * 60 * 1000,
+  ); // Check every 5 minutes
 }

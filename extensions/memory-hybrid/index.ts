@@ -44,6 +44,11 @@ const memoryPlugin = {
     const workingMemory = new WorkingMemoryBuffer(50, 0.7, 3);
     const conversationStack = new ConversationStack(30);
 
+    const bufferPath = api.resolvePath("working_memory.jsonl");
+    workingMemory.load(bufferPath).catch((err) => {
+      api.logger.warn(`memory-hybrid: load working memory failed: ${String(err)}`);
+    });
+
     // 3. Initialize Shared Services
     const dreamService = new DreamService(db, chatModel, embeddings, graphDB, api);
 
@@ -77,6 +82,9 @@ const memoryPlugin = {
       },
       stop: () => {
         dreamService.stop();
+        workingMemory.save(bufferPath).catch((err) => {
+          api.logger.warn(`memory-hybrid: save working memory failed: ${String(err)}`);
+        });
         api.logger.info("memory-hybrid: stopped");
       },
     });

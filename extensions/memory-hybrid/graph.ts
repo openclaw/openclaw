@@ -47,6 +47,8 @@ interface GraphData {
 export class GraphDB {
   public nodes: Map<string, GraphNode> = new Map();
   public edges: GraphEdge[] = [];
+  /** Adjacency list for O(1) neighbor lookups: nodeId -> Set of edge indices */
+  private adjacencyList: Map<string, Set<number>> = new Map();
   /** Set of composite keys for O(1) edge dedup: "source|target|relation" */
   private edgeKeys: Set<string> = new Set();
   private filePath: string;
@@ -109,7 +111,10 @@ export class GraphDB {
               const key = `${edge.source}|${edge.target}|${edge.relation}`;
               if (!this.edgeKeys.has(key)) {
                 this.edgeKeys.add(key);
+                const edgeIndex = this.edges.length;
                 this.edges.push(edge);
+                this.addToAdjacencyList(edge.source, edgeIndex);
+                this.addToAdjacencyList(edge.target, edgeIndex);
               }
             }
           } catch {
@@ -136,7 +141,10 @@ export class GraphDB {
           const key = `${e.source}|${e.target}|${e.relation}`;
           if (!this.edgeKeys.has(key)) {
             this.edgeKeys.add(key);
+            const edgeIndex = this.edges.length;
             this.edges.push(e);
+            this.addToAdjacencyList(e.source, edgeIndex);
+            this.addToAdjacencyList(e.target, edgeIndex);
           }
         }
 
@@ -217,9 +225,12 @@ export class GraphDB {
       }
       await writeFile(this.filePath, lines.join("\n") + "\n", "utf-8");
       this.edgeKeys.clear();
-      for (const edge of this.edges) {
+      this.adjacencyList.clear();
+      this.edges.forEach((edge, index) => {
         this.edgeKeys.add(`${edge.source}|${edge.target}|${edge.relation}`);
-      }
+        this.addToAdjacencyList(edge.source, index);
+        this.addToAdjacencyList(edge.target, index);
+      });
       this.dirtyNodes.clear();
       this.savedEdgeCount = this.edges.length;
     });
@@ -238,8 +249,18 @@ export class GraphDB {
     const key = `${edge.source}|${edge.target}|${edge.relation}`;
     if (!this.edgeKeys.has(key)) {
       this.edgeKeys.add(key);
+      const edgeIndex = this.edges.length;
       this.edges.push(edge);
+      this.addToAdjacencyList(edge.source, edgeIndex);
+      this.addToAdjacencyList(edge.target, edgeIndex);
     }
+  }
+
+  private addToAdjacencyList(nodeId: string, edgeIndex: number): void {
+    if (!this.adjacencyList.has(nodeId)) {
+      this.adjacencyList.set(nodeId, new Set());
+    }
+    this.adjacencyList.get(nodeId)!.add(edgeIndex);
   }
 
   /**
@@ -257,7 +278,9 @@ export class GraphDB {
   /** Get all edges connected to a node */
   async getNeighbors(nodeId: string): Promise<GraphEdge[]> {
     return this.withLock(async () => {
-      return this.edges.filter((e) => e.source === nodeId || e.target === nodeId);
+      const indices = this.adjacencyList.get(nodeId);
+      if (!indices) return [];
+      return Array.from(indices).map((idx) => this.edges[idx]);
     });
   }
 

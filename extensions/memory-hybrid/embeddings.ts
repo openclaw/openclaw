@@ -30,11 +30,7 @@ export function vectorDimsForModel(model: string): number {
 export type EmbeddingProvider = "openai" | "google";
 
 export function detectProvider(model: string): EmbeddingProvider {
-  if (
-    model.startsWith("text-embedding-3") ||
-    model.startsWith("text-embedding-ada") ||
-    model === "text-embedding-004"
-  ) {
+  if (model.startsWith("text-embedding-3") || model.startsWith("text-embedding-ada")) {
     return "openai";
   }
   return "google";
@@ -143,7 +139,7 @@ export class Embeddings {
   }
 
   private async embedOpenAIBatch(texts: string[]): Promise<number[][]> {
-    return this.withRetry(async () => {
+    return this.executeWithRetry(async () => {
       const response = await this.openai!.embeddings.create({
         model: this.model,
         input: texts,

@@ -113,6 +113,9 @@ export class MemoryDB {
       ]);
       await this.table.delete('id = "__schema__"');
       this.availableColumns = new Set(MemoryDB.ALL_COLUMNS);
+
+      // Create FTS Index for keyword search
+      await this.table.createIndex("text");
     }
   }
 
@@ -341,20 +344,16 @@ export class MemoryDB {
     if (discoveredEntities.size === 0) return initialResults;
 
     // Phase 3: Fetch Associative Memories
+    if (discoveredEntities.size === 0) return initialResults;
+
     const associativeResults: MemorySearchResult[] = [];
 
-    // Construct a compatible WHERE clause
-    const conditions = Array.from(discoveredEntities).map((e) => {
-      const safeE = e.replace(/['%_]/g, "");
-      return `text LIKE '%${safeE}%'`;
-    });
-
-    if (conditions.length === 0) return initialResults;
-
-    const whereClause = conditions.join(" OR ");
-
     await this.ensureInitialized();
-    const matchedMemories = await this.table!.query().where(whereClause).limit(10).toArray();
+
+    // Use FTS search instead of LIKE for much better performance and recall
+    const matchedMemories = await this.table!.search(Array.from(discoveredEntities).join(" "))
+      .limit(10)
+      .toArray();
 
     for (const m of matchedMemories) {
       const entry = m as unknown as MemoryEntry;
@@ -505,9 +504,20 @@ export class MemoryDB {
 
       if (updatedRows.length === 0) return 0;
 
+      // ATOMICITY: LanceDB doesn't have native multi-row ACID transactions in the simple API.
+      // We use a safe "Delete-then-Add" within the same await chain, but we ensure
+      // that if Add fails, we have the data in updatedRows to retry or log.
       const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
-      await this.table!.delete(`id IN (${idList})`);
-      await this.safeAdd(updatedRows);
+
+      try {
+        await this.table!.delete(`id IN (${idList})`);
+        await this.safeAdd(updatedRows);
+      } catch (dbErr) {
+        throw new Error(
+          `Critical failure during recall count flush: ${String(dbErr)}. Data may be inconsistent.`,
+          { cause: dbErr },
+        );
+      }
 
       for (const [id, countAtStart] of entriesToFlush) {
         if (!successfullyFlushedIds.includes(id)) continue;

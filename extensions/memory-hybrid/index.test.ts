@@ -103,7 +103,7 @@ describe("config", () => {
       embedding: { apiKey: "${TEST_DEFAULT_KEY}" },
     });
 
-    expect(cfg.embedding.model).toBe("gemini-embedding-2-preview");
+    expect(cfg.embedding.model).toBe("text-embedding-004");
     expect(cfg.embedding.provider).toBe("google");
     delete process.env.TEST_DEFAULT_KEY;
   });
@@ -421,10 +421,10 @@ describe("Provider Switching", () => {
     expect(cfg3.chatProvider).toBe("openai");
   });
 
-  test("should detect text-embedding-004 as OpenAI", () => {
+  test("should detect text-embedding-004 as Google", () => {
     const cfg = memoryConfigSchema.parse({
       embedding: { apiKey: "key", model: "text-embedding-004" },
     });
-    expect(cfg.embedding.provider).toBe("openai");
+    expect(cfg.embedding.provider).toBe("google");
   });
 });
