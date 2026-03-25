@@ -13,12 +13,19 @@ import {
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import * as synologyClient from "./client.js";
-import { evaluateSynologyChatGroupAccess } from "./group-access.js";
+import {
+  evaluateSynologyChatGroupAccess,
+  resolveSynologyChatGroupRequireMention,
+} from "./group-access.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
 function normalizeLowercaseStringOrEmpty(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // One rate limiter per account, created lazily
@@ -369,7 +376,7 @@ export interface WebhookHandlerDeps {
  * 7. Delivers to the agent asynchronously and sends final reply via incomingUrl
  */
 type SynologyWebhookAuthorization =
-  | { ok: false; statusCode: number; error: string }
+  | { ok: false; statusCode: number; error: string; silent?: boolean }
   | { ok: true; commandAuthorized: boolean };
 
 type AuthorizedSynologyWebhook = {
@@ -446,13 +453,36 @@ export function authorizeSynologyWebhook(params: {
     });
     if (!groupAuth.allowed) {
       if (groupAuth.reason === "group-policy-disabled") {
-        // Silent drop — same behavior as Telegram
-        return { ok: false, statusCode: 403, error: "Group messages are disabled" };
+        // Silent ACK so Synology Chat won't retry the webhook (same as Telegram).
+        return { ok: false, statusCode: 204, error: "Group messages are disabled", silent: true };
       }
       params.log?.warn(
         `Blocked group message from ${params.payload.user_id} in channel ${params.payload.channel_id ?? params.payload.channel_name}: ${groupAuth.reason}`,
       );
       return { ok: false, statusCode: 403, error: "User not authorized for group" };
+    }
+
+    // Check requireMention: skip processing if the bot was not @mentioned
+    const mentionRequired = resolveSynologyChatGroupRequireMention({
+      account: params.account,
+      channelId: params.payload.channel_id,
+      channelName: params.payload.channel_name,
+    });
+    if (mentionRequired) {
+      const botName = params.account.botName;
+      // Skip mention check if botName is not configured (can't detect mentions without a name)
+      if (botName) {
+        const text = params.payload.text ?? "";
+        // Match @botName or the bot name as a standalone word (case-insensitive)
+        const mentionPattern = new RegExp(
+          `(?:@${escapeRegex(botName)}|\\b${escapeRegex(botName)}\\b)`,
+          "i",
+        );
+        if (!mentionPattern.test(text)) {
+          // Silent drop — the bot was not mentioned, no need to process
+          return { ok: false, statusCode: 204, error: "Bot not mentioned", silent: true };
+        }
+      }
     }
   } else {
     const auth = authorizeUserForDm(
@@ -519,7 +549,12 @@ async function parseAndAuthorizeSynologyWebhook(params: {
     log: params.log,
   });
   if (!authorized.ok) {
-    respondJson(params.res, authorized.statusCode, { error: authorized.error });
+    if (authorized.silent) {
+      // Silent drop: ACK without error body (e.g., group-policy-disabled)
+      respondNoContent(params.res);
+    } else {
+      respondJson(params.res, authorized.statusCode, { error: authorized.error });
+    }
     return { ok: false };
   }
 
@@ -564,6 +599,22 @@ async function resolveSynologyReplyDeliveryUserId(params: {
   return params.payload.user_id;
 }
 
+/**
+ * Resolve the incoming webhook URL for group replies.
+ * Priority: per-channel override > account incomingUrl.
+ */
+function resolveGroupReplyUrl(
+  account: ResolvedSynologyChatAccount,
+  payload: SynologyWebhookPayload,
+): string {
+  const channels = account.channels;
+  const override =
+    (payload.channel_id ? channels[payload.channel_id] : undefined) ??
+    (payload.channel_name ? channels[payload.channel_name] : undefined) ??
+    channels["*"];
+  return override?.incomingUrl ?? account.incomingUrl;
+}
+
 async function processAuthorizedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   deliver: WebhookHandlerDeps["deliver"];
@@ -571,15 +622,18 @@ async function processAuthorizedSynologyWebhook(params: {
   message: AuthorizedSynologyWebhook;
 }): Promise<void> {
   const authorizedWebhookUserId = params.message.payload.user_id;
+  const isGroup = isGroupMessage(params.message.payload);
   let deliveryUserId = authorizedWebhookUserId;
   try {
-    deliveryUserId = await resolveSynologyReplyDeliveryUserId({
-      account: params.account,
-      payload: params.message.payload,
-      log: params.log,
-    });
+    // Only resolve Chat API user_id for DMs — groups don't need it
+    if (!isGroup) {
+      deliveryUserId = await resolveSynologyReplyDeliveryUserId({
+        account: params.account,
+        payload: params.message.payload,
+        log: params.log,
+      });
+    }
 
-    const isGroup = isGroupMessage(params.message.payload);
     const chatType = isGroup ? "group" : "direct";
 
     const deliverPromise = params.deliver({
@@ -602,12 +656,19 @@ async function processAuthorizedSynologyWebhook(params: {
       return;
     }
 
-    await synologyClient.sendMessage(
-      params.account.incomingUrl,
-      reply,
-      deliveryUserId,
-      params.account.allowInsecureSsl,
-    );
+    if (isGroup) {
+      // Group: post to channel webhook without user_ids
+      const channelUrl = resolveGroupReplyUrl(params.account, params.message.payload);
+      await synologyClient.sendToChannel(channelUrl, reply, params.account.allowInsecureSsl);
+    } else {
+      // DM: send to user with user_ids
+      await synologyClient.sendMessage(
+        params.account.incomingUrl,
+        reply,
+        deliveryUserId,
+        params.account.allowInsecureSsl,
+      );
+    }
     const replyPreview = reply.length > 100 ? `${reply.slice(0, 100)}...` : reply;
     params.log?.info?.(
       `Reply sent to ${params.message.payload.username} (${deliveryUserId}): ${replyPreview}`,
@@ -617,12 +678,18 @@ async function processAuthorizedSynologyWebhook(params: {
     params.log?.error?.(
       `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
     );
-    await synologyClient.sendMessage(
-      params.account.incomingUrl,
-      "Sorry, an error occurred while processing your message.",
-      deliveryUserId,
-      params.account.allowInsecureSsl,
-    );
+    const errorText = "Sorry, an error occurred while processing your message.";
+    if (isGroup) {
+      const channelUrl = resolveGroupReplyUrl(params.account, params.message.payload);
+      await synologyClient.sendToChannel(channelUrl, errorText, params.account.allowInsecureSsl);
+    } else {
+      await synologyClient.sendMessage(
+        params.account.incomingUrl,
+        errorText,
+        deliveryUserId,
+        params.account.allowInsecureSsl,
+      );
+    }
   }
 }
 

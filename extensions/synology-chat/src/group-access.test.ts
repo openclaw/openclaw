@@ -183,6 +183,21 @@ describe("evaluateSynologyChatGroupAccess", () => {
       expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
     });
 
+    it("normalizes allowFrom when passed as comma-separated string", () => {
+      const result = evaluateSynologyChatGroupAccess({
+        account: makeAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          channels: {
+            chan1: { allowFrom: "42, 43, 44" as unknown as string[] },
+          },
+        }),
+        senderId: "43",
+        channelId: "chan1",
+      });
+      expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
+    });
+
     it("channel_id takes precedence over channel_name", () => {
       const result = evaluateSynologyChatGroupAccess({
         account: makeAccount({

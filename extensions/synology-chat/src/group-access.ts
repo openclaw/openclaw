@@ -62,7 +62,16 @@ export function evaluateSynologyChatGroupAccess(params: {
   const channelOverride = resolveChannelOverride(account.channels, channelId, channelName);
 
   // Build the effective allowlist: per-channel override > account-level
-  const effectiveAllowFrom = channelOverride?.allowFrom ?? account.groupAllowFrom;
+  // Normalize to array: config may pass a comma-separated string instead of string[]
+  const rawAllowFrom = channelOverride?.allowFrom ?? account.groupAllowFrom;
+  const effectiveAllowFrom: string[] = Array.isArray(rawAllowFrom)
+    ? rawAllowFrom
+    : typeof rawAllowFrom === "string"
+      ? rawAllowFrom
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
 
   if (!senderId) {
     return { allowed: false, reason: "group-policy-allowlist-no-sender", groupPolicy };

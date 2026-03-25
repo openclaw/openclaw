@@ -7,7 +7,7 @@ export interface SynologyChatChannelOverride {
   /** Whether the bot must be mentioned to respond in this channel */
   requireMention?: boolean;
   /** User IDs allowed to interact in this channel (overrides account-level groupAllowFrom) */
-  allowFrom?: string[];
+  allowFrom?: string | string[];
   /** Incoming webhook URL for sending messages to this channel */
   incomingUrl?: string;
 }
