@@ -401,7 +401,7 @@ export default definePluginEntry({
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       },
-      wrapStreamFn: (ctx) => createAnthropicOAuthAuthWrapper(ctx.streamFn),
+      wrapStreamFn: (ctx) => createAnthropicOAuthAuthWrapper(ctx.streamFn!),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
       resolveDefaultThinkingLevel: ({ modelId }) =>
         matchesAnthropicModernModel(modelId) &&
