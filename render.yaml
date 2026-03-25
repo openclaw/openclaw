@@ -3,7 +3,6 @@ services:
     name: openclaw
     runtime: docker
     plan: standard
-    dockerCommand: /app/render-start.sh
     healthCheckPath: /health
 
     envVars:
