@@ -1,7 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { describe, it, expect, afterEach } from "vitest";
 import { spawnAgentProcess, type AgentProcessConfig } from "./agent-process-factory.js";
 
 // Use mock mode so tests never actually spawn an openclaw subprocess
@@ -42,38 +42,37 @@ describe("spawnAgentProcess", () => {
 
   it("should throw for memberName containing forward slash", () => {
     mkdirSync(tmpBase, { recursive: true });
-    expect(() =>
-      spawnAgentProcess(makeConfig({ memberName: "../etc/passwd" }))
-    ).toThrow(/Invalid memberName/);
+    expect(() => spawnAgentProcess(makeConfig({ memberName: "../etc/passwd" }))).toThrow(
+      /Invalid memberName/,
+    );
   });
 
   it("should throw for memberName containing backslash", () => {
     mkdirSync(tmpBase, { recursive: true });
-    expect(() =>
-      spawnAgentProcess(makeConfig({ memberName: "foo\\bar" }))
-    ).toThrow(/Invalid memberName/);
+    expect(() => spawnAgentProcess(makeConfig({ memberName: "foo\\bar" }))).toThrow(
+      /Invalid memberName/,
+    );
   });
 
   it("should throw for empty memberName", () => {
     mkdirSync(tmpBase, { recursive: true });
-    expect(() =>
-      spawnAgentProcess(makeConfig({ memberName: "" }))
-    ).toThrow(/Invalid memberName/);
+    expect(() => spawnAgentProcess(makeConfig({ memberName: "" }))).toThrow(/Invalid memberName/);
   });
 
   it("should set OPENCLAW_TEAM_NAME and OPENCLAW_MEMBER_NAME env vars", () => {
     mkdirSync(tmpBase, { recursive: true });
     // In mock mode, spawnWorker returns a no-op EventEmitter with a fake pid.
-    // We verify the env via a sentinel file written by the spawned config.
     // Since mock mode doesn't execute openclaw, we validate indirectly by
     // checking the AgentProcessConfig interface contract: the function must
     // not throw and must return a ChildProcess with a pid.
-    const child = spawnAgentProcess(makeConfig({
-      teamName: "my-team",
-      memberName: "writer",
-      role: "write",
-      notifyPort: 7702,
-    }));
+    const child = spawnAgentProcess(
+      makeConfig({
+        teamName: "my-team",
+        memberName: "writer",
+        role: "write",
+        notifyPort: 7702,
+      }),
+    );
     expect(child.pid).toBeGreaterThan(0);
     child.kill();
   });
