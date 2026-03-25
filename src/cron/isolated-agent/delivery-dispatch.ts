@@ -416,13 +416,13 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
-           onError,
-           // Isolated cron direct delivery uses its own transient retry loop.
-           // Keep all attempts out of the write-ahead delivery queue so a
-           // late-successful first send cannot leave behind a failed queue
-           // entry that replays on the next restart.
-           // See: https://github.com/openclaw/openclaw/issues/40545
-           skipQueue: true,
+          onError,
+          // Isolated cron direct delivery uses its own transient retry loop.
+          // Keep all attempts out of the write-ahead delivery queue so a
+          // late-successful first send cannot leave behind a failed queue
+          // entry that replays on the next restart.
+          // See: https://github.com/openclaw/openclaw/issues/40545
+          skipQueue: true,
         });
       const deliveryResults = options?.retryTransient
         ? await retryTransientDirectCronDelivery({
