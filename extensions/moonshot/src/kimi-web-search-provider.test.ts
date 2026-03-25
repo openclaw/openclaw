@@ -14,6 +14,17 @@ describe("kimi web search provider", () => {
     );
   });
 
+  it("builds request body with thinking disabled as object (#52407)", () => {
+    const body = __testing.buildKimiRequestBody({
+      model: "kimi-k2.5",
+      messages: [{ role: "user", content: "test" }],
+    });
+    // Moonshot requires thinking as { type: "disabled" }, not `false`.
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.tools).toEqual([{ type: "builtin_function", function: { name: "$web_search" } }]);
+    expect(body.model).toBe("kimi-k2.5");
+  });
+
   it("extracts unique citations from search results and tool call arguments", () => {
     expect(
       __testing.extractKimiCitations({

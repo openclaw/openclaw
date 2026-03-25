@@ -160,11 +160,7 @@ async function runKimiSearch(params: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${params.apiKey}`,
           },
-          body: JSON.stringify({
-            model: params.model,
-            messages,
-            tools: [KIMI_WEB_SEARCH_TOOL],
-          }),
+          body: JSON.stringify(buildKimiRequestBody({ model: params.model, messages })),
         },
       },
       async (
@@ -195,7 +191,6 @@ async function runKimiSearch(params: {
           tool_calls: toolCalls,
         });
 
-        const toolContent = buildKimiToolResultContent(data);
         let pushed = false;
         for (const toolCall of toolCalls) {
           const toolCallId = toolCall.id?.trim();
@@ -203,7 +198,16 @@ async function runKimiSearch(params: {
             continue;
           }
           pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
+          // Moonshot requires tool_call.function.arguments to be replayed
+          // verbatim as the tool result content for $web_search.
+          const verbatimArgs = toolCall.function?.arguments ?? "";
+          const toolName = toolCall.function?.name ?? "$web_search";
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            name: toolName,
+            content: verbatimArgs,
+          });
         }
         if (!pushed) {
           return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
@@ -346,9 +350,23 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
+/** @internal Build the request body for Kimi $web_search; exposed for testing. */
+export function buildKimiRequestBody(params: {
+  model: string;
+  messages: Array<Record<string, unknown>>;
+}) {
+  return {
+    model: params.model,
+    messages: params.messages,
+    tools: [KIMI_WEB_SEARCH_TOOL],
+    thinking: { type: "disabled" },
+  };
+}
+
 export const __testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  buildKimiRequestBody,
 } as const;
