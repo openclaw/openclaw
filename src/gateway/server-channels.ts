@@ -6,6 +6,8 @@ import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/bac
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
@@ -135,6 +137,17 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
+  const syncPluginRegistry = () => {
+    const runtimeState = (
+      globalThis as typeof globalThis & {
+        __openclaw_plugin_runtime_state?: { registry?: PluginRegistry };
+      }
+    ).__openclaw_plugin_runtime_state;
+
+    if (runtimeState?.registry) {
+      setActivePluginRegistry(runtimeState.registry);
+    }
+  };
   const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime, resolveChannelRuntime } =
     opts;
 
@@ -241,6 +254,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     accountId?: string,
     opts: StartChannelOptions = {},
   ) => {
+    syncPluginRegistry();
     const plugin = getChannelPlugin(channelId);
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
@@ -437,6 +451,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const stopChannel = async (channelId: ChannelId, accountId?: string) => {
+    syncPluginRegistry();
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
@@ -495,12 +510,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
+    syncPluginRegistry();
     for (const plugin of listChannelPlugins()) {
       await startChannel(plugin.id);
     }
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
+    syncPluginRegistry();
     const plugin = getChannelPlugin(channelId);
     if (!plugin) {
       return;
