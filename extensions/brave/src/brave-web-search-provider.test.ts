@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 describe("brave web search provider", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       __testing.normalizeBraveLanguageParams({
@@ -51,10 +55,14 @@ describe("brave web search provider", () => {
   });
 
   it("returns validation errors for invalid date ranges", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
     const provider = createBraveWebSearchProvider();
     const tool = provider.createTool({
       config: {},
-      searchConfig: { brave: { apiKey: "BSA..." } },
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { apiKey: "BSA..." },
+      },
     });
     if (!tool) {
       throw new Error("Expected tool definition");
