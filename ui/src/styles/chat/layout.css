@@ -498,7 +498,7 @@
   border-radius: var(--radius-md);
   border: none;
   background: var(--muted-strong);
-  color: var(--text-strong);
+  color: var(--primary-foreground);
   cursor: pointer;
   flex-shrink: 0;
   transition:
