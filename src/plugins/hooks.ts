@@ -708,7 +708,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
             requireApproval:
               acc?.requireApproval ??
-              (next.requireApproval ? { ...next.requireApproval, pluginId: reg.pluginId } : undefined),
+              (next.requireApproval
+                ? { ...next.requireApproval, pluginId: reg.pluginId }
+                : undefined),
           };
         },
         shouldStop: (result) => result.block === true,

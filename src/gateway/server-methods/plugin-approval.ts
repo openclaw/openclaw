@@ -32,7 +32,6 @@ export function createPluginApprovalHandlers(
         return;
       }
       const p = params as {
-        id?: string;
         pluginId?: string | null;
         title: string;
         description: string;
@@ -51,16 +50,6 @@ export function createPluginApprovalHandlers(
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
-      const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
-
-      if (explicitId && manager.getSnapshot(explicitId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "approval id already pending"),
-        );
-        return;
-      }
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         value?.trim() || null;
@@ -80,7 +69,8 @@ export function createPluginApprovalHandlers(
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
 
-      const record = manager.create(request, timeoutMs, explicitId);
+      // Always server-generate the ID — never accept plugin-provided IDs
+      const record = manager.create(request, timeoutMs, null);
 
       let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {

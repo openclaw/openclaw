@@ -3,7 +3,6 @@ import { NonEmptyString } from "./primitives.js";
 
 export const PluginApprovalRequestParamsSchema = Type.Object(
   {
-    id: Type.Optional(NonEmptyString),
     pluginId: Type.Optional(NonEmptyString),
     title: NonEmptyString,
     description: NonEmptyString,

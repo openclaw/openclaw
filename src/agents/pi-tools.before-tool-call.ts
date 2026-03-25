@@ -3,6 +3,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
+import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
@@ -195,6 +196,15 @@ export async function runBeforeToolCallHook(args: {
 
     if (hookResult?.requireApproval) {
       const approval = hookResult.requireApproval;
+      const safeOnResolution = async (resolution: PluginApprovalResolution) => {
+        if (typeof approval.onResolution === "function") {
+          try {
+            await approval.onResolution(resolution);
+          } catch (err) {
+            log.warn(`plugin onResolution callback failed: ${String(err)}`);
+          }
+        }
+      };
       try {
         const { callGatewayTool } = await import("./tools/gateway.js");
         const requestResult = await callGatewayTool<{
@@ -207,7 +217,6 @@ export async function runBeforeToolCallHook(args: {
           // and respond before the client-side RPC timeout fires.
           { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
           {
-            id: approval.id,
             pluginId: approval.pluginId,
             title: approval.title,
             description: approval.description,
@@ -223,6 +232,7 @@ export async function runBeforeToolCallHook(args: {
         );
         const id = requestResult?.id;
         if (!id) {
+          await safeOnResolution(PluginApprovalResolutions.CANCELLED);
           return {
             blocked: true,
             reason: approval.description || "Plugin approval request failed",
@@ -256,29 +266,36 @@ export async function runBeforeToolCallHook(args: {
           waitResult = await waitPromise;
         }
         const decision = waitResult?.decision;
-        if (typeof approval.onResolution === "function") {
-          try {
-            await approval.onResolution(decision ?? "timeout");
-          } catch (err) {
-            log.warn(`plugin onResolution callback failed: ${String(err)}`);
-          }
-        }
-        if (decision === "allow-once" || decision === "allow-always") {
+        const resolution: PluginApprovalResolution =
+          decision === PluginApprovalResolutions.ALLOW_ONCE ||
+          decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+          decision === PluginApprovalResolutions.DENY
+            ? decision
+            : PluginApprovalResolutions.TIMEOUT;
+        await safeOnResolution(resolution);
+        if (
+          decision === PluginApprovalResolutions.ALLOW_ONCE ||
+          decision === PluginApprovalResolutions.ALLOW_ALWAYS
+        ) {
           return {
             blocked: false,
             params: mergeParamsWithApprovalOverrides(params, hookResult.params),
           };
         }
-        if (decision === "deny") {
+        if (decision === PluginApprovalResolutions.DENY) {
           return { blocked: true, reason: "Denied by user" };
         }
         const timeoutBehavior = approval.timeoutBehavior ?? "deny";
         if (timeoutBehavior === "allow") {
-          return { blocked: false, params };
+          return {
+            blocked: false,
+            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+          };
         }
         return { blocked: true, reason: "Approval timed out" };
       } catch (err) {
-        // Gateway error (unknown method / older gateway) — fall back to soft block
+        // Gateway error or abort signal — fall back to soft block
+        await safeOnResolution(PluginApprovalResolutions.CANCELLED);
         log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
         return {
           blocked: true,
