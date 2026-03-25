@@ -54,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
 - Telegram/pairing: render pairing codes and approval commands as Telegram-only code blocks while keeping shared pairing replies plain text for other channels. (#52784) Thanks @sumukhj1219.
 - Telegram/native commands: run native slash-command execution against the resolved runtime snapshot so DM commands still reply when fresh config reads surface unresolved SecretRefs. (#53179) Thanks @nimbleenigma.
+- Feishu/groups: when `groupPolicy` is `open`, stop implicitly requiring @mentions for unset `requireMention`, so image, file, audio, and other non-text group messages reach the bot unless operators explicitly keep mention gating on. (#54058) Thanks @byungsker.
 
 ## 2026.3.23
 
