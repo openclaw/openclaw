@@ -52,4 +52,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Caveats
 
-Some scripts still hardcode pnpm (for example `docs:build`, `ui:*`, `protocol:check`). Run those via pnpm for now.
+Some scripts still hardcode pnpm (for example `check:docs`, `ui:*`, `protocol:check`). Run those via pnpm for now.
