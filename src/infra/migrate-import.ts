@@ -378,29 +378,20 @@ function remapSourceToTarget(params: {
   return fallbackTarget;
 }
 
-async function mergeConfigFiles(existingPath: string, importedPath: string): Promise<void> {
+/**
+ * Merge pre-parsed imported config content into the existing config file.
+ * The imported content must already be validated as a plain object.
+ */
+async function mergeConfigWithParsed(
+  existingPath: string,
+  importedContent: unknown,
+): Promise<void> {
   let existingContent: Record<string, unknown> = {};
   try {
     const raw = await fs.readFile(existingPath, "utf8");
     existingContent = JSON5.parse(raw);
   } catch {
     // If existing config is missing or invalid, overwrite.
-  }
-
-  const importedRaw = await fs.readFile(importedPath, "utf8");
-  let importedContent: unknown;
-  try {
-    importedContent = JSON5.parse(importedRaw);
-  } catch (err) {
-    throw new Error(`Imported config file is not valid JSON/JSON5: ${String(err)}`, { cause: err });
-  }
-
-  if (
-    typeof importedContent !== "object" ||
-    importedContent === null ||
-    Array.isArray(importedContent)
-  ) {
-    throw new Error("Imported config must be a JSON object, not an array or primitive.");
   }
 
   const merged = applyMergePatch(existingContent, importedContent, {
@@ -617,9 +608,14 @@ export async function importMigrateArchive(
 
     // Pass 1: Validate all declared assets exist and are safe before writing anything.
     // This prevents partial state mutation when a later asset is missing or unsafe.
+    // For config assets in merge mode, we also pre-parse the content here so that
+    // malformed config payloads fail fast before any writes happen.
     type ValidatedAsset = {
       importAsset: MigrateImportAsset;
       realExtracted: string;
+      isDirectory: boolean;
+      /** Pre-parsed config content for merge mode (validated during preflight). */
+      mergeContent?: unknown;
     };
     const validated: ValidatedAsset[] = [];
 
@@ -654,8 +650,6 @@ export async function importMigrateArchive(
       }
 
       // Validate payload type matches what the write pass expects for each kind.
-      // config → must be a file (written to a file path)
-      // credentials, agents, workspace, state → must be a directory (copied recursively)
       const payloadStat = await fs.lstat(realExtracted);
       if (importAsset.kind === "config") {
         if (!payloadStat.isFile()) {
@@ -671,19 +665,43 @@ export async function importMigrateArchive(
         }
       }
 
-      validated.push({ importAsset, realExtracted });
+      // For config assets in merge mode, pre-parse and validate the content
+      // so malformed payloads fail before any writes happen.
+      let mergeContent: unknown;
+      if (importAsset.kind === "config" && merge) {
+        const raw = await fs.readFile(realExtracted, "utf8");
+        try {
+          mergeContent = JSON5.parse(raw);
+        } catch (err) {
+          throw new Error(`Import aborted: config payload is not valid JSON/JSON5: ${String(err)}`);
+        }
+        if (
+          typeof mergeContent !== "object" ||
+          mergeContent === null ||
+          Array.isArray(mergeContent)
+        ) {
+          throw new Error("Import aborted: config payload must be a JSON object for merge mode.");
+        }
+      }
+
+      validated.push({
+        importAsset,
+        realExtracted,
+        isDirectory: payloadStat.isDirectory(),
+        mergeContent,
+      });
     }
 
     // Pass 2: All assets validated — now apply writes.
-    for (const { importAsset, realExtracted } of validated) {
+    for (const { importAsset, realExtracted, isDirectory, mergeContent } of validated) {
       const targetPath = importAsset.targetPath;
 
-      if (importAsset.kind === "config" && merge) {
+      if (importAsset.kind === "config" && merge && mergeContent !== undefined) {
+        // Config content was pre-parsed and validated in pass 1.
         await fs.mkdir(path.dirname(targetPath), { recursive: true });
-        await mergeConfigFiles(targetPath, realExtracted);
+        await mergeConfigWithParsed(targetPath, mergeContent);
       } else {
-        const extractedStat = await fs.lstat(realExtracted);
-        if (extractedStat.isDirectory()) {
+        if (isDirectory) {
           await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
         }
         await copyRecursive(realExtracted, targetPath);
