@@ -1605,7 +1605,7 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(streamedToolCall.arguments).toEqual({});
   });
 
-  it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
+  it("preserves last valid repair when later deltas make the trailing suffix too long", async () => {
     const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
     const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
     const partialMessage = { role: "assistant", content: [partialToolCall] };
@@ -1646,8 +1646,99 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
       // drain
     }
 
-    expect(partialToolCall.arguments).toEqual({});
+    // After the fix: valid arguments set by an earlier successful repair are preserved
+    // instead of being wiped to {}. The cached repair map entry is removed (so
+    // toolcall_end does not re-apply), but the already-set arguments remain on the
+    // partial message's content block.
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    // streamedToolCall is the toolcall_end's toolCall ref — not touched because
+    // the repair map entry was already cleared by the time toolcall_end fires.
     expect(streamedToolCall.arguments).toEqual({});
+  });
+
+  it("preserves valid JSON arguments instead of treating them as repair failures", async () => {
+    // Bug fix: tryParseMalformedToolCallArguments previously returned undefined for
+    // valid JSON (same signal as "unfixable"), causing the caller to clear arguments.
+    // After the fix, valid JSON is returned as a successful parse.
+    const partialToolCall = { type: "toolCall", name: "exec", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "exec", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "exec", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "exec", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"command":"ls -la"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ command: "ls -la" });
+    expect(streamedToolCall.arguments).toEqual({ command: "ls -la" });
+    expect(endMessageToolCall.arguments).toEqual({ command: "ls -la" });
+    expect(finalToolCall.arguments).toEqual({ command: "ls -la" });
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not wipe arguments when repair returns undefined for incomplete JSON", async () => {
+    // Simulates Kimi's content_block_start setting arguments directly, followed by
+    // an incomplete delta that triggers repair attempt but cannot be parsed.
+    // Previously the else branch would clear arguments to {}; now it leaves them alone.
+    const partialToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/etc/hosts" },
+    };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    // Arguments set by content_block_start are preserved — not wiped to undefined
+    expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
   });
 });
 
