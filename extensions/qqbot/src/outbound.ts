@@ -40,6 +40,7 @@ import { decodeCronPayload } from "./utils/payload.js";
 import {
   isLocalPath as isLocalFilePath,
   normalizePath,
+  resolveQQBotLocalMediaPath,
   sanitizeFileName,
   getQQBotDataDir,
   getQQBotMediaDir,
@@ -316,7 +317,7 @@ export async function sendPhoto(
   imagePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = normalizePath(imagePath);
+  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(imagePath));
   const isLocal = isLocalFilePath(mediaPath);
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const isData = mediaPath.startsWith("data:");
@@ -456,7 +457,7 @@ export async function sendVoice(
   transcodeEnabled: boolean = true,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = normalizePath(voicePath);
+  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(voicePath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   // 公网 URL 处理
@@ -602,7 +603,7 @@ export async function sendVideoMsg(
   videoPath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = normalizePath(videoPath);
+  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(videoPath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
 
   // urlDirectUpload=false 时，公网 URL 直接下载到本地再发送
@@ -730,7 +731,7 @@ export async function sendDocument(
   filePath: string,
 ): Promise<OutboundResult> {
   const prefix = ctx.logPrefix ?? "[qqbot]";
-  const mediaPath = normalizePath(filePath);
+  const mediaPath = resolveQQBotLocalMediaPath(normalizePath(filePath));
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
   const fileName = sanitizeFileName(path.basename(mediaPath));
 
@@ -1413,7 +1414,7 @@ export async function sendProactiveMessage(
  */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account, mimeType } = ctx;
-  const mediaUrl = normalizePath(ctx.mediaUrl);
+  const mediaUrl = resolveQQBotLocalMediaPath(normalizePath(ctx.mediaUrl));
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };

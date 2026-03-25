@@ -29,7 +29,12 @@ import {
   isMediaPayload,
   type MediaPayload,
 } from "./utils/payload.js";
-import { getQQBotDataDir, normalizePath, sanitizeFileName } from "./utils/platform.js";
+import {
+  getQQBotDataDir,
+  normalizePath,
+  resolveQQBotLocalMediaPath,
+  sanitizeFileName,
+} from "./utils/platform.js";
 
 export interface MessageTarget {
   type: "c2c" | "guild" | "dm" | "group";
@@ -187,7 +192,7 @@ export async function handleStructuredPayload(
 
 async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
-  let imageUrl = normalizePath(payload.path);
+  let imageUrl = resolveQQBotLocalMediaPath(normalizePath(payload.path));
   const originalImagePath = payload.source === "file" ? imageUrl : undefined;
 
   if (payload.source === "file") {
@@ -337,7 +342,7 @@ async function handleAudioPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const videoPath = normalizePath(payload.path ?? "");
+    const videoPath = resolveQQBotLocalMediaPath(normalizePath(payload.path ?? ""));
     if (!videoPath?.trim()) {
       log?.error(`[qqbot:${account.accountId}] Video missing path`);
     } else {
@@ -426,7 +431,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
 async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
   try {
-    const filePath = normalizePath(payload.path ?? "");
+    const filePath = resolveQQBotLocalMediaPath(normalizePath(payload.path ?? ""));
     if (!filePath?.trim()) {
       log?.error(`[qqbot:${account.accountId}] File missing path`);
     } else {

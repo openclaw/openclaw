@@ -141,6 +141,48 @@ export function normalizePath(p: string): string {
   return expandTilde(result);
 }
 
+function isPathWithinRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * 修正 QQBot 本地媒体路径。
+ *
+ * 当模型或旧提示词把媒体路径写成 ~/.openclaw/workspace/qqbot/... 或
+ * ~/.openclaw/qqbot/... 时，自动回退到真实存在的 ~/.openclaw/media/qqbot/...。
+ */
+export function resolveQQBotLocalMediaPath(p: string): string {
+  const normalized = normalizePath(p);
+  if (!isLocalPath(normalized) || fs.existsSync(normalized)) {
+    return normalized;
+  }
+
+  const homeDir = getHomeDir();
+  const mediaRoot = getQQBotMediaDir();
+  const dataRoot = getQQBotDataDir();
+  const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
+  const candidateRoots = [
+    { from: workspaceRoot, to: mediaRoot },
+    { from: dataRoot, to: mediaRoot },
+    { from: mediaRoot, to: dataRoot },
+  ];
+
+  for (const { from, to } of candidateRoots) {
+    if (!isPathWithinRoot(normalized, from)) {
+      continue;
+    }
+    const relative = path.relative(from, normalized);
+    const candidate = path.join(to, relative);
+    if (fs.existsSync(candidate)) {
+      debugWarn(`[platform] Remapped missing QQBot media path ${normalized} -> ${candidate}`);
+      return candidate;
+    }
+  }
+
+  return normalized;
+}
+
 // ============ 文件名 UTF-8 规范化 ============
 
 /**

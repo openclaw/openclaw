@@ -11,10 +11,10 @@
  *   从而计算「开平→插件」和「插件处理」两段耗时
  */
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveRuntimeServiceVersion } from "openclaw/plugin-sdk/cli-runtime";
 import type { QQBotAccountConfig } from "./types.js";
 import { getUpdateInfo } from "./update-checker.js";
 import { debugLog } from "./utils/debug-log.js";
@@ -31,36 +31,6 @@ try {
 }
 
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
-
-// 获取 openclaw 框架版本（缓存结果，只执行一次）
-let _frameworkVersion: string | null = null;
-function getFrameworkVersion(): string {
-  if (_frameworkVersion !== null) return _frameworkVersion;
-  try {
-    // 先尝试 PATH 中的 CLI
-    // Windows 上 npm 安装的 CLI 通常是 .cmd wrapper，execFileSync 需要 shell:true 才能执行
-    for (const cli of ["openclaw", "clawdbot", "moltbot"]) {
-      try {
-        const out = execFileSync(cli, ["--version"], {
-          timeout: 3000,
-          encoding: "utf8",
-          ...(isWindows() ? { shell: true } : {}),
-        }).trim();
-        // 输出格式: "OpenClaw 2026.3.13 (61d171a)"
-        if (out) {
-          _frameworkVersion = out;
-          return _frameworkVersion;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    // fallback
-  }
-  _frameworkVersion = "unknown";
-  return _frameworkVersion;
-}
 
 // ============ 类型定义 ============
 
@@ -173,20 +143,17 @@ registerCommand({
 });
 
 /**
- * /bot-version — 查看插件版本号
+ * /bot-version — 查看框架版本号
  */
 registerCommand({
   name: "bot-version",
-  description: "查看插件版本号",
-  usage: [
-    `/bot-version`,
-    ``,
-    `查看当前 QQBot 插件版本和 OpenClaw 框架版本。`,
-    `同时检查是否有新版本可用。`,
-  ].join("\n"),
+  description: "查看框架版本号",
+  usage: [`/bot-version`, ``, `查看当前 OpenClaw 框架版本。`, `同时检查是否有新版本可用。`].join(
+    "\n",
+  ),
   handler: async () => {
-    const frameworkVersion = getFrameworkVersion();
-    const lines = [`🦞框架版本：${frameworkVersion}`, `🤖QQBot 插件版本：v${PLUGIN_VERSION}`];
+    const frameworkVersion = resolveRuntimeServiceVersion();
+    const lines = [`🦞OpenClaw 版本：${frameworkVersion}`];
     const info = await getUpdateInfo();
     if (info.checkedAt === 0) {
       lines.push(`⏳ 版本检查中...`);
@@ -217,7 +184,6 @@ registerCommand({
     for (const [name, cmd] of commands) {
       lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
     }
-    lines.push(``, `> 插件版本 v${PLUGIN_VERSION}`);
     return lines.join("\n");
   },
 });
