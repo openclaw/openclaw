@@ -516,7 +516,9 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     loadWebMediaMock.mockRejectedValueOnce(
-      new Error("Local media path is not under an allowed directory: /home/admin/.openclaw/openclaw.json"),
+      new Error(
+        "Local media path is not under an allowed directory: /home/admin/.openclaw/openclaw.json",
+      ),
     );
 
     const feishuDocTool = resolveFeishuDocTool();

@@ -537,6 +537,8 @@ async function resolveUploadInput(
 
     if (unambiguousPath || (absolutePath && existsSync(candidate))) {
       // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
+      // TODO: thread a localRoots parameter through resolveUploadInput so operators
+      // who extend localRoots beyond the defaults get consistent behavior with sendMediaFeishu.
       const resolvedPath = resolve(candidate);
       const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedPath, {
         maxBytes,
@@ -597,6 +599,8 @@ async function resolveUploadInput(
   }
 
   // Use loadWebMedia to enforce localRoots sandbox (same as sendMediaFeishu).
+  // TODO: thread a localRoots parameter through resolveUploadInput so operators
+  // who extend localRoots beyond the defaults get consistent behavior with sendMediaFeishu.
   const resolvedFilePath = resolve(filePath!);
   const loaded = await getFeishuRuntime().media.loadWebMedia(resolvedFilePath, {
     maxBytes,
