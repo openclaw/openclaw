@@ -10,6 +10,7 @@ type Semver = {
 };
 
 const MIN_NODE: Semver = { major: 22, minor: 16, patch: 0 };
+const MINIMUM_ENGINE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)\s*$/i;
 
 export type RuntimeDetails = {
   kind: RuntimeKind;
@@ -71,6 +72,28 @@ export function runtimeSatisfies(details: RuntimeDetails): boolean {
 
 export function isSupportedNodeVersion(version: string | null): boolean {
   return isAtLeast(parseSemver(version), MIN_NODE);
+}
+
+export function parseMinimumNodeEngine(engine: string | null): Semver | null {
+  if (!engine) {
+    return null;
+  }
+  const match = engine.match(MINIMUM_ENGINE_RE);
+  if (!match) {
+    return null;
+  }
+  return parseSemver(match[1] ?? null);
+}
+
+export function nodeVersionSatisfiesEngine(
+  version: string | null,
+  engine: string | null,
+): boolean | null {
+  const minimum = parseMinimumNodeEngine(engine);
+  if (!minimum) {
+    return null;
+  }
+  return isAtLeast(parseSemver(version), minimum);
 }
 
 export function assertSupportedRuntime(
