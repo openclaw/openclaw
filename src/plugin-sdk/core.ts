@@ -457,3 +457,24 @@ export function createChannelPluginBase<TResolvedAccount>(
 }
 
 export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+
+// Provider discovery helpers (used by ollama, vllm, sglang extensions)
+export {
+  buildOllamaProvider,
+  buildSglangProvider,
+  buildVllmProvider,
+} from "../agents/models-config.providers.discovery.js";
+
+// Ollama setup helpers
+export {
+  OLLAMA_DEFAULT_BASE_URL,
+  ensureOllamaModelPulled,
+  promptAndConfigureOllama,
+  configureOllamaNonInteractive,
+} from "../commands/ollama-setup.js";
+
+// Self-hosted provider setup helpers (used by vllm, sglang extensions)
+export {
+  promptAndConfigureOpenAICompatibleSelfHostedProvider,
+  configureOpenAICompatibleSelfHostedProviderNonInteractive,
+} from "../commands/self-hosted-provider-setup.js";
