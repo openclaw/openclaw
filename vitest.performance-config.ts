@@ -10,6 +10,14 @@ const isDisabled = (value: string | undefined): boolean => {
   return normalized === "0" || normalized === "false";
 };
 
+const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
+  if (platform === "win32") {
+    return true;
+  }
+  const runnerOs = env.RUNNER_OS?.trim().toLowerCase();
+  return runnerOs === "windows";
+};
+
 export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
   experimental?: {
     fsModuleCache?: true;
@@ -22,8 +30,12 @@ export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
     importDurations?: { print: true };
     printImportBreakdown?: true;
   } = {};
+  const windowsEnv = isWindowsEnv(env, process.platform);
 
-  if (!isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
+  if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
+    experimental.fsModuleCache = true;
+  }
+  if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
