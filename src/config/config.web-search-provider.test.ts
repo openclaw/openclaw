@@ -22,6 +22,15 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
         getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
         getConfiguredCredentialValue: getConfigured("brave"),
+        autoDetectOrder: 10,
+      },
+      {
+        id: "bocha",
+        envVars: ["BOCHA_API_KEY"],
+        credentialPath: "plugins.entries.bocha.config.webSearch.apiKey",
+        getCredentialValue: getScoped("bocha"),
+        getConfiguredCredentialValue: getConfigured("bocha"),
+        autoDetectOrder: 15,
       },
       {
         id: "firecrawl",
@@ -29,6 +38,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
         getCredentialValue: getScoped("firecrawl"),
         getConfiguredCredentialValue: getConfigured("firecrawl"),
+        autoDetectOrder: 60,
       },
       {
         id: "gemini",
@@ -36,6 +46,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.google.config.webSearch.apiKey",
         getCredentialValue: getScoped("gemini"),
         getConfiguredCredentialValue: getConfigured("google"),
+        autoDetectOrder: 20,
       },
       {
         id: "grok",
@@ -43,6 +54,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
         getCredentialValue: getScoped("grok"),
         getConfiguredCredentialValue: getConfigured("xai"),
+        autoDetectOrder: 30,
       },
       {
         id: "kimi",
@@ -50,6 +62,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
         getCredentialValue: getScoped("kimi"),
         getConfiguredCredentialValue: getConfigured("moonshot"),
+        autoDetectOrder: 40,
       },
       {
         id: "perplexity",
@@ -57,6 +70,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
         getCredentialValue: getScoped("perplexity"),
         getConfiguredCredentialValue: getConfigured("perplexity"),
+        autoDetectOrder: 50,
       },
       {
         id: "tavily",
@@ -64,6 +78,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
         getCredentialValue: getScoped("tavily"),
         getConfiguredCredentialValue: getConfigured("tavily"),
+        autoDetectOrder: 70,
       },
     ],
     resolvePluginWebSearchProviders: () => [
@@ -73,6 +88,15 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
         getCredentialValue: (search?: Record<string, unknown>) => search?.apiKey,
         getConfiguredCredentialValue: getConfigured("brave"),
+        autoDetectOrder: 10,
+      },
+      {
+        id: "bocha",
+        envVars: ["BOCHA_API_KEY"],
+        credentialPath: "plugins.entries.bocha.config.webSearch.apiKey",
+        getCredentialValue: getScoped("bocha"),
+        getConfiguredCredentialValue: getConfigured("bocha"),
+        autoDetectOrder: 15,
       },
       {
         id: "firecrawl",
@@ -80,6 +104,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
         getCredentialValue: getScoped("firecrawl"),
         getConfiguredCredentialValue: getConfigured("firecrawl"),
+        autoDetectOrder: 60,
       },
       {
         id: "gemini",
@@ -87,6 +112,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.google.config.webSearch.apiKey",
         getCredentialValue: getScoped("gemini"),
         getConfiguredCredentialValue: getConfigured("google"),
+        autoDetectOrder: 20,
       },
       {
         id: "grok",
@@ -94,6 +120,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
         getCredentialValue: getScoped("grok"),
         getConfiguredCredentialValue: getConfigured("xai"),
+        autoDetectOrder: 30,
       },
       {
         id: "kimi",
@@ -101,6 +128,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
         getCredentialValue: getScoped("kimi"),
         getConfiguredCredentialValue: getConfigured("moonshot"),
+        autoDetectOrder: 40,
       },
       {
         id: "perplexity",
@@ -108,6 +136,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.perplexity.config.webSearch.apiKey",
         getCredentialValue: getScoped("perplexity"),
         getConfiguredCredentialValue: getConfigured("perplexity"),
+        autoDetectOrder: 50,
       },
       {
         id: "tavily",
@@ -115,6 +144,7 @@ vi.mock("../plugins/web-search-providers.js", () => {
         credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
         getCredentialValue: getScoped("tavily"),
         getConfiguredCredentialValue: getConfigured("tavily"),
+        autoDetectOrder: 70,
       },
     ],
   };
@@ -304,6 +334,7 @@ describe("web search provider auto-detection", () => {
 
   beforeEach(() => {
     delete process.env.BRAVE_API_KEY;
+    delete process.env.BOCHA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
@@ -328,6 +359,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects brave when only BRAVE_API_KEY is set", () => {
     process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("brave");
+  });
+
+  it("auto-detects bocha when only BOCHA_API_KEY is set", () => {
+    process.env.BOCHA_API_KEY = "test-bocha-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("bocha");
   });
 
   it("auto-detects gemini when only GEMINI_API_KEY is set", () => {
