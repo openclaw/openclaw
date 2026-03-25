@@ -181,6 +181,10 @@
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
     },
+    "./plugin-sdk/github-copilot-token": {
+      "types": "./dist/plugin-sdk/github-copilot-token.d.ts",
+      "default": "./dist/plugin-sdk/github-copilot-token.js"
+    },
     "./plugin-sdk/cli-runtime": {
       "types": "./dist/plugin-sdk/cli-runtime.d.ts",
       "default": "./dist/plugin-sdk/cli-runtime.js"
@@ -591,6 +595,9 @@
     "build:docker": "node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts",
     "build:plugin-sdk:dts": "tsc -p tsconfig.plugin-sdk.dts.json",
     "build:strict-smoke": "pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts",
+    "canon:check": "node scripts/canon.mjs check",
+    "canon:check:json": "node scripts/canon.mjs check --json",
+    "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh",
     "check": "pnpm check:no-conflict-markers && pnpm check:host-env-policy:swift && pnpm check:base-config-schema && pnpm check:bundled-plugin-metadata && pnpm check:bundled-provider-auth-env-vars && pnpm format:check && pnpm tsgo && pnpm plugin-sdk:check-exports && pnpm lint && pnpm lint:tmp:no-random-messaging && pnpm lint:tmp:channel-agnostic-boundaries && pnpm lint:tmp:no-raw-channel-fetch && pnpm lint:agent:ingress-owner && pnpm lint:plugins:no-register-http-handler && pnpm lint:plugins:no-monolithic-plugin-sdk-entry-imports && pnpm lint:plugins:no-extension-src-imports && pnpm lint:plugins:no-extension-test-core-imports && pnpm lint:plugins:no-extension-imports && pnpm lint:plugins:plugin-sdk-subpaths-exported && pnpm lint:extensions:no-src-outside-plugin-sdk && pnpm lint:extensions:no-plugin-sdk-internal && pnpm lint:extensions:no-relative-outside-package && pnpm lint:web-search-provider-boundaries && pnpm lint:webhook:no-low-level-body-read && pnpm lint:auth:no-pairing-store-group && pnpm lint:auth:pairing-account-scope",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
@@ -682,7 +689,7 @@
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/OpenClawProtocol/GatewayModels.swift apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     "protocol:gen": "node --import tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "node --import tsx scripts/protocol-gen-swift.ts",
-    "release:check": "pnpm config:docs:check && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
+    "release:check": "pnpm config:docs:check && pnpm plugin-sdk:check-exports && pnpm plugin-sdk:api:check && node scripts/stage-bundled-plugin-runtime-deps.mjs && pnpm ui:build && node --import tsx scripts/release-check.ts",
     "release:openclaw:npm:check": "node --import tsx scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import tsx scripts/openclaw-npm-postpublish-verify.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
@@ -700,13 +707,14 @@
     "test:contracts:plugins": "OPENCLAW_TEST_PROFILE=low pnpm test -- src/plugins/contracts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:coverage:changed": "vitest run --config vitest.unit.config.ts --coverage --changed origin/main",
-    "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
+    "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:openwebui && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
     "test:docker:cleanup": "bash scripts/test-cleanup-docker.sh",
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
+    "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
@@ -729,7 +737,6 @@
     "test:parallels:npm-update": "bash scripts/e2e/parallels-npm-update-smoke.sh",
     "test:parallels:windows": "bash scripts/e2e/parallels-windows-smoke.sh",
     "test:perf:budget": "node scripts/test-perf-budget.mjs",
-    "test:perf:find-thread-candidates": "node scripts/test-find-thread-candidates.mjs",
     "test:perf:hotspots": "node scripts/test-hotspots.mjs",
     "test:perf:imports": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 pnpm test",
     "test:perf:imports:changed": "OPENCLAW_VITEST_IMPORT_DURATIONS=1 OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN=1 pnpm test -- --changed origin/main",
@@ -832,7 +839,7 @@
     "openshell": "0.1.0"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.14.0"
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {

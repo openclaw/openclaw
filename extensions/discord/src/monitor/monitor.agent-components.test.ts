@@ -9,6 +9,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../../../../test/helpers/extensions/discord-component-runtime.js";
+import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
 
 describe("agent components", () => {
@@ -75,9 +76,10 @@ describe("agent components", () => {
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
     const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
-    expect(pairingText).toContain("Pairing code:");
-    const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-    expect(code).toBeDefined();
+    const code = expectPairingReplyText(pairingText, {
+      channel: "discord",
+      idLine: "Your Discord user id: 123456789",
+    });
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
     expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
