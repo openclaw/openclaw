@@ -1,15 +1,9 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  appendAssistantMessageToSessionTranscript,
-  resolveAgentMainSessionKey,
-  resolveMainSessionKey,
-  resolveStorePath,
-} from "../../config/sessions.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
@@ -18,6 +12,7 @@ import {
 } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -236,89 +231,45 @@ function buildDirectCronDeliveryIdempotencyKey(params: {
   return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
-function buildCronAwarenessIdempotencyKey(params: {
-  deliveryIdempotencyKey: string;
-  sessionKey: string;
+function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
+  // their existing behavior, and best-effort sends may only partially deliver.
+  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+}
+
+function resolveCronAwarenessMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
 }): string {
-  return `cron-awareness:v1:${params.deliveryIdempotencyKey}:${params.sessionKey}`;
+  return params.cfg.session?.scope === "global"
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
-function collectDeliveryMirrorMediaUrls(payloads: readonly ReplyPayload[]): string[] | undefined {
-  const urls = payloads.flatMap((payload) => {
-    const mediaUrls = payload.mediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [];
-    if (mediaUrls.length > 0) {
-      return mediaUrls;
-    }
-    const mediaUrl = payload.mediaUrl?.trim();
-    return mediaUrl ? [mediaUrl] : [];
-  });
-  if (urls.length === 0) {
-    return undefined;
-  }
-  return [...new Set(urls)];
-}
-
-function resolveCronAwarenessMainTarget(params: { cfg: OpenClawConfig; agentId: string }): {
-  sessionKey: string;
-  storeAgentId: string;
-} {
-  const sessionKey =
-    params.cfg.session?.scope === "global"
-      ? resolveMainSessionKey(params.cfg)
-      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-  return {
-    sessionKey,
-    storeAgentId: sessionKey === "global" ? resolveDefaultAgentId(params.cfg) : params.agentId,
-  };
-}
-
-function shouldMirrorCronAwareness(job: CronJob): boolean {
-  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs should
-  // keep their existing transcript semantics instead of being rewritten here.
-  return job.sessionTarget === "isolated";
-}
-
-async function persistCronAwarenessMirror(params: {
+function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
   deliveryIdempotencyKey: string;
-  payloads: readonly ReplyPayload[];
   outputText?: string;
   synthesizedText?: string;
-}): Promise<void> {
+}): void {
   const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
-  const mediaUrls = collectDeliveryMirrorMediaUrls(params.payloads);
-  if (!text && !mediaUrls) {
+  if (!text) {
     return;
   }
 
   try {
-    const target = resolveCronAwarenessMainTarget({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-    const appended = await appendAssistantMessageToSessionTranscript({
-      agentId: target.storeAgentId,
-      storePath: resolveStorePath(params.cfg.session?.store, {
-        agentId: target.storeAgentId,
+    enqueueSystemEvent(text, {
+      sessionKey: resolveCronAwarenessMainSessionKey({
+        cfg: params.cfg,
+        agentId: params.agentId,
       }),
-      sessionKey: target.sessionKey,
-      text,
-      mediaUrls,
-      idempotencyKey: buildCronAwarenessIdempotencyKey({
-        deliveryIdempotencyKey: params.deliveryIdempotencyKey,
-        sessionKey: target.sessionKey,
-      }),
+      contextKey: params.deliveryIdempotencyKey,
     });
-    if (!appended.ok) {
-      logWarn(
-        `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${appended.reason}`,
-      );
-    }
   } catch (err) {
     logWarn(
-      `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${err instanceof Error ? err.message : String(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -512,18 +463,17 @@ export async function dispatchCronDelivery(
           })
         : await runDelivery();
       delivered = deliveryResults.length > 0;
+      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+        queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey,
+          outputText,
+          synthesizedText,
+        });
+      }
       if (delivered) {
-        if (shouldMirrorCronAwareness(params.job)) {
-          await persistCronAwarenessMirror({
-            cfg: params.cfgWithAgentDefaults,
-            jobId: params.job.id,
-            agentId: params.agentId,
-            deliveryIdempotencyKey,
-            payloads: payloadsForDelivery,
-            outputText,
-            synthesizedText,
-          });
-        }
         rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
       }
       return null;

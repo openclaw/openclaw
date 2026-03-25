@@ -3,7 +3,8 @@ import path from "node:path";
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
-import { resolveDefaultSessionStorePath, resolveSessionFilePath } from "../config/sessions.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
@@ -50,19 +51,12 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
     resetCompletedDirectCronDeliveriesForTests();
+    resetSystemEventsForTest();
   });
 
-  it("mirrors delivered isolated cron text into the agent main session transcript", async () => {
+  it("queues delivered isolated cron text for the next main-session turn", async () => {
     await withTempCronHome(async (home) => {
-      const storePath = await writeDefaultAgentSessionStoreEntries({
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "telegram",
-          lastChannel: "telegram",
-          lastTo: "123",
-        },
-      });
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "hello from cron" }]);
 
@@ -80,29 +74,13 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-
-      const transcript = await fs.readFile(
-        resolveSessionFilePath("main-session", undefined, {
-          agentId: "main",
-          sessionsDir: path.dirname(storePath),
-        }),
-        "utf-8",
-      );
-      expect(transcript).toContain("hello from cron");
+      expect(peekSystemEvents("agent:main:main")).toEqual(["hello from cron"]);
     });
   });
 
-  it("uses the global main transcript when session scope is global", async () => {
+  it("uses the global main queue when session scope is global", async () => {
     await withTempCronHome(async (home) => {
-      const storePath = await writeDefaultAgentSessionStoreEntries({
-        global: {
-          sessionId: "global-main-session",
-          updatedAt: Date.now(),
-          lastProvider: "telegram",
-          lastChannel: "telegram",
-          lastTo: "123",
-        },
-      });
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "global cron digest" }]);
 
@@ -123,44 +101,7 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
-
-      const transcript = await fs.readFile(
-        resolveSessionFilePath("global-main-session", undefined, {
-          agentId: "main",
-          sessionsDir: path.dirname(storePath),
-        }),
-        "utf-8",
-      );
-      expect(transcript).toContain("global cron digest");
-    });
-  });
-
-  it("skips awareness mirroring when the main session does not exist", async () => {
-    await withTempCronHome(async (home) => {
-      const storePath = await writeDefaultAgentSessionStoreEntries({});
-      const deps = createCliDeps();
-      mockAgentPayloads([{ text: "no main session yet" }]);
-
-      const result = await runAnnounceTurn({
-        home,
-        storePath,
-        sessionKey: "cron:job-1",
-        deps,
-        delivery: {
-          mode: "announce",
-          channel: "telegram",
-          to: "123",
-        },
-      });
-
-      expect(result.status).toBe("ok");
-      expect(result.delivered).toBe(true);
-
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        Record<string, unknown>
-      >;
-      expect(store["agent:main:main"]).toBeUndefined();
+      expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
     });
   });
 });
