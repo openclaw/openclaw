@@ -235,6 +235,7 @@ Check active modes: run the corresponding script with `check` argument.
 - Single-vault GraphQL evidence helper: `/home/node/.openclaw/skills/morpho-sre/scripts/single-vault-graphql-evidence.sh`
 - Linear ticket API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/linear-ticket-api.sh`
 - Notion API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh`
+- Intercom API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh`
 - Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
 - Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
 - Dune CLI wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/dune-cli.sh`
@@ -266,6 +267,7 @@ Check active modes: run the corresponding script with `check` argument.
 - Use `incident-dossier-openclaw-sre-relationship-index-oom-2026-03-16.md` for openclaw-sre OOM incidents caused by truncated state files and hot retry loops in plugins like relationship-index.
 - Helper scripts that support RCA and eRPC investigation:
   - `erpc-context.sh`
+  - `intercom-api.sh`
   - `single-vault-graphql-evidence.sh`
   - `wiz-api.sh`
   - `rca-provider-codex.sh`

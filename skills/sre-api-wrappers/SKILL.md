@@ -1,6 +1,6 @@
 ---
 name: sre-api-wrappers
-description: "Use when querying Grafana dashboards, Wiz security posture, Dune onchain analytics, eRPC config, Sentry errors, BetterStack incidents, or Linear tickets in Morpho infrastructure. Quick reference for all SRE API wrapper scripts."
+description: "Use when querying Grafana dashboards, Wiz security posture, Dune onchain analytics, eRPC config, Sentry errors, Intercom support data, BetterStack incidents, or Linear tickets in Morpho infrastructure. Quick reference for all SRE API wrapper scripts."
 metadata: { "openclaw": { "emoji": "🔌" } }
 ---
 
@@ -17,6 +17,7 @@ Reply with conclusions only in ALL communications — Slack, DMs, PR comments, L
 - Running Dune onchain analytics queries
 - Inspecting eRPC config, routing, or caching behavior
 - Looking up Sentry errors, events, or stack traces
+- Looking up Intercom contacts, conversations, companies, or tickets
 - Checking BetterStack incident metadata
 - Managing Linear tickets (create, update, comment, attach)
 - Any request that involves one of the wrapper scripts below
@@ -34,6 +35,7 @@ All scripts live under `/home/node/.openclaw/skills/morpho-sre/scripts/`.
 | `erpc-context.sh`                  | Build local eRPC context bundle (config, metrics, docs)          |
 | `sentry-api.sh`                    | Sentry REST API wrapper (issues, events, releases)               |
 | `sentry-cli.sh`                    | Sentry CLI wrapper (info, releases, sourcemaps)                  |
+| `intercom-api.sh`                  | Intercom read-only REST wrapper (contacts, convos, tickets)      |
 | `betterstack-api.sh`               | BetterStack incident and monitor API                             |
 | `linear-ticket-api.sh`             | Linear issue CRUD, comments, labels, attachments, branch names   |
 | `posthog-mcp.sh`                   | PostHog MCP launcher for session replays and events              |
@@ -65,6 +67,9 @@ dune-cli.sh --probe-auth
 # Sentry
 sentry-cli.sh dev info
 sentry-cli.sh prd info
+
+# Intercom
+intercom-api.sh --probe-auth
 
 # BetterStack
 betterstack-api.sh GET '/incidents?per_page=1'
@@ -169,6 +174,23 @@ sentry-api.sh prd '/api/0/organizations/<org>/issues/'
 
 # Get specific event
 sentry-api.sh prd '/api/0/issues/<issue_id>/events/latest/'
+```
+
+## Intercom
+
+```bash
+# Current admin identity + auth probe
+intercom-api.sh --probe-auth
+
+# Contact lookup
+intercom-api.sh contacts list --per-page 25
+
+# Conversation lookup
+intercom-api.sh conversations get 123456789
+
+# Search contacts or tickets with an Intercom JSON query body
+intercom-api.sh contacts search --body-file /tmp/intercom-contact-search.json
+intercom-api.sh tickets search --body '{"query":{"operator":"AND","value":[]}}'
 ```
 
 ## BetterStack

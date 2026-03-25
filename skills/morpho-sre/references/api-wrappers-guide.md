@@ -125,6 +125,45 @@ Token is cached at `/tmp/wiz-api-token.json` (chmod 600) and auto-refreshed. Pre
 /home/node/.openclaw/skills/morpho-sre/scripts/notion-api.sh page markdown <page-id-or-url>
 ```
 
+## Intercom API
+
+**Script:** `/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh`
+
+**Credential chain:** `INTERCOM_SECRET` env > `INTERCOM_TOKEN` env > Vault token (fast) > Vault K8s JWT (slow)
+
+**Vault path:** `secret/data/openclaw-sre/all-secrets` (key: `INTERCOM_SECRET`)
+
+- Read-only wrapper around the Intercom REST API.
+- Default Intercom version is pinned to `2.14`; override with `INTERCOM_API_VERSION` if needed.
+- Default base URL is `https://api.intercom.io`; set `INTERCOM_API_REGION=eu|au` or `INTERCOM_API_BASE_URL` when the workspace is not on the default US API host.
+- Use `contacts/conversations/tickets search` with a JSON body when you need compound Intercom filters.
+- `raw get` / `raw post` stay locked to approved read-only endpoints only.
+
+```bash
+# Probe auth / resolved workspace admin
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh --probe-auth
+
+# Inspect your current Intercom admin identity
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh me
+
+# List recent contacts
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh contacts list --per-page 25
+
+# Retrieve one conversation by API id
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh conversations get 123456789
+
+# Search contacts with a custom Intercom query body
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh contacts search \
+  --body-file /tmp/intercom-contact-search.json --per-page 10
+
+# Search tickets with a custom Intercom query body
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh tickets search \
+  --body '{"query":{"operator":"AND","value":[]}}'
+
+# Fallback to an approved read-only endpoint that does not have a first-class subcommand yet
+/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh raw get '/admins/activity_logs?page=1&per_page=5'
+```
+
 ## BetterStack Incident API
 
 **Script:** `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh`

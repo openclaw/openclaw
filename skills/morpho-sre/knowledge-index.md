@@ -86,6 +86,9 @@ investigation.
   Direct Wiz GraphQL API client. OAuth2 auth with file-based token caching.
   Queries vulnerabilities, issues, cloud config, Kubernetes posture, runtime
   events, and resource inventory.
+- `intercom-api.sh`
+  Read-only Intercom REST API wrapper for contacts, conversations, companies,
+  tickets, and support-thread context.
 - `single-vault-graphql-evidence.sh`
   GraphQL exact-query replay and same-chain control helper for single-entity API
   incidents.
@@ -115,6 +118,10 @@ investigation.
   Start `references/indexer-freshness-playbook.md`, then `morpho-infra/docs/guides/observability-stack-onboarding.md`, then the closest indexing dossier.
 - Consumer app frontend / JS error / replay / conversion drop:
   Start `frontend-project-resolver.sh`, then the matching `posthog-<env>-<project-key>` MCP server, then `sentry-api.sh` / `sentry-cli.sh`, then `morpho-infra/docs/guides/ai-agents-incident-troubleshooting.md`, then `morpho-infra/docs/operations/incident-response.md`.
+- Customer support thread / Intercom ticket / inbox conversation:
+  Start `intercom-api.sh`, then match the surfaced entity to the product flow,
+  then continue with `frontend-project-resolver.sh`, `sentry-api.sh`, or
+  `consumer-bug-preflight.sh` as needed.
 - Curator / delegate / liquidation / markets-v2 frontend bug:
   Start `prime-monorepo/apps/<app>` (see SKILL.md "Prime Monorepo App Mapping" for app→path table), then `frontend-project-resolver.sh`, then matching PostHog/Sentry project, then `morpho-infra/docs/operations/incident-response.md`.
 - Consumer wallet / approval / permit / repay failure:

@@ -23,7 +23,11 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, or Foundry access")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("/home/node/.openclaw/skills/morpho-sre/scripts/intercom-api.sh")
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never claim no Sentry, PostHog, Linear, Intercom, or Foundry access")
 ' "$CONFIG" >/dev/null
 
 jq -e '
@@ -222,5 +226,7 @@ test -f "$ROOT/posthog-mcp.sh"
 test -f "$ROOT/frontend-project-resolver.sh"
 test -f "$ROOT/sentry-cli.sh"
 test -f "$ROOT/sentry-api.sh"
+test -f "$ROOT/intercom-api.sh"
+test -f "$ROOT/lib-intercom-api.sh"
 test -f "$ROOT/consumer-bug-preflight.sh"
 test -f "$ROOT/wiz-api.sh"
