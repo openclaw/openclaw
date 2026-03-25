@@ -120,6 +120,7 @@ const { clearPluginCommands, registerPluginCommand } = await import("../../plugi
 const { abortEmbeddedPiRun, compactEmbeddedPiSession } =
   await import("../../agents/pi-embedded.js");
 const { __testing: subagentControlTesting } = await import("../../agents/subagent-control.js");
+const { enqueueSystemEvent } = await import("../../infra/system-events.js");
 const { resetBashChatCommandForTests } = await import("./bash-command.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 const { buildCommandsPaginationKeyboard } = await import("./commands-info.js");
@@ -624,6 +625,109 @@ describe("/compact command", () => {
         agentDir,
       }),
     );
+  });
+
+  it("labels nothing-to-compact results as skipped without calling them below-threshold", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Nothing to compact (session too small)",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 31_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction skipped: nothing compactable in this session yet • Context 31k/?",
+      },
+    });
+    expect(vi.mocked(enqueueSystemEvent)).toHaveBeenCalledWith(
+      "Compaction skipped: nothing compactable in this session yet • Context 31k/?",
+      { sessionKey: params.sessionKey },
+    );
+  });
+
+  it("formats below-threshold skip reasons with friendly copy", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction skipped: below threshold for manual compaction",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 31_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction skipped: context is below the compaction threshold • Context 31k/?",
+      },
+    });
+  });
+
+  it("keeps true compaction errors labeled as failures", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6.",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+          totalTokens: 109_000,
+          contextTokens: 200_000,
+        },
+      },
+      true,
+    );
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction failed: Compaction safeguard could not resolve an API key for anthropic/claude-opus-4-6. • Context 109k/?",
+      },
+    });
   });
 });
 
