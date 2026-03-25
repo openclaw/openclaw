@@ -8,6 +8,11 @@ import {
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { BlueBubblesConfigSchema } from "./config-schema.js";
+import {
+  resolveBlueBubblesGroupRequireMention,
+  resolveBlueBubblesGroupToolPolicy,
+} from "./group-policy.js";
 import { DEFAULT_WEBHOOK_PATH } from "./webhook-shared.js";
 
 async function createBlueBubblesConfigureAdapter() {
@@ -136,5 +141,101 @@ describe("bluebubbles setup surface", () => {
     });
 
     expect(next?.channels?.bluebubbles?.enabled).toBe(false);
+  });
+});
+
+describe("BlueBubblesConfigSchema", () => {
+  it("accepts account config when serverUrl and password are both set", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: "secret", // pragma: allowlist secret
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts SecretRef password when serverUrl is set", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_PASSWORD",
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("requires password when top-level serverUrl is configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["password"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      "password is required when serverUrl is configured",
+    );
+  });
+
+  it("requires password when account serverUrl is configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["accounts", "work", "password"]);
+    expect(parsed.error.issues[0]?.message).toBe(
+      "password is required when serverUrl is configured",
+    );
+  });
+
+  it("allows password omission when serverUrl is not configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          name: "Work iMessage",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe("bluebubbles group policy", () => {
+  it("uses generic channel group policy helpers", () => {
+    const cfg = {
+      channels: {
+        bluebubbles: {
+          groups: {
+            "chat:primary": {
+              requireMention: false,
+              tools: { deny: ["exec"] },
+            },
+            "*": {
+              requireMention: true,
+              tools: { allow: ["message.send"] },
+            },
+          },
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any;
+
+    expect(resolveBlueBubblesGroupRequireMention({ cfg, groupId: "chat:primary" })).toBe(false);
+    expect(resolveBlueBubblesGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);
+    expect(resolveBlueBubblesGroupToolPolicy({ cfg, groupId: "chat:primary" })).toEqual({
+      deny: ["exec"],
+    });
+    expect(resolveBlueBubblesGroupToolPolicy({ cfg, groupId: "chat:other" })).toEqual({
+      allow: ["message.send"],
+    });
   });
 });

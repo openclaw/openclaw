@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createDirectoryTestRuntime,
+  expectDirectorySurface,
+} from "../../../test/helpers/extensions/directory.ts";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 
 const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
@@ -155,5 +159,122 @@ describe("googlechatPlugin outbound sendMedia", () => {
       messageId: "spaces/AAA/messages/msg-2",
       chatId: "spaces/AAA",
     });
+  });
+});
+
+describe("googlechat directory", () => {
+  const runtimeEnv = createDirectoryTestRuntime() as never;
+
+  it("lists peers and groups from config", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: { client_email: "bot@example.com" },
+          dm: { allowFrom: ["users/alice", "googlechat:bob"] },
+          groups: {
+            "spaces/AAA": {},
+            "spaces/BBB": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const directory = expectDirectorySurface(googlechatPlugin.directory);
+
+    await expect(
+      directory.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { kind: "user", id: "users/alice" },
+        { kind: "user", id: "bob" },
+      ]),
+    );
+
+    await expect(
+      directory.listGroups({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { kind: "group", id: "spaces/AAA" },
+        { kind: "group", id: "spaces/BBB" },
+      ]),
+    );
+  });
+
+  it("normalizes spaced provider-prefixed dm allowlist entries", async () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: { client_email: "bot@example.com" },
+          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const directory = expectDirectorySurface(googlechatPlugin.directory);
+
+    await expect(
+      directory.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+        runtime: runtimeEnv,
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        { kind: "user", id: "users/alice" },
+        { kind: "user", id: "users/bob@example.com" },
+      ]),
+    );
+  });
+});
+
+describe("googlechatPlugin security", () => {
+  it("normalizes prefixed DM allowlist entries to lowercase user ids", () => {
+    const security = googlechatPlugin.security;
+    if (!security) {
+      throw new Error("googlechat security unavailable");
+    }
+    const resolveDmPolicy = security.resolveDmPolicy;
+    const normalizeAllowEntry = googlechatPlugin.pairing?.normalizeAllowEntry;
+    expect(resolveDmPolicy).toBeTypeOf("function");
+    expect(normalizeAllowEntry).toBeTypeOf("function");
+
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: { client_email: "bot@example.com" },
+          dm: {
+            policy: "allowlist",
+            allowFrom: ["  googlechat:user:Bob@Example.com  "],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = googlechatPlugin.config.resolveAccount(cfg, "default");
+    const resolved = resolveDmPolicy!({ cfg, account });
+    if (!resolved) {
+      throw new Error("googlechat resolveDmPolicy returned null");
+    }
+
+    expect(resolved.policy).toBe("allowlist");
+    expect(resolved.allowFrom).toEqual(["  googlechat:user:Bob@Example.com  "]);
+    expect(resolved.normalizeEntry?.("  googlechat:user:Bob@Example.com  ")).toBe(
+      "bob@example.com",
+    );
+    expect(normalizeAllowEntry!("  users/Alice@Example.com  ")).toBe("alice@example.com");
   });
 });
