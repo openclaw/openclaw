@@ -1,8 +1,8 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
 import {
   behaviorManifestPath,
   unitMemoryHotspotManifestPath,
@@ -10,45 +10,11 @@ import {
 } from "./scripts/test-runner-manifest.mjs";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
+export { resolveLocalVitestMaxWorkers };
+
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
-const parsePositiveInt = (value: string | undefined): number | undefined => {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-};
-
-export function resolveLocalVitestMaxWorkers(
-  env: Record<string, string | undefined> = process.env,
-  options: {
-    cpuCount?: number;
-    totalMemoryBytes?: number;
-    platform?: NodeJS.Platform;
-  } = {},
-): number {
-  const explicit = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS);
-  if (explicit !== undefined) {
-    return explicit;
-  }
-
-  const cpuCount =
-    parsePositiveInt(env.OPENCLAW_TEST_HOST_CPU_COUNT) ?? options.cpuCount ?? os.cpus().length;
-  const totalMemoryBytes = options.totalMemoryBytes ?? os.totalmem();
-  const hostMemoryGiB =
-    parsePositiveInt(env.OPENCLAW_TEST_HOST_MEMORY_GIB) ?? Math.floor(totalMemoryBytes / 1024 ** 3);
-  const platform = options.platform ?? process.platform;
-  const isMacOS = platform === "darwin" || env.RUNNER_OS === "macOS";
-  const boundedCpuCount = Math.max(1, cpuCount);
-
-  if (isMacOS && boundedCpuCount <= 12 && hostMemoryGiB <= 64) {
-    return Math.min(3, boundedCpuCount);
-  }
-  if (hostMemoryGiB <= 64) {
-    return Math.min(4, boundedCpuCount);
-  }
-  return Math.max(4, Math.min(16, boundedCpuCount));
-}
-
 const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
 export default defineConfig({
@@ -84,6 +50,10 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "test/setup.ts",
       "scripts/test-parallel.mjs",
+      "scripts/test-planner/catalog.mjs",
+      "scripts/test-planner/executor.mjs",
+      "scripts/test-planner/planner.mjs",
+      "scripts/test-planner/runtime-profile.mjs",
       "scripts/test-runner-manifest.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
