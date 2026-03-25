@@ -1091,9 +1091,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRunEmbed(force?: boolean): boolean {
-    if (this.qmd.searchMode === "search") {
-      return false;
-    }
+    // Always generate embeddings regardless of searchMode. Even if the current
+    // search mode is "search" (BM25-only), embeddings are still required for:
+    // 1. Users who may later switch to "vsearch" or "query" modes
+    // 2. Ensuring the index is complete and ready for hybrid search
+    // 3. Consistency with documented behavior (docs say `qmd embed` runs)
     const now = Date.now();
     if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
       return false;
