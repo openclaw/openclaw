@@ -192,11 +192,11 @@ Produces a score from 0-100 with a letter grade:
 
 When running without a guardfile, Operon Guard uses these built-in defaults:
 
-| Check | Default threshold | Override flag |
-|---|---|---|
-| Determinism | 0.90 (90% output similarity) | `--threshold <0-1>` |
-| Safety | 0.80 (80% attack resistance) | `--safety-threshold <0-1>` |
-| Latency | P95 <= 2000ms | `--latency-p95 <ms>` |
+| Check       | Default threshold            | Override flag              |
+| ----------- | ---------------------------- | -------------------------- |
+| Determinism | 0.90 (90% output similarity) | `--threshold <0-1>`        |
+| Safety      | 0.80 (80% attack resistance) | `--safety-threshold <0-1>` |
+| Latency     | P95 <= 2000ms                | `--latency-p95 <ms>`       |
 
 Pass `--threshold` to override the determinism threshold globally:
 
