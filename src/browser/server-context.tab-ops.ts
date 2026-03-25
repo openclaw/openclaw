@@ -175,11 +175,20 @@ export function createProfileTabOps({
       );
     }
 
-    const createdViaCdp = await createTargetViaCdp({
-      cdpUrl: profile.cdpUrl,
-      url,
-      ...ssrfPolicyOpts,
-    })
+    const isRemote = !profile.cdpIsLoopback;
+    const createdViaCdp = await createTargetViaCdp(
+      {
+        cdpUrl: profile.cdpUrl,
+        url,
+        ...ssrfPolicyOpts,
+      },
+      isRemote
+        ? {
+            httpTimeoutMs: state().resolved.remoteCdpTimeoutMs,
+            handshakeTimeoutMs: state().resolved.remoteCdpHandshakeTimeoutMs,
+          }
+        : undefined,
+    )
       .then((r) => r.targetId)
       .catch(() => null);
 
