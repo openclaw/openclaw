@@ -3367,6 +3367,103 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 additionalProperties: false,
               },
+              router: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  defaultTier: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "low",
+                      },
+                      {
+                        type: "string",
+                        const: "medium",
+                      },
+                      {
+                        type: "string",
+                        const: "high",
+                      },
+                    ],
+                  },
+                  tiers: {
+                    type: "object",
+                    properties: {
+                      low: {
+                        type: "object",
+                        properties: {
+                          model: {
+                            type: "string",
+                          },
+                        },
+                        required: ["model"],
+                        additionalProperties: false,
+                      },
+                      medium: {
+                        type: "object",
+                        properties: {
+                          model: {
+                            type: "string",
+                          },
+                        },
+                        required: ["model"],
+                        additionalProperties: false,
+                      },
+                      high: {
+                        type: "object",
+                        properties: {
+                          model: {
+                            type: "string",
+                          },
+                        },
+                        required: ["model"],
+                        additionalProperties: false,
+                      },
+                    },
+                    required: ["low", "medium", "high"],
+                    additionalProperties: false,
+                  },
+                  escalation: {
+                    type: "object",
+                    properties: {
+                      signals: {
+                        type: "object",
+                        properties: {
+                          maxRetries: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxToolCalls: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                          maxContextGrowth: {
+                            type: "number",
+                            minimum: 0,
+                            maximum: 1,
+                          },
+                          errorPatterns: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    required: ["signals"],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["enabled", "defaultTier", "tiers", "escalation"],
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },

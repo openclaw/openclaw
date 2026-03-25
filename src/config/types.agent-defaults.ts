@@ -117,6 +117,24 @@ export type CliBackendConfig = {
   };
 };
 
+export type RouterConfig = {
+  enabled: boolean;
+  defaultTier: "low" | "medium" | "high";
+  tiers: {
+    low: { model: string };
+    medium: { model: string };
+    high: { model: string };
+  };
+  escalation: {
+    signals: {
+      maxRetries?: number;
+      maxToolCalls?: number;
+      maxContextGrowth?: number;
+      errorPatterns?: string[];
+    };
+  };
+};
+
 export type AgentDefaultsConfig = {
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
@@ -293,6 +311,8 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Model router configuration for automatic tier selection. */
+  router?: RouterConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

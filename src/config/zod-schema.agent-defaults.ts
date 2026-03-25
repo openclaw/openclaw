@@ -14,6 +14,26 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
+const RouterSchema = z
+  .object({
+    enabled: z.boolean(),
+    defaultTier: z.union([z.literal("low"), z.literal("medium"), z.literal("high")]),
+    tiers: z.object({
+      low: z.object({ model: z.string() }),
+      medium: z.object({ model: z.string() }),
+      high: z.object({ model: z.string() }),
+    }),
+    escalation: z.object({
+      signals: z.object({
+        maxRetries: z.number().int().nonnegative().optional(),
+        maxToolCalls: z.number().int().nonnegative().optional(),
+        maxContextGrowth: z.number().min(0).max(1).optional(),
+        errorPatterns: z.array(z.string()).optional(),
+      }),
+    }),
+  })
+  .strict();
+
 export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
@@ -194,6 +214,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    router: RouterSchema.optional(),
   })
   .strict()
   .optional();
