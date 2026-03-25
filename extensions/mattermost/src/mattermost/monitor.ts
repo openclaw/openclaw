@@ -1679,23 +1679,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             // text+media together in the correct Mattermost format (ID=2965096969).
             if (!hasMedia) {
               const text = core.channel.text.convertMarkdownTables(payload.text, tableMode);
-              try {
-                await patchMattermostPost(blockStreamingClient!, {
-                  postId: streamMessageId,
-                  message: text,
-                });
-                runtime.log?.(`stream-patch final edit ${streamMessageId}`);
-                // Successful text-only patch. Reset streaming state and return.
-                streamMessageId = null;
-                pendingPatchText = "";
-                lastSentText = "";
-                patchSending = false;
-                return;
-              } catch (err) {
-                logVerboseMessage(
-                  `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
-                );
-                // Fall through to deliverMattermostReplyPayload below.
+              // If the final text exceeds textChunkLimit, skip the in-place patch
+              // and fall through to deliverMattermostReplyPayload which applies
+              // chunkMarkdownTextWithMode for proper multi-post delivery (ID=2978002398).
+              if (text.length <= textLimit) {
+                try {
+                  await patchMattermostPost(blockStreamingClient!, {
+                    postId: streamMessageId,
+                    message: text,
+                  });
+                  runtime.log?.(`stream-patch final edit ${streamMessageId}`);
+                  // Successful text-only patch. Reset streaming state and return.
+                  streamMessageId = null;
+                  pendingPatchText = "";
+                  lastSentText = "";
+                  patchSending = false;
+                  return;
+                } catch (err) {
+                  logVerboseMessage(
+                    `mattermost stream-patch final edit failed: ${String(err)}, sending new message`,
+                  );
+                  // Fall through to deliverMattermostReplyPayload below.
+                }
               }
             }
             // Media payload or patch failure: deliver the full payload via the
