@@ -102,7 +102,7 @@ export class AgentMemoSearchManager implements MemorySearchManager {
       url,
       init: {
         method: "POST",
-        headers: this.buildHeaders(),
+        headers: this.buildHeaders(true),
         body,
       },
       ssrfPolicy: this.ssrfPolicy,
@@ -168,7 +168,7 @@ export class AgentMemoSearchManager implements MemorySearchManager {
 
   status(): MemoryProviderStatus {
     return {
-      backend: "builtin",
+      backend: "agentmemo" as MemoryProviderStatus["backend"],
       provider: "agentmemo",
       model: "external",
       custom: {
@@ -208,11 +208,13 @@ export class AgentMemoSearchManager implements MemorySearchManager {
   // Internals
   // -------------------------------------------------------------------------
 
-  private buildHeaders(): Record<string, string> {
+  private buildHeaders(withBody = false): Record<string, string> {
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       Accept: "application/json",
     };
+    if (withBody) {
+      headers["Content-Type"] = "application/json";
+    }
     if (this.apiKey) {
       headers["Authorization"] = `Bearer ${this.apiKey}`;
     }
