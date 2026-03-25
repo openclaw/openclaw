@@ -24,12 +24,7 @@ async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promi
           path.basename(resolved),
         );
   const digest = createHash("sha256").update(`${kind}:${normalized}`).digest("hex").slice(0, 24);
-  const ownerScope =
-    typeof process.getuid === "function"
-      ? `uid-${process.getuid()}`
-      : `user-${process.env.USER || process.env.USERNAME || "default"}`;
-  const lockBaseDir =
-    kind === "dir" ? normalized : path.join(os.tmpdir(), `openclaw-${ownerScope}`);
+  const lockBaseDir = kind === "dir" ? normalized : path.dirname(normalized);
   return path.join(lockBaseDir, ".openclaw.workspace-locks", `${kind}-${digest}.lock`);
 }
 
@@ -384,7 +379,7 @@ describe("workspace lock manager", () => {
     }
   });
 
-  it("does not create missing target parent directories for file locks", async () => {
+  it("creates lock dir inside the target parent for file locks (cross-user safe)", async () => {
     const dir = await makeCaseDir();
     const target = path.join(dir, "missing", "nested", "notes.txt");
     const missingParent = path.dirname(target);
@@ -396,7 +391,12 @@ describe("workspace lock manager", () => {
       ttlMs: 5_000,
     });
 
-    await expect(fs.stat(missingParent)).rejects.toThrow();
+    // Lock dir is created inside the target's parent directory (not in a
+    // per-user temp dir) so different OS users converge on the same lock.
+    const lockDir = path.join(missingParent, ".openclaw.workspace-locks");
+    await expect(fs.stat(lockDir)).resolves.toBeTruthy();
+    // The target file itself should NOT exist.
+    await expect(fs.stat(target)).rejects.toThrow();
     await lock.release();
   });
 
@@ -773,5 +773,49 @@ describe("workspace lock manager", () => {
 
     await lock.release();
     await expect(fs.stat(lock.lockPath)).rejects.toThrow();
+  });
+
+  it("release removes lock file even when handle is still open (Windows EPERM regression)", async () => {
+    // Regression: releaseLock must close the file handle BEFORE calling
+    // fs.rm, otherwise Windows rejects the unlink with EPERM.
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "eperm-test.txt");
+    await fs.writeFile(target, "data");
+
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      ttlMs: 5_000,
+    });
+
+    // Lock file should exist before release.
+    await expect(fs.stat(lock.lockPath)).resolves.toBeTruthy();
+
+    await lock.release();
+
+    // Lock file must be gone after release.
+    await expect(fs.stat(lock.lockPath)).rejects.toThrow();
+  });
+
+  it("cross-user convergence: same target produces same lock path regardless of owner", async () => {
+    // Regression: lock paths must not depend on the OS user identity so
+    // two processes under different UIDs serialize on the same lock file.
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "shared-file.txt");
+    await fs.writeFile(target, "data");
+
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      ttlMs: 5_000,
+    });
+
+    // Lock file should be inside the target's parent directory, not in a
+    // per-user temp directory.
+    expect(lock.lockPath).toContain(dir);
+    expect(lock.lockPath).not.toContain("uid-");
+    expect(lock.lockPath).not.toContain("user-");
+
+    await lock.release();
   });
 });

@@ -392,6 +392,10 @@ export function wrapToolMutationLock(
         bindMounts: options?.bindMounts,
       });
       const lockKey = await canonicalizeMutationLockKey(path.resolve(root, resolvedPath));
+      // Also wait on any in-flight apply_patch for this workspace root so
+      // per-file writes and apply_patch never overlap.
+      const applyPatchQueueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${path.resolve(root)}`;
+      const applyPatchPrevious = workspaceMutationLocks.get(applyPatchQueueKey);
       const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
       let release: (() => void) | undefined;
       const current = new Promise<void>((resolve) => {
@@ -401,6 +405,9 @@ export function wrapToolMutationLock(
 
       let ranMutation = false;
       try {
+        if (applyPatchPrevious) {
+          await waitForQueuedMutation(applyPatchPrevious, signal);
+        }
         await waitForQueuedMutation(previous, signal);
         ranMutation = true;
         const lockFn = await getWithWorkspaceLock();
@@ -452,27 +459,39 @@ export function wrapToolMutationLock(
  * files atomically, so we serialize it against all other workspace mutations
  * using the workspace root as the lock key.
  */
+/**
+ * The workspace-level lock key used by apply_patch. Exported so per-file
+ * mutation locks (wrapToolMutationLock) can also wait on this, ensuring
+ * apply_patch and write/edit never overlap on the same workspace.
+ */
+export const APPLY_PATCH_WORKSPACE_LOCK_PREFIX = "apply_patch_ws:";
+
 export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
+  const resolvedRoot = path.resolve(root);
+  const lockKey = resolvedRoot; // Use actual absolute path as lock target
+  const queueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${resolvedRoot}`;
+
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      const lockKey = `apply_patch:${path.resolve(root)}`;
-      const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
+      const previous = workspaceMutationLocks.get(queueKey) ?? Promise.resolve();
       let release: (() => void) | undefined;
       const current = new Promise<void>((resolve) => {
         release = resolve;
       });
-      workspaceMutationLocks.set(lockKey, current);
+      workspaceMutationLocks.set(queueKey, current);
 
       let ranMutation = false;
       try {
         await waitForQueuedMutation(previous, signal);
         ranMutation = true;
         const lockFn = await getWithWorkspaceLock();
+        // Use "dir" kind with the actual workspace root path so the filesystem
+        // lock is deterministic and doesn't depend on cwd.
         return await lockFn(
           lockKey,
           {
-            kind: "file",
+            kind: "dir",
             timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
             ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
             signal,
@@ -484,21 +503,21 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
       } finally {
         if (ranMutation) {
           release?.();
-          if (workspaceMutationLocks.get(lockKey) === current) {
-            workspaceMutationLocks.delete(lockKey);
+          if (workspaceMutationLocks.get(queueKey) === current) {
+            workspaceMutationLocks.delete(queueKey);
           }
         } else {
           void previous.then(
             () => {
               release?.();
-              if (workspaceMutationLocks.get(lockKey) === current) {
-                workspaceMutationLocks.delete(lockKey);
+              if (workspaceMutationLocks.get(queueKey) === current) {
+                workspaceMutationLocks.delete(queueKey);
               }
             },
             () => {
               release?.();
-              if (workspaceMutationLocks.get(lockKey) === current) {
-                workspaceMutationLocks.delete(lockKey);
+              if (workspaceMutationLocks.get(queueKey) === current) {
+                workspaceMutationLocks.delete(queueKey);
               }
             },
           );
@@ -606,12 +625,17 @@ function mapContainerPathToWorkspaceRoot(params: {
 
   // If the candidate is already a host path under one of the bind mounts, return it directly.
   // This avoids double-mapping when someone passes a host-resolved path.
+  // Skip root binds (hostRoot="/") — they match everything and would prevent
+  // container-path remapping from ever running.
   for (const bind of bindMatches) {
     const hostNorm = bind.hostRoot.replace(/\/+$/, "") || "/";
+    if (hostNorm === "/") {
+      continue;
+    }
     if (normalizedCandidate === hostNorm) {
       return bind.hostRoot;
     }
-    const hostPrefix = hostNorm === "/" ? "/" : `${hostNorm}/`;
+    const hostPrefix = `${hostNorm}/`;
     if (normalizedCandidate.startsWith(hostPrefix)) {
       return path.resolve(normalizedCandidate);
     }
@@ -832,6 +856,7 @@ type SandboxToolParams = {
   imageSanitization?: ImageSanitizationLimits;
   mutationLockingEnabled?: boolean;
   containerWorkdir?: string;
+  bindMounts?: string[];
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -852,6 +877,7 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   return params.mutationLockingEnabled
     ? wrapToolMutationLock(normalized, params.root, {
         containerWorkdir: params.containerWorkdir,
+        bindMounts: params.bindMounts,
       })
     : normalized;
 }
@@ -869,6 +895,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return params.mutationLockingEnabled
     ? wrapToolMutationLock(normalized, params.root, {
         containerWorkdir: params.containerWorkdir,
+        bindMounts: params.bindMounts,
       })
     : normalized;
 }

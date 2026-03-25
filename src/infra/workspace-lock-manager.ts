@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
@@ -84,10 +83,12 @@ async function normalizeTargetPath(targetPath: string, kind: WorkspaceLockKind):
 }
 
 async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind): Promise<string> {
-  const lockBaseDir =
-    kind === "dir"
-      ? normalizedTarget
-      : path.join(os.tmpdir(), "openclaw-" + resolveLockOwnerScope());
+  // Use a shared cross-user namespace so different OS users locking the same
+  // target converge on the same lock file. For "dir" targets the lock lives
+  // inside the directory itself. For "file" targets we derive the lock dir
+  // from the file's parent directory so any user with write access to the
+  // workspace sees the same lock.
+  const lockBaseDir = kind === "dir" ? normalizedTarget : path.dirname(normalizedTarget);
   const lockDir = path.join(lockBaseDir, ".openclaw.workspace-locks");
   const digest = createHash("sha256")
     .update(`${kind}:${normalizedTarget}`)
@@ -96,16 +97,8 @@ async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind
   return path.join(lockDir, `${kind}-${digest}.lock`);
 }
 
-function resolveLockOwnerScope(): string {
-  if (typeof process.getuid === "function") {
-    return `uid-${process.getuid()}`;
-  }
-  const username =
-    (typeof process.env.USER === "string" && process.env.USER.trim()) ||
-    (typeof process.env.USERNAME === "string" && process.env.USERNAME.trim()) ||
-    "default";
-  return `user-${username}`;
-}
+// resolveLockOwnerScope removed — lock paths are now derived from the target
+// path's parent directory to ensure cross-user convergence.
 
 function createAbortError(): Error {
   const error = new Error("Operation aborted.");
@@ -248,13 +241,24 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
 
     const serialized = JSON.stringify(nextPayload);
     const buf = Buffer.from(serialized, "utf8");
-    const { bytesWritten } = await handle.write(buf, 0, buf.length, 0);
-    if (bytesWritten !== buf.length) {
-      throw new Error(
-        `refreshLock: short write (${bytesWritten}/${buf.length}); aborting to preserve lock integrity`,
-      );
+
+    // Retry up to 3 times on short writes to avoid leaving corrupted JSON on disk.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { bytesWritten } = await handle.write(buf, 0, buf.length, 0);
+      if (bytesWritten === buf.length) {
+        await handle.truncate(bytesWritten);
+        // Verify the written payload is parseable.
+        const verification = await readPayloadFromHandle(handle);
+        if (verification && verification.token === token) {
+          break;
+        }
+      }
+      if (attempt === 2) {
+        throw new Error(
+          `refreshLock: failed to write full payload after 3 attempts; aborting to preserve lock integrity`,
+        );
+      }
     }
-    await handle.truncate(bytesWritten);
   } catch {
     // Preserve exclusivity on transient write errors; do not delete lock here.
   } finally {
@@ -284,6 +288,9 @@ async function releaseLock(mapKey: string, token: string): Promise<void> {
       return;
     }
 
+    // Close handle BEFORE unlinking — Windows rejects rm on open files (EPERM).
+    await handle.close().catch(() => undefined);
+    handle = undefined;
     await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
   } catch {
     // Best-effort cleanup only.

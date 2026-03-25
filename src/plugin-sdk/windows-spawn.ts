@@ -180,11 +180,9 @@ function resolveEntrypointFromPackageJson(
     return null;
   }
 
-  const wrapperBase = path.basename(wrapperPath, path.extname(wrapperPath)).toLowerCase();
-  const packageBase = packageName.split("/").at(-1)?.toLowerCase() ?? packageName.toLowerCase();
-  if (wrapperBase !== packageBase) {
-    return null;
-  }
+  // Don't gate on basename matching — renamed .cmd shims (e.g. qmd-beta.cmd
+  // wrapping the qmd package) should still fall through to the package.json
+  // lookup so we can resolve the real entrypoint.
 
   const tryResolveFromPackageJson = (packageJsonPath: string): string | null => {
     if (!isFilePath(packageJsonPath)) {

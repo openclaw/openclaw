@@ -373,6 +373,19 @@ export function createOpenClawCodingTools(options?: {
   const mutationLockingEnabled =
     options?.config?.agents?.defaults?.sharedWorkspaceLocking?.enabled === true;
 
+  // Build the full set of sandbox bind mounts (including the implicit /agent
+  // mount) so mutation locks can map container paths → host paths correctly.
+  const sandboxBindMounts: string[] | undefined = sandbox
+    ? [
+        ...(sandbox.docker.binds ?? []),
+        // Synthetic bind for the agent workspace mount so /agent/foo.txt
+        // resolves to the same host path as <agentWorkspaceDir>/foo.txt.
+        ...(sandbox.agentWorkspaceDir !== sandbox.workspaceDir
+          ? [`${sandbox.agentWorkspaceDir}:/agent:rw`]
+          : []),
+      ]
+    : undefined;
+
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       if (sandboxRoot) {
@@ -495,6 +508,7 @@ export function createOpenClawCodingTools(options?: {
                     bridge: sandboxFsBridge!,
                     mutationLockingEnabled,
                     containerWorkdir: sandbox.containerWorkdir,
+                    bindMounts: sandboxBindMounts,
                   }),
                   sandboxRoot,
                   {
@@ -506,6 +520,7 @@ export function createOpenClawCodingTools(options?: {
                   bridge: sandboxFsBridge!,
                   mutationLockingEnabled,
                   containerWorkdir: sandbox.containerWorkdir,
+                  bindMounts: sandboxBindMounts,
                 }),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
@@ -514,6 +529,7 @@ export function createOpenClawCodingTools(options?: {
                     bridge: sandboxFsBridge!,
                     mutationLockingEnabled,
                     containerWorkdir: sandbox.containerWorkdir,
+                    bindMounts: sandboxBindMounts,
                   }),
                   sandboxRoot,
                   {
@@ -525,6 +541,7 @@ export function createOpenClawCodingTools(options?: {
                   bridge: sandboxFsBridge!,
                   mutationLockingEnabled,
                   containerWorkdir: sandbox.containerWorkdir,
+                  bindMounts: sandboxBindMounts,
                 }),
           ]
         : []
@@ -602,7 +619,7 @@ export function createOpenClawCodingTools(options?: {
               mutationLockingEnabled
                 ? wrapToolMutationLock(memoryFlushWriteTool, sandboxRoot ?? workspaceRoot, {
                     containerWorkdir: sandbox?.containerWorkdir,
-                    bindMounts: sandbox?.docker.binds,
+                    bindMounts: sandboxBindMounts,
                   })
                 : memoryFlushWriteTool,
             ];
