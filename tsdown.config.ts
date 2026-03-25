@@ -53,7 +53,6 @@ const pluginSdkEntrypoints = [
   "thread-ownership",
   "account-id",
   "device-pair",
-  "voice-call",
   "keyed-async-queue",
 ] as const;
 
