@@ -99,4 +99,22 @@ describe("chat-model-ref helpers", () => {
       reason: "ambiguous",
     });
   });
+
+  it("qualifies slash-containing model IDs with the server provider", () => {
+    expect(
+      resolvePreferredServerChatModel("nvidia/nemotron-3-super-120b-a12b:free", "openrouter", []),
+    ).toEqual({
+      value: "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+      source: "server",
+    });
+  });
+
+  it("qualifies multi-slash model IDs for HuggingFace/Together providers", () => {
+    expect(
+      resolvePreferredServerChatModel("meta-llama/Llama-3-70b-chat-hf", "together", []),
+    ).toEqual({
+      value: "together/meta-llama/Llama-3-70b-chat-hf",
+      source: "server",
+    });
+  });
 });

@@ -109,8 +109,19 @@ export function resolvePreferredServerChatModel(
     createChatModelOverride(trimmedModel),
     catalog,
   );
-  if (overrideResolution.source === "qualified" || overrideResolution.source === "catalog") {
+  if (overrideResolution.source === "catalog") {
     return overrideResolution;
+  }
+  // Model IDs that contain a slash (e.g. OpenRouter "nvidia/nemotron-...")
+  // are classified as "qualified" by createChatModelOverride, but the slash
+  // belongs to the model ID itself, not a provider prefix.  Always re-qualify
+  // with the server-provided provider so downstream parseModelRef splits on
+  // the correct boundary.
+  if (overrideResolution.source === "qualified" && provider?.trim()) {
+    return {
+      value: resolveServerChatModelValue(trimmedModel, provider),
+      source: "server",
+    };
   }
 
   return {
