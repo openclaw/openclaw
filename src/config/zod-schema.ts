@@ -120,6 +120,45 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const ChatHistoryChannelIdSchema = z.union([
+  z.literal("telegram"),
+  z.literal("slack"),
+  z.literal("discord"),
+  z.literal("signal"),
+  z.literal("whatsapp"),
+]);
+
+const ChatHistoryStorageSchema = z
+  .object({
+    path: z.string().optional(),
+    splitByGroup: z.boolean().optional(),
+    splitByMonth: z.boolean().optional(),
+    combinedFile: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ChatHistoryFormatSchema = z
+  .object({
+    includeUserId: z.boolean().optional(),
+    includeGroupId: z.boolean().optional(),
+    includeGroupName: z.boolean().optional(),
+    timezone: z.string().optional(),
+    includeReplyContext: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ChatHistorySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    channels: z.record(ChatHistoryChannelIdSchema, z.boolean()).optional(),
+    storage: ChatHistoryStorageSchema,
+    format: ChatHistoryFormatSchema,
+  })
+  .strict()
+  .optional();
+
 const HttpUrlSchema = z
   .string()
   .url()
@@ -885,6 +924,7 @@ export const OpenClawSchema = z
       .optional(),
     memory: MemorySchema,
     mcp: McpConfigSchema,
+    chatHistory: ChatHistorySchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
