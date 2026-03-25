@@ -657,6 +657,39 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(msg.content).toBe("hello");
       }
 
+      // Non-streaming usage extraction
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "usage reply" }],
+          meta: {
+            agentMeta: {
+              usage: { input: 42, output: 17, cacheRead: 5, cacheWrite: 0, total: 64 },
+            },
+          },
+        } as never);
+        const json = await postSyncUserMessage("count my tokens");
+        const usage = json.usage as Record<string, unknown> | undefined;
+        expect(usage).toBeDefined();
+        expect(usage?.prompt_tokens).toBe(42);
+        expect(usage?.completion_tokens).toBe(17);
+        expect(usage?.total_tokens).toBe(64);
+      }
+
+      // Non-streaming usage falls back to zeros when meta is absent
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({
+          payloads: [{ text: "no usage" }],
+        } as never);
+        const json = await postSyncUserMessage("no meta");
+        const usage = json.usage as Record<string, unknown> | undefined;
+        expect(usage).toBeDefined();
+        expect(usage?.prompt_tokens).toBe(0);
+        expect(usage?.completion_tokens).toBe(0);
+        expect(usage?.total_tokens).toBe(0);
+      }
+
       {
         agentCommand.mockClear();
         agentCommand.mockResolvedValueOnce({ payloads: [{ text: "" }] } as never);

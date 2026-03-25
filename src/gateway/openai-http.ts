@@ -396,6 +396,31 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+function extractUsage(result: unknown): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+} {
+  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
+  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
+  if (!usage || typeof usage !== "object") {
+    return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  }
+  const u = usage as {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  const input = Math.max(0, u.input ?? 0);
+  const output = Math.max(0, u.output ?? 0);
+  const cacheRead = Math.max(0, u.cacheRead ?? 0);
+  const cacheWrite = Math.max(0, u.cacheWrite ?? 0);
+  const total = Math.max(0, u.total ?? input + output + cacheRead + cacheWrite);
+  return { prompt_tokens: input, completion_tokens: output, total_tokens: total };
+}
+
 function resolveAgentResponseText(result: unknown): string {
   const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
   if (!Array.isArray(payloads) || payloads.length === 0) {
@@ -498,6 +523,7 @@ export async function handleOpenAiHttpRequest(
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
       const content = resolveAgentResponseText(result);
+      const usage = extractUsage(result);
 
       sendJson(res, 200, {
         id: runId,
@@ -511,7 +537,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage,
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
