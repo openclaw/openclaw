@@ -69,7 +69,7 @@ export async function runDiscordTaskWithTimeout(params: {
   run: (abortSignal: AbortSignal | undefined) => Promise<void>;
   timeoutMs?: number;
   abortSignals?: Array<AbortSignal | undefined>;
-  onTimeout: (timeoutMs: number) => void;
+  onTimeout: (timeoutMs: number) => void | Promise<void>;
   onAbortAfterTimeout?: () => void;
   onErrorAfterTimeout?: (error: unknown) => void;
 }): Promise<boolean> {
@@ -108,7 +108,7 @@ export async function runDiscordTaskWithTimeout(params: {
     if (result === "timeout") {
       timedOut = true;
       timeoutAbortController?.abort();
-      params.onTimeout(params.timeoutMs);
+      await params.onTimeout(params.timeoutMs);
       return true;
     }
     return false;

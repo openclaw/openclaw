@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import {
+  loadConfigMock,
+  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
+  resetPairingSecurityMocks,
+  upsertPairingRequestMock as pairingUpsertPairingRequestMock,
+} from "./pairing-security.test-harness.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -23,13 +29,9 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-
-export const mockLoadConfig: AnyMockFn = vi.fn().mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
-
-export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
-export const upsertPairingRequestMock: AnyMockFn = vi
-  .fn()
-  .mockResolvedValue({ code: "PAIRCODE", created: true });
+export const mockLoadConfig = loadConfigMock;
+export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
+export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
   ev: EventEmitter;
@@ -87,37 +89,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    loadConfig: () => mockLoadConfig(),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (
-      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
-    ) =>
-      await actual.readStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: async (provider, accountId) =>
-          (await readAllowFromStoreMock(provider, accountId)) as string[],
-      }),
-  };
-});
-
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
@@ -143,6 +114,13 @@ export function getSock(): MockSock {
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 let monitorWebInbox: MonitorWebInbox;
+
+export function getMonitorWebInbox(): MonitorWebInbox {
+  if (!monitorWebInbox) {
+    throw new Error("monitorWebInbox not initialized");
+  }
+  return monitorWebInbox;
+}
 
 export async function settleInboundWork() {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -199,12 +177,14 @@ export function buildNotifyMessageUpsert(params: {
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
-  });
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
-  });
+  const sendCall = sock.sendMessage.mock.calls[0];
+  expect(sendCall?.[0]).toBe(jid);
+  const text = String((sendCall?.[1] as { text?: string } | undefined)?.text ?? "");
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(`Your WhatsApp phone number: ${senderE164}`);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain("```\nPAIRCODE\n```");
+  expect(text).toContain("pairing approve whatsapp PAIRCODE");
 }
 
 let authDir: string | undefined;
@@ -224,12 +204,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
-    mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
-    readAllowFromStoreMock.mockResolvedValue([]);
-    upsertPairingRequestMock.mockResolvedValue({
-      code: "PAIRCODE",
-      created: true,
-    });
+    resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     const inboundModule = await import("./inbound.js");
     monitorWebInbox = inboundModule.monitorWebInbox;
     const { resetWebInboundDedupe } = inboundModule;
