@@ -408,6 +408,29 @@ function resolveAgentResponseText(result: unknown): string {
   return content || "No response from OpenClaw.";
 }
 
+/** Extract usage from the agent run result and map to OpenAI format. */
+function resolveAgentResponseUsage(result: unknown): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+} {
+  const meta = (result as { meta?: { agentMeta?: { usage?: Record<string, number> } } } | null)
+    ?.meta;
+  const usage = meta?.agentMeta?.usage;
+  if (!usage) {
+    return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  }
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const total = usage.total ?? input + output + cacheRead;
+  return {
+    prompt_tokens: input + cacheRead,
+    completion_tokens: output,
+    total_tokens: total,
+  };
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -511,7 +534,7 @@ export async function handleOpenAiHttpRequest(
             finish_reason: "stop",
           },
         ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage: resolveAgentResponseUsage(result),
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
