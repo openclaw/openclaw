@@ -8,6 +8,7 @@ export type ApiKeyCredential = {
   key?: string;
   keyRef?: SecretRef;
   email?: string;
+  displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
   metadata?: Record<string, string>;
 };
@@ -24,6 +25,7 @@ export type TokenCredential = {
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
+  displayName?: string;
 };
 
 export type OAuthCredential = OAuthCredentials & {
@@ -31,6 +33,7 @@ export type OAuthCredential = OAuthCredentials & {
   provider: string;
   clientId?: string;
   email?: string;
+  displayName?: string;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;

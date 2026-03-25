@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
@@ -12,6 +15,8 @@ import {
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -680,13 +685,54 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
-    return {
-      kind: "final",
-      payload: {
-        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-      },
-    };
+  if (finalEmbeddedError && !hasPayloadText) {
+    const errorMsg = finalEmbeddedError.message ?? "";
+    if (isContextOverflowError(errorMsg)) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+        },
+      };
+    }
+  }
+
+  // Surface rate limit and overload errors that occur mid-turn (after tool
+  // calls) instead of silently returning an empty response. See #36142.
+  // Only applies when the assistant produced no valid (non-error) reply text,
+  // so tool-level rate-limit messages don't override a successful turn.
+  // Prioritize metaErrorMsg (raw upstream error) over errorPayloadText to
+  // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
+  // skip already-formatted payloads so tool-specific 429 errors (e.g.
+  // browser/search tool failures) are preserved rather than overwritten.
+  //
+  // Instead of early-returning kind:"final" (which would bypass
+  // buildReplyPayloads() filtering and session bookkeeping), inject the
+  // error payload into runResult so it flows through the normal
+  // kind:"success" path — preserving streaming dedup, message_send
+  // suppression, and usage/model metadata updates.
+  if (runResult) {
+    const hasNonErrorContent = runResult.payloads?.some(
+      (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
+    );
+    if (!hasNonErrorContent) {
+      const metaErrorMsg = finalEmbeddedError?.message ?? "";
+      const rawErrorPayloadText =
+        runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
+          ?.text ?? "";
+      const errorCandidate = metaErrorMsg || rawErrorPayloadText;
+      if (
+        errorCandidate &&
+        (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
+      ) {
+        runResult.payloads = [
+          {
+            text: "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            isError: true,
+          },
+        ];
+      }
+    }
   }
 
   return {

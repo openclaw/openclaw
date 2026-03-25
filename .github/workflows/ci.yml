@@ -323,12 +323,22 @@ jobs:
           - runtime: node
             task: test
             shard_index: 1
-            shard_count: 2
+            shard_count: 4
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
-            shard_count: 2
+            shard_count: 4
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 3
+            shard_count: 4
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 4
+            shard_count: 4
             command: pnpm test
           - runtime: node
             task: channels
@@ -679,42 +689,47 @@ jobs:
           - runtime: node
             task: test
             shard_index: 1
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 2
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 3
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 4
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 5
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 6
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 7
-            shard_count: 8
+            shard_count: 9
             command: pnpm test
           - runtime: node
             task: test
             shard_index: 8
-            shard_count: 8
+            shard_count: 9
+            command: pnpm test
+          - runtime: node
+            task: test
+            shard_index: 9
+            shard_count: 9
             command: pnpm test
     steps:
       - name: Checkout

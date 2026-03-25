@@ -94,11 +94,8 @@ const testProfile =
 const isMacMiniProfile = testProfile === "macmini";
 // Vitest executes Node tests through Vite's SSR/module-runner pipeline, so the
 // shared unit lane still retains transformed ESM/module state even when the
-// tests themselves are not "server rendering" a website. We previously kept
-// forks as the default after VM-pool regressions on constrained hosts. On
-// 2026-03-22, a direct full-unit threads run finished 1109/1110 green; the sole
-// correctness exception stayed on the manifest fork lane, so the wrapper now
-// defaults unit runs to threads while preserving explicit fork escapes.
+// tests themselves are not "server rendering" a website. Keep forks as the
+// only active pool so local and CI behavior stay aligned.
 const forceIsolation =
   process.env.OPENCLAW_TEST_ISOLATE === "1" || process.env.OPENCLAW_TEST_ISOLATE === "true";
 const disableIsolation =
@@ -110,15 +107,10 @@ const includeChannelsSuite = process.env.OPENCLAW_TEST_INCLUDE_CHANNELS === "1";
 const includeExtensionsSuite = process.env.OPENCLAW_TEST_INCLUDE_EXTENSIONS === "1";
 const noIsolateArgs = disableIsolation ? ["--isolate=false"] : [];
 const skipDefaultRuns = process.env.OPENCLAW_TEST_SKIP_DEFAULT === "1";
-const parsePoolOverride = (value, fallback) => {
-  if (value === "threads" || value === "forks") {
-    return value;
-  }
-  return fallback;
-};
-// Even on low-memory hosts, keep the isolated lane split so files like
-// git-commit.test.ts still get the worker/process isolation they require.
-const shouldSplitUnitRuns = testProfile !== "serial";
+// Even on low-memory or fully serial hosts, keep the unit lane split so
+// long-lived workers do not accumulate the whole unit transform graph.
+const shouldSplitUnitRuns = true;
+const useLowProfileUnitSchedulingDefaults = testProfile === "low" || testProfile === "serial";
 let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -283,9 +275,9 @@ const channelIsolatedFiles = dedupeFilesPreserveOrder([
   ),
 ]);
 const channelIsolatedFileSet = new Set(channelIsolatedFiles);
-const defaultUnitPool = parsePoolOverride(process.env.OPENCLAW_TEST_UNIT_DEFAULT_POOL, "threads");
 const isTargetedIsolatedUnitFile = (fileFilter) =>
   unitForkIsolatedFiles.includes(fileFilter) || unitMemoryIsolatedFiles.includes(fileFilter);
+const isLegacyBasePinnedFile = (fileFilter) => baseThreadPinnedFiles.includes(fileFilter);
 const inferTarget = (fileFilter) => {
   const isolated =
     isTargetedIsolatedUnitFile(fileFilter) ||
@@ -327,26 +319,20 @@ const parseEnvNumber = (name, fallback) => {
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
-const defaultHeavyUnitFileLimit =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 90
-      : testProfile === "low"
-        ? 36
-        : highMemLocalHost
-          ? 80
-          : 60;
-const defaultHeavyUnitLaneCount =
-  testProfile === "serial"
-    ? 0
-    : isMacMiniProfile
-      ? 6
-      : testProfile === "low"
-        ? 4
-        : highMemLocalHost
-          ? 5
-          : 4;
+const defaultHeavyUnitFileLimit = isMacMiniProfile
+  ? 90
+  : useLowProfileUnitSchedulingDefaults
+    ? 36
+    : highMemLocalHost
+      ? 80
+      : 60;
+const defaultHeavyUnitLaneCount = isMacMiniProfile
+  ? 6
+  : useLowProfileUnitSchedulingDefaults
+    ? 4
+    : highMemLocalHost
+      ? 5
+      : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -356,8 +342,7 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const defaultMemoryHeavyUnitFileLimit =
-  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
+const defaultMemoryHeavyUnitFileLimit = isCI ? 64 : useLowProfileUnitSchedulingDefaults ? 8 : 16;
 const memoryHeavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
   defaultMemoryHeavyUnitFileLimit,
@@ -401,6 +386,9 @@ const resolveEntryTimingEstimator = (entry) => {
     return estimateUnitDurationMs;
   }
   if (config === "vitest.channels.config.ts") {
+    return estimateChannelDurationMs;
+  }
+  if (config === "vitest.extensions.config.ts") {
     return estimateChannelDurationMs;
   }
   return null;
@@ -451,10 +439,45 @@ const channelSharedCandidateFiles = allKnownTestFiles.filter(
     channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
     !channelIsolatedFileSet.has(file),
 );
+const defaultExtensionsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
+const extensionsBatchTargetMs = parseEnvNumber(
+  "OPENCLAW_TEST_EXTENSIONS_BATCH_TARGET_MS",
+  defaultExtensionsBatchTargetMs,
+);
 const extensionIsolatedEntries = extensionForkIsolatedFiles.map((file) => ({
   name: `extensions-${path.basename(file, ".test.ts")}-isolated`,
   args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
 }));
+// Shared extensions workers can retain a very large transform graph across
+// hundreds of plugin files on forks/non-isolated runs. Recycle that lane in
+// bounded batches so teardown happens before the worker reaches CI memory-cliff
+// territory and starts surfacing spurious worker-shutdown errors.
+const extensionsSharedBatches = splitFilesByDurationBudget(
+  extensionSharedCandidateFiles,
+  extensionsBatchTargetMs,
+  estimateChannelDurationMs,
+);
+const extensionsSharedEntries = extensionsSharedBatches
+  .filter((batch) => batch.length > 0)
+  .map((batch, batchIndex) => ({
+    name:
+      extensionsSharedBatches.length === 1
+        ? "extensions"
+        : `extensions-batch-${String(batchIndex + 1)}`,
+    serialPhase: "extensions",
+    includeFiles: batch,
+    estimatedDurationMs: estimateEntryFilesDurationMs(
+      { args: ["vitest", "run", "--config", "vitest.extensions.config.ts"] },
+      batch,
+    ),
+    env: {
+      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+        `vitest-extensions-include-${String(batchIndex + 1)}`,
+        batch,
+      ),
+    },
+    args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
+  }));
 const channelIsolatedEntries = channelIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-channels-isolated`,
   args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
@@ -464,8 +487,13 @@ const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
-const defaultUnitFastBatchTargetMs =
-  testProfile === "low" ? 10_000 : isCI && !isWindows ? 45_000 : 0;
+const defaultUnitFastBatchTargetMs = useLowProfileUnitSchedulingDefaults
+  ? 10_000
+  : isCI && !isWindows
+    ? 45_000
+    : highMemLocalHost
+      ? 45_000
+      : 0;
 const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,
@@ -511,13 +539,13 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
         "run",
         "--config",
         "vitest.unit.config.ts",
-        `--pool=${defaultUnitPool}`,
+        "--pool=forks",
         ...noIsolateArgs,
       ],
     }));
 });
 // Shared channel workers retain large transformed module graphs across files on
-// threads/non-isolated runs. Recycle that lane in bounded batches so the
+// non-isolated runs. Recycle that lane in bounded batches so the
 // process gets torn down before unrelated channel files inherit the full graph.
 const channelsSharedBatches = splitFilesByDurationBudget(
   channelSharedCandidateFiles,
@@ -560,17 +588,17 @@ const unitHeavyEntries = heavyUnitBuckets.map((files, index) => ({
     ...files,
   ],
 }));
-const unitThreadEntries =
+const unitPinnedEntries =
   unitThreadPinnedFiles.length > 0
     ? [
         {
-          name: "unit-threads",
+          name: "unit-pinned",
           args: [
             "vitest",
             "run",
             "--config",
             "vitest.unit.config.ts",
-            "--pool=threads",
+            "--pool=forks",
             ...noIsolateArgs,
             ...unitThreadPinnedFiles,
           ],
@@ -609,7 +637,7 @@ const baseRuns = [
               file,
             ],
           })),
-          ...unitThreadEntries,
+          ...unitPinnedEntries,
         ]
       : [
           {
@@ -624,25 +652,7 @@ const baseRuns = [
             ],
           },
         ]),
-  ...(includeExtensionsSuite
-    ? [
-        ...extensionIsolatedEntries,
-        {
-          name: "extensions",
-          includeFiles: extensionSharedCandidateFiles,
-          env:
-            extensionSharedCandidateFiles.length > 0
-              ? {
-                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-                    "vitest-extensions-include",
-                    extensionSharedCandidateFiles,
-                  ),
-                }
-              : undefined,
-          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
-        },
-      ]
-    : []),
+  ...(includeExtensionsSuite ? [...extensionIsolatedEntries, ...extensionsSharedEntries] : []),
   ...(includeChannelsSuite
     ? [
         ...channelIsolatedEntries.map((entry) => ({
@@ -692,8 +702,6 @@ const resolveFilterMatches = (fileFilter) => {
   }
   return allKnownTestFiles.filter((file) => file.includes(normalizedFilter));
 };
-const isThreadPinnedUnitFile = (fileFilter) => unitThreadPinnedFiles.includes(fileFilter);
-const isBaseThreadPinnedFile = (fileFilter) => baseThreadPinnedFiles.includes(fileFilter);
 const createTargetedEntry = (owner, isolated, filters) => {
   const name = isolated ? `${owner}-isolated` : owner;
   const forceForks = isolated;
@@ -705,27 +713,13 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.unit.config.ts",
-        `--pool=${forceForks ? "forks" : defaultUnitPool}`,
+        "--pool=forks",
         ...noIsolateArgs,
         ...filters,
       ],
     };
   }
-  if (owner === "unit-threads") {
-    return {
-      name,
-      args: [
-        "vitest",
-        "run",
-        "--config",
-        "vitest.unit.config.ts",
-        "--pool=threads",
-        ...noIsolateArgs,
-        ...filters,
-      ],
-    };
-  }
-  if (owner === "base-threads") {
+  if (owner === "base-pinned") {
     return {
       name,
       args: [
@@ -733,7 +727,7 @@ const createTargetedEntry = (owner, isolated, filters) => {
         "run",
         "--config",
         "vitest.config.ts",
-        "--pool=threads",
+        "--pool=forks",
         ...noIsolateArgs,
         ...filters,
       ],
@@ -816,11 +810,7 @@ const formatPerFileEntryName = (owner, file) => {
 };
 const createPerFileTargetedEntry = (file) => {
   const target = inferTarget(file);
-  const owner = isThreadPinnedUnitFile(file)
-    ? "unit-threads"
-    : isBaseThreadPinnedFile(file)
-      ? "base-threads"
-      : target.owner;
+  const owner = isLegacyBasePinnedFile(file) ? "base-pinned" : target.owner;
   return {
     ...createTargetedEntry(owner, target.isolated, [file]),
     name: `${formatPerFileEntryName(owner, file)}${target.isolated ? "-isolated" : ""}`,
@@ -894,11 +884,7 @@ const targetedEntries = (() => {
     if (matchedFiles.length === 0) {
       const normalizedFile = normalizeRepoPath(fileFilter);
       const target = inferTarget(normalizedFile);
-      const owner = isThreadPinnedUnitFile(normalizedFile)
-        ? "unit-threads"
-        : isBaseThreadPinnedFile(normalizedFile)
-          ? "base-threads"
-          : target.owner;
+      const owner = isLegacyBasePinnedFile(normalizedFile) ? "base-pinned" : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(normalizedFile);
@@ -907,11 +893,7 @@ const targetedEntries = (() => {
     }
     for (const matchedFile of matchedFiles) {
       const target = inferTarget(matchedFile);
-      const owner = isThreadPinnedUnitFile(matchedFile)
-        ? "unit-threads"
-        : isBaseThreadPinnedFile(matchedFile)
-          ? "base-threads"
-          : target.owner;
+      const owner = isLegacyBasePinnedFile(matchedFile) ? "base-pinned" : target.owner;
       const key = `${owner}:${target.isolated ? "isolated" : "default"}`;
       const files = acc.get(key) ?? [];
       files.push(matchedFile);
@@ -922,7 +904,7 @@ const targetedEntries = (() => {
   return Array.from(groups, ([key, filters]) => {
     const [owner, mode] = key.split(":");
     const uniqueFilters = [...new Set(filters)];
-    if (mode === "isolated") {
+    if (mode === "isolated" || owner === "base-pinned") {
       return uniqueFilters.map((file) => createPerFileTargetedEntry(file));
     }
     return [createTargetedEntry(owner, false, uniqueFilters)];
@@ -1121,9 +1103,6 @@ const maxWorkersForRun = (name) => {
     return null;
   }
   if (isCI && isMacOS) {
-    return 1;
-  }
-  if (name.endsWith("-threads")) {
     return 1;
   }
   if (name.endsWith("-isolated")) {

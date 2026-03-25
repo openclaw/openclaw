@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -21,7 +22,6 @@ const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ resetInboundDedupe } = await import("../../../src/auto-reply/reply/inbound-dedupe.js"));
   ({ HISTORY_CONTEXT_MARKER } = await import("../../../src/auto-reply/reply/history.js"));
   ({ CURRENT_MESSAGE_MARKER } = await import("../../../src/auto-reply/reply/mentions.js"));
@@ -565,8 +565,11 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Your Slack user id: U1");
-    expect(sendMock.mock.calls[0]?.[1]).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "slack",
+      idLine: "Your Slack user id: U1",
+      code: "PAIRCODE",
+    });
   });
 
   it("does not resend pairing code when a request is already pending", async () => {

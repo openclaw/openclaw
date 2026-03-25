@@ -93,6 +93,26 @@ describe("feishu setup wizard", () => {
 });
 
 describe("feishu setup wizard status", () => {
+  it("treats SecretRef appSecret as configured when appId is present", async () => {
+    const status = await feishuGetStatus({
+      cfg: {
+        channels: {
+          feishu: {
+            appId: "cli_a123456",
+            appSecret: {
+              source: "env",
+              provider: "default",
+              id: "FEISHU_APP_SECRET",
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+  });
+
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
     const status = await feishuGetStatus({
       cfg: {

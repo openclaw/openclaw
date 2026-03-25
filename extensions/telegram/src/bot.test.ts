@@ -51,7 +51,6 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
       await import("../../../src/auto-reply/commands-registry.js"));
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
@@ -1588,6 +1587,59 @@ describe("createTelegramBot", () => {
         (call) => call[1] === "You are not authorized to use this command.",
       ),
     ).toBe(false);
+  });
+
+  it("keeps native DM commands on the startup-resolved config when fresh reads contain SecretRefs", async () => {
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
+    replySpy.mockResolvedValue({ text: "response" });
+
+    const startupConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing" as const,
+          botToken: "resolved-token",
+        },
+      },
+    };
+
+    createTelegramBot({
+      token: "tok",
+      config: startupConfig,
+    });
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
+
+    const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
+      | ((ctx: Record<string, unknown>) => Promise<void>)
+      | undefined;
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
+
+    await handler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+      },
+      match: "",
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("blocks native DM commands for unpaired users", async () => {
