@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter } from "./console.js";
+import * as loggerMod from "./logger.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -143,5 +144,44 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-creates file logger after midnight when date changes", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-26T23:59:00"));
+      setLoggerOverride({ level: "info", consoleLevel: "silent" });
+
+      const mockLogger = {
+        info: vi.fn(),
+        debug: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        trace: vi.fn(),
+      };
+      const spy = vi
+        .spyOn(loggerMod, "getChildLogger")
+        .mockReturnValue(mockLogger as unknown as ReturnType<typeof loggerMod.getChildLogger>);
+
+      const log = createSubsystemLogger("test/midnight");
+
+      log.info("before midnight");
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      // Same day: should reuse cached logger
+      log.info("still before midnight");
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      // Advance past midnight
+      vi.setSystemTime(new Date("2026-03-27T00:01:00"));
+
+      log.info("after midnight");
+      expect(spy).toHaveBeenCalledTimes(2);
+
+      spy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -307,9 +307,12 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   let fileLogger: TsLogger<LogObj> | null = null;
+  let fileLoggerDate = "";
   const getFileLogger = (): TsLogger<LogObj> => {
-    if (!fileLogger) {
+    const today = new Date().toDateString();
+    if (!fileLogger || fileLoggerDate !== today) {
       fileLogger = getChildLogger({ subsystem });
+      fileLoggerDate = today;
     }
     return fileLogger;
   };
