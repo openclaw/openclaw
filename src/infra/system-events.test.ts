@@ -11,6 +11,7 @@ import {
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
+  resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
 type SystemEventsModule = typeof import("./system-events.js");
@@ -103,6 +104,38 @@ describe("system events (session routing)", () => {
     expect(hasSystemEvents(key)).toBe(false);
 
     expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
+  });
+
+  it("resolves the newest effective delivery context from queued events", () => {
+    const key = "agent:main:test-delivery-context";
+    enqueueSystemEvent("Restarted", {
+      sessionKey: key,
+      deliveryContext: {
+        channel: " telegram ",
+        to: " -100123 ",
+      },
+    });
+    enqueueSystemEvent("Thread route", {
+      sessionKey: key,
+      deliveryContext: {
+        threadId: " 42 ",
+      },
+    });
+
+    const events = peekSystemEventEntries(key);
+    const resolved = resolveSystemEventDeliveryContext(events);
+    events[0].deliveryContext!.to = "mutated";
+
+    expect(resolved).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      threadId: "42",
+    });
+    expect(resolveSystemEventDeliveryContext(peekSystemEventEntries(key))).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      threadId: "42",
+    });
   });
 
   it("keeps only the newest 20 queued events", () => {

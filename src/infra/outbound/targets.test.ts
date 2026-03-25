@@ -645,6 +645,52 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("-10063448508");
     expect(resolved.threadId).toBe(1008013);
   });
+
+  it("prefers turn-scoped routing over mutable session routing for target=last", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-turn-source",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+      },
+      heartbeat: {
+        target: "last",
+      },
+      turnSource: {
+        channel: "telegram",
+        to: "-100123",
+        threadId: 42,
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-100123");
+    expect(resolved.threadId).toBe(42);
+  });
+
+  it("merges partial turn-scoped metadata with the stored session route for target=last", () => {
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: {
+        sessionId: "sess-heartbeat-turn-source-partial",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-100123",
+      },
+      heartbeat: {
+        target: "last",
+      },
+      turnSource: {
+        threadId: 42,
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-100123");
+    expect(resolved.threadId).toBe(42);
+  });
 });
 
 describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
