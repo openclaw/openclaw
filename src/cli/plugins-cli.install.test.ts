@@ -406,6 +406,7 @@ describe("plugins cli install", () => {
     );
 
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("npm install failed");
   });
 
   it("falls back to installing hook packs from npm specs", async () => {
