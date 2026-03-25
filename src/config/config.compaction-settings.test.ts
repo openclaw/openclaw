@@ -109,6 +109,51 @@ describe("config compaction settings", () => {
     );
   });
 
+  it("preserves explicit compaction guard config values", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              guard: {
+                enabled: true,
+                maxCompactionsPerWindow: 3,
+                windowMinutes: 30,
+                escalation: "recommend-reset",
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.guard?.enabled).toBe(true);
+        expect(cfg.agents?.defaults?.compaction?.guard?.maxCompactionsPerWindow).toBe(3);
+        expect(cfg.agents?.defaults?.compaction?.guard?.windowMinutes).toBe(30);
+        expect(cfg.agents?.defaults?.compaction?.guard?.escalation).toBe("recommend-reset");
+      },
+    );
+  });
+
+  it("defaults compaction guard shape to disabled", async () => {
+    await withTempHomeConfig(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+        },
+      },
+      async () => {
+        const cfg = loadConfig();
+        expect(cfg.agents?.defaults?.compaction?.guard).toEqual({ enabled: false });
+      },
+    );
+  });
+
   it("preserves oversized quality guard retry values for runtime clamping", async () => {
     await withTempHomeConfig(
       {

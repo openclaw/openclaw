@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildGuardAugmentedCompactionInstructions,
   DEFAULT_COMPACTION_INSTRUCTIONS,
   resolveCompactionInstructions,
   composeSplitTurnInstructions,
@@ -233,5 +234,74 @@ describe("composeSplitTurnInstructions", () => {
     const result = composeSplitTurnInstructions(prefix, instructions);
     expect(result).toContain("Line 1\nLine 2");
     expect(result).toContain("Rule A\nRule B\nRule C");
+  });
+});
+
+describe("buildGuardAugmentedCompactionInstructions", () => {
+  const compactSignal = {
+    action: "compact" as const,
+    usageRatio: 0.93,
+    repeatedToolFailures: [
+      {
+        signature: "exec: permission denied",
+        count: 3,
+      },
+    ],
+    duplicateAssistantClusters: 2,
+    staleSystemRecurrences: 1,
+    noGroundedReplyTurns: 0,
+  };
+
+  it("leaves instructions unchanged when the guard is disabled or low-risk", () => {
+    expect(
+      buildGuardAugmentedCompactionInstructions({
+        baseInstructions: "Keep identifiers.",
+        guardEnabled: false,
+        guardSignal: compactSignal,
+      }),
+    ).toBe("Keep identifiers.");
+
+    expect(
+      buildGuardAugmentedCompactionInstructions({
+        baseInstructions: "Keep identifiers.",
+        guardEnabled: true,
+        guardSignal: {
+          ...compactSignal,
+          action: "warn",
+        },
+      }),
+    ).toBe("Keep identifiers.");
+  });
+
+  it("adds preservation and compression guidance for compact-level risk", () => {
+    const result = buildGuardAugmentedCompactionInstructions({
+      baseInstructions: "Keep identifiers.",
+      guardEnabled: true,
+      guardSignal: compactSignal,
+    });
+
+    expect(result).toContain("Loop-aware compaction guard:");
+    expect(result).toContain("The latest explicit user goal or request.");
+    expect(result).toContain("The latest meaningful assistant answer");
+    expect(result).toContain("Repeated tool failures with the same signature.");
+    expect(result).toContain("Do not represent stale reminder/system text as an active user goal.");
+    expect(result).toContain("Repeated tool failure pattern: exec: permission denied (count 3).");
+  });
+
+  it("preserves the existing instructions and appends the guard block on high-risk paths", () => {
+    const baseInstructions = "Keep identifiers.\nPreserve user preferences.";
+    const result = buildGuardAugmentedCompactionInstructions({
+      baseInstructions,
+      guardEnabled: true,
+      guardSignal: {
+        ...compactSignal,
+        action: "recommend-reset",
+        staleSystemRecurrences: 2,
+      },
+    });
+
+    expect(result.startsWith(baseInstructions)).toBe(true);
+    expect(result).toContain("\n\nLoop-aware compaction guard:");
+    expect(result).toContain("Repeated stale reminder/system entries in the recent tail: 2.");
   });
 });
