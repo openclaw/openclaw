@@ -98,7 +98,6 @@ describe("resolveProviderAuths key normalization", () => {
     suiteCase = 0;
   });
 
-<<<<<<< HEAD
   beforeEach(async () => {
     vi.resetModules();
     ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
