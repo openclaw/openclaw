@@ -669,6 +669,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/windows-search:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/xai: {}
 
   extensions/xiaomi: {}
