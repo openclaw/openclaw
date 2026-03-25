@@ -29,7 +29,7 @@ describe("splitMediaFromOutput", () => {
     }
   });
 
-  it("rejects traversal and home-dir paths", () => {
+  it("rejects traversal and home-dir paths and strips them from output", () => {
     const traversalCases = [
       "MEDIA:../../../etc/passwd",
       "MEDIA:../../.env",
@@ -39,7 +39,8 @@ describe("splitMediaFromOutput", () => {
     ];
     for (const input of traversalCases) {
       const result = splitMediaFromOutput(input);
-      expect(result.mediaUrls, `should reject: ${input}`).toBeUndefined();
+      expect(result.mediaUrls, `should reject media: ${input}`).toBeUndefined();
+      expect(result.text, `should strip from text: ${input}`).toBe("");
     }
   });
 

@@ -30,8 +30,22 @@ function hasTraversalOrHomeDirPrefix(candidate: string): boolean {
   );
 }
 
-// Recognize local file path patterns, rejecting traversal and home-dir paths
-// up front so they never reach downstream load/send logic.
+// Broad structural check: does this look like a local file path? Used only for
+// stripping MEDIA: lines from output text — never for media approval.
+function looksLikeLocalFilePath(candidate: string): boolean {
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+// Recognize safe local file path patterns for media approval, rejecting
+// traversal and home-dir paths so they never reach downstream load/send logic.
 function isLikelyLocalPath(candidate: string): boolean {
   if (hasTraversalOrHomeDirPrefix(candidate)) {
     return false;
@@ -187,7 +201,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&
