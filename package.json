@@ -837,7 +837,7 @@
     "openshell": "0.1.0"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.14.0"
   },
   "packageManager": "pnpm@10.32.1",
   "pnpm": {
