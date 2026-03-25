@@ -703,7 +703,7 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("install")
     .description(
-      "Install a plugin or hook pack (path, archive, npm spec, clawhub:package, or marketplace entry)",
+      "Install a plugin or hook pack (path, archive, npm spec, npm:package, clawhub:package, or marketplace entry)",
     )
     .argument(
       "<path-or-spec-or-plugin>",

@@ -350,6 +350,64 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain('Use "openclaw skills install demo" instead.');
   });
 
+  it("installs directly from npm when npm: prefix is used", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "npm:demo"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
+  it("skips ClawHub entirely when npm: prefix is used", async () => {
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "npm install failed",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:demo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+  });
+
   it("falls back to installing hook packs from npm specs", async () => {
     const cfg = {} as OpenClawConfig;
     const installedCfg = {

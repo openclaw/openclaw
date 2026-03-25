@@ -34,6 +34,7 @@ import {
   createPluginInstallLogger,
   decidePreferredClawHubFallback,
   formatPluginInstallWithHookFallbackError,
+  parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 
@@ -444,6 +445,45 @@ export async function runPluginInstallCommand(params: {
         clawhubFamily: result.clawhub.clawhubFamily,
         clawhubChannel: result.clawhub.clawhubChannel,
       },
+    });
+    return;
+  }
+
+  const npmPrefixSpec = parseNpmPrefixSpec(raw);
+  if (npmPrefixSpec) {
+    const result = await installPluginFromNpmSpec({
+      spec: npmPrefixSpec,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      const hookFallback = await tryInstallHookPackFromNpmSpec({
+        config: cfg,
+        spec: npmPrefixSpec,
+        pin: opts.pin,
+      });
+      if (hookFallback.ok) {
+        return;
+      }
+      defaultRuntime.error(
+        formatPluginInstallWithHookFallbackError(result.error, hookFallback.error),
+      );
+      return defaultRuntime.exit(1);
+    }
+
+    clearPluginManifestRegistryCache();
+    const installRecord = resolvePinnedNpmInstallRecordForCli(
+      npmPrefixSpec,
+      Boolean(opts.pin),
+      result.targetDir,
+      result.version,
+      result.npmResolution,
+      defaultRuntime.log,
+      theme.warn,
+    );
+    await persistPluginInstall({
+      config: cfg,
+      pluginId: result.pluginId,
+      install: installRecord,
     });
     return;
   }

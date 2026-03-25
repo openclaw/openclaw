@@ -153,6 +153,20 @@ export function buildPreferredClawHubSpec(raw: string): string | null {
   return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
 }
 
+/**
+ * Parse an explicit `npm:<spec>` prefix, stripping the prefix and returning
+ * the inner npm spec string. Returns `null` when the input does not use the
+ * `npm:` prefix.
+ */
+export function parseNpmPrefixSpec(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith("npm:")) {
+    return null;
+  }
+  const spec = trimmed.slice("npm:".length).trim();
+  return spec || null;
+}
+
 export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
   FALLBACK_TO_NPM: "fallback_to_npm",
   STOP: "stop",
