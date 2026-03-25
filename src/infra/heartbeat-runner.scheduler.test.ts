@@ -40,6 +40,17 @@ describe("startHeartbeatRunner", () => {
     });
   }
 
+  function createFailedRunSpy(failureCount: number) {
+    let callCount = 0;
+    return vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= failureCount) {
+        return { status: "failed", reason: "broken" } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
+  }
+
   async function expectWakeDispatch(params: {
     cfg: OpenClawConfig;
     runSpy: RunOnce;
@@ -126,9 +137,14 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Second heartbeat should still fire (scheduler must not be dead)
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // Thrown failures should retry on the fast lane instead of waiting for
+    // the next full interval.
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
+
+    // The normal interval scheduler must still continue after the retry.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
 
     runner.stop();
   });
@@ -226,6 +242,28 @@ describe("startHeartbeatRunner", () => {
     // must not have been pushed to t=30m * 6 = 180m by the 5 retries.
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(runSpy).toHaveBeenCalledTimes(6);
+
+    runner.stop();
+  });
+
+  it("retries failed interval runs quickly instead of waiting for the next interval", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = createFailedRunSpy(2);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
 
     runner.stop();
   });

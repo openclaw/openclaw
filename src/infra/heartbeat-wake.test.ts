@@ -77,7 +77,7 @@ describe("heartbeat-wake", () => {
     await expectRetryAfterDefaultDelay({
       handler,
       initialReason: "interval",
-      expectedRetryReason: "interval",
+      expectedRetryReason: "retry",
     });
   });
 
@@ -109,6 +109,19 @@ describe("heartbeat-wake", () => {
       handler,
       initialReason: "exec-event",
       expectedRetryReason: "exec-event",
+    });
+  });
+
+  it("retries failed interval wakes with retry reason", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 1 });
+    await expectRetryAfterDefaultDelay({
+      handler,
+      initialReason: "interval",
+      expectedRetryReason: "retry",
     });
   });
 
@@ -283,6 +296,27 @@ describe("heartbeat-wake", () => {
     });
   });
 
+  it("does not let one target's retry backoff delay another target's wake", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockImplementation(async (opts: { agentId?: string }) => {
+      if (opts.agentId === "bad") {
+        return { status: "failed" as const, reason: "broken" };
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0]);
+
+    requestHeartbeatNow({ reason: "interval", agentId: "bad", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    requestHeartbeatNow({ reason: "hook:wake", agentId: "good", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1]?.[0]).toMatchObject({ reason: "hook:wake", agentId: "good" });
+  });
+
   it("executes distinct targeted wakes queued in the same coalescing window", async () => {
     vi.useFakeTimers();
     const handler = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -379,6 +413,53 @@ describe("heartbeat-wake", () => {
     handler.mockResolvedValue({ status: "ran", durationMs: 1 });
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not penalize unattempted targets when a different target throws", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn().mockImplementation(async (opts: { agentId?: string }) => {
+      if (opts.agentId === "bad") {
+        throw new Error("boom");
+      }
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    setHeartbeatWakeHandler(handler as unknown as Parameters<typeof setHeartbeatWakeHandler>[0]);
+
+    for (let i = 0; i < 5; i++) {
+      requestHeartbeatNow({ reason: "interval", agentId: "bad", coalesceMs: 0 });
+      requestHeartbeatNow({ reason: "interval", agentId: "good", coalesceMs: 0 });
+      await vi.advanceTimersByTimeAsync(120_000);
+    }
+
+    handler.mockClear();
+    requestHeartbeatNow({ reason: "interval", agentId: "good", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({ agentId: "good" });
+  });
+
+  it("requeues the tripping wake so the half-open probe runs without a new request", async () => {
+    vi.useFakeTimers();
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValueOnce({ status: "failed", reason: "broken" })
+      .mockResolvedValue({ status: "ran", durationMs: 1 });
+    setHeartbeatWakeHandler(handler);
+
+    requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(handler).toHaveBeenCalledTimes(5);
+
+    handler.mockClear();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toEqual({ reason: "retry" });
   });
 
   it("re-schedules timer when breaker drops all wakes so polling does not stall", async () => {

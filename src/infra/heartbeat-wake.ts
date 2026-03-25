@@ -25,11 +25,15 @@ export function areHeartbeatsEnabled(): boolean {
   return heartbeatsEnabled;
 }
 
-type WakeTimerKind = "normal" | "retry";
+// `readyAt` tracks the earliest coalesced time a target wants to run.
+// `notBeforeAt` is a hard floor for retries/cooldowns that fresh wakes
+// for the same target must not bypass.
 type PendingWakeReason = {
   reason: string;
   priority: number;
   requestedAt: number;
+  readyAt: number;
+  notBeforeAt: number;
   agentId?: string;
   sessionKey?: string;
 };
@@ -41,7 +45,6 @@ let scheduled = false;
 let running = false;
 let timer: NodeJS.Timeout | null = null;
 let timerDueAt: number | null = null;
-let timerKind: WakeTimerKind | null = null;
 
 // Circuit breaker: track consecutive failures *per wake target* to prevent
 // retry storms. After MAX_CONSECUTIVE_FAILURES for a given target, stop
@@ -111,6 +114,11 @@ function normalizeWakeReason(reason?: string): string {
   return normalizeHeartbeatWakeReason(reason);
 }
 
+function resolveRetryWakeReason(reason?: string): string {
+  const normalizedReason = normalizeWakeReason(reason);
+  return resolveHeartbeatReasonKind(normalizedReason) === "interval" ? "retry" : normalizedReason;
+}
+
 function normalizeWakeTarget(value?: string): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed || undefined;
@@ -122,13 +130,54 @@ function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
   return `${agentId ?? ""}::${sessionKey ?? ""}`;
 }
 
+function getBreakerRemainingMs(targetKey: string): number | null {
+  const state = breakerByTarget.get(targetKey);
+  if (!state || state.failures < MAX_CONSECUTIVE_FAILURES) {
+    return null;
+  }
+  return Math.max(0, BREAKER_COOLDOWN_MS - (Date.now() - state.trippedAt));
+}
+
+function resolveWakeReadyAt(requestedAt: number, readyAt?: number): number {
+  if (typeof readyAt !== "number" || !Number.isFinite(readyAt)) {
+    return requestedAt;
+  }
+  return Math.max(requestedAt, readyAt);
+}
+
+function resolveWakeNotBeforeAt(requestedAt: number, notBeforeAt?: number): number {
+  if (typeof notBeforeAt !== "number" || !Number.isFinite(notBeforeAt)) {
+    return requestedAt;
+  }
+  return Math.max(requestedAt, notBeforeAt);
+}
+
+function resolvePendingWakeDueAt(wake: PendingWakeReason): number {
+  return Math.max(wake.readyAt, wake.notBeforeAt);
+}
+
+function getNextPendingWakeDelayMs(now = Date.now()): number | null {
+  let nextDueAt = Infinity;
+  for (const wake of pendingWakes.values()) {
+    const dueAt = resolvePendingWakeDueAt(wake);
+    if (dueAt < nextDueAt) {
+      nextDueAt = dueAt;
+    }
+  }
+  return Number.isFinite(nextDueAt) ? Math.max(0, nextDueAt - now) : null;
+}
+
 function queuePendingWakeReason(params?: {
   reason?: string;
   requestedAt?: number;
+  readyAt?: number;
+  notBeforeAt?: number;
   agentId?: string;
   sessionKey?: string;
 }) {
   const requestedAt = params?.requestedAt ?? Date.now();
+  const readyAt = resolveWakeReadyAt(requestedAt, params?.readyAt);
+  const notBeforeAt = resolveWakeNotBeforeAt(requestedAt, params?.notBeforeAt);
   const normalizedReason = normalizeWakeReason(params?.reason);
   const normalizedAgentId = normalizeWakeTarget(params?.agentId);
   const normalizedSessionKey = normalizeWakeTarget(params?.sessionKey);
@@ -140,6 +189,8 @@ function queuePendingWakeReason(params?: {
     reason: normalizedReason,
     priority: resolveReasonPriority(normalizedReason),
     requestedAt,
+    readyAt,
+    notBeforeAt,
     agentId: normalizedAgentId,
     sessionKey: normalizedSessionKey,
   };
@@ -148,28 +199,43 @@ function queuePendingWakeReason(params?: {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
+  const mergedReadyAt = Math.min(previous.readyAt, next.readyAt);
+  const mergedNotBeforeAt = Math.max(previous.notBeforeAt, next.notBeforeAt);
   if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, next);
+    pendingWakes.set(wakeTargetKey, {
+      ...next,
+      readyAt: mergedReadyAt,
+      notBeforeAt: mergedNotBeforeAt,
+    });
     return;
   }
   if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, next);
+    pendingWakes.set(wakeTargetKey, {
+      ...next,
+      readyAt: mergedReadyAt,
+      notBeforeAt: mergedNotBeforeAt,
+    });
+    return;
   }
+  pendingWakes.set(wakeTargetKey, {
+    ...previous,
+    readyAt: mergedReadyAt,
+    notBeforeAt: mergedNotBeforeAt,
+  });
 }
 
-function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
-  const delay = Number.isFinite(coalesceMs) ? Math.max(0, coalesceMs) : DEFAULT_COALESCE_MS;
+function schedulePendingWakes(fallbackDelayMs?: number) {
+  const pendingDelayMs = getNextPendingWakeDelayMs();
+  const delay =
+    pendingDelayMs ??
+    (typeof fallbackDelayMs === "number" && Number.isFinite(fallbackDelayMs)
+      ? Math.max(0, fallbackDelayMs)
+      : null);
+  if (delay === null) {
+    return;
+  }
   const dueAt = Date.now() + delay;
   if (timer) {
-    // Keep retry cooldown as a hard minimum delay. This prevents the
-    // finally-path reschedule (often delay=0) from collapsing backoff.
-    // NOTE: This means a failing target's retry timer can delay wakes for
-    // other targets by up to MAX_RETRY_BACKOFF_MS. The per-target breaker
-    // bounds this: after MAX_CONSECUTIVE_FAILURES the target is open-circuited
-    // and stops scheduling retries, so the delay window is finite.
-    if (timerKind === "retry") {
-      return;
-    }
     // If existing timer fires sooner or at the same time, keep it.
     if (typeof timerDueAt === "number" && timerDueAt <= dueAt) {
       return;
@@ -178,14 +244,11 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     clearTimeout(timer);
     timer = null;
     timerDueAt = null;
-    timerKind = null;
   }
   timerDueAt = dueAt;
-  timerKind = kind;
   timer = setTimeout(async () => {
     timer = null;
     timerDueAt = null;
-    timerKind = null;
     scheduled = false;
     const active = handler;
     if (!active) {
@@ -193,50 +256,46 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
     }
     if (running) {
       scheduled = true;
-      schedule(delay, kind);
       return;
     }
 
-    // Build pending batch, filtering out targets whose breaker is open.
+    const now = Date.now();
+    // Build pending batch from wakes whose per-target cooldown has elapsed.
     const pendingBatch: PendingWakeReason[] = [];
-    let minBreakerRemainingMs = Infinity;
     for (const [targetKey, wake] of pendingWakes) {
+      if (resolvePendingWakeDueAt(wake) > now) {
+        continue;
+      }
       if (isBreakerOpen(targetKey)) {
-        // Target's breaker is tripped — drop this wake, but track the
-        // remaining cooldown so we re-schedule for the half-open probe.
-        const state = breakerByTarget.get(targetKey);
-        if (state) {
-          const remaining = BREAKER_COOLDOWN_MS - (Date.now() - state.trippedAt);
-          if (remaining > 0 && remaining < minBreakerRemainingMs) {
-            minBreakerRemainingMs = remaining;
-          }
+        // A retained wake became due before its breaker cooled down.
+        // Push its next probe to the actual remaining cooldown.
+        const remaining = getBreakerRemainingMs(targetKey);
+        if (remaining !== null) {
+          const nextDueAt = now + remaining;
+          pendingWakes.set(targetKey, {
+            ...wake,
+            readyAt: nextDueAt,
+            notBeforeAt: nextDueAt,
+          });
         }
         continue;
       }
       pendingBatch.push(wake);
     }
     if (pendingBatch.length === 0) {
-      // All wakes were dropped by the breaker. Keep pendingWakes intact so
-      // the half-open probe timer fires with a non-empty batch.
-      if (Number.isFinite(minBreakerRemainingMs)) {
-        schedule(minBreakerRemainingMs, "normal");
+      if (pendingWakes.size > 0 || scheduled) {
+        schedulePendingWakes(scheduled ? 0 : undefined);
       }
       return;
     }
-    // Only remove entries that made it into the batch; breaker-filtered
-    // wakes stay in pendingWakes so their half-open probe fires on
-    // schedule even when the batch is only partially dropped.
     for (const wake of pendingBatch) {
       pendingWakes.delete(getWakeTargetKey(wake));
-    }
-    // Re-schedule for breaker-filtered targets if any remain.
-    if (pendingWakes.size > 0 && Number.isFinite(minBreakerRemainingMs)) {
-      schedule(minBreakerRemainingMs, "normal");
     }
     running = true;
     // Track processed targets so the catch block only penalizes
     // targets that were not yet handled when the handler threw.
     const processedTargets = new Set<string>();
+    let activeWake: PendingWakeReason | null = null;
     try {
       for (const pendingWake of pendingBatch) {
         const targetKey = getWakeTargetKey(pendingWake);
@@ -246,30 +305,45 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           ...(pendingWake.agentId ? { agentId: pendingWake.agentId } : {}),
           ...(pendingWake.sessionKey ? { sessionKey: pendingWake.sessionKey } : {}),
         };
+        activeWake = pendingWake;
         const res = await active(wakeOpts);
+        activeWake = null;
         processedTargets.add(targetKey);
         if (res.status === "failed") {
           breaker.failures += 1;
+          const retryReason = resolveRetryWakeReason(pendingWake.reason);
           if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
-            // Trip the breaker for this target — skip remaining retries.
+            // Retain the wake so the half-open probe runs after cooldown.
             breaker.trippedAt = Date.now();
+            const nextDueAt = Date.now() + BREAKER_COOLDOWN_MS;
+            queuePendingWakeReason({
+              reason: retryReason,
+              readyAt: nextDueAt,
+              notBeforeAt: nextDueAt,
+              agentId: pendingWake.agentId,
+              sessionKey: pendingWake.sessionKey,
+            });
             continue;
           }
           const backoffMs = computeRetryBackoffMs(breaker.failures);
+          const nextDueAt = Date.now() + backoffMs;
           queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
+            reason: retryReason,
+            readyAt: nextDueAt,
+            notBeforeAt: nextDueAt,
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
           });
-          schedule(backoffMs, "retry");
         } else if (res.status === "skipped" && res.reason === "requests-in-flight") {
           // The main lane is busy; retry this wake target soon.
+          const nextDueAt = Date.now() + DEFAULT_RETRY_MS;
           queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
+            reason: resolveRetryWakeReason(pendingWake.reason),
+            readyAt: nextDueAt,
+            notBeforeAt: nextDueAt,
             agentId: pendingWake.agentId,
             sessionKey: pendingWake.sessionKey,
           });
-          schedule(DEFAULT_RETRY_MS, "retry");
         } else {
           // Success or benign skip — evict the breaker entry to bound map size.
           breakerByTarget.delete(targetKey);
@@ -277,34 +351,54 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
       }
     } catch {
       // Error is already logged by the heartbeat runner; only penalize
-      // targets that were NOT already processed before the throw.
-      let maxBackoffMs = 0;
+      // the target that was actively executing when the throw happened.
+      const activeTargetKey = activeWake ? getWakeTargetKey(activeWake) : null;
+      if (activeWake && activeTargetKey) {
+        const breaker = getBreakerState(activeTargetKey);
+        breaker.failures += 1;
+        const retryReason = resolveRetryWakeReason(activeWake.reason);
+        if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
+          breaker.trippedAt = Date.now();
+          const nextDueAt = Date.now() + BREAKER_COOLDOWN_MS;
+          queuePendingWakeReason({
+            reason: retryReason,
+            readyAt: nextDueAt,
+            notBeforeAt: nextDueAt,
+            agentId: activeWake.agentId,
+            sessionKey: activeWake.sessionKey,
+          });
+        } else {
+          const backoffMs = computeRetryBackoffMs(breaker.failures);
+          const nextDueAt = Date.now() + backoffMs;
+          queuePendingWakeReason({
+            reason: retryReason,
+            readyAt: nextDueAt,
+            notBeforeAt: nextDueAt,
+            agentId: activeWake.agentId,
+            sessionKey: activeWake.sessionKey,
+          });
+        }
+      }
       for (const pendingWake of pendingBatch) {
         const targetKey = getWakeTargetKey(pendingWake);
         if (processedTargets.has(targetKey)) {
           continue;
         }
-        const breaker = getBreakerState(targetKey);
-        breaker.failures += 1;
-        if (breaker.failures >= MAX_CONSECUTIVE_FAILURES) {
-          breaker.trippedAt = Date.now();
-        } else {
-          const backoffMs = computeRetryBackoffMs(breaker.failures);
-          maxBackoffMs = Math.max(maxBackoffMs, backoffMs);
-          queuePendingWakeReason({
-            reason: pendingWake.reason ?? "retry",
-            agentId: pendingWake.agentId,
-            sessionKey: pendingWake.sessionKey,
-          });
+        if (targetKey === activeTargetKey) {
+          continue;
         }
-      }
-      if (maxBackoffMs > 0) {
-        schedule(maxBackoffMs, "retry");
+        queuePendingWakeReason({
+          reason: pendingWake.reason,
+          readyAt: Date.now(),
+          notBeforeAt: Date.now(),
+          agentId: pendingWake.agentId,
+          sessionKey: pendingWake.sessionKey,
+        });
       }
     } finally {
       running = false;
       if (pendingWakes.size > 0 || scheduled) {
-        schedule(delay, "normal");
+        schedulePendingWakes(scheduled ? 0 : undefined);
       }
     }
   }, delay);
@@ -330,7 +424,6 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     }
     timer = null;
     timerDueAt = null;
-    timerKind = null;
     // Reset module-level execution state that may be stale from interrupted
     // runs in the previous lifecycle. Without this, `running === true` from
     // an interrupted heartbeat blocks all future schedule() attempts, and
@@ -339,9 +432,20 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
     scheduled = false;
     // Reset the circuit breaker so a fresh lifecycle starts clean.
     breakerByTarget.clear();
+    if (pendingWakes.size > 0) {
+      const now = Date.now();
+      const drainAt = now + DEFAULT_COALESCE_MS;
+      for (const [targetKey, wake] of pendingWakes) {
+        pendingWakes.set(targetKey, {
+          ...wake,
+          readyAt: drainAt,
+          notBeforeAt: now,
+        });
+      }
+    }
   }
   if (handler && pendingWakes.size > 0) {
-    schedule(DEFAULT_COALESCE_MS, "normal");
+    schedulePendingWakes(DEFAULT_COALESCE_MS);
   }
   return () => {
     if (handlerGeneration !== generation) {
@@ -361,12 +465,19 @@ export function requestHeartbeatNow(opts?: {
   agentId?: string;
   sessionKey?: string;
 }) {
+  const requestedAt = Date.now();
+  const coalesceMs = Number.isFinite(opts?.coalesceMs)
+    ? Math.max(0, opts?.coalesceMs ?? DEFAULT_COALESCE_MS)
+    : DEFAULT_COALESCE_MS;
   queuePendingWakeReason({
     reason: opts?.reason,
+    requestedAt,
+    readyAt: requestedAt + coalesceMs,
+    notBeforeAt: requestedAt,
     agentId: opts?.agentId,
     sessionKey: opts?.sessionKey,
   });
-  schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS, "normal");
+  schedulePendingWakes();
 }
 
 export function hasHeartbeatWakeHandler() {
@@ -383,7 +494,6 @@ export function resetHeartbeatWakeStateForTests() {
   }
   timer = null;
   timerDueAt = null;
-  timerKind = null;
   pendingWakes.clear();
   scheduled = false;
   running = false;
