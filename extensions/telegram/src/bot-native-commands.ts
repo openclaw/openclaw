@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   normalizeTelegramCommandName,
@@ -645,6 +646,7 @@ export const registerTelegramNativeCommands = ({
           }
           const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+          const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
           const commandDefinition = findCommandByNativeName(command.name, "telegram");
           const rawText = ctx.match?.trim() ?? "";
@@ -774,7 +776,7 @@ export const registerTelegramNativeCommands = ({
           });
 
           await recordInboundSessionMetaSafe({
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             agentId: route.agentId,
             sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
             ctx: ctxPayload,
@@ -794,7 +796,7 @@ export const registerTelegramNativeCommands = ({
           };
 
           const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             agentId: route.agentId,
             channel: "telegram",
             accountId: route.accountId,
@@ -802,13 +804,13 @@ export const registerTelegramNativeCommands = ({
 
           await telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
-            cfg: runtimeCfg,
+            cfg: executionCfg,
             dispatcherOptions: {
               ...replyPipeline,
               deliver: async (payload, _info) => {
                 if (
                   shouldSuppressLocalTelegramExecApprovalPrompt({
-                    cfg: runtimeCfg,
+                    cfg: executionCfg,
                     accountId: route.accountId,
                     payload,
                   })
