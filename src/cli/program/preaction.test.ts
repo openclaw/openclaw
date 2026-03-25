@@ -203,7 +203,6 @@ describe("registerPreActionHooks", () => {
 
   it("handles debug mode and plugin-required command preaction", async () => {
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
-
     await runPreAction({
       parseArgv: ["status"],
       processArgv: ["node", "openclaw", "status", "--debug"],
