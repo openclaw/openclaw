@@ -12,8 +12,6 @@ describe("splitMediaFromOutput", () => {
     const pathCases = [
       ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
       ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
-      ["~/Pictures/My File.png", "MEDIA:~/Pictures/My File.png"],
-      ["../../etc/passwd", "MEDIA:../../etc/passwd"],
       ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
       ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
       ["./screenshot.png", "  MEDIA:./screenshot.png"],
@@ -28,6 +26,21 @@ describe("splitMediaFromOutput", () => {
       const result = splitMediaFromOutput(input);
       expect(result.mediaUrls).toEqual([expectedPath]);
       expect(result.text).toBe("");
+    }
+  });
+
+  it("rejects traversal and home-dir paths and strips them from output", () => {
+    const traversalCases = [
+      "MEDIA:../../../etc/passwd",
+      "MEDIA:../../.env",
+      "MEDIA:~/.ssh/id_rsa",
+      "MEDIA:~/Pictures/My File.png",
+      "MEDIA:./foo/../../../etc/shadow",
+    ];
+    for (const input of traversalCases) {
+      const result = splitMediaFromOutput(input);
+      expect(result.mediaUrls, `should reject media: ${input}`).toBeUndefined();
+      expect(result.text, `should strip from text: ${input}`).toBe("");
     }
   });
 
