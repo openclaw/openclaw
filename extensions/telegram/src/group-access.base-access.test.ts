@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 
 function allow(entries: string[], hasWildcard = false): NormalizedAllowFrom {
@@ -12,6 +12,17 @@ function allow(entries: string[], hasWildcard = false): NormalizedAllowFrom {
 }
 
 describe("evaluateTelegramGroupBaseAccess", () => {
+  it("normalizes sender-only allowlist entries and rejects group ids", () => {
+    const result = normalizeAllowFrom(["-1001234567890", " tg:-100999 ", "745123456", "@someone"]);
+
+    expect(result).toEqual({
+      entries: ["745123456"],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: ["-1001234567890", "-100999", "@someone"],
+    });
+  });
+
   it("fails closed when explicit group allowFrom override is empty", () => {
     const result = evaluateTelegramGroupBaseAccess({
       isGroup: true,
