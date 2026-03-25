@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 async function loadHarness(options?: {
   tools?: Array<{ name: string; label?: string; description?: string; displaySummary?: string }>;
+  createToolsMock?: ReturnType<typeof vi.fn>;
   pluginMeta?: Record<string, { pluginId: string } | undefined>;
   channelMeta?: Record<string, { channelId: string } | undefined>;
   pluginCatalogTools?: Array<{ name: string }>;
   coreCatalogTools?: string[];
   effectivePolicy?: { profile?: string; providerProfile?: string };
+  resolvedModelCompat?: Record<string, unknown>;
 }) {
   vi.resetModules();
   vi.doMock("./agent-scope.js", async (importOriginal) => {
@@ -18,12 +20,24 @@ async function loadHarness(options?: {
       resolveAgentDir: () => "/tmp/agents/main/agent",
     };
   });
+  const createToolsMock =
+    options?.createToolsMock ??
+    vi.fn(
+      () =>
+        options?.tools ?? [
+          { name: "exec", label: "Exec", description: "Run shell commands" },
+          { name: "docs_lookup", label: "Docs Lookup", description: "Search docs" },
+        ],
+    );
   vi.doMock("./pi-tools.js", () => ({
-    createOpenClawCodingTools: () =>
-      options?.tools ?? [
-        { name: "exec", label: "Exec", description: "Run shell commands" },
-        { name: "docs_lookup", label: "Docs Lookup", description: "Search docs" },
-      ],
+    createOpenClawCodingTools: createToolsMock,
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", () => ({
+    resolveModel: vi.fn(() => ({
+      model: options?.resolvedModelCompat ? { compat: options.resolvedModelCompat } : undefined,
+      authStorage: {} as never,
+      modelRegistry: {} as never,
+    })),
   }));
   vi.doMock("../plugins/tools.js", () => ({
     getPluginToolMeta: (tool: { name: string }) => options?.pluginMeta?.[tool.name],
@@ -187,5 +201,29 @@ describe("resolveEffectiveToolInventory", () => {
 
     expect(result.profile).toBe("coding");
     expect(result.unavailableCount).toBe(2);
+  });
+
+  it("passes resolved model compat into effective tool creation", async () => {
+    const createToolsMock = vi.fn(() => [
+      { name: "exec", label: "Exec", description: "Run shell commands" },
+    ]);
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      createToolsMock,
+      resolvedModelCompat: { supportsTools: true, supportsNativeWebSearch: true },
+    });
+
+    resolveEffectiveToolInventory({
+      cfg: {},
+      agentDir: "/tmp/agents/main/agent",
+      modelProvider: "xai",
+      modelId: "grok-test",
+    });
+
+    expect(createToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+        modelCompat: { supportsTools: true, supportsNativeWebSearch: true },
+      }),
+    );
   });
 });

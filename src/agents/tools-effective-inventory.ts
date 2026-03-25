@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getPluginToolMeta, resolvePluginTools } from "../plugins/tools.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
+import { resolveModel } from "./pi-embedded-runner/model.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
 import { listCoreToolSections } from "./tool-catalog.js";
@@ -156,6 +157,24 @@ function countUnavailableCatalogTools(params: {
   return unavailableCount;
 }
 
+function resolveEffectiveModelCompat(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  modelProvider?: string;
+  modelId?: string;
+}) {
+  const provider = params.modelProvider?.trim();
+  const modelId = params.modelId?.trim();
+  if (!provider || !modelId) {
+    return undefined;
+  }
+  try {
+    return resolveModel(provider, modelId, params.agentDir, params.cfg).model?.compat;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {
@@ -164,6 +183,12 @@ export function resolveEffectiveToolInventory(
     resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, agentId);
+  const modelCompat = resolveEffectiveModelCompat({
+    cfg: params.cfg,
+    agentDir,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
 
   const effectiveTools = createOpenClawCodingTools({
     agentId,
@@ -173,6 +198,7 @@ export function resolveEffectiveToolInventory(
     config: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelCompat,
     messageProvider: params.messageProvider,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId,
