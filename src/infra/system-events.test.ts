@@ -207,6 +207,52 @@ describe("system events (session routing)", () => {
     expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
   });
 
+  it("skips system events for periodic heartbeats (not event-driven)", async () => {
+    const key = "agent:main:whatsapp:direct:+1234";
+    enqueueSystemEvent("Exec completed (session abc, code 0)", { sessionKey: key });
+
+    // Periodic heartbeat: events should be skipped (not consumed, not even visible)
+    const heartbeatResult = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+      isHeartbeat: true,
+    });
+    expect(heartbeatResult).toBeUndefined();
+    // Events still in queue — periodic heartbeat didn't touch them
+    expect(peekSystemEvents(key)).toEqual(["Exec completed (session abc, code 0)"]);
+
+    // Normal run: events should be drained (consumed)
+    const normalResult = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(normalResult).toMatch(/Exec completed/);
+    // Events now gone after normal drain
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
+  it("drains system events for event-driven heartbeats (exec/cron)", async () => {
+    const key = "agent:main:whatsapp:direct:+event-driven";
+    enqueueSystemEvent("Exec completed (session xyz, code 0)", { sessionKey: key });
+
+    // Event-driven heartbeat: events MUST be drained so the agent can see them
+    const result = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+      isHeartbeat: true,
+      isEventDrivenHeartbeat: true,
+    });
+    expect(result).toMatch(/Exec completed/);
+    // Events consumed — queue is now empty
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
   it("scrubs node last-input suffix", async () => {
     const key = "agent:main:test-node-scrub";
     enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });

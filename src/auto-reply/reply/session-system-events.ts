@@ -18,6 +18,8 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  isHeartbeat?: boolean;
+  isEventDrivenHeartbeat?: boolean;
 }): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
@@ -83,7 +85,18 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
+  // Periodic heartbeat runs skip system events entirely.  They don't persist
+  // to the session transcript (JSONL), so processing events here would
+  // silently discard them — and repeated peeks would re-trigger the same
+  // events on every heartbeat cycle, wasting tokens and risking duplicate
+  // side-effects.  Events stay queued untouched for the next run to drain.
+  //
+  // Event-driven heartbeats (exec completion, cron) are the designated
+  // consumer of those events — they MUST drain so the agent can act on the
+  // results referenced by their prompt (e.g. "The result is shown in the
+  // system messages above").
+  const skipDrain = params.isHeartbeat && !params.isEventDrivenHeartbeat;
+  const queued = skipDrain ? [] : drainSystemEventEntries(params.sessionKey);
   systemLines.push(
     ...queued.flatMap((event) => {
       const compacted = compactSystemEvent(event.text);

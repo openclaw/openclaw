@@ -935,16 +935,36 @@ export async function runHeartbeatOnce(opts: {
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
+    // Event-driven heartbeats (exec completion, cron, hook/wake, node
+    // notifications, etc.) must drain system events so the agent can see the
+    // results referenced by their prompt.  Only truly periodic heartbeats
+    // (interval timer, retry) skip the drain to avoid silently consuming
+    // events that won't be persisted to the session transcript.
+    //
+    // We invert the check: instead of enumerating every event-driven reason,
+    // we treat everything as event-driven UNLESS it's a known periodic reason.
+    // This is safer — new event sources get drain by default.
+    //
+    // Edge case: an interval/retry heartbeat may discover queued exec or cron
+    // events (tagged by contextKey) that arrived between heartbeat cycles.
+    // The prompt already references those events, so we must drain them too.
+    const reasonKind = resolveHeartbeatReasonKind(opts.reason);
+    const isPeriodicHeartbeat = reasonKind === "interval" || reasonKind === "retry";
+    const isEventDriven = !isPeriodicHeartbeat || hasExecCompletion || hasCronEvents;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
+          isEventDrivenHeartbeat: isEventDriven,
           heartbeatModelOverride,
           suppressToolErrorWarnings,
           bootstrapContextMode,
         }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
-    const getReplyFromConfig =
-      opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+      : {
+          isHeartbeat: true,
+          isEventDrivenHeartbeat: isEventDriven,
+          suppressToolErrorWarnings,
+          bootstrapContextMode,
+        };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
