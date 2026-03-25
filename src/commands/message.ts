@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
@@ -53,7 +54,9 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
-  const agentId = normalizeAgentId(typeof opts.agent === "string" ? opts.agent : cfg.agent?.id);
+  const agentId = normalizeAgentId(
+    typeof opts.agent === "string" ? opts.agent : resolveDefaultAgentId(cfg),
+  );
 
   const run = async () =>
     await runMessageAction({
