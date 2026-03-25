@@ -1488,7 +1488,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             aliasIndex,
           });
           const userModelKey = userResolved
-            ? `${userResolved.ref.provider}/${userResolved.ref.model}`
+            ? modelKey(userResolved.ref.provider, userResolved.ref.model)
             : userRawModel;
 
           // Check if user's stored model is an image model AND in allowlist
