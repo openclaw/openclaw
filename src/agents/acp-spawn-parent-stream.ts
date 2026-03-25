@@ -314,6 +314,16 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
 
+    // Handle system_event stream - relay clarifying questions and progress updates
+    if (event.stream === "system_event") {
+      const data = event.data as { text?: unknown; contextKey?: string } | undefined;
+      const text = data?.text;
+      if (typeof text === "string" && text.trim()) {
+        emit(text, data?.contextKey ?? `${contextPrefix}:system`);
+      }
+      return;
+    }
+
     if (event.stream !== "lifecycle") {
       return;
     }
