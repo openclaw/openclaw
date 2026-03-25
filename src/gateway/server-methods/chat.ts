@@ -14,6 +14,7 @@ import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
+import { ModelRouter } from "../../router/index.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -37,6 +38,7 @@ import {
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { getRouterConfigForAgent } from "../http-utils.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -1441,6 +1443,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey,
         config: cfg,
       });
+
+      // Router integration: create router if configured for this agent
+      // TODO: Wire up router to reply pipeline for model override and escalation
+      const routerConfig = getRouterConfigForAgent(agentId);
+      const _router: ModelRouter | undefined = routerConfig?.enabled
+        ? new ModelRouter(routerConfig)
+        : undefined;
+
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,
