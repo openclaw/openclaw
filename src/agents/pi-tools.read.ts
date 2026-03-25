@@ -649,7 +649,11 @@ export function createOpenClawReadTool(
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
 
       let safeArgs = (normalized ?? params ?? {}) as Record<string, unknown>;
-      if (options?.workspaceRoot && typeof safeArgs.path === "string" && path.isAbsolute(safeArgs.path)) {
+      if (
+        options?.workspaceRoot &&
+        typeof safeArgs.path === "string" &&
+        path.isAbsolute(safeArgs.path)
+      ) {
         safeArgs = {
           ...safeArgs,
           path: path.relative(options.workspaceRoot, safeArgs.path) || ".",
