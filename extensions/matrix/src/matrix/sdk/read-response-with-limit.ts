@@ -37,6 +37,10 @@ async function readChunkWithIdleTimeout(
   });
 }
 
+function cancelReaderWithoutAwait(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void reader.cancel().catch(() => undefined);
+}
+
 export async function readResponseWithLimit(
   res: Response,
   maxBytes: number,
@@ -74,9 +78,7 @@ export async function readResponseWithLimit(
       if (value?.length) {
         total += value.length;
         if (total > maxBytes) {
-          try {
-            await reader.cancel();
-          } catch {}
+          cancelReaderWithoutAwait(reader);
           throw onOverflow({ size: total, maxBytes, res });
         }
         chunks.push(value);

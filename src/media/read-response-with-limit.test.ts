@@ -53,6 +53,41 @@ describe("readResponseWithLimit", () => {
     ).rejects.toThrow("custom: 10 > 5");
   });
 
+  it("does not wait for reader cancel before rejecting oversized payloads", async () => {
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const releaseLock = vi.fn();
+    const reader = {
+      read: vi.fn().mockResolvedValueOnce({
+        done: false,
+        value: new Uint8Array([1, 2, 3, 4, 5]),
+      }),
+      cancel,
+      releaseLock,
+    };
+    const res = {
+      body: {
+        getReader: () => reader,
+      },
+    } as unknown as Response;
+
+    const outcome = await Promise.race([
+      readResponseWithLimit(res, 4).then(
+        () => "resolved",
+        (err: unknown) => {
+          expect(String(err)).toMatch(/too large/i);
+          return "rejected";
+        },
+      ),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 50);
+      }),
+    ]);
+
+    expect(outcome).toBe("rejected");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
   it("times out when no new chunk arrives before idle timeout", async () => {
     vi.useFakeTimers();
     try {

@@ -37,6 +37,10 @@ async function readChunkWithIdleTimeout(
   });
 }
 
+function cancelReaderWithoutAwait(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void reader.cancel().catch(() => undefined);
+}
+
 type ReadResponsePrefixResult = {
   buffer: Buffer;
   size: number;
@@ -90,9 +94,7 @@ async function readResponsePrefix(
         }
         size = nextTotal;
         truncated = true;
-        try {
-          await reader.cancel();
-        } catch {}
+        cancelReaderWithoutAwait(reader);
         break;
       }
       chunks.push(value);
