@@ -783,6 +783,54 @@ describe("applyAuthChoice", () => {
     expect(oauthResult.config.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
   });
 
+  it("does not abort GigaChat OAuth reauth when a config-backed SecretRef is unresolved", async () => {
+    await setupTempState();
+
+    delete process.env.GIGACHAT_CREDENTIALS;
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+    delete process.env.MISSING_GIGACHAT_CREDENTIALS;
+
+    const { prompter, runtime } = createApiKeyPromptHarness();
+    const oauthResult = await applyAuthChoice({
+      authChoice: "gigachat-personal",
+      config: {
+        models: {
+          providers: {
+            gigachat: {
+              api: "openai-completions",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_GIGACHAT_CREDENTIALS",
+              },
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      prompter,
+      runtime,
+      setDefaultModel: false,
+      opts: { gigachatApiKey: "gigachat-oauth-credentials==" },
+    });
+
+    expect(oauthResult.config.auth?.profiles?.["gigachat:default"]).toMatchObject({
+      provider: "gigachat",
+      mode: "api_key",
+    });
+    expect(await readAuthProfile("gigachat:default")).toMatchObject({
+      type: "api_key",
+      provider: "gigachat",
+      metadata: {
+        authMode: "oauth",
+        scope: "GIGACHAT_API_PERS",
+      },
+    });
+  });
+
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:

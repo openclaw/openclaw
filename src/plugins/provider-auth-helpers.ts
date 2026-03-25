@@ -187,6 +187,20 @@ export async function shouldResetGigachatBaseUrlForOAuthReauth(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
 }): Promise<boolean> {
+  const resolveGigachatApiKeySafely = async (
+    value: SecretInput | undefined,
+  ): Promise<string | undefined> => {
+    if (!value) {
+      return undefined;
+    }
+    return await resolveSecretInputString({
+      config: params.cfg,
+      value,
+      env: process.env,
+      // Reauth should still proceed when a stale ref can no longer be resolved.
+      onResolveRefError: () => undefined as never,
+    });
+  };
   const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
   const activeProfileId = resolveAuthProfileOrder({
     cfg: params.cfg,
@@ -196,11 +210,7 @@ export async function shouldResetGigachatBaseUrlForOAuthReauth(params: {
   const activeProfile = activeProfileId ? store.profiles[activeProfileId] : undefined;
   const activeProfileApiKey =
     activeProfile?.type === "api_key" && activeProfile.provider === "gigachat"
-      ? await resolveSecretInputString({
-          config: params.cfg,
-          value: activeProfile.keyRef ?? activeProfile.key,
-          env: process.env,
-        })
+      ? await resolveGigachatApiKeySafely(activeProfile.keyRef ?? activeProfile.key)
       : undefined;
   if (
     activeProfile?.type === "api_key" &&
@@ -214,13 +224,7 @@ export async function shouldResetGigachatBaseUrlForOAuthReauth(params: {
   // When no GigaChat auth profile is active, onboarding can still be replacing a
   // manual config-backed Basic setup (`models.providers.gigachat.apiKey/baseUrl`).
   const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, "gigachat");
-  const configuredApiKey = configuredProvider?.apiKey
-    ? await resolveSecretInputString({
-        config: params.cfg,
-        value: configuredProvider.apiKey,
-        env: process.env,
-      })
-    : undefined;
+  const configuredApiKey = await resolveGigachatApiKeySafely(configuredProvider?.apiKey);
   return activeProfile == null && resolveGigachatAuthMode({ apiKey: configuredApiKey }) === "basic";
 }
 
