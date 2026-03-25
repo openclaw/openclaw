@@ -152,11 +152,11 @@ describe("directive behavior", () => {
           },
         },
         {
-          body: "/model minimax/m2.7",
+          body: "/model minimax/highspeed",
           storePath: path.join(home, "sessions-provider-fuzzy.json"),
           expectedSelection: {
             provider: "minimax",
-            model: "MiniMax-M2.5",
+            model: "MiniMax-M2.7-highspeed",
           },
           config: {
             agents: {
