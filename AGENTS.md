@@ -172,7 +172,9 @@
   9. After merge, fast-forward the canonical local checkout and re-verify the live runtime/worktree ownership when the code is expected to be running live.
 - Draft PR exception: opening a draft PR before live E2E is fine when you explicitly say it is unvalidated. Merging before runtime validation is not fine for user-facing changes.
 - `/landpr` lives in the global Codex prompts (`~/.codex/prompts/landpr.md`); when landing or merging any PR, always follow that `/landpr` process.
-- Before opening or updating any PR, read `CONTRIBUTING.md` from the target repo and explicitly align the PR title/body/checklists with it (including AI-assistance transparency requirements when present).
+- Before opening or updating any PR, choose the review guide based on the target:
+  - For fork PRs to `artemgetmann/openclaw` targeting `main` or `codex/consumer-openclaw-project`, read `FORK_CONTRIBUTING.md` and follow that instead of upstream `CONTRIBUTING.md`.
+  - For upstream PRs or any other target, read `CONTRIBUTING.md` from the target repo and explicitly align the PR title/body/checklists with it (including AI-assistance transparency requirements when present).
 - PR validation baseline (unless user explicitly scopes narrower): run `pnpm build && pnpm check && pnpm test`, then report exactly what was/was not verified.
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
