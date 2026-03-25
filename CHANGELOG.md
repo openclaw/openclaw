@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
+- Agents/sandbox: make blocked-tool guidance glob-aware again, redact/sanitize session-specific explain hints for safer copy-paste, and avoid leaking control-character session keys in those hints. (#54684) Thanks @ngutman.
 - Feishu: close WebSocket connections on monitor stop/abort so ghost connections no longer persist, preventing duplicate event processing and resource leaks across restart cycles. (#52844) Thanks @schumilin.
 - Feishu: use the original message `create_time` instead of `Date.now()` for inbound timestamps so offline-retried messages carry the correct authoring time, preventing mis-targeted agent actions on stale instructions. (#52809) Thanks @schumilin.
 - Plugins/SDK: thread `moduleUrl` through plugin-sdk alias resolution so user-installed plugins outside the openclaw directory (e.g. `~/.openclaw/extensions/`) correctly resolve `openclaw/plugin-sdk/*` subpath imports, and gate `plugin-sdk:check-exports` in `release:check`. (#54283) Thanks @xieyongliang.
