@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/sambanova-provider",
+  "version": "2026.3.25",
+  "private": true,
+  "description": "OpenClaw SambaNova provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

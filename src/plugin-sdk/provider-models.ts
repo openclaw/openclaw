@@ -97,6 +97,11 @@ export {
   DEEPSEEK_MODEL_CATALOG,
 } from "./deepseek.js";
 export {
+  buildSambanovaModelDefinition,
+  SAMBANOVA_BASE_URL,
+  SAMBANOVA_MODEL_CATALOG,
+} from "../agents/sambanova-models.js";
+export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,

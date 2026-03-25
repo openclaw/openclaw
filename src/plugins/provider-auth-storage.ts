@@ -89,6 +89,7 @@ const {
   setXaiApiKey,
   setMistralApiKey,
   setKilocodeApiKey,
+  setSambanovaApiKey,
 } = createProviderApiKeySetters({
   setAnthropicApiKey: { provider: "anthropic" },
   setOpenaiApiKey: { provider: "openai" },
@@ -114,6 +115,7 @@ const {
   setXaiApiKey: { provider: "xai" },
   setMistralApiKey: { provider: "mistral" },
   setKilocodeApiKey: { provider: "kilocode" },
+  setSambanovaApiKey: { provider: "sambanova" },
 });
 
 export {
@@ -138,6 +140,7 @@ export {
   setXaiApiKey,
   setMistralApiKey,
   setKilocodeApiKey,
+  setSambanovaApiKey,
 };
 
 export async function setMinimaxApiKey(

@@ -305,6 +305,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: sambanova":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sambanova/**"
 "extensions: together":
   - changed-files:
       - any-glob-to-any-file:

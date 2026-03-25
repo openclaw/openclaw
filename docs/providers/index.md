@@ -49,6 +49,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
 - [Qwen / Model Studio (Alibaba Cloud)](/providers/qwen_modelstudio)
+- [SambaNova](/providers/sambanova)
 - [SGLang (local models)](/providers/sglang)
 - [Synthetic](/providers/synthetic)
 - [Together AI](/providers/together)

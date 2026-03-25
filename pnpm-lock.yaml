@@ -541,6 +541,8 @@ importers:
 
   extensions/qianfan: {}
 
+  extensions/sambanova: {}
+
   extensions/sglang: {}
 
   extensions/signal: {}

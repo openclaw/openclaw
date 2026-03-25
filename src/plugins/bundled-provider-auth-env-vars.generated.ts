@@ -31,6 +31,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   openrouter: ["OPENROUTER_API_KEY"],
   perplexity: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
   qianfan: ["QIANFAN_API_KEY"],
+  sambanova: ["SAMBANOVA_API_KEY"],
   sglang: ["SGLANG_API_KEY"],
   synthetic: ["SYNTHETIC_API_KEY"],
   tavily: ["TAVILY_API_KEY"],

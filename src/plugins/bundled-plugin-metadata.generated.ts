@@ -11798,6 +11798,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "sambanova",
+    idHint: "sambanova",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/sambanova-provider",
+    packageVersion: "2026.3.25",
+    packageDescription: "OpenClaw SambaNova provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "sambanova",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["sambanova"],
+      providerAuthEnvVars: {
+        sambanova: ["SAMBANOVA_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "sambanova",
+          method: "api-key",
+          choiceId: "sambanova-api-key",
+          choiceLabel: "SambaNova API key",
+          groupId: "sambanova",
+          groupLabel: "SambaNova",
+          groupHint: "Fast inference for open-source models",
+          optionKey: "sambanovaApiKey",
+          cliFlag: "--sambanova-api-key",
+          cliOption: "--sambanova-api-key <key>",
+          cliDescription: "SambaNova API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "sglang",
     idHint: "sglang",
     source: {
