@@ -31,6 +31,7 @@ import {
   canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveAgentsDirFromSessionStorePath,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveMainSessionKey,
@@ -979,10 +980,14 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   store: Record<string, SessionEntry>;
 } {
   const storeConfig = cfg.session?.store;
-  if (storeConfig && !isStorePathTemplate(storeConfig)) {
-    const storePath = resolveStorePath(storeConfig);
+  const resolvedLiteralStorePath =
+    storeConfig && !isStorePathTemplate(storeConfig) ? resolveStorePath(storeConfig) : undefined;
+  const resolvedLiteralAgentsDir = resolvedLiteralStorePath
+    ? resolveAgentsDirFromSessionStorePath(resolvedLiteralStorePath)
+    : undefined;
+  if (resolvedLiteralStorePath && !resolvedLiteralAgentsDir) {
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(resolvedLiteralStorePath);
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
@@ -994,7 +999,7 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
         canonicalKey,
       });
     }
-    return { storePath, store: combined };
+    return { storePath: resolvedLiteralStorePath, store: combined };
   }
 
   const targets = resolveAllAgentSessionStoreTargetsSync(cfg);

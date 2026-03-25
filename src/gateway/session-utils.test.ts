@@ -974,4 +974,44 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("literal main-agent store paths still discover sibling agent stores (#54435)", async () => {
+    await withStateDirEnv("openclaw-literal-main-store-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const mainDir = path.join(customRoot, "agents", "main", "sessions");
+      const codexDir = path.join(customRoot, "agents", "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      const literalMainStorePath = path.join(mainDir, "sessions.json");
+      fs.writeFileSync(
+        literalMainStorePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: literalMainStorePath,
+        },
+        agents: {
+          list: [{ id: "main", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(Object.keys(store).toSorted()).toEqual(["agent:codex:acp-task", "agent:main:main"]);
+    });
+  });
 });
