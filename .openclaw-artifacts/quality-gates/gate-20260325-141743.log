@@ -1,0 +1,402 @@
+quality gate started: 2026-03-25T19:17:43Z
+repo: /Users/newdldewdl/openclaw-contrib
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.24 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.24 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+<DIR>/a2ui.bundle.js  chunk │ size: 474.70 kB
+
+✔ rolldown v1.0.0-rc.9 Finished in 81.38 ms
+extensions/msteams/src/sdk.ts (47:11) [33m[UNRESOLVED_IMPORT] Warning:[0m Could not resolve '@microsoft/teams.apps' in extensions/msteams/src/sdk.ts
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/msteams/src/sdk.ts:47:12 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m47 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m([0m"@microsoft/teams.apps"[38;5;249m)[0m[38;5;249m,[0m
+ [38;5;240m   │[0m            ───────────┬───────────  
+ [38;5;240m   │[0m                       ╰───────────── Module not found, treating it as an external dependency
+[38;5;246m────╯[0m
+
+extensions/msteams/src/sdk.ts (48:11) [33m[UNRESOLVED_IMPORT] Warning:[0m Could not resolve '@microsoft/teams.api' in extensions/msteams/src/sdk.ts
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/msteams/src/sdk.ts:48:12 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m48 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m([0m"@microsoft/teams.api"[38;5;249m)[0m[38;5;249m,[0m
+ [38;5;240m   │[0m            ───────────┬──────────  
+ [38;5;240m   │[0m                       ╰──────────── Module not found, treating it as an external dependency
+[38;5;246m────╯[0m
+
+extensions/msteams/src/sdk.ts (414:17) [33m[UNRESOLVED_IMPORT] Warning:[0m Could not resolve '@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js' in extensions/msteams/src/sdk.ts
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m extensions/msteams/src/sdk.ts:414:18 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m414 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249ma[0m[38;5;249mw[0m[38;5;249ma[0m[38;5;249mi[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mi[0m[38;5;249mm[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m([0m"@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js"[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m    │[0m                  ──────────────────────────────┬──────────────────────────────  
+ [38;5;240m    │[0m                                                ╰──────────────────────────────── Module not found, treating it as an external dependency
+[38;5;246m─────╯[0m
+
+
+> openclaw@2026.3.24 build:plugin-sdk:dts /Users/newdldewdl/openclaw-contrib
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied 4 hook metadata files.
+[copy-export-html-templates] Copied 5 export-html assets.
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.3.24 format:check /Users/newdldewdl/openclaw-contrib
+> oxfmt --check --threads=1
+
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 13292ms on 8828 files using 1 threads.
+[PASS] pnpm format:check
+==== pnpm tsgo ====
+[PASS] pnpm tsgo
+==== pnpm lint ====
+
+> openclaw@2026.3.24 lint /Users/newdldewdl/openclaw-contrib
+> oxlint --type-aware
+
+Found 0 warnings and 0 errors.
+Finished in 9.7s on 5589 files with 136 rules using 8 threads.
+[PASS] pnpm lint
+==== pnpm test ====
+
+> openclaw@2026.3.24 test /Users/newdldewdl/openclaw-contrib
+> node scripts/test-parallel.mjs
+
+[test-parallel] start unit-fast workers=2 filters=all
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/contracts/runtime.contract.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/plugins/tools.optional.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 827[2mms[22m[39m
+ [32m✓[39m src/pairing/setup-code.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 1497[2mms[22m[39m
+ [32m✓[39m src/config/config.web-search-provider.test.ts [2m([22m[2m24 tests[22m[2m)[22m[33m 5780[2mms[22m[39m
+     [33m[2m✓[22m[39m gemini wins over grok, kimi, and perplexity when brave unavailable [33m 356[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.test.ts [2m([22m[2m57 tests[22m[2m)[22m[33m 8649[2mms[22m[39m
+     [33m[2m✓[22m[39m can scope bundled provider loads to deepseek without hanging [33m 7795[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/discovery.contract.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 5487[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps qwen portal oauth marker fallback provider-owned [33m 423[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps qwen portal env api keys higher priority than oauth markers [33m 751[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps GitHub Copilot catalog disabled without env tokens or profiles [33m 467[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps GitHub Copilot profile-only catalog fallback provider-owned [33m 337[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps GitHub Copilot env-token base URL resolution provider-owned [33m 302[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps Ollama explicit catalog normalization provider-owned [33m 324[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps Ollama empty autodiscovery disabled without keys or explicit config [33m 335[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps vLLM self-hosted discovery provider-owned [33m 420[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps SGLang self-hosted discovery provider-owned [33m 313[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps MiniMax portal explicit base URL override provider-owned [33m 324[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps Model Studio catalog provider-owned [33m 306[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps Cloudflare AI Gateway env-managed catalog provider-owned [33m 325[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 7736[2mms[22m[39m
+     [33m[2m✓[22m[39m uses remote baseUrl/apiKey and merges headers [33m 303[2mms[22m[39m
+     [33m[2m✓[22m[39m builds Gemini embeddings requests with api key header [33m 365[2mms[22m[39m
+     [33m[2m✓[22m[39m fails fast when Gemini remote apiKey is an unresolved SecretRef [33m 367[2mms[22m[39m
+     [33m[2m✓[22m[39m uses GEMINI_API_KEY env indirection for Gemini remote apiKey [33m 766[2mms[22m[39m
+     [33m[2m✓[22m[39m builds Mistral embeddings requests with bearer auth [33m 320[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps explicit model when openai is selected [33m 317[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes local embeddings to magnitude ~1.0 [33m 371[2mms[22m[39m
+     [33m[2m✓[22m[39m loads the model only once when embedBatch is called concurrently [33m 701[2mms[22m[39m
+     [33m[2m✓[22m[39m retries initialization after a transient ensureContext failure [33m 565[2mms[22m[39m
+     [33m[2m✓[22m[39m shares initialization when embedQuery and embedBatch start concurrently [33m 1222[2mms[22m[39m
+ [32m✓[39m src/infra/net/proxy-fetch.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 181[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.media.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 3927[2mms[22m[39m
+       [33m[2m✓[22m[39m hydrates buffer and filename from media for sendAttachment [33m 394[2mms[22m[39m
+       [33m[2m✓[22m[39m enforces sandboxed attachment paths for attachment actions [33m 388[2mms[22m[39m
+       [33m[2m✓[22m[39m rejects out-of-sandbox media reference: 'mediaUrl absolute path' [33m 313[2mms[22m[39m
+       [33m[2m✓[22m[39m rejects out-of-sandbox media reference: 'mediaUrl file URL' [33m 539[2mms[22m[39m
+       [33m[2m✓[22m[39m rewrites in-sandbox media references before dry send [33m 325[2mms[22m[39m
+       [33m[2m✓[22m[39m keeps remote HTTP 'mediaUrl' aliases unchanged under sandbox validation [33m 310[2mms[22m[39m
+       [33m[2m✓[22m[39m allows media paths under preferred OpenClaw tmp root [33m 301[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-compaction.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 810[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.lifecycle.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 3934[2mms[22m[39m
+     [33m[2m✓[22m[39m continues on errors when bestEffort is enabled [33m 344[2mms[22m[39m
+     [33m[2m✓[22m[39m calls failDelivery instead of ackDelivery on bestEffort partial failure [33m 311[2mms[22m[39m
+     [33m[2m✓[22m[39m acks the queue entry when delivery is aborted [33m 308[2mms[22m[39m
+     [33m[2m✓[22m[39m emits internal message:sent hook with success=true for chunked payload delivery [33m 301[2mms[22m[39m
+     [33m[2m✓[22m[39m does not emit internal message:sent hook when neither mirror nor sessionKey is provided [33m 315[2mms[22m[39m
+     [33m[2m✓[22m[39m emits internal message:sent hook when sessionKey is provided without mirror [33m 436[2mms[22m[39m
+     [33m[2m✓[22m[39m warns when session.agentId is set without a session key [33m 317[2mms[22m[39m
+     [33m[2m✓[22m[39m mirrors delivered output when mirror options are provided [33m 328[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent success for text-only deliveries [33m 316[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent success for sendPayload deliveries [33m 357[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent failure when delivery errors [33m 308[2mms[22m[39m
+ [32m✓[39m src/process/exec.windows.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 192[2mms[22m[39m
+ [32m✓[39m src/infra/transport-ready.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 796[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.channels.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 2904[2mms[22m[39m
+     [33m[2m✓[22m[39m threads resolved cfg through alias + target normalization in outbound dispatch [33m 326[2mms[22m[39m
+     [33m[2m✓[22m[39m 'normalizes iMessage aliases' [33m 355[2mms[22m[39m
+     [33m[2m✓[22m[39m 'passes replyToId through to the outbo…' [33m 315[2mms[22m[39m
+     [33m[2m✓[22m[39m 'passes threadId through to the outbou…' [33m 363[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes Teams alias for polls [33m 333[2mms[22m[39m
+     [33m[2m✓[22m[39m drops gateway url overrides in backend mode (SSRF hardening) [33m 401[2mms[22m[39m
+     [33m[2m✓[22m[39m forwards explicit agentId in gateway send params [33m 513[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.returns-default-unset.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 335[2mms[22m[39m
+ [32m✓[39m src/config/schema.base.generated.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 1798[2mms[22m[39m
+     [33m[2m✓[22m[39m matches the computed base config schema payload [33m 1796[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.integration.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 1306[2mms[22m[39m
+ [32m✓[39m test/scripts/committer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1774[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts supported path argument shapes [33m 1397[2mms[22m[39m
+     [33m[2m✓[22m[39m commits changelog-only changes without pulling in unrelated dirty files [33m 375[2mms[22m[39m
+ [32m✓[39m src/channels/channels-misc.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivery-target-thread-session.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 2279[2mms[22m[39m
+     [33m[2m✓[22m[39m uses thread session entry when sessionKey is provided and entry exists [33m 485[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to main session when sessionKey entry does not exist [33m 347[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to main session when no sessionKey is provided [33m 310[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves threadId from :topic: in delivery.to on first run (no session history) [33m 326[2mms[22m[39m
+     [33m[2m✓[22m[39m explicit accountId overrides session lastAccountId [33m 421[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves threadId from :topic: when lastTo differs [33m 388[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.pty-command.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 200[2mms[22m[39m
+ [32m✓[39m src/utils/normalize-secret-input.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/ports.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 691[2mms[22m[39m
+ [32m✓[39m src/tts/provider-registry.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 547[2mms[22m[39m
+ [32m✓[39m test/scripts/test-parallel.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 1800[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps serial profile on split unit lanes instead of one giant unit worker [33m 533[2mms[22m[39m
+     [33m[2m✓[22m[39m recycles default local unit-fast runs into bounded batches [33m 803[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps legacy base-pinned targeted reruns on dedicated forks lanes [33m 461[2mms[22m[39m
+ [32m✓[39m src/acp/translator.prompt-prefix.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/secrets/resolve.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 2897[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves exec refs with protocolVersion 1 response [33m 843[2mms[22m[39m
+     [33m[2m✓[22m[39m uses timeoutMs as the default no-output timeout for exec providers [33m 459[2mms[22m[39m
+     [33m[2m✓[22m[39m supports non-JSON single-value exec output when jsonOnly is false [33m 563[2mms[22m[39m
+ [32m✓[39m src/tts/tts.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 5186[2mms[22m[39m
+       [33m[2m✓[22m[39m summarizes text and returns result with metrics [33m 336[2mms[22m[39m
+       [33m[2m✓[22m[39m calls the summary model with the expected parameters [33m 3299[2mms[22m[39m
+       [33m[2m✓[22m[39m uses summaryModel override when configured [33m 456[2mms[22m[39m
+       [33m[2m✓[22m[39m throws when summary output is missing or empty [33m 414[2mms[22m[39m
+ [32m✓[39m src/media/store.outside-workspace.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.proxy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1050[2mms[22m[39m
+     [33m[2m✓[22m[39m passes fetchFn to audio provider when HTTPS_PROXY is set [33m 352[2mms[22m[39m
+     [33m[2m✓[22m[39m passes fetchFn to video provider when HTTPS_PROXY is set [33m 311[2mms[22m[39m
+     [33m[2m✓[22m[39m does not pass fetchFn when no proxy env vars are set [33m 386[2mms[22m[39m
+ [32m✓[39m src/plugins/providers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 718[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/hook-runner-global.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 326[2mms[22m[39m
+ [32m✓[39m src/infra/fs-safe.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 992[2mms[22m[39m
+     [33m[2m✓[22m[39m writes a file within root safely [33m 410[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.signal-groups.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/plugins-runtime-boundary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/infra/restart.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 477[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/whatsapp-heartbeat.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 800[2mms[22m[39m
+ [32m✓[39m src/memory/manager.vector-dedupe.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 401[2mms[22m[39m
+     [33m[2m✓[22m[39m deletes existing vector rows before inserting replacements [33m 401[2mms[22m[39m
+ [32m✓[39m src/infra/path-env.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-paths.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-voyage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 519[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.continuity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.poll.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1285[2mms[22m[39m
+     [33m[2m✓[22m[39m requires at least two poll options [33m 344[2mms[22m[39m
+     [33m[2m✓[22m[39m expands maxSelections when pollMulti is enabled [33m 350[2mms[22m[39m
+     [33m[2m✓[22m[39m defaults maxSelections to one choice when pollMulti is omitted [33m 308[2mms[22m[39m
+ [32m✓[39m src/cli/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 575[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-runtime.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 511[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run-plan.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m src/config/schema.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 363[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/acp-bindings.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 722[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/actions/actions.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 785[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 887[2mms[22m[39m
+     [33m[2m✓[22m[39m passes explicit agentId to outbound delivery for scoped media roots [33m 307[2mms[22m[39m
+ [32m✓[39m src/memory/manager.mistral-provider.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1169[2mms[22m[39m
+     [33m[2m✓[22m[39m stores mistral client when mistral provider is selected [33m 361[2mms[22m[39m
+     [33m[2m✓[22m[39m stores mistral client after fallback activation [33m 452[2mms[22m[39m
+     [33m[2m✓[22m[39m uses default ollama model when activating ollama fallback [33m 352[2mms[22m[39m
+ [32m✓[39m src/infra/device-pairing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 939[2mms[22m[39m
+ [32m✓[39m src/tts/edge-tts-validation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 771[2mms[22m[39m
+     [33m[2m✓[22m[39m throws when the output file is 0 bytes [33m 381[2mms[22m[39m
+     [33m[2m✓[22m[39m succeeds when the output file has content [33m 390[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.coverage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 694[2mms[22m[39m
+     [33m[2m✓[22m[39m handles every openclaw.json registry target when configured as active [33m 350[2mms[22m[39m
+     [33m[2m✓[22m[39m handles every auth-profiles registry target [33m 341[2mms[22m[39m
+ [32m✓[39m src/cli/prompt.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1085[2mms[22m[39m
+     [33m[2m✓[22m[39m returns true when global --yes is set [33m 478[2mms[22m[39m
+     [33m[2m✓[22m[39m asks the question and respects default [33m 604[2mms[22m[39m
+ [32m✓[39m src/memory/index.test.ts [2m([22m[2m25 tests[22m[2m | [22m[33m3 skipped[39m[2m)[22m[33m 1551[2mms[22m[39m
+ [32m✓[39m src/config/config.talk-validation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/infra/fs-pinned-write-helper.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 582[2mms[22m[39m
+     [33m[2m✓[22m[39m writes through a pinned parent directory [33m 475[2mms[22m[39m
+ [32m✓[39m src/secrets/apply.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 423[2mms[22m[39m
+ [32m✓[39m src/image-generation/provider-registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 260[2mms[22m[39m
+ [32m✓[39m src/memory/manager.watcher-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 956[2mms[22m[39m
+     [33m[2m✓[22m[39m watches markdown globs and ignores dependency directories [33m 359[2mms[22m[39m
+     [33m[2m✓[22m[39m watches multimodal extensions with case-insensitive globs [33m 595[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/session-meta.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/install-sh-version.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 695[2mms[22m[39m
+ [32m✓[39m src/security/temp-path-guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 492[2mms[22m[39m
+     [33m[2m✓[22m[39m enforces runtime guardrails for tmpdir joins and weak randomness [33m 491[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-reason.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/shared/chat-content.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/config/legacy.shared.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/logging/logger.browser-import.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 164[2mms[22m[39m
+ [32m✓[39m src/cli/plugin-registry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run.option-collisions.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 732[2mms[22m[39m
+ [32m✓[39m test/architecture-smells.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 4114[2mms[22m[39m
+     [33m[2m✓[22m[39m produces stable sorted output [33m 3530[2mms[22m[39m
+     [33m[2m✓[22m[39m script json output matches the collector [33m 579[2mms[22m[39m
+ [32m✓[39m src/memory/manager.batch.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 485[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-browser.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 164[2mms[22m[39m
+ [32m✓[39m src/secrets/audit.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 658[2mms[22m[39m
+ [32m✓[39m src/infra/npm-pack-install.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/session-memory/handler.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 498[2mms[22m[39m
+ [32m✓[39m test/scripts/ios-team-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 681[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves a fallback team ID from Xcode team listings (smoke) [33m 566[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-plugin-metadata.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 580[2mms[22m[39m
+     [33m[2m✓[22m[39m supports check mode for stale generated artifacts [33m 542[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.test.ts [2m([22m[2m32 tests[22m[2m)[22m[33m 366[2mms[22m[39m
+ [32m✓[39m src/media/store.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 155[2mms[22m[39m
+ [32m✓[39m src/security/windows-acl.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m src/infra/watch-node.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/memory/manager.embedding-batches.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 523[2mms[22m[39m
+ [32m✓[39m src/memory/batch-gemini.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 118[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-hints.windows-paths.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/logging.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m test/scripts/run-vitest-profile.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/tui/tui-event-handlers.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/plugin-auto-enable.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/media-understanding/image.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 417[2mms[22m[39m
+ [32m✓[39m src/memory/manager.atomic-reindex.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 400[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps the prior index when a full reindex fails [33m 397[2mms[22m[39m
+ [32m✓[39m src/infra/net/hostname.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-exec-env.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.vision-skip.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 591[2mms[22m[39m
+     [33m[2m✓[22m[39m skips image understanding when the active model supports vision [33m 590[2mms[22m[39m
+ [32m✓[39m test/scripts/test-extension.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 810[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 130[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.tts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-manager.test.ts [2m([22m[2m57 tests[22m[2m)[22m[33m 526[2mms[22m[39m
+     [33m[2m✓[22m[39m reuses exported session markdown files when inputs are unchanged [33m 328[2mms[22m[39m
+ [32m✓[39m src/acp/control-plane/manager.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 385[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 204[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/session.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/config.gateway-tailscale-bind.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.test.ts [2m([22m[2m55 tests[22m[2m)[22m[33m 388[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 210[2mms[22m[39m
+ [32m✓[39m test/git-hooks-pre-commit.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 488[2mms[22m[39m
+     [33m[2m✓[22m[39m does not treat staged filenames as git-add flags (e.g. --all) [33m 487[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/progress.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-store.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 430[2mms[22m[39m
+ [32m✓[39m src/hooks/plugin-hooks.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 120[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/error-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/logging/logger.settings.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/git-commit.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 358[2mms[22m[39m
+ [32m✓[39m src/infra/archive-staging.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/group-policy-warnings.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/scripts/docs-link-audit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.minimax.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-audio-preflight.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/media/file-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/logging/log-file-size-cap.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+     [33m[2m✓[22m[39m suppresses file writes after cap is reached and warns once [33m 367[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.echo-transcript.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 460[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 344[2mms[22m[39m
+ [32m✓[39m src/hooks/loader.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 318[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/cfg-threading.guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/config/config.plugin-validation.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 289[2mms[22m[39m
+ [32m✓[39m src/cron/service.prevents-duplicate-timers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.fast-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/test-utils/env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/hooks/frontmatter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/group-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/archive.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+ [32m✓[39m src/extensionAPI.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-events.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.git-path-regression.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 303[2mms[22m[39m
+     [33m[2m✓[22m[39m loads git-style package extension entries when they import plugin-sdk infra-runtime (#49806) [33m 302[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-helpers.test.ts [2m([22m[2m88 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-gemini.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 613[2mms[22m[39m
+ [32m✓[39m src/infra/tmp-openclaw-dir.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/config/sessions/disk-budget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime-web-tools.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 820[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-forum-topics.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m src/infra/json-utf8-bytes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-analysis.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/schema.hints.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 387[2mms[22m[39m
+     [33m[2m✓[22m[39m main schema yields correct hints (samples) [33m 383[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.maintenance.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/channels/command-gating.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/security/audit.test.ts [2m([22m[2m73 tests[22m[2m)[22m[33m 1134[2mms[22m[39m
+     [33m[2m✓[22m[39m evaluates code-safety findings [33m 310[2mms[22m[39m
+ [32m✓[39m src/config/config.agent-concurrency-defaults.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/media/base64.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/shared/text/reasoning-tags.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/program.nodes-test-helpers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/config/sessions/delivery-info.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/telegram-actions-poll.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/process/command-queue.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/cron/service/ops.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.gateway-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 296[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-ciao.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth.contract.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/infra/device-bootstrap.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m src/infra/env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/net/undici-global-dispatcher.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/config/sessions.cache.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/config/markdown-tables.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 192[2mms[22m[39m
+[test-parallel] failure tail unit-fast
+✓[39m src/media/file-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/logging/log-file-size-cap.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+     [33m[2m✓[22m[39m suppresses file writes after cap is reached and warns once [33m 367[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.echo-transcript.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 460[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 344[2mms[22m[39m
+ [32m✓[39m src/hooks/loader.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 318[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/cfg-threading.guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/config/config.plugin-validation.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 289[2mms[22m[39m
+ [32m✓[39m src/cron/service.prevents-duplicate-timers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.fast-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/test-utils/env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/hooks/frontmatter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/group-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/archive.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+ [32m✓[39m src/extensionAPI.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-events.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.git-path-regression.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 303[2mms[22m[39m
+     [33m[2m✓[22m[39m loads git-style package extension entries when they import plugin-sdk infra-runtime (#49806) [33m 302[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-helpers.test.ts [2m([22m[2m88 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-gemini.test.ts [2m([22m[2m31 tests[22m[2m)[22m[33m 613[2mms[22m[39m
+ [32m✓[39m src/infra/tmp-openclaw-dir.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/config/sessions/disk-budget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime-web-tools.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 820[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-forum-topics.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m src/infra/json-utf8-bytes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-analysis.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/schema.hints.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 387[2mms[22m[39m
+     [33m[2m✓[22m[39m main schema yields correct hints (samples) [33m 383[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.maintenance.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/channels/command-gating.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/security/audit.test.ts [2m([22m[2m73 tests[22m[2m)[22m[33m 1134[2mms[22m[39m
+     [33m[2m✓[22m[39m evaluates code-safety findings [33m 310[2mms[22m[39m
+ [32m✓[39m src/config/config.agent-concurrency-defaults.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/media/base64.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/shared/text/reasoning-tags.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cli/program.nodes-test-helpers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/config/sessions/delivery-info.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/telegram-actions-poll.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/process/command-queue.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/cron/service/ops.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.gateway-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 296[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-ciao.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth.contract.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/infra/device-bootstrap.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m src/infra/env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/net/undici-global-dispatcher.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/config/sessions.cache.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/config/markdown-tables.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 192[2mms[22m[39m
+[test-parallel] failure artifacts unit-fast log=/var/folders/6f/mrqmfkbd5tx3gnvxlytt9qd00000gn/T/openclaw-test-parallel-C0p5VK/unit-fast-1774466334760.log meta=/var/folders/6f/mrqmfkbd5tx3gnvxlytt9qd00000gn/T/openclaw-test-parallel-C0p5VK/unit-fast-1774466334760-failure.json
+[test-parallel] done unit-fast code=1 elapsed=108.6s
+ ELIFECYCLE  Test failed. See above for more details.

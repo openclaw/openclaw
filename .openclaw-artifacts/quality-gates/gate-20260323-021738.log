@@ -1,0 +1,58 @@
+quality gate started: 2026-03-23T07:17:38Z
+repo: /Users/newdldewdl/openclaw-contrib
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.22 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.22 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+A2UI bundle up to date; skipping.
+
+> openclaw@2026.3.22 build:plugin-sdk:dts /Users/newdldewdl/openclaw-contrib
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied 4 hook metadata files.
+[copy-export-html-templates] Copied 5 export-html assets.
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.3.22 format:check /Users/newdldewdl/openclaw-contrib
+> oxfmt --check --threads=1
+
+Checking formatting...
+
+extensions/nextcloud-talk/src/setup-core.test.ts (0ms)
+extensions/openai/index.ts (0ms)
+src/image-generation/providers/fal.test.ts (0ms)
+src/image-generation/providers/google.test.ts (0ms)
+src/image-generation/providers/openai.test.ts (0ms)
+src/media-understanding/apply.echo-transcript.test.ts (0ms)
+src/media-understanding/apply.test.ts (1ms)
+src/media-understanding/providers/deepgram/audio.live.test.ts (0ms)
+src/media-understanding/providers/deepgram/audio.test.ts (0ms)
+
+Format issues found in above 9 files. Run without `--check` to fix.
+Finished in 10808ms on 8642 files using 1 threads.
+ ELIFECYCLE  Command failed with exit code 1.
+[WARN] pnpm format:check produced issues (non-blocking locally)
+==== pnpm tsgo ====
+extensions/irc/src/setup-core.test.ts(130,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/irc/src/setup-core.test.ts(136,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/irc/src/setup-core.test.ts(142,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/mattermost/src/setup-core.test.ts(69,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/mattermost/src/setup-core.test.ts(77,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/mattermost/src/setup-core.test.ts(85,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/msteams/src/reply-dispatcher.ts(107,26): error TS2304: Cannot find name 'MSTeamsRenderedMessage'.
+extensions/msteams/src/reply-dispatcher.ts(109,41): error TS2304: Cannot find name 'MSTeamsRenderedMessage'.
+extensions/msteams/src/reply-dispatcher.ts(157,20): error TS2339: Property 'warn' does not exist on type 'MSTeamsMonitorLogger'.
+extensions/nextcloud-talk/src/setup-core.test.ts(108,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/nextcloud-talk/src/setup-core.test.ts(115,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+extensions/nextcloud-talk/src/setup-core.test.ts(122,7): error TS2722: Cannot invoke an object which is possibly 'undefined'.
+[FAIL] pnpm tsgo
+[FAIL] Quality gate stopped at: pnpm tsgo
+log: /Users/newdldewdl/openclaw-contrib/.openclaw-artifacts/quality-gates/gate-20260323-021738.log

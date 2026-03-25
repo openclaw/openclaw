@@ -81,38 +81,13 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
   return media.trim() ? media : undefined;
 }
 
-function readBooleanParam(params: Record<string, unknown>, keys: string[]): boolean | undefined {
-  for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
-  return (
-    isRecord(actionValue) &&
-    actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION &&
-    (Boolean(typeof actionValue.command === "string" && actionValue.command.trim()) ||
-      Boolean(typeof actionValue.text === "string" && actionValue.text.trim()))
-  );
-}
-
-function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
-  if (Array.isArray(node)) {
-    return node.some((item) => containsLegacyFeishuCardCommandValue(item));
-  }
-  if (!isRecord(node)) {
+function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
+  if (!card || typeof card !== "object") {
     return false;
   }
-
-  if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
-    return true;
-  }
-
-  return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
+  // Feishu cards must have at least one key to be valid
+  // Empty objects {} are not valid and will cause 400 errors from Feishu API
+  return Object.keys(card).length > 0;
 }
 
 const meta: ChannelMeta = {
@@ -705,14 +680,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
-            const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
-            const card = presentation
-              ? buildFeishuPresentationCard({ presentation, fallbackText: text })
-              : undefined;
-            if (card && mediaUrl) {
+            const hasValidCard = isValidFeishuCard(card);
+            if (hasValidCard && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
             }
-            if (!card && !text && !mediaUrl) {
+            if (!hasValidCard && !text && !mediaUrl) {
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
             const runtime = await loadFeishuChannelRuntime();
@@ -722,16 +694,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             }
             const sendMedia = maybeSendMedia;
             let result;
-            if (card) {
-              if (containsLegacyFeishuCardCommandValue(card)) {
-                throw new Error(
-                  "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
-                );
-              }
+            if (hasValidCard) {
               result = await runtime.sendCardFeishu({
                 cfg: ctx.cfg,
                 to,
-                card,
+                card: card!,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
                 replyInThread: ctx.action === "thread-reply",
@@ -803,12 +770,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
+            const hasValidCard = isValidFeishuCard(card);
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
               cfg: ctx.cfg,
               messageId,
               text,
-              card,
+              card: hasValidCard ? card : undefined,
               accountId: ctx.accountId ?? undefined,
             });
             return jsonActionResult({

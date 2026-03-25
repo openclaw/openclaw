@@ -1,0 +1,1424 @@
+quality gate started: 2026-03-24T03:17:59Z
+repo: /Users/newdldewdl/openclaw-contrib
+umask: 0022 (was 0077)
+[INFO] node_modules already present
+==== pnpm build ====
+
+> openclaw@2026.3.23 build /Users/newdldewdl/openclaw-contrib
+> pnpm canvas:a2ui:bundle && node scripts/tsdown-build.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && pnpm build:plugin-sdk:dts && node --import tsx scripts/write-plugin-sdk-entry-dts.ts && node --import tsx scripts/canvas-a2ui-copy.ts && node --import tsx scripts/copy-hook-metadata.ts && node --import tsx scripts/copy-export-html-templates.ts && node --import tsx scripts/write-build-info.ts && node --import tsx scripts/write-cli-startup-metadata.ts && node --import tsx scripts/write-cli-compat.ts
+
+
+> openclaw@2026.3.23 canvas:a2ui:bundle /Users/newdldewdl/openclaw-contrib
+> bash scripts/bundle-a2ui.sh
+
+A2UI bundle up to date; skipping.
+
+> openclaw@2026.3.23 build:plugin-sdk:dts /Users/newdldewdl/openclaw-contrib
+> tsc -p tsconfig.plugin-sdk.dts.json
+
+[copy-hook-metadata] Copied 4 hook metadata files.
+[copy-export-html-templates] Copied 5 export-html assets.
+[PASS] pnpm build
+==== pnpm format:check (advisory) ====
+
+> openclaw@2026.3.23 format:check /Users/newdldewdl/openclaw-contrib
+> oxfmt --check --threads=1
+
+Checking formatting...
+
+extensions/feishu/src/send.ts (1ms)
+
+Format issues found in above 1 files. Run without `--check` to fix.
+Finished in 21560ms on 8794 files using 1 threads.
+ ELIFECYCLE  Command failed with exit code 1.
+[WARN] pnpm format:check produced issues (non-blocking locally)
+==== pnpm tsgo ====
+[PASS] pnpm tsgo
+==== pnpm lint ====
+
+> openclaw@2026.3.23 lint /Users/newdldewdl/openclaw-contrib
+> oxlint --type-aware
+
+Found 0 warnings and 0 errors.
+Finished in 11.4s on 5473 files with 136 rules using 8 threads.
+[PASS] pnpm lint
+==== pnpm test ====
+
+> openclaw@2026.3.23 test /Users/newdldewdl/openclaw-contrib
+> node scripts/test-parallel.mjs
+
+[test-parallel] start unit-fast workers=2 filters=all
+
+[1m[46m RUN [49m[22m [36mv4.1.0 [39m[90m/Users/newdldewdl/openclaw-contrib[39m
+
+ [32m✓[39m src/plugins/bundled-plugin-metadata.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+     [33m[2m✓[22m[39m supports check mode for stale generated artifacts [33m 341[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-plugin-naming.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/media/store.redirect.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/tts/tts.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 1512[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.test.ts [2m([22m[2m56 tests[22m[2m)[22m[33m 787[2mms[22m[39m
+ [32m✓[39m src/secrets/resolve.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 1526[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves exec refs with protocolVersion 1 response [33m 304[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-claude-inspect.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-gemini.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 298[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/discovery.contract.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 3358[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps Model Studio catalog provider-owned [33m 310[2mms[22m[39m
+ [32m✓[39m src/media-understanding/image.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 303[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-ollama.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1169[2mms[22m[39m
+     [33m[2m✓[22m[39m fails fast when memory-search remote apiKey is an unresolved SecretRef [33m 328[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to env key when models.providers.ollama.apiKey is an unresolved SecretRef [33m 322[2mms[22m[39m
+ [32m✓[39m src/config/schema.base.generated.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 2486[2mms[22m[39m
+     [33m[2m✓[22m[39m matches the computed base config schema payload [33m 2486[2mms[22m[39m
+ [32m✓[39m src/tui/components/searchable-select-list.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m test/scripts/committer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1310[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts supported path argument shapes [33m 1049[2mms[22m[39m
+ [32m✓[39m test/scripts/ios-team-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 538[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves a fallback team ID from Xcode team listings (smoke) [33m 479[2mms[22m[39m
+ [32m✓[39m src/install-sh-version.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 605[2mms[22m[39m
+ [32m✓[39m src/secrets/audit.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 520[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run.option-collisions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 429[2mms[22m[39m
+ [32m✓[39m src/infra/fs-safe.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 1996[2mms[22m[39m
+     [33m[2m✓[22m[39m writes a file within root safely [33m 1622[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/actions/actions.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 5791[2mms[22m[39m
+     [33m[2m✓[22m[39m derives discord action listings from channel and moderation gates [33m 530[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes telegram reaction message identifiers before dispatch [33m 459[2mms[22m[39m
+   [33m[2m✓[22m[39m forwards trusted mediaLocalRoots for send actions [33m 316[2mms[22m[39m
+ [31m❯[39m src/config/io.compat.test.ts [2m([22m[2m8 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 24[2mms[22m[39m
+     [32m✓[39m uses ~/.openclaw/openclaw.json when config exists[32m 8[2mms[22m[39m
+     [32m✓[39m defaults to ~/.openclaw/openclaw.json when config is missing[32m 1[2mms[22m[39m
+     [32m✓[39m uses OPENCLAW_HOME for default config path[32m 0[2mms[22m[39m
+     [32m✓[39m honors explicit OPENCLAW_CONFIG_PATH override[32m 1[2mms[22m[39m
+     [32m✓[39m normalizes safe-bin config entries at config load time[32m 4[2mms[22m[39m
+     [32m✓[39m logs invalid config path details and throws on invalid config[32m 3[2mms[22m[39m
+     [32m✓[39m does not warn when config was last touched by a same-base correction publish[32m 2[2mms[22m[39m
+[31m     [31m×[31m does not warn for same-base prerelease configs when current version is newer[39m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-helpers.test.ts [2m([22m[2m88 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/config/talk.normalize.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/session-memory/handler.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 375[2mms[22m[39m
+ [32m✓[39m src/memory/manager.get-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 974[2mms[22m[39m
+     [33m[2m✓[22m[39m deduplicates concurrent manager creation for the same cache key [33m 323[2mms[22m[39m
+     [33m[2m✓[22m[39m drains in-flight manager creation during global teardown [33m 431[2mms[22m[39m
+ [32m✓[39m src/security/audit.test.ts [2m([22m[2m73 tests[22m[2m)[22m[32m 251[2mms[22m[39m
+ [32m✓[39m src/infra/git-commit.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 315[2mms[22m[39m
+ [32m✓[39m test/architecture-smells.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 463[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.session-key-normalization.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 535[2mms[22m[39m
+     [33m[2m✓[22m[39m blocks inherited GIT_EXEC_PATH so git cannot execute helper payloads [33m 381[2mms[22m[39m
+ [32m✓[39m test/git-hooks-pre-commit.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 305[2mms[22m[39m
+     [33m[2m✓[22m[39m does not treat staged filenames as git-add flags (e.g. --all) [33m 304[2mms[22m[39m
+ [32m✓[39m src/secrets/apply.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 367[2mms[22m[39m
+ [32m✓[39m src/acp/control-plane/manager.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 425[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 320[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.test.ts [2m([22m[2m32 tests[22m[2m)[22m[33m 369[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.media.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 1917[2mms[22m[39m
+       [33m[2m✓[22m[39m rewrites in-sandbox media references before dry send [33m 318[2mms[22m[39m
+ [32m✓[39m src/memory/index.test.ts [2m([22m[2m21 tests[22m[2m | [22m[33m3 skipped[39m[2m)[22m[33m 779[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/registry-backed.contract.test.ts [2m([22m[2m167 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 6691[2mms[22m[39m
+     [33m[2m✓[22m[39m uses remote baseUrl/apiKey and merges headers [32m 300[2mms[22m[39m
+     [33m[2m✓[22m[39m builds Mistral embeddings requests with bearer auth [33m 339[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps explicit model when openai is selected [33m 354[2mms[22m[39m
+     [33m[2m✓[22m[39m selects the first available remote provider in auto mode [33m 326[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to openai when node-llama-cpp is missing [33m 318[2mms[22m[39m
+     [33m[2m✓[22m[39m throws a helpful error when local is requested and fallback is none [33m 898[2mms[22m[39m
+     [33m[2m✓[22m[39m loads the model only once when embedBatch is called concurrently [33m 538[2mms[22m[39m
+     [33m[2m✓[22m[39m retries initialization after a transient ensureContext failure [33m 456[2mms[22m[39m
+     [33m[2m✓[22m[39m shares initialization when embedQuery and embedBatch start concurrently [33m 575[2mms[22m[39m
+     [33m[2m✓[22m[39m returns null provider when all requested auth paths fail [33m 305[2mms[22m[39m
+ [32m✓[39m src/config/schema.hints.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 264[2mms[22m[39m
+ [32m✓[39m src/i18n/registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/cli/config-cli.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 126[2mms[22m[39m
+ [32m✓[39m src/infra/archive.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 208[2mms[22m[39m
+ [32m✓[39m src/infra/fs-pinned-write-helper.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+ [32m✓[39m src/config/schema.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 329[2mms[22m[39m
+ [32m✓[39m src/media-understanding/apply.echo-transcript.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 365[2mms[22m[39m
+ [32m✓[39m src/tui/gateway-chat.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 199[2mms[22m[39m
+ [32m✓[39m test/scripts/test-extension.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 328[2mms[22m[39m
+ [32m✓[39m src/plugins/commands.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/memory/manager.batch.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 364[2mms[22m[39m
+ [32m✓[39m src/plugins/loader.git-path-regression.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 221[2mms[22m[39m
+ [32m✓[39m src/hooks/loader.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 236[2mms[22m[39m
+ [32m✓[39m src/security/temp-path-guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 348[2mms[22m[39m
+     [33m[2m✓[22m[39m enforces runtime guardrails for tmpdir joins and weak randomness [33m 347[2mms[22m[39m
+ [32m✓[39m src/infra/archive-staging.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 190[2mms[22m[39m
+ [32m✓[39m src/acp/server.startup.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 169[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivers-response-has-heartbeat-ok-but-includes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 294[2mms[22m[39m
+ [32m✓[39m src/config/config.plugin-validation.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 176[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-safe-bins.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/infra/run-node.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 128[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli.coverage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 155[2mms[22m[39m
+ [32m✓[39m src/daemon/service-env.test.ts [2m([22m[2m59 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/entry.version-fast-path.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-command.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.subagent-model.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 97[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-core-channels.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 107[2mms[22m[39m
+ [32m✓[39m src/cli/mcp-cli.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/infra/restart-stale-pids.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/config/sessions.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.returns-default-unset.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+ [32m✓[39m src/infra/system-presence.version.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 181[2mms[22m[39m
+ [32m✓[39m src/config/config.sandbox-docker.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-gateway.test.ts [2m([22m[2m23 tests[22m[2m)[22m[33m 7156[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when gateway assignment path does not exist in local config [33m 2607[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when configured refs remain unresolved after gateway assignments are applied [33m 549[2mms[22m[39m
+     [33m[2m✓[22m[39m allows unresolved array-index refs when gateway marks concrete paths inactive [33m 512[2mms[22m[39m
+     [33m[2m✓[22m[39m degrades unresolved refs in read-only status mode instead of throwing [33m 323[2mms[22m[39m
+     [33m[2m✓[22m[39m limits strict local fallback analysis to unresolved gateway paths [32m 300[2mms[22m[39m
+     [33m[2m✓[22m[39m degrades unresolved refs in read-only operational mode [33m 639[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-lock.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 896[2mms[22m[39m
+ [32m✓[39m src/logging/log-file-size-cap.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 2916[2mms[22m[39m
+     [33m[2m✓[22m[39m suppresses file writes after cap is reached and warns once [33m 2642[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 103[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 346[2mms[22m[39m
+ [32m✓[39m src/cli/config-cli.integration.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 471[2mms[22m[39m
+     [33m[2m✓[22m[39m executes exec providers during dry-run when --allow-exec is set [33m 355[2mms[22m[39m
+ [32m✓[39m src/infra/update-check.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 360[2mms[22m[39m
+     [33m[2m✓[22m[39m detects package installs for non-git roots [33m 343[2mms[22m[39m
+ [32m✓[39m src/infra/brew.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/config/io.write-config.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 318[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-policy.test.ts [2m([22m[2m90 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.lane.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 248[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.auth.plugin.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 147[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 194[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.model-formatting.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 182[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-paths.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-camera.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/config/config.pruning-defaults.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/config/io.runtime-snapshot-write.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 636[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves source secret refs when writeConfigFile receives runtime-resolved config [33m 512[2mms[22m[39m
+ [32m✓[39m src/context-engine/context-engine.test.ts [2m([22m[2m30 tests[22m[2m)[22m[33m 367[2mms[22m[39m
+ [32m✓[39m src/config/config.legacy-config-detection.accepts-imessage-dmpolicy.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 106[2mms[22m[39m
+ [32m✓[39m src/infra/device-pairing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/config/plugin-auto-enable.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 130[2mms[22m[39m
+ [32m✓[39m src/config/config.legacy-config-detection.rejects-routing-allowfrom.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.direct-delivery-forum-topics.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.startup-fallback.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32m✓[39m src/acp/persistent-bindings.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 166[2mms[22m[39m
+ [32m✓[39m src/hooks/plugin-hooks.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 378[2mms[22m[39m
+ [32m✓[39m src/config/doc-baseline.integration.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 189[2mms[22m[39m
+ [32m✓[39m src/config/config-misc.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 97[2mms[22m[39m
+ [32m✓[39m src/infra/jsonl-socket.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/logger.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli.coverage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 202[2mms[22m[39m
+ [32m✓[39m src/config/config.nix-integration-u3-u5-u9.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-cli.install.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/infra/exec-wrapper-resolution.test.ts [2m([22m[2m60 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/utils.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/config/config.web-search-provider.test.ts [2m([22m[2m24 tests[22m[2m)[22m[33m 16804[2mms[22m[39m
+     [33m[2m✓[22m[39m does not warn for legacy brave config when bundled web search allowlist compat applies [33m 350[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts perplexity provider and config [33m 440[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts gemini provider and config [33m 399[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts firecrawl provider and config [33m 385[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts tavily provider config on the plugin-owned path [33m 389[2mms[22m[39m
+     [33m[2m✓[22m[39m does not migrate the nonexistent legacy Tavily scoped config [33m 536[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts gemini provider with no extra config [33m 1125[2mms[22m[39m
+     [33m[2m✓[22m[39m accepts brave llm-context mode config [33m 4304[2mms[22m[39m
+     [33m[2m✓[22m[39m rejects invalid brave mode config values [33m 738[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to brave when no keys available [33m 1187[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects brave when only BRAVE_API_KEY is set [33m 1442[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects gemini when only GEMINI_API_KEY is set [33m 834[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects tavily when only TAVILY_API_KEY is set [33m 491[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects firecrawl when only FIRECRAWL_API_KEY is set [33m 453[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects kimi when only KIMI_API_KEY is set [33m 616[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects perplexity when only PERPLEXITY_API_KEY is set [33m 600[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects perplexity when only OPENROUTER_API_KEY is set [33m 388[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects grok when only XAI_API_KEY is set [33m 336[2mms[22m[39m
+     [33m[2m✓[22m[39m gemini wins over grok, kimi, and perplexity when brave unavailable [33m 331[2mms[22m[39m
+     [33m[2m✓[22m[39m grok wins over kimi and perplexity when brave and gemini unavailable [33m 303[2mms[22m[39m
+ [32m✓[39m src/cli/argv.test.ts [2m([22m[2m52 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/includes.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/infra/archive-path.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.auth-profile-propagation.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/cli/memory-cli.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/hooks/workspace.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/hooks/internal-hooks.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-root.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/cron/run-log.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/config/plugins-runtime-boundary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m test/openclaw-npm-release-check.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/hooks/hooks-install.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 98[2mms[22m[39m
+ [32m✓[39m src/infra/tmp-openclaw-dir.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-legacy-crypto.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/cli/profile.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/status-reactions.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/update-runner.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/infra/json-files.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/config/config.identity-avatar.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/qr-cli.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/infra/retry.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-allow-always.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/acp/translator.session-rate-limit.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/infra/errors.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/device-bootstrap.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.ghost-reminder.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 122[2mms[22m[39m
+ [32m✓[39m src/infra/secret-file.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/cron/service.failure-alert.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/cli/pairing-cli.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 101[2mms[22m[39m
+ [32m✓[39m src/infra/json-utf8-bytes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.model-override.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.fatal-detection.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/cron/session-reaper.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 356[2mms[22m[39m
+ [32m✓[39m src/daemon/service-audit.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/infra/update-startup.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 114[2mms[22m[39m
+ [32m✓[39m src/cron/service.restart-catchup.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/infra/exec-obfuscation-detect.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 108[2mms[22m[39m
+ [32m✓[39m src/infra/update-global.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cli/channel-auth.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 154[2mms[22m[39m
+ [32m✓[39m src/hooks/frontmatter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/gaxios-fetch-compat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/config/config.allowlist-requires-allowfrom.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/install-package-dir.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-35195-backup-timing.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/logging/console-capture.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/link-understanding/detect.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/control-ui-assets.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.stop.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cron/store.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cron/normalize.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/infra-runtime.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/infra/abort-pattern.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-analysis.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 134[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-19676-at-reschedule.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/cron/schedule.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+ [32m✓[39m src/cli/program.force.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/infra/install-safe-path.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/cli/devices-cli.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/infra/install-source-utils.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 83[2mms[22m[39m
+ [32m✓[39m src/infra/wsl.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/channels/channel-config.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.scheduler.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/cron/service.persists-delivered-status.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-16156-list-skips-cron.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/config/env-substitution.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-migration-snapshot.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/infra/parse-finite-number.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/config.identity-defaults.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 243[2mms[22m[39m
+ [32m✓[39m src/config/legacy-migrate.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/logging/redact.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/infra-store.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/cron/service.every-jobs-fire.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 240[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-migration-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 84[2mms[22m[39m
+ [32m✓[39m src/infra/boundary-path.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 106[2mms[22m[39m
+ [32m✓[39m src/infra/watch-node.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/channels/typing.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/infra/cli-root-options.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.store.migration.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/infra/npm-registry-spec.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/infra/exec-command-resolution.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/acp/translator.cancel-scoping.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-events.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/system-cli.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli-compat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/boundary-file-read.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-parity.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-legacy-state.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/detect-package-manager.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cron/service.jobs.top-of-hour-stagger.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/version.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/cron/service.runs-one-shot-main-job-disables-it.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.sender-prefers-delivery-target.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-plugin-helper.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 669[2mms[22m[39m
+ [32m✓[39m src/config/sessions.cache.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 217[2mms[22m[39m
+ [32m✓[39m src/cron/service.session-reaper-in-finally.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 167[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-store.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-forwarder.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/config/config.schema-regressions.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/config/talk-defaults.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/hooks/message-hooks.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/channels/session.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/path-env.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/restart-sentinel.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 483[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.claude.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/infra/system-events.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 124[2mms[22m[39m
+ [32m✓[39m src/infra/shell-env.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/cli/channel-options.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 300[2mms[22m[39m
+ [32m✓[39m src/config/config.compaction-settings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/scp-host.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/config/schema.help.quality.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 125[2mms[22m[39m
+ [32m✓[39m src/docker-build-cache.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/restart.deferral-timeout.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/config.backup-rotation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/session-cost-usage.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 207[2mms[22m[39m
+ [32m✓[39m test/official-channel-catalog.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/secrets-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/cli-utils.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.state-dir.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/session-maintenance-warning.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/config/slack-http-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/cron/service.store-migration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/system-presence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/device-identity.state-dir.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.shared.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/env-preserve-io.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-inspect.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 184[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.load.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 143[2mms[22m[39m
+ [32m✓[39m src/config/validation.allowed-values.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/stable-node-path.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/npm-pack-install.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/vitest-scoped-config.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/plugin-extension-import-boundary.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1559[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps dedicated web-search registry shims out of the remaining inventory [33m 1541[2mms[22m[39m
+ [32m✓[39m src/config/config.acp-binding-cutover.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-voyage.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 208[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-manager.test.ts [2m([22m[2m57 tests[22m[2m)[22m[33m 692[2mms[22m[39m
+     [33m[2m✓[22m[39m reuses exported session markdown files when inputs are unchanged [33m 447[2mms[22m[39m
+ [32m✓[39m src/plugins/sdk-alias.test.ts [2m([22m[2m24 tests[22m[2m)[22m[33m 1320[2mms[22m[39m
+     [33m[2m✓[22m[39m loads source runtime shims through the non-native Jiti boundary [33m 937[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/install.integration.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 1069[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-mints token when no source exists without embedding it into service env [33m 996[2mms[22m[39m
+ [32m✓[39m src/memory/manager.readonly-recovery.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 124[2mms[22m[39m
+ [32m✓[39m src/routing/resolve-route.test.ts [2m([22m[2m41 tests[22m[2m)[22m[33m 664[2mms[22m[39m
+     [33m[2m✓[22m[39m does not rescan full bindings after channel/account cache rollover (#36915) [33m 641[2mms[22m[39m
+ [32m✓[39m src/secrets/exec-secret-ref-id-parity.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/memory/manager.embedding-batches.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1143[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-core.test.ts [2m([22m[2m42 tests[22m[2m)[22m[33m 377[2mms[22m[39m
+ [32m✓[39m src/plugins/web-search-providers.runtime.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 7509[2mms[22m[39m
+     [33m[2m✓[22m[39m loads bundled providers through the plugin loader in alphabetical order [33m 1155[2mms[22m[39m
+     [33m[2m✓[22m[39m memoizes snapshot provider resolution for the same config and env [33m 564[2mms[22m[39m
+     [33m[2m✓[22m[39m invalidates the snapshot cache when config or env contents change in place [33m 754[2mms[22m[39m
+     [33m[2m✓[22m[39m skips web-search snapshot memoization when plugin cache opt-outs are set [33m 1653[2mms[22m[39m
+     [33m[2m✓[22m[39m skips web-search snapshot memoization when discovery cache ttl is zero [33m 983[2mms[22m[39m
+     [33m[2m✓[22m[39m invalidates the snapshot cache when global Vitest fallback changes [33m 974[2mms[22m[39m
+     [33m[2m✓[22m[39m expires web-search snapshot memoization after the shortest plugin cache ttl [33m 741[2mms[22m[39m
+     [33m[2m✓[22m[39m invalidates web-search snapshots when cache-control env values change in place [33m 326[2mms[22m[39m
+     [33m[2m✓[22m[39m prefers the active plugin registry for runtime resolution [33m 356[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 255[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/restart-helper.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/security/windows-acl.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 141[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 118[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 201[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.gateway-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 90[2mms[22m[39m
+ [32m✓[39m src/memory/manager.atomic-reindex.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 287[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/outbound-payload.contract.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-lifecycle.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/plugins/stage-bundled-plugin-runtime.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/process/command-queue.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/scripts/ci-changed-scope.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 327[2mms[22m[39m
+     [33m[2m✓[22m[39m treats base and head as literal git args [33m 324[2mms[22m[39m
+ [32m✓[39m src/memory/manager.watcher-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 635[2mms[22m[39m
+     [33m[2m✓[22m[39m watches markdown globs and ignores dependency directories [33m 310[2mms[22m[39m
+     [33m[2m✓[22m[39m watches multimodal extensions with case-insensitive globs [33m 324[2mms[22m[39m
+ [32m✓[39m src/cli/program/routes.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/runtime.contract.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/memory/manager.read-file.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/index.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/discovery.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-system-run-plan.test.ts [2m([22m[2m41 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m ui/src/ui/app-chat.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 151[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.plugin-dispatch.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/plugins/manifest-registry.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.owner-auth.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-target.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/manager.vector-dedupe.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 372[2mms[22m[39m
+     [33m[2m✓[22m[39m deletes existing vector rows before inserting replacements [33m 371[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/slack.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/helpers.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/program/command-registry.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.skip-tiny-audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/tui/theme/theme.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-store.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/security/dm-policy-shared.test.ts [2m([22m[2m66 tests[22m[2m)[22m[33m 874[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/keyed-async-queue.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/ssrf-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/security/skill-scanner.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.auto-audio.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 115[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.proxy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1665[2mms[22m[39m
+     [33m[2m✓[22m[39m passes fetchFn to audio provider when HTTPS_PROXY is set [33m 598[2mms[22m[39m
+     [33m[2m✓[22m[39m passes fetchFn to video provider when HTTPS_PROXY is set [33m 587[2mms[22m[39m
+     [33m[2m✓[22m[39m does not pass fetchFn when no proxy env vars are set [33m 478[2mms[22m[39m
+ [32m✓[39m src/pairing/setup-code.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 162[2mms[22m[39m
+ [32m✓[39m src/config/sessions/sessions.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m ui/src/ui/controllers/chat.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/media/store.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 232[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-mcp.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/memory/mmr.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/shared/text/join-segments.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/security/external-content.test.ts [2m([22m[2m45 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.gather.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 334[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 223[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/boot-md/handler.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/memory/session-files.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 654[2mms[22m[39m
+     [33m[2m✓[22m[39m returns lineMap tracking original JSONL line numbers [33m 551[2mms[22m[39m
+ [32m✓[39m src/plugins/copy-bundled-plugin-metadata.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 341[2mms[22m[39m
+ [32m✓[39m src/plugins/status.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 910[2mms[22m[39m
+     [33m[2m✓[22m[39m forwards an explicit env to plugin loading [33m 827[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth-choice.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 464[2mms[22m[39m
+     [33m[2m✓[22m[39m maps provider-plugin choices through the shared preferred-provider fallback resolver [33m 376[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.test.ts [2m([22m[2m55 tests[22m[2m)[22m[33m 57385[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves env refs for config and auth profiles [33m 1548[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves sandbox ssh secret refs for active ssh backends [33m 3064[2mms[22m[39m
+     [33m[2m✓[22m[39m treats sandbox ssh secret refs as inactive when ssh backend is not selected [33m 1659[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes inline SecretRef object on token to tokenRef [33m 1411[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes inline SecretRef object on key to keyRef [33m 2279[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps explicit keyRef when inline key SecretRef is also present [33m 791[2mms[22m[39m
+     [33m[2m✓[22m[39m treats non-selected web search provider refs as inactive [33m 331[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps non-selected provider refs inactive in web search auto mode [33m 379[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves selected web search provider ref even when provider config is disabled [33m 624[2mms[22m[39m
+     [33m[2m✓[22m[39m fails fast at startup when selected web search provider ref is unresolved [33m 447[2mms[22m[39m
+     [33m[2m✓[22m[39m exposes active runtime web tool metadata as a defensive clone [33m 372[2mms[22m[39m
+     [33m[2m✓[22m[39m resolves file refs via configured file provider [33m 373[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when file provider payload is not a JSON object [33m 357[2mms[22m[39m
+     [33m[2m✓[22m[39m skips inactive-surface refs and emits diagnostics [33m 324[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote refs as inactive when local auth credentials are configured [33m 508[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.auth.password ref as active when mode is unset and no token is configured [33m 391[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.auth.token ref as active when token mode is explicit [33m 414[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.auth.token ref as inactive when password mode is explicit [33m 415[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when gateway.auth.token ref is active and unresolved [33m 464[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when an active exec ref id contains traversal segments [33m 406[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.auth.password ref as inactive when auth mode is trusted-proxy [33m 345[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.auth.password ref as inactive when remote token is configured [33m 356[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote refs as inactive in local mode when auth mode is none [33m 453[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote refs as inactive in local mode when auth mode is trusted-proxy [33m 355[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote.token ref as active in local mode when no local credentials are configured [33m 432[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote.password ref as active in local mode when password can win [33m 531[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Zalo botToken refs as active even when tokenFile is configured [33m 406[2mms[22m[39m
+     [33m[2m✓[22m[39m treats account-level Zalo botToken refs as active even when tokenFile is configured [33m 564[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Zalo botToken refs as active for non-default accounts without overrides [33m 764[2mms[22m[39m
+     [33m[2m✓[22m[39m treats channels.zalo.accounts.default.botToken refs as active [33m 332[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Nextcloud Talk botSecret and apiPassword refs as active when file paths are configured [33m 390[2mms[22m[39m
+     [33m[2m✓[22m[39m treats account-level Nextcloud Talk botSecret and apiPassword refs as active when file paths are configured [33m 301[2mms[22m[39m
+     [33m[2m✓[22m[39m treats gateway.remote refs as active when tailscale serve is enabled [33m 344[2mms[22m[39m
+     [33m[2m✓[22m[39m treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch [33m 604[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when enabled channel surfaces contain unresolved refs [33m 448[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when default Telegram account can inherit an unresolved top-level token ref [33m 635[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Telegram token as inactive when all enabled accounts override it [33m 926[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Telegram account overrides as enabled when account.enabled is omitted [33m 1824[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Telegram webhookSecret refs as inactive when webhook mode is not configured [33m 1249[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Telegram top-level botToken refs as inactive when tokenFile is configured [33m 1466[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Telegram account botToken refs as inactive when account tokenFile is configured [33m 999[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Telegram botToken refs as active when account botToken is blank [33m 6750[2mms[22m[39m
+     [33m[2m✓[22m[39m treats IRC account nickserv password refs as inactive when nickserv is disabled [33m 2115[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level IRC nickserv password refs as inactive when nickserv is disabled [33m 1058[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Slack signingSecret refs as inactive when mode is socket [33m 426[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Slack appToken refs as inactive when mode is http [33m 3152[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Google Chat serviceAccount as inactive when enabled accounts use serviceAccountRef [33m 8269[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when non-default Discord account inherits an unresolved top-level token ref [33m 1088[2mms[22m[39m
+     [33m[2m✓[22m[39m treats top-level Discord token refs as inactive when account token is explicitly blank [33m 1473[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Discord PluralKit token refs as inactive when PluralKit is disabled [33m 489[2mms[22m[39m
+     [33m[2m✓[22m[39m treats Discord voice TTS refs as inactive when voice is disabled [33m 319[2mms[22m[39m
+     [33m[2m✓[22m[39m handles Discord nested inheritance for enabled and disabled accounts [33m 412[2mms[22m[39m
+     [33m[2m✓[22m[39m skips top-level Discord voice refs when all enabled accounts override nested voice config [33m 315[2mms[22m[39m
+     [33m[2m✓[22m[39m fails when an enabled Discord account override has an unresolved nested ref [33m 328[2mms[22m[39m
+     [33m[2m✓[22m[39m does not write inherited auth stores during runtime secret activation [33m 894[2mms[22m[39m
+ [32m✓[39m src/media/mime.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-selection.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/config/sessions/targets.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.integration.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 142[2mms[22m[39m
+ [32m✓[39m src/security/fix.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 271[2mms[22m[39m
+ [32m✓[39m src/infra/format-time/format-time.test.ts [2m([22m[2m42 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/pty.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/account-helpers.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m test/plugin-npm-release.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/tui/tui-command-handlers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke-browser.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 155[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/group-policy-warnings.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/provider.contract.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 141[2mms[22m[39m
+ [32m✓[39m src/media/input-files.fetch-guard.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 165[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/run-loop.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-config-helpers.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/program/message/helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/inbound.contract.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.fast-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.message-tool-policy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 239[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/subagent-followup.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/registry.contract.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/session-binding-service.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.test.ts [2m([22m[2m44 tests[22m[2m)[22m[33m 14913[2mms[22m[39m
+     [33m[2m✓[22m[39m chunks telegram markdown and passes through accountId [33m 679[2mms[22m[39m
+     [33m[2m✓[22m[39m clamps telegram text chunk size to protocol max even with higher config [33m 368[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps payload replyToId across all chunked telegram sends [33m 362[2mms[22m[39m
+     [33m[2m✓[22m[39m passes explicit accountId to sendTelegram [33m 343[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves HTML text for telegram sendPayload channelData path [33m 651[2mms[22m[39m
+     [33m[2m✓[22m[39m does not inject telegram approval buttons from plain approval text [33m 578[2mms[22m[39m
+     [33m[2m✓[22m[39m includes OpenClaw tmp root in telegram mediaLocalRoots [33m 352[2mms[22m[39m
+     [33m[2m✓[22m[39m includes OpenClaw tmp root in signal mediaLocalRoots [33m 308[2mms[22m[39m
+     [33m[2m✓[22m[39m includes OpenClaw tmp root in whatsapp mediaLocalRoots [33m 662[2mms[22m[39m
+     [33m[2m✓[22m[39m emits internal message:sent hook when sessionKey is provided without mirror [33m 316[2mms[22m[39m
+     [33m[2m✓[22m[39m calls failDelivery instead of ackDelivery on bestEffort partial failure [33m 562[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent success for sendPayload deliveries [33m 323[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves channelData-only payloads with empty text for non-WhatsApp sendPayload channels [33m 347[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to sendText when plugin outbound omits sendMedia [33m 662[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to one sendText call for multi-media payloads when sendMedia is omitted [33m 469[2mms[22m[39m
+     [33m[2m✓[22m[39m fails media-only payloads when plugin outbound omits sendMedia [33m 468[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent failure when delivery errors [33m 680[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/delivery-queue.recovery.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/memory/query-expansion.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/test-utils/env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/manager.mistral-provider.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1393[2mms[22m[39m
+     [33m[2m✓[22m[39m stores mistral client when mistral provider is selected [33m 771[2mms[22m[39m
+     [33m[2m✓[22m[39m uses default ollama model when activating ollama fallback [33m 341[2mms[22m[39m
+ [32m✓[39m src/plugins/providers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-manifest.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/tui/tui-formatters.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media/server.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 104[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/plugins-channel.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/internal.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/infra/net/undici-global-dispatcher.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 94[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.interim-retry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 79[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-resolution.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.payload-fallbacks.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/infra/net/fetch-guard.ssrf.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-normalization.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.pinning.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/net/ssrf.dispatcher.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1193[2mms[22m[39m
+     [33m[2m✓[22m[39m passes explicit agentId to outbound delivery for scoped media roots [33m 468[2mms[22m[39m
+     [33m[2m✓[22m[39m propagates the send idempotency key into mirrored transcript delivery [33m 477[2mms[22m[39m
+ [32m✓[39m src/config/sessions/delivery-info.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/net/proxy-env.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/net/proxy-fetch.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-params.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/session.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/delivery-queue.storage.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/slack.sendpayload.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/tui/components/chat-log.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.nested-lists.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/restart-health.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-targets.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/reply-payload.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/provider-entry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.hr-spacing.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.agent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 169[2mms[22m[39m
+ [32m✓[39m src/plugins/uninstall.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/plugins/web-search-providers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/tls/gateway.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 168[2mms[22m[39m
+ [32m✓[39m src/tui/tui-event-handlers.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/whatsapp-heartbeat.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/plugins/marketplace.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/tui/tui.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/temporal-decay.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.table-bullets.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle-core.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/media-understanding/media-understanding-misc.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/tui/commands.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/tui/osc8-hyperlinks.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.blockquote-spacing.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/persistent-dedupe.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/group-policy.contract.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/cfg-threading.guard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/install.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/media/server.outside-workspace.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/root-alias.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.status-health-sessions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 97[2mms[22m[39m
+ [32m✓[39m src/terminal/table.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/utils/utils-misc.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/program/config-guard.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 98[2mms[22m[39m
+ [32m✓[39m src/node-host/runner.credentials.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-provider-auth-env-vars.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 633[2mms[22m[39m
+     [33m[2m✓[22m[39m matches the generated manifest snapshot [33m 581[2mms[22m[39m
+ [32m✓[39m src/logging/timestamps.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/plugins/bundle-commands.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 117[2mms[22m[39m
+ [32m✓[39m src/channels/channels-misc.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/shared/pid-alive.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-normalization.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/tools.optional.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-resolution.coverage.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/loader.contract.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/acp-bindings.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/config/config.talk-validation.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/node-host/invoke.sanitize-env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/json-file.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/process/exec.test.ts [2m([22m[2m8 tests[22m[2m | [22m[33m2 skipped[39m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/config.gateway-tailscale-bind.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/retry-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/fetch.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/plugins/interactive.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 151[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-runtime-policy.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/infra/transport-ready.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.onboard.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 169[2mms[22m[39m
+ [32m✓[39m src/config/io.validation-fails-closed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/service.armtimer-tight-loop.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-binding.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/logging/diagnostic.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/daemon/constants.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-actions.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/memory/search-manager.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/tts/provider-registry.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1613[2mms[22m[39m
+     [33m[2m✓[22m[39m uses active plugin speech providers without reloading plugins [33m 862[2mms[22m[39m
+     [33m[2m✓[22m[39m returns builtin providers when neither plugins nor active registry provide speech support [33m 307[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 185[2mms[22m[39m
+ [32m✓[39m src/daemon/program-args.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 196[2mms[22m[39m
+ [32m✓[39m src/security/safe-regex.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/ports.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime.coverage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 615[2mms[22m[39m
+     [33m[2m✓[22m[39m handles every openclaw.json registry target when configured as active [33m 323[2mms[22m[39m
+ [32m✓[39m src/channels/config-presence.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/agent-events.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/config/group-policy.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/widearea-dns.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/matrix-account-selection.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/command-gating.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/node-pairing.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-resolver.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/shared/text/reasoning-tags.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-web-search.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/shared/net/ip.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.restore.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/tailscale.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-runner.transcript-prune.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/config/config.secrets-schema.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-process.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/acp/client.test.ts [2m([22m[2m44 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/device-identity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/utils/usage-format.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/adapters/child.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/http-body.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-helpers.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/operator-scope-compat.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-compaction.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-surface.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/cli/acp-cli.option-collisions.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.configure.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/archive-helpers.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.auth.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/sanitize-text.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/mcp-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/path-safety.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/cli/security-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/logs-cli.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/secrets/configure-plan.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-wake.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/cli/program.smoke.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 194[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/plugin-entry-guardrails.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.maintenance.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32m✓[39m src/cli/program/helpers.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/memory/batch-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.format.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/utils/delivery-context.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/program/help.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safe-bin-trust.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m ui/src/ui/views/agents-utils.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/shared/config-eval.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/session-meta.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m src/infra/update-channels.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/secrets/target-registry-pattern.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-send-service.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allowlist-config-edit.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/allowlists/resolve-utils.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/process-respawn.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.subclis.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/voicewake.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 171[2mms[22m[39m
+ [32m✓[39m src/config/config.irc.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/models-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/runtime-telegram-typing.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/plugin-registry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/infra/safe-open-sync.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/bootstrap-extra-files/handler.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cron/service.delivery-plan.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/config.discord-presence.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m test/scripts/check-channel-agnostic-boundaries.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugins/update.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/channels/ack-reactions.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/route.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/logging/subsystem.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.context.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/identity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/sessions/store.pruning.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/service/jobs.schedule-error-isolation.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/config/sessions/session-key.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/net/hostname.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/config/sessions/disk-budget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/agent-delivery.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/bound-delivery-router.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/abort.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/format.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/delivery-queue.policy.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-custom-commands.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m test/vitest-unit-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/conversation-id.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.setup.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli.coverage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/cli/parse-timeout.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/secure-random.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/cron/service.read-ops-nonblocking.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-dir.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/node-host/exec-policy.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/config.tools-alsoAllow.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-13992-regression.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-audio-preflight.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/delivery.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/deps.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-visibility.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/config-set-mode.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/binding-targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/runtime-api-guardrails.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-group-access.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/catalog.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps bundled model augmentation wired through the provider runtime [33m 393[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-reason.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/shared/avatar-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/push-apns.relay.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/commands.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/channels/transport/stall-watchdog.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.message.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/cli/exec-approvals-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m test/release-check.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 495[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle-core.config-guard.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/tui/tui-stream-assembler.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/config/io.owner-display-secret.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/hooks/message-hook-mappers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-config.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message.channels.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 5838[2mms[22m[39m
+     [33m[2m✓[22m[39m threads resolved cfg through alias + target normalization in outbound dispatch [33m 317[2mms[22m[39m
+     [33m[2m✓[22m[39m 'passes threadId through to the outbou…' [33m 441[2mms[22m[39m
+     [33m[2m✓[22m[39m normalizes Teams alias for polls [33m 2677[2mms[22m[39m
+     [33m[2m✓[22m[39m drops gateway url overrides in backend mode (SSRF hardening) [33m 851[2mms[22m[39m
+     [33m[2m✓[22m[39m forwards explicit agentId in gateway send params [33m 823[2mms[22m[39m
+ [32m✓[39m src/media/audio.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/runtime-discord-typing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-request-guards.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/fetch.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/directory-config-helpers.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/program/action-reparse.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/program/preaction.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 174[2mms[22m[39m
+ [32m✓[39m src/infra/channel-summary.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/deliver.lifecycle.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 3341[2mms[22m[39m
+     [33m[2m✓[22m[39m continues on errors when bestEffort is enabled [33m 418[2mms[22m[39m
+     [33m[2m✓[22m[39m calls failDelivery instead of ackDelivery on bestEffort partial failure [33m 327[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent success for sendPayload deliveries [33m 330[2mms[22m[39m
+     [33m[2m✓[22m[39m emits message_sent failure when delivery errors [33m 340[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/web-search-provider.contract.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/git-root.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime-web-tools.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 5402[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-detects first available provider and keeps lower-priority refs inactive [33m 383[2mms[22m[39m
+     [33m[2m✓[22m[39m warns when provider is invalid and falls back to auto-detect [33m 542[2mms[22m[39m
+     [33m[2m✓[22m[39m fails fast when configured provider ref is unresolved with no fallback [33m 443[2mms[22m[39m
+     [33m[2m✓[22m[39m uses bundled provider resolution for configured bundled providers [33m 398[2mms[22m[39m
+     [33m[2m✓[22m[39m does not resolve Firecrawl SecretRef when Firecrawl is inactive [33m 406[2mms[22m[39m
+     [33m[2m✓[22m[39m uses env fallback for unresolved Firecrawl SecretRef when active [33m 324[2mms[22m[39m
+ [32m✓[39m src/cron/heartbeat-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/plugins/config-state.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-runtime.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/cli/npm-resolution.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/delivery.failure-notify.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m ui/src/ui/controllers/agents.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/memory/backend-config.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/lifecycle.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/shell-inline-command.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/config/logging.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/shared/frontmatter.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/min-host-version.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.rearm-timer-when-running.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/session-context.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/poll-params.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/services.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/cli/cron-cli/shared.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/program/register.backup.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.finalize.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/registry.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/config-helpers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/helpers.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-cli/register.invoke.nodes-run-approval-timeout.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m test/scripts/run-vitest-profile.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/utils/reaction-level.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/canvas-host/server.state-dir.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/config/paths.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-ciao.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/config.agent-concurrency-defaults.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/config.discord.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-state.option-collisions.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/secrets/runtime-gateway-auth-surfaces.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/requirements.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/targets.test.ts [2m([22m[2m49 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-remote-fetch.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/embedding-chunk-limits.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/media-understanding/resolve.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/media-understanding/google.video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/channels/inbound-debounce-policy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/hooks/import-url.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/hooks/policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/install-mode-options.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/secret-input.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/channels/conversation-label.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/config-set-input.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/media/host.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/shared/text/assistant-visible-text.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.heartbeat-ok-summary-suppressed.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cron/service.main-job-passes-heartbeat-target-last.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/cron/store-migration.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/bootstrap/node-extra-ca-certs.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-events.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/windows-task-restart.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/logging/logger.browser-import.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/config.env-vars.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.deepgram.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/infra/path-prepend.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-events-filter.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/infra/restart.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/config/telegram-webhook-secret.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/model-alias-defaults.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-discovery.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/draft-stream-controls.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/schema-validator.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-runtime-deps.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/command-options.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/plugin-install-plan.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/allow-from.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-cli.uninstall.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/shared/tailscale-status.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/voice-call.plugin.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/markdown/frontmatter.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/tui/tui-input-history.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/ports.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/hook-runner-global.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-wizard.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 163[2mms[22m[39m
+ [32m✓[39m src/config/telegram-webhook-port.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-config.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/shared/entry-status.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/plugin-install-path-warnings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks.install.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/wizard.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/plain-object.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/dockerfile.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/config.dm-policy-alias.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/typing-start-guard.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/config.hooks-module-paths.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/group-access.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-manage.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cli/completion-cli.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.helpers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/security/audit-extra.sync.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/io.eacces.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/status-helpers.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/runtime-group-policy.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/runtime-overrides.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.minimax.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/install-flow.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/npm-integrity.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-send-result.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/home-dir.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/config/config.telegram-topic-agentid.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-manage.timeout-option.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/tsdown-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/command-secret-targets.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/docker-image-digests.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/media/inbound-path-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/process/kill-tree.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 258[2mms[22m[39m
+ [32m✓[39m src/config/slack-token-validation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/security/dm-policy-channel-smoke.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent.delivery-target-thread-session.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1898[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to main session when sessionKey entry does not exist [33m 314[2mms[22m[39m
+     [33m[2m✓[22m[39m falls back to main session when no sessionKey is provided [33m 326[2mms[22m[39m
+     [33m[2m✓[22m[39m explicit accountId overrides session lastAccountId [33m 304[2mms[22m[39m
+     [33m[2m✓[22m[39m preserves threadId from :topic: when lastTo differs [33m 371[2mms[22m[39m
+ [32m✓[39m src/cron/stagger.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/executable-path.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/thread-bindings-config-keys.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/shared/node-resolve.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-cli.update.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.exit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.codex.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/merge-patch.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/interactive/payload.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.formatting.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/channel-capabilities.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.before-agent-start.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/shared/string-normalization.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/shared/subagents-format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/shared/device-auth-store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/scripts/canvas-a2ui-copy.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/terminal/restore.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/sessions/send-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/global-singleton.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/secrets/target-registry.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-catalog.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/shared/string-sample.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/shared/gateway-bind-url.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-validation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/bundled-sources.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/batch-gemini.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m src/media-understanding/openai.audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/memory/batch-status.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/memory/batch-voyage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-onboarding-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/load-channel-config-surface.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media-understanding/deepgram.audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.vision-skip.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 270[2mms[22m[39m
+ [32m✓[39m src/media-understanding/moonshot.video.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/web-media.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/config/version.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/exec-wrapper-trust-plan.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.talk.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.signal-groups.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/file-identity.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/exec-allowlist-matching.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/clipboard.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-binary.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-spec.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/daemon/service.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approvals-policy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/media-understanding/provider-registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 1418[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps core-owned fallback providers registered by default [33m 1402[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-reply-pipeline.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 169[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-session-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/media/parse.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m test/scripts/check-no-raw-window-open.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 111[2mms[22m[39m
+ [32m✓[39m src/infra/device-auth-store.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/tui/tui-session-actions.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-mistral.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-session.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-messages.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/image-ops.helpers.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m test/scripts/check-no-random-messaging-tmp.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/test-helpers/state-dir-env.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-processes.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/infra/heartbeat-active-hours.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-command.contract.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-context.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/machine-name.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/infra/path-alias-guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-token.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/infra/state-migrations.fs.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.cron-retention.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/logging/console-timestamp.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/cron/service.prevents-duplicate-timers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/runtime-guard.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/normalize-paths.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.shared.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.session-maintenance-extensions.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/bootstrap/node-startup-env.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/unhandled-rejections.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/cron/cron-protocol-conformance.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/hardlink-guards.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 119[2mms[22m[39m
+ [32m✓[39m src/infra/clawhub.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/infra/dotenv.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/targets.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/polls.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/diagnostic-flags.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/hooks-cli.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/config.discord-agent-components.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/install-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/acp/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail-setup-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/directory-cli.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.load.plugin.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/acp/translator.prompt-prefix.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/supervisor-markers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/daemon/cmd-argv.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/mention-gating.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/message-secret-scope.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/fixed-window-rate-limit.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/prompt.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cron/service.get-job.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 213[2mms[22m[39m
+ [32m✓[39m src/acp/persistent-bindings.lifecycle.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/infra/exec-allowlist-pattern.test.ts [2m([22m[2m10 tests[22m[2m | [22m[33m1 skipped[39m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.logging-levels.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/os-summary.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m test/vitest-unit-paths.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.typing-mode.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/channel-activity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/bonjour-errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.store-load-invalid-main-job.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/cli/banner.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/config/cache-utils.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd-hints.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/allowlist-match.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/skills-remote.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/entry.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/infra/system-message.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m test/appcast.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/package-json.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/location.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/acp/translator.set-session-mode.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/is-main.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/daemon/schtasks-exec.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/command-source.test-helpers.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/acp/translator.stop-reason.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-command-display.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/exec-inline-eval.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/tailnet.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/ssh-tunnel.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.tts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/logging/parse-log-line.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cli/log-level-option.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-17852-daily-skip.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/logging/logger-timestamp.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/acp/session-mapper.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/image-generation/runtime.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 5802[2mms[22m[39m
+     [33m[2m✓[22m[39m generates images through the active image-generation registry [33m 4704[2mms[22m[39m
+     [33m[2m✓[22m[39m lists runtime image-generation providers from the active registry [33m 395[2mms[22m[39m
+     [33m[2m✓[22m[39m explains native image-generation config and provider auth when no model is configured [33m 380[2mms[22m[39m
+     [33m[2m✓[22m[39m does not crash on prototype-like provider ids in auth hints [33m 311[2mms[22m[39m
+ [32m✓[39m src/channels/native-command-session-targets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/run-state-machine.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cli/tagline.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/exec-approval-reply.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m test/vitest-extensions-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/binaries.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.zai.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/image-generation/provider-registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/infra/gateway-process-argv.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/thread-binding-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.list-page-sort-guards.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/host-env-security.policy-parity.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/backup-create.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m src/infra/canvas-host-url.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/image-generation/live-test-helpers.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/provider-usage.fetch.gemini.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/nodes-media-utils.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/ports-probe.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/exec-safety.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/acp/secret-file.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/logging/logger-env.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/daemon/launchd-restart-handoff.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/path-guards.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/node-shell.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/abort-signal.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/skills-cli.commands.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-hints.windows-paths.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/hooks/module-loader.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/run-main.profile-env.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/logging/console-settings.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/infra/dedupe.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/infra/runtime-status.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/logging/logger.settings.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/zod-schema.agent-defaults.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/channels/registry.helpers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/logging/logger-settings.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/infra/backoff.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/cli/completion-fish.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/ports-lsof.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/entry.respawn.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/exec-host.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/docs/slash-commands-doc.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cli/outbound-send-mapping.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/sender-label.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/infra/prototype-keys.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/acp/policy.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/daemon/runtime-hints.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/network-interfaces.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/hooks/gmail-watcher-lifecycle.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/warning-filter.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-files.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/package-tag.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/daemon/systemd-unit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/model-overrides.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/daemon/inspect.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/cli/plugins-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/channels/account-snapshot-fields.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/cron/service.issue-22895-every-next-run.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/config/agent-dirs.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m test/vitest-performance-config.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/config/dangerous-name-matching.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/build-stamp.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/config.msteams.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 191[2mms[22m[39m
+ [32m✓[39m src/config/config.meta-timestamp-coercion.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+ [32m✓[39m src/markdown/ir.table-code.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/auth.contract.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m test/scripts/check-no-conflict-markers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 361[2mms[22m[39m
+     [33m[2m✓[22m[39m finds conflict markers in tracked script files [33m 355[2mms[22m[39m
+ [32m✓[39m test/scripts/ui.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/slots.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-target.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/media/read-response-with-limit.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/browser-cli-actions-input/shared.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-proxy.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/payloads.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/supervisor.pty-command.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/plugins/source-display.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/program/command-tree.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/utils/transcript-tools.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/process/exec.windows.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [31m❯[39m src/memory/manager.async-search.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 464491[2mms[22m[39m
+[31m     [31m×[31m does not await sync when searching[39m[33m 462487[2mms[22m[39m
+     [33m[2m✓[22m[39m waits for in-flight search sync during close [33m 1646[2mms[22m[39m
+ [32m✓[39m src/secrets/command-config.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/shared.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/outbound-media.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 319[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/register-service-commands.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 177[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/directory-cache.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/terminal/stream-writer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-group-access-configure.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/routing/account-id.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/thread-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/cli/gateway-cli/register.option-collisions.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 117[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/temp-path.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 150[2mms[22m[39m
+ [32m✓[39m test/scripts/check-file-utils.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-capability-matrix.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/secret-input-schema.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/tui/tui.submit-handler.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/utils/run-with-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/terminal/ansi.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/shared/text-chunking.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/plugins/pi-package-graph.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/shared/chat-message-content.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/scripts/test-find-thread-candidates.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/routing/session-key.continuity.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/request-url.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/secrets/ref-contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/shared/node-list-parse.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/plugins/http-registry.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 168[2mms[22m[39m
+ [32m✓[39m ui/src/ui/views/usage-render-details.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 114[2mms[22m[39m
+ [32m✓[39m src/plugins/enable.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.phase-hooks.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/fetch-auth.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/media-understanding/format.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/media-understanding/transcribe-audio.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 282[2mms[22m[39m
+ [32m✓[39m src/media-understanding/mistral.provider.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/config/config.multi-agent-agentdir-validation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/config/config.skills-entries-config.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/config/doc-baseline.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m src/cli/program/build-program.version-alias.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 807[2mms[22m[39m
+     [33m[2m✓[22m[39m exits with version output for root -v [33m 567[2mms[22m[39m
+ [32m✓[39m src/shared/assistant-identity-values.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/media/store.outside-workspace.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 1111[2mms[22m[39m
+     [33m[2m✓[22m[39m maps outside-workspace reads to a descriptive invalid-path error [33m 851[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/config-schema.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/wizard/session.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/envelope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/telegram-actions-poll.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/target-resolvers.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/media/file-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 63[2mms[22m[39m
+ [32m✓[39m src/secrets/plan.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/shared/process-scoped-map.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.poll.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 5925[2mms[22m[39m
+     [33m[2m✓[22m[39m requires at least two poll options [33m 824[2mms[22m[39m
+     [33m[2m✓[22m[39m passes shared poll fields and auto threadId to executePollAction [33m 3148[2mms[22m[39m
+     [33m[2m✓[22m[39m expands maxSelections when pollMulti is enabled [33m 830[2mms[22m[39m
+     [33m[2m✓[22m[39m defaults maxSelections to one choice when pollMulti is omitted [33m 1118[2mms[22m[39m
+ [32m✓[39m test/scripts/test-parallel.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-inbound-claim.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 85[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-gateway.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/outbound-policy.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 525[2mms[22m[39m
+ [32m✓[39m src/infra/tls/fingerprint.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-session.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/plugins/contracts/shape.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/message-action-runner.threading.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/media/ffmpeg-exec.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/process/spawn-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/progress.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/utils/directive-tags.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/utils/mask-api-key.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/wizard/clack-prompter.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allow-from.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/memory/post-json.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m test/scripts/test-runner-manifest.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/schema.shared.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/secrets/path-utils.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/webhook-memory-guards.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/gateway-request-scope.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/shared/usage-aggregates.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/allowlist-resolution.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/config/markdown-tables.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/plugins/installs.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media-understanding/defaults.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/process/windows-command.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/contracts/registry.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-pairing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/plugins/hooks.model-override-wiring.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/utils/queue-helpers.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugins/clawhub.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/tts/prepare-text.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-subagent.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/media/base64.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/memory/batch-error-utils.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-query-parser.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/tui/tui-waiting.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/shared/model-param-b.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 144[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/direct-dm.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/interactive.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/media/local-roots.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/utils/normalize-secret-input.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-discovery.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 323[2mms[22m[39m
+ [32m✓[39m src/sessions/session-id.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/memory/qmd-scope.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/memory/embeddings-model-normalize.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 602[2mms[22m[39m
+ [32m✓[39m src/sessions/session-lifecycle-events.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/tts/edge-tts-validation.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 11250[2mms[22m[39m
+     [33m[2m✓[22m[39m throws when the output file is 0 bytes [33m 6816[2mms[22m[39m
+     [33m[2m✓[22m[39m succeeds when the output file has content [33m 4239[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/package-contract-guardrails.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/config/logging-max-file-bytes.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/utils/message-channel.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/shared/node-match.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/memory/prompt-section.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-llm.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/plugins/cli.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/threading-helpers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/process/exec.no-output-timer.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/tool-payload.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/cli/program/context.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/pairing/pairing-challenge.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/tui/tui-local-shell.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/account-action-gate.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/test-utils/channel-plugins.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m src/test-utils/temp-home.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 228[2mms[22m[39m
+ [32m✓[39m src/config/legacy.shared.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 112[2mms[22m[39m
+ [32m✓[39m src/config/issue-format.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 120[2mms[22m[39m
+ [32m✓[39m test/scripts/test-report-utils.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/process/supervisor/registry.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/shared/chat-content.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/shared/entry-metadata.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1330[2mms[22m[39m
+     [33m[2m✓[22m[39m prefers metadata emoji and homepage when present [33m 363[2mms[22m[39m
+ [32m✓[39m src/config/sessions/explicit-session-key-normalization.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/shared/text/code-regions.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/index.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 101[2mms[22m[39m
+ [32m✓[39m src/config/redact-snapshot.schema.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m src/shared/chat-envelope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/config/sessions/cache-fields.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/directory-adapters.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/target-errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/session-identifiers.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/memory/manager.sync-errors-do-not-crash.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/merge-patch.proto-pollution.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/sessions/model-overrides.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m test/ui.presenter-next-run.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/routing/account-lookup.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/terminal/safe-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 161[2mms[22m[39m
+ [32m✓[39m src/config/discord-preview-streaming.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/plugins/logger.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/tui/components/btw-inline-message.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/outbound/direct-text-media.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/acp/control-plane/runtime-cache.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.sandbox-config-preserved.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 76[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/target-parsing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/cron/isolated-agent/run.session-key.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 257[2mms[22m[39m
+ [32m✓[39m src/plugins/wired-hooks-message.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/normalize/targets.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.secret-input.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m src/plugins/install-min-host-version-guardrails.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 72[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/setup-wizard-binary.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/status-issues/bluebubbles.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/cron/service/timeout-policy.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/secrets/configure.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 62[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/actions/reaction-message-id.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-approval-mismatch.contract.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/plugins/runtime/types.contract.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/infra/ports-format.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/shared/net/ipv4.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/markdown/whatsapp.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/runner.entries.guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/media-understanding/attachments.normalize.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/text-chunking.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/hooks/fire-and-forget.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/runtime-forwarders.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/gateway-token-drift.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/media/load-options.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/media-understanding/attachments.guards.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/ws.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/scripts/docs-link-audit.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/infra/openclaw-exec-env.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/error-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/memory/batch-output.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/extensionAPI.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/cli/program/program-context.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/hooks/bundled/boot-md/handler.gateway-startup.integration.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/message-actions.security.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/sessions/transcript-events.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/outbound/channel-adapters.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-auth-choices.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/config.talk-api-key-fallback.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/web-search/runtime.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/progress.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/channels/plugins/pairing-adapters.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/cli/daemon-cli/status.print.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/config/sessions/artifacts.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/index.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/infra/channels-status-issues.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/config/allowed-values.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/infra/map-size.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/infra/system-run-normalize.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/infra/install-from-npm-spec.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/shared/device-auth.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 167[2mms[22m[39m
+ [32m✓[39m src/infra/network-discovery-display.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/infra/pairing-pending.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m test/test-runner-manifest.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/acp/event-mapper.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/acp/runtime/errors.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/plugins/channel-plugin-ids.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/memory/hybrid.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/command-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/tui/tui-overlays.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/runtime.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/plugins/provider-model-helpers.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/wizard/setup.completion.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/cli/program/build-program.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/secrets/provider-env-vars.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/cli/update-cli/shared.command-runner.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-policy.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 105[2mms[22m[39m
+ [32m✓[39m src/infra/gemini-auth.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 89[2mms[22m[39m
+ [32m✓[39m src/plugin-sdk/channel-setup.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/terminal/prompt-select-styled.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m test/scripts/test-update-memory-hotspots-utils.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/cli/program.nodes-test-helpers.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/config/io.compat.test.ts[2m > [22mconfig io paths[2m > [22mdoes not warn for same-base prerelease configs when current version is newer
+[31m[1mAssertionError[22m: expected "vi.fn()" to not be called with arguments: [ StringContaining{…} ][90m
+
+Received:
+
+[1m  1st vi.fn() call:
+
+[22m[2m  [[22m
+[32m-   StringContaining "Config was last written by a newer OpenClaw",[90m
+[31m+   "Config was last written by a newer OpenClaw (2026.3.23-beta.1); current version is 2026.3.23.",[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2m❯[22m src/config/io.compat.test.ts:[2m228:31[22m[39m
+    [90m226|[39m       io[33m.[39m[34mloadConfig[39m()[33m;[39m
+    [90m227|[39m
+    [90m228|[39m       [34mexpect[39m(logger[33m.[39mwarn)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   |[39m                               [31m^[39m
+    [90m229|[39m         expect.stringContaining("Config was last written by a newer Op…
+    [90m230|[39m       )[33m;[39m
+[90m [2m❯[22m withTempHome src/config/io.compat.test.ts:[2m12:5[22m[39m
+[90m [2m❯[22m src/config/io.compat.test.ts:[2m206:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/memory/manager.async-search.test.ts[2m > [22mmemory search async sync[2m > [22mdoes not await sync when searching
+[31m[1mError[22m: Test timed out in 300000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/memory/manager.async-search.test.ts:[2m65:3[22m[39m
+    [90m 63|[39m   })[33m;[39m
+    [90m 64|[39m
+    [90m 65|[39m   [34mit[39m([32m"does not await sync when searching"[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m   |[39m   [31m^[39m
+    [90m 66|[39m     [35mconst[39m cfg [33m=[39m [34mbuildConfig[39m()[33m;[39m
+    [90m 67|[39m     manager [33m=[39m [35mawait[39m [34mcreateMemoryManagerOrThrow[39m(cfg)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m1108 passed[39m[22m[90m (1110)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m9533 passed[39m[22m[2m | [22m[33m6 skipped[39m[90m (9541)[39m
+[2m   Start at [22m 22:19:28
+[2m   Duration [22m 1288.02s[2m (transform 90.27s, setup 1595.86s, import 149.54s, tests 716.93s, environment 7.89s)[22m
+
+[test-parallel] done unit-fast code=1 elapsed=1300.4s
+ ELIFECYCLE  Test failed. See above for more details.
+[FAIL] pnpm test
+[FAIL] Quality gate stopped at: pnpm test
+log: /Users/newdldewdl/openclaw-contrib/.openclaw-artifacts/quality-gates/gate-20260323-221759.log
