@@ -120,7 +120,7 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:automation` | cron, gateway                                                                                             |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |
-| `group:evox`   | All built-in EVOX.sh tools (excludes plugin tools)                                                       |
+| `group:evox`       | All built-in EVOX.sh tools (excludes plugin tools)                                                        |
 
 ### Provider-specific restrictions
 

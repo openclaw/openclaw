@@ -75,7 +75,7 @@ export async function reportUsageToWebhookIfConfigured(params: {
   try {
     const tokenHeader = webhookConfig.tokenHeader ?? "X-Gateway-Token";
     const tokenValue = webhookConfig.token ?? params.cfg.gateway?.auth?.token;
-    const token = tokenValue 
+    const token = tokenValue
       ? await resolveSecretInputString({
           config: params.cfg,
           value: tokenValue,

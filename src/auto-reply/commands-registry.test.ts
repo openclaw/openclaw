@@ -291,9 +291,7 @@ describe("commands registry", () => {
   });
 
   it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "evox" })).toBe(
-      "/help@otherbot",
-    );
+    expect(normalizeCommandBody("/help@otherbot", { botUsername: "evox" })).toBe("/help@otherbot");
   });
 
   it("keeps unregistered dock underscore aliases unchanged", () => {

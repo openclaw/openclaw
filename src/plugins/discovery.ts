@@ -825,9 +825,7 @@ function discoverBundledMetadataInDirectory(params: {
         ...(!packageManifest?.description && entry.packageDescription
           ? { description: entry.packageDescription }
           : {}),
-        ...(!packageManifest?.evox && entry.packageManifest
-          ? { evox: entry.packageManifest }
-          : {}),
+        ...(!packageManifest?.evox && entry.packageManifest ? { evox: entry.packageManifest } : {}),
       },
       packageDir: rootDir,
       bundledManifest: entry.manifest,

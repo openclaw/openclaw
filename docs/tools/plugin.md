@@ -60,9 +60,9 @@ The install path uses the same resolver as the CLI: local path/archive, explicit
 
 EVOX.sh recognizes two plugin formats:
 
-| Format     | How it works                                                       | Examples                                               |
-| ---------- | ------------------------------------------------------------------ | ------------------------------------------------------ |
-| **Native** | `openclaw.plugin.json` + runtime module; executes in-process       | Official plugins, community npm packages               |
+| Format     | How it works                                                      | Examples                                               |
+| ---------- | ----------------------------------------------------------------- | ------------------------------------------------------ |
+| **Native** | `openclaw.plugin.json` + runtime module; executes in-process      | Official plugins, community npm packages               |
 | **Bundle** | Codex/Claude/Cursor-compatible layout; mapped to EVOX.sh features | `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/` |
 
 Both show up under `evox plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.

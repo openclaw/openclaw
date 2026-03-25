@@ -5,13 +5,7 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
 describe("parseCliProfileArgs", () => {
   it("leaves gateway --dev for subcommands", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "evox",
-      "gateway",
-      "--dev",
-      "--allow-unconfigured",
-    ]);
+    const res = parseCliProfileArgs(["node", "evox", "gateway", "--dev", "--allow-unconfigured"]);
     if (!res.ok) {
       throw new Error(res.error);
     }
@@ -155,9 +149,7 @@ describe("formatCliCommand", () => {
   });
 
   it("handles command with no args after evox", () => {
-    expect(formatCliCommand("evox", { OPENCLAW_PROFILE: "test" })).toBe(
-      "evox --profile test",
-    );
+    expect(formatCliCommand("evox", { OPENCLAW_PROFILE: "test" })).toBe("evox --profile test");
   });
 
   it("handles pnpm wrapper", () => {

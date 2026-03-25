@@ -59,10 +59,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["evox status --all", "Full diagnosis (read-only)."],
           ["evox status --json", "Machine-readable output."],
           ["evox status --usage", "Show model provider usage/quota snapshots."],
-          [
-            "evox status --deep",
-            "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
-          ],
+          ["evox status --deep", "Run channel probes (WA + Telegram + Discord + Slack + Signal)."],
           ["evox status --deep --timeout 5000", "Tighten probe timeout."],
         ])}`,
     )
@@ -182,10 +179,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["evox sessions cleanup --enforce", "Apply maintenance now."],
           ["evox sessions cleanup --agent work --dry-run", "Preview one agent store."],
           ["evox sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
-          [
-            "evox sessions cleanup --enforce --store ./tmp/sessions.json",
-            "Use a specific store.",
-          ],
+          ["evox sessions cleanup --enforce --store ./tmp/sessions.json", "Use a specific store."],
         ])}`,
     )
     .action(async (opts, command) => {

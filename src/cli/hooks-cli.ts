@@ -449,8 +449,7 @@ export function registerHooksCli(program: Command): void {
     .description("Manage internal agent hooks")
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.evox.sh/cli/hooks")}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.evox.sh/cli/hooks")}\n`,
     );
 
   hooks

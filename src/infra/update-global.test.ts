@@ -141,18 +141,8 @@ describe("update global helpers", () => {
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(globalInstallArgs("pnpm", "evox@latest")).toEqual([
-      "pnpm",
-      "add",
-      "-g",
-      "evox@latest",
-    ]);
-    expect(globalInstallArgs("bun", "evox@latest")).toEqual([
-      "bun",
-      "add",
-      "-g",
-      "evox@latest",
-    ]);
+    expect(globalInstallArgs("pnpm", "evox@latest")).toEqual(["pnpm", "add", "-g", "evox@latest"]);
+    expect(globalInstallArgs("bun", "evox@latest")).toEqual(["bun", "add", "-g", "evox@latest"]);
 
     expect(globalInstallFallbackArgs("npm", "evox@latest")).toEqual([
       "npm",

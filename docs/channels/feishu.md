@@ -439,8 +439,8 @@ evox pairing list feishu
 
 ## Gateway management commands
 
-| Command                    | Description                   |
-| -------------------------- | ----------------------------- |
+| Command                | Description                   |
+| ---------------------- | ----------------------------- |
 | `evox gateway status`  | Show gateway status           |
 | `evox gateway install` | Install/start gateway service |
 | `evox gateway stop`    | Stop gateway service          |

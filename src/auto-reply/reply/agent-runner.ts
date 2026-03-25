@@ -5,7 +5,6 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
-import { reportUsageToWebhookIfConfigured } from "../../gateway/usage-webhook.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
@@ -16,6 +15,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { reportUsageToWebhookIfConfigured } from "../../gateway/usage-webhook.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";

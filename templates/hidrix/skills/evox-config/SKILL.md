@@ -10,11 +10,13 @@ EVOX.sh configuration guide. Use this when explaining cron, config, or agent set
 ## ⚠️ IMPORTANT: Path Names
 
 **CORRECT paths:**
+
 - `~/.evox/evox.yaml` — Main config (NOT `~/.openclaw/config.yaml`)
 - `~/.evox/agents/main/` — Agent data
 - `/workspace/` — Trong Docker container
 
 **DEPRECATED (không dùng):**
+
 - ~~`~/.openclaw/`~~ → Dùng `~/.evox/`
 - ~~`openclaw.mjs`~~ → Dùng `evox`
 
@@ -29,16 +31,18 @@ EVOX.sh Cron System
 ```
 
 ### Config example
+
 ```yaml
 # ~/.evox/evox.yaml
 cron:
   jobs:
     - name: daily-report
-      schedule: "0 9 * * *"  # 9 AM daily
+      schedule: "0 9 * * *" # 9 AM daily
       prompt: "Generate daily summary"
 ```
 
 ### Cron expressions
+
 - `* * * * *` = minute hour day month weekday
 - `0 9 * * *` = 9:00 AM daily
 - `0 */4 * * *` = every 4 hours
@@ -47,16 +51,19 @@ cron:
 ## Common Tasks
 
 ### Check config
+
 ```bash
 cat ~/.evox/evox.yaml
 ```
 
 ### Reload config
+
 ```bash
 evox gateway reload
 ```
 
 ### View cron jobs
+
 ```bash
 evox cron list
 ```

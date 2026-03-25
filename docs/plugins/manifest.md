@@ -125,7 +125,7 @@ Those belong in your plugin code and `package.json`.
 | `kind`                | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                 |
 | `channels`            | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                  |
 | `providers`           | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                           |
-| `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that EVOX.sh can inspect without loading plugin code.                                      |
+| `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that EVOX.sh can inspect without loading plugin code.                                       |
 | `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
 | `skills`              | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                      |
 | `name`                | No       | `string`                         | Human-readable plugin name.                                                                                                  |
@@ -143,7 +143,7 @@ EVOX.sh reads this before provider runtime loads.
 | `provider`         | Yes      | `string`                                        | Provider id this choice belongs to.                                                                      |
 | `method`           | Yes      | `string`                                        | Auth method id to dispatch to.                                                                           |
 | `choiceId`         | Yes      | `string`                                        | Stable auth-choice id used by onboarding and CLI flows.                                                  |
-| `choiceLabel`      | No       | `string`                                        | User-facing label. If omitted, EVOX.sh falls back to `choiceId`.                                        |
+| `choiceLabel`      | No       | `string`                                        | User-facing label. If omitted, EVOX.sh falls back to `choiceId`.                                         |
 | `choiceHint`       | No       | `string`                                        | Short helper text for the picker.                                                                        |
 | `groupId`          | No       | `string`                                        | Optional group id for grouping related choices.                                                          |
 | `groupLabel`       | No       | `string`                                        | User-facing label for that group.                                                                        |
@@ -186,9 +186,9 @@ Each field hint can include:
 
 The two files serve different jobs:
 
-| File                   | Use it for                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `openclaw.plugin.json` | Discovery, config validation, auth-choice metadata, and UI hints that must exist before plugin code runs           |
+| File                   | Use it for                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `openclaw.plugin.json` | Discovery, config validation, auth-choice metadata, and UI hints that must exist before plugin code runs       |
 | `package.json`         | npm metadata, dependency installation, and the `evox` block used for entrypoints and setup or catalog metadata |
 
 If you are unsure where a piece of metadata belongs, use this rule:

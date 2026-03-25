@@ -68,7 +68,7 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 | -------- | ------------------------------------------------------------------------------------------------------------- |
 | `stable` | Waits `stableDelayHours`, then applies with deterministic jitter across `stableJitterHours` (spread rollout). |
 | `beta`   | Checks every `betaCheckIntervalHours` (default: hourly) and applies immediately.                              |
-| `dev`    | No automatic apply. Use `evox update` manually.                                                           |
+| `dev`    | No automatic apply. Use `evox update` manually.                                                               |
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
 

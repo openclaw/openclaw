@@ -134,7 +134,7 @@ All OpenShell config lives under `plugins.entries.openshell.config`:
 | ------------------------- | ------------------------ | ------------- | ----------------------------------------------------- |
 | `mode`                    | `"mirror"` or `"remote"` | `"mirror"`    | Workspace sync mode                                   |
 | `command`                 | `string`                 | `"openshell"` | Path or name of the `openshell` CLI                   |
-| `from`                    | `string`                 | `"evox"`  | Sandbox source for first-time create                  |
+| `from`                    | `string`                 | `"evox"`      | Sandbox source for first-time create                  |
 | `gateway`                 | `string`                 | —             | OpenShell gateway name (`--gateway`)                  |
 | `gatewayEndpoint`         | `string`                 | —             | OpenShell gateway endpoint URL (`--gateway-endpoint`) |
 | `policy`                  | `string`                 | —             | OpenShell policy ID for sandbox creation              |

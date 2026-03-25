@@ -209,8 +209,7 @@ export function registerLogsCli(program: Command) {
     .option("--local-time", "Display timestamps in local timezone", false)
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.evox.sh/cli/logs")}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.evox.sh/cli/logs")}\n`,
     );
 
   addGatewayClientOptions(logs);

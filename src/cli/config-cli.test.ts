@@ -491,9 +491,7 @@ describe("config cli", () => {
         "evox config set channels.discord.token --ref-provider default --ref-source",
       );
       expect(helpText).toContain("--ref-id DISCORD_BOT_TOKEN");
-      expect(helpText).toContain(
-        "evox config set --batch-file ./config-set.batch.json --dry-run",
-      );
+      expect(helpText).toContain("evox config set --batch-file ./config-set.batch.json --dry-run");
     });
   });
 

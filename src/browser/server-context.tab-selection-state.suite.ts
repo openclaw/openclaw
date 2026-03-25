@@ -20,10 +20,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function seedRunningProfileState(
-  state: ReturnType<typeof makeState>,
-  profileName = "evox",
-): void {
+function seedRunningProfileState(state: ReturnType<typeof makeState>, profileName = "evox"): void {
   (state.profiles as Map<string, unknown>).set(profileName, {
     profile: { name: profileName },
     running: { pid: 1234, proc: { on: vi.fn() } },
@@ -83,7 +80,7 @@ async function openManagedTabWithRunningProfile(params: {
   const state = makeState("evox");
   seedRunningProfileState(state);
   const ctx = createBrowserRouteContext({ getState: () => state });
-  const evox = ctx.forProfile("evox");
+  const _evox = ctx.forProfile("evox");
   return await openclaw.openTab(params.url ?? "http://127.0.0.1:3009");
 }
 
@@ -115,7 +112,7 @@ describe("browser server-context tab selection state", () => {
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("evox");
     const ctx = createBrowserRouteContext({ getState: () => state });
-    const evox = ctx.forProfile("evox");
+    const _evox = ctx.forProfile("evox");
 
     const opened = await openclaw.openTab("http://127.0.0.1:8080");
     expect(opened.targetId).toBe("CREATED");
@@ -182,7 +179,7 @@ describe("browser server-context tab selection state", () => {
     const state = makeState("evox");
     seedRunningProfileState(state);
     const ctx = createBrowserRouteContext({ getState: () => state });
-    const evox = ctx.forProfile("evox");
+    const _evox = ctx.forProfile("evox");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened.targetId).toBe("NEW");
@@ -202,7 +199,7 @@ describe("browser server-context tab selection state", () => {
     const state = makeState("evox");
     state.resolved.attachOnly = true;
     const ctx = createBrowserRouteContext({ getState: () => state });
-    const evox = ctx.forProfile("evox");
+    const _evox = ctx.forProfile("evox");
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened.targetId).toBe("NEW");
@@ -243,7 +240,7 @@ describe("browser server-context tab selection state", () => {
     global.fetch = withFetchPreconnect(fetchMock);
     const state = makeState("evox");
     const ctx = createBrowserRouteContext({ getState: () => state });
-    const evox = ctx.forProfile("evox");
+    const _evox = ctx.forProfile("evox");
 
     await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
       InvalidBrowserNavigationUrlError,

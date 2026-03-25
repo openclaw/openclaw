@@ -26,10 +26,7 @@ export function registerNodeCli(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          [
-            "evox node run --host 127.0.0.1 --port 18789",
-            "Run the node host in the foreground.",
-          ],
+          ["evox node run --host 127.0.0.1 --port 18789", "Run the node host in the foreground."],
           ["evox node status", "Check node host service status."],
           ["evox node install", "Install the node host service."],
           ["evox node restart", "Restart the installed node host service."],

@@ -797,9 +797,7 @@ describe("web_search kimi provider", () => {
                 },
               },
             ],
-            search_results: [
-              { title: "EVOX.sh", url: "https://evox.sh/docs", content: "docs" },
-            ],
+            search_results: [{ title: "EVOX.sh", url: "https://evox.sh/docs", content: "docs" }],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );

@@ -37,10 +37,7 @@ describe("doctor finalize config flow", () => {
       cfg: { channels: {} },
       shouldWriteConfig: false,
     });
-    expect(note).toHaveBeenCalledWith(
-      'Run "evox doctor --fix" to apply these changes.',
-      "Doctor",
-    );
+    expect(note).toHaveBeenCalledWith('Run "evox doctor --fix" to apply these changes.', "Doctor");
   });
 
   it("writes automatically in repair mode when changes exist", async () => {

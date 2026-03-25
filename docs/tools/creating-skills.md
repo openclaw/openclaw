@@ -102,12 +102,12 @@ The YAML frontmatter supports these fields:
 
 ## Where skills live
 
-| Location                        | Precedence | Scope                 |
-| ------------------------------- | ---------- | --------------------- |
-| `\<workspace\>/skills/`         | Highest    | Per-agent             |
-| `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
+| Location                       | Precedence | Scope                 |
+| ------------------------------ | ---------- | --------------------- |
+| `\<workspace\>/skills/`        | Highest    | Per-agent             |
+| `~/.openclaw/skills/`          | Medium     | Shared (all agents)   |
 | Bundled (shipped with EVOX.sh) | Lowest     | Global                |
-| `skills.load.extraDirs`         | Lowest     | Custom shared folders |
+| `skills.load.extraDirs`        | Lowest     | Custom shared folders |
 
 ## Related
 

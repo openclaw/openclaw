@@ -2,7 +2,7 @@ name: Update Registry
 on:
   push:
     branches: [main]
-    paths: ['skills/**']
+    paths: ["skills/**"]
 permissions:
   contents: write
 jobs:

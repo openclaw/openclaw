@@ -11,8 +11,8 @@ title: "Installer Internals"
 
 EVOX.sh ships three installer scripts, served from `evox.sh`.
 
-| Script                             | Platform             | What it does                                                                                 |
-| ---------------------------------- | -------------------- | -------------------------------------------------------------------------------------------- |
+| Script                             | Platform             | What it does                                                                                |
+| ---------------------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL  | Installs Node if needed, installs EVOX.sh via npm (default) or git, and can run onboarding. |
 | [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | Installs Node + EVOX.sh into a local prefix (`~/.openclaw`). No root required.              |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | Installs Node if needed, installs EVOX.sh via npm (default) or git, and can run onboarding. |
@@ -221,10 +221,10 @@ Designed for environments where you want everything under a local prefix (defaul
 | Flag                   | Description                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------- |
 | `--prefix <path>`      | Install prefix (default: `~/.openclaw`)                                         |
-| `--version <ver>`      | EVOX.sh version or dist-tag (default: `latest`)                                |
+| `--version <ver>`      | EVOX.sh version or dist-tag (default: `latest`)                                 |
 | `--node-version <ver>` | Node version (default: `22.22.0`)                                               |
 | `--json`               | Emit NDJSON events                                                              |
-| `--onboard`            | Run `evox onboard` after install                                            |
+| `--onboard`            | Run `evox onboard` after install                                                |
 | `--no-onboard`         | Skip onboarding (default)                                                       |
 | `--set-npm-prefix`     | On Linux, force npm prefix to `~/.npm-global` if current prefix is not writable |
 | `--help`               | Show usage (`-h`)                                                               |
@@ -236,7 +236,7 @@ Designed for environments where you want everything under a local prefix (defaul
 | Variable                                    | Description                                                                       |
 | ------------------------------------------- | --------------------------------------------------------------------------------- |
 | `OPENCLAW_PREFIX=<path>`                    | Install prefix                                                                    |
-| `OPENCLAW_VERSION=<ver>`                    | EVOX.sh version or dist-tag                                                      |
+| `OPENCLAW_VERSION=<ver>`                    | EVOX.sh version or dist-tag                                                       |
 | `OPENCLAW_NODE_VERSION=<ver>`               | Node version                                                                      |
 | `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                                   |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                                                     |
@@ -313,7 +313,7 @@ Designed for environments where you want everything under a local prefix (defaul
 | --------------------------- | ---------------------------------------------------------- |
 | `-InstallMethod npm\|git`   | Install method (default: `npm`)                            |
 | `-Tag <tag\|version\|spec>` | npm dist-tag, version, or package spec (default: `latest`) |
-| `-GitDir <path>`            | Checkout directory (default: `%USERPROFILE%\evox`)     |
+| `-GitDir <path>`            | Checkout directory (default: `%USERPROFILE%\evox`)         |
 | `-NoOnboard`                | Skip onboarding                                            |
 | `-NoGitUpdate`              | Skip `git pull`                                            |
 | `-DryRun`                   | Print actions only                                         |

@@ -144,10 +144,7 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([
-        expectedBuildSpawn(),
-        [process.execPath, "evox.mjs", "status"],
-      ]);
+      expect(spawnCalls).toEqual([expectedBuildSpawn(), [process.execPath, "evox.mjs", "status"]]);
 
       await expect(
         fs.readFile(path.join(tmp, "dist", "plugin-sdk", "root-alias.cjs"), "utf-8"),
@@ -293,10 +290,7 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([
-        expectedBuildSpawn(),
-        [process.execPath, "evox.mjs", "status"],
-      ]);
+      expect(spawnCalls).toEqual([expectedBuildSpawn(), [process.execPath, "evox.mjs", "status"]]);
     });
   });
 
@@ -762,10 +756,7 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([
-        expectedBuildSpawn(),
-        [process.execPath, "evox.mjs", "status"],
-      ]);
+      expect(spawnCalls).toEqual([expectedBuildSpawn(), [process.execPath, "evox.mjs", "status"]]);
     });
   });
 });

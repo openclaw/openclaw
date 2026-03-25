@@ -3,10 +3,7 @@ import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  POSIX_EVOX_TMP_DIR,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-evox-dir.js";
+import { POSIX_EVOX_TMP_DIR, resolvePreferredOpenClawTmpDir } from "../infra/tmp-evox-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";

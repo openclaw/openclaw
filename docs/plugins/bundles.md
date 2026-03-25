@@ -74,9 +74,9 @@ is detected but not yet wired.
 
 | Feature       | How it maps                                                                                          | Applies to     |
 | ------------- | ---------------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal EVOX.sh skills                                                    | All formats    |
+| Skill content | Bundle skill roots load as normal EVOX.sh skills                                                     | All formats    |
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                           | Claude, Cursor |
-| Hook packs    | EVOX.sh-style `HOOK.md` + `handler.ts` layouts                                                      | Codex          |
+| Hook packs    | EVOX.sh-style `HOOK.md` + `handler.ts` layouts                                                       | Codex          |
 | MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio servers launched as subprocesses | All formats    |
 | Settings      | Claude `settings.json` imported as embedded Pi defaults                                              | Claude         |
 
