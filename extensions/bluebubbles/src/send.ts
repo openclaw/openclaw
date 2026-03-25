@@ -17,8 +17,7 @@ import {
   type SsrFPolicy,
 } from "./types.js";
 
-function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy | undefined {
-  if (allowPrivateNetwork === undefined) return undefined;
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
   return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
 }
 
