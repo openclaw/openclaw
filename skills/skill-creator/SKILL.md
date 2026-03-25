@@ -268,28 +268,43 @@ Skip this step only if the skill being developed already exists, and iteration o
 
 When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
 
+**Important: Always create skills in your workspace directory, NOT in the global OpenClaw installation.** Skills created in the global `node_modules/openclaw/skills/` directory will be lost when you upgrade OpenClaw.
+
 Usage:
 
 ```bash
-scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
+scripts/init_skill.py <skill-name> [--path <output-directory>] [--resources scripts,references,assets] [--examples]
 ```
 
 Examples:
 
 ```bash
-scripts/init_skill.py my-skill --path skills/public
-scripts/init_skill.py my-skill --path skills/public --resources scripts,references
-scripts/init_skill.py my-skill --path skills/public --resources scripts --examples
+# Create in default workspace skills directory (~/.openclaw/workspace/skills/)
+scripts/init_skill.py my-skill
+
+# Create in default workspace with resources
+scripts/init_skill.py my-skill --resources scripts,references
+
+# Create in default workspace with resources and examples
+scripts/init_skill.py my-skill --resources scripts --examples
+
+# Create in a custom directory (use absolute paths to avoid confusion)
+scripts/init_skill.py my-skill --path /absolute/path/to/skills
+scripts/init_skill.py my-skill --path ~/.openclaw/workspace/skills
 ```
 
 The script:
 
-- Creates the skill directory at the specified path
+- Creates the skill directory at the specified path (defaults to workspace skills directory if `--path` is omitted)
 - Generates a SKILL.md template with proper frontmatter and TODO placeholders
 - Optionally creates resource directories based on `--resources`
 - Optionally adds example files when `--examples` is set
 
 After initialization, customize the SKILL.md and add resources as needed. If you used `--examples`, replace or delete placeholder files.
+
+**Default behavior:** When `--path` is not specified, the skill is created in:
+- `~/.openclaw/workspace/skills/<skill-name>/` (default)
+- Or `$OPENCLAW_WORKSPACE_DIR/skills/<skill-name>/` if the environment variable is set
 
 ### Step 4: Edit the Skill
 

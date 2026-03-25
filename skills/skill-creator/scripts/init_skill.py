@@ -3,16 +3,22 @@
 Skill Initializer - Creates a new skill from template
 
 Usage:
-    init_skill.py <skill-name> --path <path> [--resources scripts,references,assets] [--examples]
+    init_skill.py <skill-name> [--path <path>] [--resources scripts,references,assets] [--examples]
 
 Examples:
-    init_skill.py my-new-skill --path skills/public
-    init_skill.py my-new-skill --path skills/public --resources scripts,references
-    init_skill.py my-api-helper --path skills/private --resources scripts --examples
+    init_skill.py my-new-skill                                    # Creates in workspace skills directory
+    init_skill.py my-new-skill --path /absolute/path/to/skills    # Creates in specified directory
+    init_skill.py my-new-skill --path ~/.openclaw/workspace/skills --resources scripts,references
+    init_skill.py my-api-helper --resources scripts --examples
     init_skill.py custom-skill --path /custom/location
+
+When --path is not specified, the skill is created in the OpenClaw workspace skills directory:
+- Defaults to ~/.openclaw/workspace/skills/<skill-name>
+- Respects OPENCLAW_WORKSPACE_DIR environment variable if set
 """
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -317,12 +323,41 @@ def init_skill(skill_name, path, resources, include_examples):
     return skill_dir
 
 
+def resolve_default_skills_dir():
+    """
+    Resolve the default skills directory for the OpenClaw workspace.
+    
+    Priority:
+    1. OPENCLAW_WORKSPACE_DIR env var + /skills
+    2. ~/.openclaw/workspace/skills (default)
+    
+    Returns the absolute path to the skills directory.
+    """
+    # Check for workspace directory override
+    workspace_dir = os.environ.get("OPENCLAW_WORKSPACE_DIR", "").strip()
+    if not workspace_dir:
+        # Default workspace directory
+        home = os.path.expanduser("~")
+        workspace_dir = os.path.join(home, ".openclaw", "workspace")
+    else:
+        # Expand tilde in env var (e.g., "~/.openclaw/workspace")
+        workspace_dir = os.path.expanduser(workspace_dir)
+    
+    skills_dir = os.path.join(workspace_dir, "skills")
+    return os.path.abspath(skills_dir)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Create a new skill directory with a SKILL.md template.",
     )
     parser.add_argument("skill_name", help="Skill name (normalized to hyphen-case)")
-    parser.add_argument("--path", required=True, help="Output directory for the skill")
+    parser.add_argument(
+        "--path",
+        required=False,
+        default=None,
+        help="Output directory for the skill (default: workspace skills directory)",
+    )
     parser.add_argument(
         "--resources",
         default="",
@@ -354,7 +389,12 @@ def main():
         print("[ERROR] --examples requires --resources to be set.")
         sys.exit(1)
 
-    path = args.path
+    # Resolve path: use provided --path or default to workspace skills directory
+    if args.path:
+        path = args.path
+    else:
+        path = resolve_default_skills_dir()
+        print(f"[INFO] No --path specified, using default workspace skills directory: {path}")
 
     print(f"Initializing skill: {skill_name}")
     print(f"   Location: {path}")
