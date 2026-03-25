@@ -1,4 +1,5 @@
-import { normalize, isAbsolute } from "node:path";
+import { isAbsolute } from "node:path";
+import { normalize as posixNormalize } from "node:path/posix";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 
 export interface WorkerModeEnv {
@@ -47,8 +48,11 @@ export function parseWorkerModeEnv(): WorkerModeEnv {
       `[openclaw] --mode=worker: OPENCLAW_CONFIG_PATH must be an absolute path, got: ${rawConfigPath}`,
     );
   }
-  const normalizedConfigPath = normalize(rawConfigPath);
-  if (normalizedConfigPath !== rawConfigPath) {
+  // Use posix normalize for cross-platform traversal detection: on Windows,
+  // node:path normalize converts / to \, making the string-equality check fail
+  // for legitimate paths. posix normalize only resolves .. segments.
+  const posixNormalized = posixNormalize(rawConfigPath);
+  if (posixNormalized !== rawConfigPath) {
     throw new Error(
       `[openclaw] --mode=worker: OPENCLAW_CONFIG_PATH must not contain traversal segments (..): ${rawConfigPath}`,
     );
@@ -62,7 +66,7 @@ export function parseWorkerModeEnv(): WorkerModeEnv {
     );
   }
 
-  return { teamName, memberName, role, configPath: normalizedConfigPath, notifyPort };
+  return { teamName, memberName, role, configPath: rawConfigPath, notifyPort };
 }
 
 export function registerWorkerFactory(fn: WorkerFactory | null): void {

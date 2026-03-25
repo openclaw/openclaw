@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, createWriteStream } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname } from "node:path";
 
 export interface AgentProcessConfig {
   teamName: string;
@@ -60,16 +60,14 @@ export function spawnAgentProcess(config: AgentProcessConfig): ChildProcess {
   // Capture stdout/stderr to per-member log files.
   // Attach error handlers to prevent unhandled error events from crashing the
   // parent process if the log directory becomes unavailable (disk full, etc.)
-  const stdoutLog = createWriteStream(
-    join(logDir, `${config.memberName}.log`),
-    { flags: "a" },
-  );
-  const stderrLog = createWriteStream(
-    join(logDir, `${config.memberName}.err`),
-    { flags: "a" },
-  );
-  stdoutLog.on("error", () => { /* log write failures are non-fatal */ });
-  stderrLog.on("error", () => { /* log write failures are non-fatal */ });
+  const stdoutLog = createWriteStream(join(logDir, `${config.memberName}.log`), { flags: "a" });
+  const stderrLog = createWriteStream(join(logDir, `${config.memberName}.err`), { flags: "a" });
+  stdoutLog.on("error", () => {
+    /* log write failures are non-fatal */
+  });
+  stderrLog.on("error", () => {
+    /* log write failures are non-fatal */
+  });
 
   child.stdout?.pipe(stdoutLog);
   child.stderr?.pipe(stderrLog);
