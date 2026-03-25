@@ -20,6 +20,7 @@ type DiscordInboundWorkerParams = {
 export type DiscordInboundWorker = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
+  waitForIdle: () => Promise<void>;
 };
 
 function formatDiscordRunContextSuffix(job: DiscordInboundJob): string {
@@ -181,5 +182,8 @@ export function createDiscordInboundWorker(
         });
     },
     deactivate: runState.deactivate,
+    waitForIdle: async () => {
+      await runQueue.waitForIdle();
+    },
   };
 }

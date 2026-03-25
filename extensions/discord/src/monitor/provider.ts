@@ -44,7 +44,12 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordAccount } from "../accounts.js";
+import {
+  forgetDiscordManagedBotIdentity,
+  rememberDiscordManagedBotIdentity,
+  resolveDiscordAccount,
+} from "../accounts.js";
+import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -85,6 +90,7 @@ import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
+import { normalizeDiscordInboundWorkerTimeoutMs } from "./timeouts.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -172,6 +178,38 @@ function appendPluginCommandSpecs(params: {
 
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
+class WithTimeoutError extends Error {
+  constructor() {
+    super("timeout");
+    this.name = "WithTimeoutError";
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer: NodeJS.Timeout | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new WithTimeoutError()), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+}
+
+const DISCORD_MESSAGE_HANDLER_IDLE_TIMEOUT_CAP_MS = 15_000;
+const DISCORD_MANAGED_IDENTITY_DEFER_CLEANUP_MS = 5_000;
+
+function resolveDiscordMessageHandlerIdleTimeoutMs(raw: number | undefined): number {
+  const normalized = normalizeDiscordInboundWorkerTimeoutMs(raw);
+  if (!normalized) {
+    return DISCORD_MESSAGE_HANDLER_IDLE_TIMEOUT_CAP_MS;
+  }
+  return Math.min(normalized, DISCORD_MESSAGE_HANDLER_IDLE_TIMEOUT_CAP_MS);
+}
 
 function isLegacyMissingSessionError(message: string): boolean {
   return (
@@ -650,9 +688,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let lifecycleStarted = false;
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => void) | undefined;
+  let waitForMessageHandlerIdle: (() => Promise<void>) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
+  let botUserId: string | undefined;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -852,7 +892,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       string,
       import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
     >();
-    let botUserId: string | undefined;
     let botUserName: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
@@ -889,6 +928,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botUser = await client.fetchUser("@me");
       botUserId = botUser?.id;
       botUserName = botUser?.username?.trim() || botUser?.globalName?.trim() || undefined;
+      if (botUserId) {
+        rememberDiscordManagedBotIdentity({
+          botUserId,
+          accountId: account.accountId,
+        });
+      }
       logDiscordStartupPhase({
         runtime,
         accountId: account.accountId,
@@ -947,6 +992,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordRestFetch,
     });
     deactivateMessageHandler = messageHandler.deactivate;
+    waitForMessageHandlerIdle = messageHandler.waitForIdle;
     const trackInboundEvent = opts.setStatus
       ? () => {
           const at = Date.now();
@@ -1025,6 +1071,38 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
   } finally {
     deactivateMessageHandler?.();
+    let drainTimedOut = false;
+    if (waitForMessageHandlerIdle) {
+      const idleTimeoutMs = resolveDiscordMessageHandlerIdleTimeoutMs(
+        discordCfg.inboundWorker?.runTimeoutMs,
+      );
+      try {
+        await withTimeout(waitForMessageHandlerIdle(), idleTimeoutMs);
+      } catch (error) {
+        const isTimeout = error instanceof WithTimeoutError;
+        const message = isTimeout
+          ? `discord: inbound handler did not drain within ${idleTimeoutMs}ms during teardown; continuing shutdown`
+          : `discord: inbound handler idle wait failed during teardown: ${formatErrorMessage(error)}`;
+        runtime.log?.(warn(message));
+        if (isTimeout) {
+          drainTimedOut = true;
+        }
+      }
+    }
+    if (drainTimedOut) {
+      runtime.log?.(
+        warn(
+          "discord: deferring managed-identity cleanup by ${DISCORD_MANAGED_IDENTITY_DEFER_CLEANUP_MS}ms to let in-flight inbound jobs finish",
+        ),
+      );
+      await new Promise((resolve) =>
+        setTimeout(resolve, DISCORD_MANAGED_IDENTITY_DEFER_CLEANUP_MS),
+      );
+    }
+    forgetDiscordManagedBotIdentity({
+      botUserId,
+      accountId: account.accountId,
+    });
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });
     if (onEarlyGatewayDebug) {
