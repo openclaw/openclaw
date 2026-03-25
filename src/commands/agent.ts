@@ -44,6 +44,7 @@ import { normalizeSpawnedRunMetadata } from "../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
+import { applyRoleReplyGuard } from "../auto-reply/reply/role-output-guard.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -837,9 +838,14 @@ async function agentCommandInternal(
         );
       }
 
-      const normalizedFinalPayload = normalizeReplyPayload({
-        text: finalText,
-      });
+      const normalizedFinalPayload = normalizeReplyPayload(
+        applyRoleReplyGuard(
+          {
+            text: finalText,
+          },
+          sessionAgentId,
+        ),
+      );
       const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
       const result = {
         payloads,
@@ -1202,7 +1208,9 @@ async function agentCommandInternal(
       });
     }
 
-    const payloads = result.payloads ?? [];
+    const payloads = (result.payloads ?? []).map((payload) =>
+      applyRoleReplyGuard(payload, sessionAgentId),
+    );
     return await deliverAgentCommandResult({
       cfg,
       deps,
@@ -1210,7 +1218,10 @@ async function agentCommandInternal(
       opts,
       outboundSession,
       sessionEntry,
-      result,
+      result: {
+        ...result,
+        payloads,
+      },
       payloads,
     });
   } finally {

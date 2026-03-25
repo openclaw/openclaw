@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -6,6 +7,7 @@ import { maybeApplyTtsToPayload } from "../../tts/tts.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { applyRoleReplyGuard } from "./role-output-guard.js";
 import { routeReply } from "./route-reply.js";
 
 export type AcpDispatchDeliveryMeta = {
@@ -65,6 +67,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  const sessionAgentId = params.ctx.SessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.ctx.SessionKey,
+        config: params.cfg,
+      })
+    : undefined;
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
@@ -139,18 +147,19 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       inboundAudio: params.inboundAudio,
       ttsAuto: params.sessionTtsAuto,
     });
+    const guardedPayload = applyRoleReplyGuard(ttsPayload, sessionAgentId);
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
-        const edited = await tryEditToolMessage(ttsPayload, toolCallId);
+        const edited = await tryEditToolMessage(guardedPayload, toolCallId);
         if (edited) {
           return true;
         }
       }
 
       const result = await routeReply({
-        payload: ttsPayload,
+        payload: guardedPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
@@ -178,12 +187,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
 
     if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
+      return params.dispatcher.sendToolResult(guardedPayload);
     }
     if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
+      return params.dispatcher.sendBlockReply(guardedPayload);
     }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    return params.dispatcher.sendFinalReply(guardedPayload);
   };
 
   return {

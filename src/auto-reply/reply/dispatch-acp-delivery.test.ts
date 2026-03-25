@@ -72,4 +72,29 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(onReplyStart).not.toHaveBeenCalled();
   });
+
+  it("applies role guard to ACP final delivery using the session agent id", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:coder-bot:main",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("final", {
+      text: "I can help write code changes and debug the issue.",
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("coder-bot"),
+      }),
+    );
+  });
 });

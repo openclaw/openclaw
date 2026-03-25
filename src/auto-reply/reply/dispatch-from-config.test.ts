@@ -511,6 +511,30 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("applies role guard to final replies based on the session agent id", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:coder-bot:main",
+    });
+
+    const replyResolver = async () =>
+      ({
+        text: "I can help write code changes and debug the issue.",
+      }) satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("coder-bot"),
+      }),
+    );
+  });
+
   it("suppresses group tool summaries but still forwards tool media", async () => {
     setNoAbort();
     const cfg = emptyConfig;

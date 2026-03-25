@@ -34,6 +34,7 @@ import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispat
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
+import { applyRoleReplyGuard } from "./role-output-guard.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -172,6 +173,12 @@ export async function dispatchReplyFromConfig(params: {
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+  const sessionAgentId = sessionKey
+    ? resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+      })
+    : undefined;
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
   const hookRunner = getGlobalHookRunner();
@@ -280,11 +287,12 @@ export async function dispatchReplyFromConfig(params: {
       const payload = {
         text: formatAbortReplyText(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
+      const guardedPayload = applyRoleReplyGuard(payload, sessionAgentId);
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         const result = await routeReply({
-          payload,
+          payload: guardedPayload,
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -304,7 +312,7 @@ export async function dispatchReplyFromConfig(params: {
           );
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(payload);
+        queuedFinal = dispatcher.sendFinalReply(guardedPayload);
       }
       const counts = dispatcher.getQueuedCounts();
       counts.final += routedFinalCount;
@@ -423,10 +431,11 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
+            const guardedPayload = applyRoleReplyGuard(deliveryPayload, sessionAgentId);
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(deliveryPayload, undefined, false);
+              await sendPayloadAsync(guardedPayload, undefined, false);
             } else {
-              dispatcher.sendToolResult(deliveryPayload);
+              dispatcher.sendToolResult(guardedPayload);
             }
           };
           return run();
@@ -455,10 +464,11 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
+            const guardedPayload = applyRoleReplyGuard(ttsPayload, sessionAgentId);
             if (shouldRouteToOriginating) {
-              await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
+              await sendPayloadAsync(guardedPayload, context?.abortSignal, false);
             } else {
-              dispatcher.sendBlockReply(ttsPayload);
+              dispatcher.sendBlockReply(guardedPayload);
             }
           };
           return run();
@@ -511,10 +521,11 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      const guardedReply = applyRoleReplyGuard(ttsReply, sessionAgentId);
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
         const result = await routeReply({
-          payload: ttsReply,
+          payload: guardedReply,
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: ctx.SessionKey,
@@ -534,7 +545,7 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        queuedFinal = dispatcher.sendFinalReply(guardedReply) || queuedFinal;
       }
     }
 
@@ -564,9 +575,10 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
+          const guardedPayload = applyRoleReplyGuard(ttsOnlyPayload, sessionAgentId);
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
             const result = await routeReply({
-              payload: ttsOnlyPayload,
+              payload: guardedPayload,
               channel: originatingChannel,
               to: originatingTo,
               sessionKey: ctx.SessionKey,
@@ -586,7 +598,7 @@ export async function dispatchReplyFromConfig(params: {
               );
             }
           } else {
-            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+            const didQueue = dispatcher.sendFinalReply(guardedPayload);
             queuedFinal = didQueue || queuedFinal;
           }
         }

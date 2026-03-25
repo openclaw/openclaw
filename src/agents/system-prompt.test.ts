@@ -163,6 +163,16 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
     });
 
+    expect(prompt).toContain("## Role Priority");
+    expect(prompt).toContain(
+      "Do not present yourself as a generic coding or software-engineering assistant unless the workspace files explicitly assign that role.",
+    );
+    expect(prompt).toContain(
+      "If injected workspace context includes SOUL.md, IDENTITY.md, AGENTS.md, or USER.md, treat those files as the primary source of truth",
+    );
+    expect(prompt).toContain(
+      "Do not silently switch between engineering contract-design, implementation, and review roles unless the workspace files explicitly reassign you.",
+    );
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
