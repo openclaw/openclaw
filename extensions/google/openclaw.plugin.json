@@ -39,6 +39,10 @@
     "webSearch.model": {
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
+    },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Gemini API base URL override for web search grounding (e.g. for proxy or private endpoints)."
     }
   },
   "configSchema": {
@@ -53,6 +57,9 @@
             "type": ["string", "object"]
           },
           "model": {
+            "type": "string"
+          },
+          "baseUrl": {
             "type": "string"
           }
         }

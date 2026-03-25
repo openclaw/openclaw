@@ -15,4 +15,19 @@ describe("gemini web search provider", () => {
     expect(__testing.resolveGeminiModel({ model: "  " })).toBe("gemini-2.5-flash");
     expect(__testing.resolveGeminiModel({ model: "gemini-2.5-pro" })).toBe("gemini-2.5-pro");
   });
+
+  it("resolves the default base URL when unset or blank", () => {
+    expect(__testing.resolveGeminiBaseUrl()).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+    expect(__testing.resolveGeminiBaseUrl({ baseUrl: "  " })).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
+  });
+
+  it("prefers configured base URL over default", () => {
+    expect(__testing.resolveGeminiBaseUrl({ baseUrl: "https://custom.api.com" })).toBe(
+      "https://custom.api.com",
+    );
+  });
 });

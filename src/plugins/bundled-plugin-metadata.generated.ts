@@ -1109,6 +1109,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               model: {
                 type: "string",
               },
+              baseUrl: {
+                type: "string",
+              },
             },
           },
         },
@@ -1152,6 +1155,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         "webSearch.model": {
           label: "Gemini Search Model",
           help: "Gemini model override for web search grounding.",
+        },
+        "webSearch.baseUrl": {
+          label: "Gemini Search Base URL",
+          help: "Gemini API base URL override for web search grounding (e.g. for proxy or private endpoints).",
         },
       },
     },
