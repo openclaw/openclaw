@@ -416,7 +416,7 @@ export async function processMessage(params: {
           // Only deliver final replies to external messaging channels (WhatsApp).
           // Block (reasoning/thinking) and tool updates are meant for the internal
           // web UI only; sending them here leaks chain-of-thought to end users.
-          return;
+          return false;
         }
         await deliverWebReply({
           replyResult: payload,
@@ -446,6 +446,7 @@ export async function processMessage(params: {
           const preview = payload.text != null ? elide(reply.text, 400) : "<media>";
           whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
         }
+        return true;
       },
       onError: (err, info) => {
         const label =

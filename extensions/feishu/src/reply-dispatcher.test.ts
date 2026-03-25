@@ -281,7 +281,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
-    await options.deliver({ text: "```md\npartial answer\n```" }, { kind: "block" });
+    await expect(
+      options.deliver({ text: "```md\npartial answer\n```" }, { kind: "block" }),
+    ).resolves.toBe(true);
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
@@ -636,6 +638,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       threadReply: true,
       rootId: "om_root_topic",
     });
+    await expect(
+      options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" }),
+    ).resolves.toBe(false);
     await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(0);

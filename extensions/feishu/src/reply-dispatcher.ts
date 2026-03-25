@@ -370,8 +370,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
 
         if (!shouldDeliverText && !hasMedia) {
-          return;
+          return false;
         }
+
+        let deliveredVisibleContent = false;
 
         if (shouldDeliverText) {
           const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
@@ -380,7 +382,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
             if (!(streamingEnabled && useCard)) {
-              return;
+              return false;
             }
             startStreaming();
             if (streamingStartPromise) {
@@ -406,11 +408,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               await closeStreaming();
               deliveredFinalTexts.add(text);
             }
+            deliveredVisibleContent = true;
             // Send media even when streaming handled the text
             if (hasMedia) {
               await sendMediaReplies(payload);
+              deliveredVisibleContent = true;
             }
-            return;
+            return deliveredVisibleContent;
           }
 
           if (useCard) {
@@ -434,6 +438,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 });
               },
             });
+            deliveredVisibleContent = true;
           } else {
             await sendChunkedTextReply({
               text,
@@ -451,12 +456,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 });
               },
             });
+            deliveredVisibleContent = true;
           }
         }
 
         if (hasMedia) {
           await sendMediaReplies(payload);
+          deliveredVisibleContent = true;
         }
+
+        return deliveredVisibleContent;
       },
       onError: async (error, info) => {
         params.runtime.error?.(

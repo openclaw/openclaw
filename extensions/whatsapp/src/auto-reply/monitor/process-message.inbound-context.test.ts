@@ -292,16 +292,19 @@ describe("web processMessage inbound context", () => {
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
-      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+      | ((
+          payload: { text?: string },
+          info: { kind: "tool" | "block" | "final" },
+        ) => Promise<boolean | void>)
       | undefined;
     expect(deliver).toBeTypeOf("function");
 
-    await deliver?.({ text: "tool payload" }, { kind: "tool" });
-    await deliver?.({ text: "block payload" }, { kind: "block" });
+    await expect(deliver?.({ text: "tool payload" }, { kind: "tool" })).resolves.toBe(false);
+    await expect(deliver?.({ text: "block payload" }, { kind: "block" })).resolves.toBe(false);
     expect(deliverWebReplyMock).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
-    await deliver?.({ text: "final payload" }, { kind: "final" });
+    await expect(deliver?.({ text: "final payload" }, { kind: "final" })).resolves.toBe(true);
     expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
     expect(rememberSentText).toHaveBeenCalledTimes(1);
   });
