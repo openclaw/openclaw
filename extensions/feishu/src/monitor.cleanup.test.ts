@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  botNames,
-  botOpenIds,
-  stopFeishuMonitorState,
-  wsClients,
-} from "./monitor.state.js";
+import { botNames, botOpenIds, stopFeishuMonitorState, wsClients } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const createFeishuWSClientMock = vi.hoisted(() => vi.fn());
