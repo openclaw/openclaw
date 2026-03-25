@@ -55,6 +55,25 @@ async function loadMatrixSendModules() {
   ({ sendTypingMatrix } = await import("./send.js"));
   ({ voteMatrixPoll } = await import("./actions/polls.js"));
 }
+
+function createEncryptedMediaPayload() {
+  return {
+    buffer: Buffer.from("encrypted"),
+    file: {
+      key: {
+        kty: "oct",
+        key_ops: ["encrypt", "decrypt"],
+        alg: "A256CTR",
+        k: "secret",
+        ext: true,
+      },
+      iv: "iv",
+      hashes: { sha256: "hash" },
+      v: "v2",
+    },
+  };
+}
+
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
@@ -73,6 +92,22 @@ const makeClient = () => {
   } as unknown as import("./sdk.js").MatrixClient;
   return { client, sendMessage, sendEvent, getEvent, uploadContent };
 };
+
+function makeEncryptedMediaClient() {
+  const result = makeClient();
+  (result.client as { crypto?: object }).crypto = {
+    isRoomEncrypted: vi.fn().mockResolvedValue(true),
+    encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
+  };
+  return result;
+}
+
+async function resetMatrixSendRuntimeMocks() {
+  loadConfigMock.mockReset().mockReturnValue({});
+  mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+  isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
+  await loadMatrixSendModules();
+}
 
 describe("sendMessageMatrix media", () => {
   beforeAll(async () => {
@@ -119,25 +154,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uploads encrypted media with file payloads", async () => {
-    const { client, sendMessage, uploadContent } = makeClient();
-    (client as { crypto?: object }).crypto = {
-      isRoomEncrypted: vi.fn().mockResolvedValue(true),
-      encryptMedia: vi.fn().mockResolvedValue({
-        buffer: Buffer.from("encrypted"),
-        file: {
-          key: {
-            kty: "oct",
-            key_ops: ["encrypt", "decrypt"],
-            alg: "A256CTR",
-            k: "secret",
-            ext: true,
-          },
-          iv: "iv",
-          hashes: { sha256: "hash" },
-          v: "v2",
-        },
-      }),
-    };
+    const { client, sendMessage, uploadContent } = makeEncryptedMediaClient();
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
@@ -156,25 +173,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("does not upload plaintext thumbnails for encrypted image sends", async () => {
-    const { client, uploadContent } = makeClient();
-    (client as { crypto?: object }).crypto = {
-      isRoomEncrypted: vi.fn().mockResolvedValue(true),
-      encryptMedia: vi.fn().mockResolvedValue({
-        buffer: Buffer.from("encrypted"),
-        file: {
-          key: {
-            kty: "oct",
-            key_ops: ["encrypt", "decrypt"],
-            alg: "A256CTR",
-            k: "secret",
-            ext: true,
-          },
-          iv: "iv",
-          hashes: { sha256: "hash" },
-          v: "v2",
-        },
-      }),
-    };
+    const { client, uploadContent } = makeEncryptedMediaClient();
     getImageMetadataMock
       .mockResolvedValueOnce({ width: 1600, height: 1200 })
       .mockResolvedValueOnce({ width: 800, height: 600 });
@@ -332,10 +331,7 @@ describe("sendMessageMatrix media", () => {
 describe("sendMessageMatrix threads", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
-    loadConfigMock.mockReset().mockReturnValue({});
-    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
-    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    await loadMatrixSendModules();
+    await resetMatrixSendRuntimeMocks();
   });
 
   it("includes thread relation metadata when threadId is set", async () => {
@@ -380,10 +376,7 @@ describe("voteMatrixPoll", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    loadConfigMock.mockReset().mockReturnValue({});
-    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
-    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    await loadMatrixSendModules();
+    await resetMatrixSendRuntimeMocks();
   });
 
   it("maps 1-based option indexes to Matrix poll answer ids", async () => {

@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 961,
+            "line": 1049,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 970,
+            "line": 1058,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2377,7 +2377,7 @@
           "exportName": "buildCommandsPaginationKeyboard",
           "kind": "function",
           "source": {
-            "line": 89,
+            "line": 196,
             "path": "src/auto-reply/reply/commands-info.ts"
           }
         },
@@ -2413,7 +2413,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 841,
+            "line": 844,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -3018,7 +3018,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 162,
+            "line": 163,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 436,
+            "line": 437,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 413,
+            "line": 414,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3072,7 +3072,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 245,
+            "line": 246,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3090,7 +3090,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 276,
+            "line": 277,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3239,6 +3239,15 @@
           }
         },
         {
+          "declaration": "export function resolveGatewayPort(cfg?: OpenClawConfig | undefined, env?: ProcessEnv): number;",
+          "exportName": "resolveGatewayPort",
+          "kind": "function",
+          "source": {
+            "line": 285,
+            "path": "src/config/paths.ts"
+          }
+        },
+        {
           "declaration": "export function resolveTailnetHostWithRunner(runCommandWithTimeout?: TailscaleStatusCommandRunner | undefined): Promise<string | null>;",
           "exportName": "resolveTailnetHostWithRunner",
           "kind": "function",
@@ -3279,7 +3288,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 142,
+            "line": 143,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3288,7 +3297,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 154,
+            "line": 155,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3360,7 +3369,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 137,
+            "line": 138,
             "path": "src/plugin-sdk/core.ts"
           }
         },

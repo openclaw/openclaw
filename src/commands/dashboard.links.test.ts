@@ -64,7 +64,6 @@ function mockSnapshot(token: unknown = "abc") {
 
 describe("dashboardCommand", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ dashboardCommand } = await import("./dashboard.js"));
   });
 

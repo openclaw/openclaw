@@ -1,20 +1,21 @@
 import { beforeEach, vi } from "vitest";
-
-type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
-  (...args: TArgs): Promise<TResult>;
-  mockReset: () => AsyncMock<TArgs, TResult>;
-  mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
-  mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
-};
+import {
+  type AsyncMock,
+  loadConfigMock,
+  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
+  resetPairingSecurityMocks,
+  upsertPairingRequestMock as pairingUpsertPairingRequestMock,
+} from "../pairing-security.test-harness.js";
 
 export const sendMessageMock = vi.fn() as AsyncMock;
-export const readAllowFromStoreMock = vi.fn() as AsyncMock;
-export const upsertPairingRequestMock = vi.fn() as AsyncMock;
+export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
+export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 let config: Record<string, unknown> = {};
 
 export function setAccessControlTestConfig(next: Record<string, unknown>): void {
   config = next;
+  loadConfigMock.mockReturnValue(config);
 }
 
 export function setupAccessControlTestHarness(): void {
@@ -28,8 +29,7 @@ export function setupAccessControlTestHarness(): void {
       },
     };
     sendMessageMock.mockReset().mockResolvedValue(undefined);
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+    resetPairingSecurityMocks(config);
   });
 }
 
