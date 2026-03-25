@@ -49,9 +49,19 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+If the Gateway runs in Docker or Docker Compose, use the CLI container instead:
+
+```bash
+# List pending requests
+docker compose run --rm openclaw-cli devices list
+
+# Approve by request ID
+docker compose run --rm openclaw-cli devices approve <requestId>
+```
+
 If the browser retries pairing with changed auth details (role/scopes/public
 key), the previous pending request is superseded and a new `requestId` is
-created. Re-run `openclaw devices list` before approval.
+created. Re-run the matching `devices list` command before approval.
 
 Once approved, the device is remembered and won't require re-approval unless
 you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
