@@ -518,7 +518,7 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
 }
 
 /** Channels that require opus audio */
-const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix", "discord"]);
 
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && OPUS_CHANNELS.has(channelId)) {
