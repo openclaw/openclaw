@@ -41,6 +41,7 @@ describe("marketplace plugins", () => {
   afterEach(() => {
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
+    vi.unstubAllGlobals();
   });
 
   it("lists plugins from a local marketplace root", async () => {
@@ -211,6 +212,39 @@ describe("marketplace plugins", () => {
       pluginId: "frontend-design",
       marketplacePlugin: "frontend-design",
       marketplaceSource: "owner/repo",
+    });
+  });
+
+  it("returns a structured error for archive downloads with an empty response body", async () => {
+    await withTempDir(async (rootDir) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 200 })),
+      );
+      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(rootDir, ".claude-plugin", "marketplace.json"),
+        JSON.stringify({
+          plugins: [
+            {
+              name: "frontend-design",
+              source: "https://example.com/frontend-design.tgz",
+            },
+          ],
+        }),
+      );
+
+      const { installPluginFromMarketplace } = await import("./marketplace.js");
+      const result = await installPluginFromMarketplace({
+        marketplace: path.join(rootDir, ".claude-plugin", "marketplace.json"),
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "failed to download https://example.com/frontend-design.tgz: empty response body",
+      });
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });
 
