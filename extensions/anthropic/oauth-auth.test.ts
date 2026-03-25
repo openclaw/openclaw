@@ -2,7 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Anthropic OAuth authentication", () => {
-  it("should use Bearer auth for OAuth tokens (sk-ant-oat01-)", async () => {
+  it("should use Bearer auth for OAuth tokens (sk-ant-oat-)", async () => {
     const mockStreamFn: StreamFn = vi.fn((model, context, options) => {
       return Promise.resolve({} as never);
     });
@@ -24,7 +24,7 @@ describe("Anthropic OAuth authentication", () => {
 
     const wrappedStreamFn = wrapStreamFn!({ streamFn: mockStreamFn });
 
-    const oauthToken = "sk-ant-oat01-test-token-1234567890";
+    const oauthToken = "sk-ant-oat-test-token-1234567890";
     const model = {
       api: "anthropic-messages",
       provider: "anthropic",
@@ -111,7 +111,7 @@ describe("Anthropic OAuth authentication", () => {
 
     const wrappedStreamFn = wrapStreamFn!({ streamFn: mockStreamFn });
 
-    const oauthToken = "sk-ant-oat01-test-token-1234567890";
+    const oauthToken = "sk-ant-oat-test-token-1234567890";
     const model = {
       api: "anthropic-messages",
       provider: "anthropic",

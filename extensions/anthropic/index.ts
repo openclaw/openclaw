@@ -52,7 +52,7 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
 ] as const;
-const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat01-";
+const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat";
 
 function cloneFirstTemplateModel(params: {
   modelId: string;
