@@ -190,7 +190,10 @@ export async function resolveSessionAuthProfileOverride(params: {
   // after the image turn.
   // Return source "auto" for the transient profile so downstream run setup treats
   // it as auto-selected rather than user-locked, enabling normal rotation/cooldown.
+  // Also update the in-memory source so callers reading from sessionEntry directly
+  // (e.g., agent-command.ts) get the correct source for the transient profile.
   if (skipPersist) {
+    sessionEntry.authProfileOverrideSource = "auto";
     return { authProfileId: next, authProfileIdSource: "auto" };
   }
 
