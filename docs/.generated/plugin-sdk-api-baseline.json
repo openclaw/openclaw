@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 961,
+            "line": 1049,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 970,
+            "line": 1058,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2377,7 +2377,7 @@
           "exportName": "buildCommandsPaginationKeyboard",
           "kind": "function",
           "source": {
-            "line": 89,
+            "line": 196,
             "path": "src/auto-reply/reply/commands-info.ts"
           }
         },
@@ -2404,7 +2404,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 841,
+            "line": 844,
             "path": "src/auto-reply/status.ts"
           }
         },

@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -20,7 +21,12 @@ import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
+import {
+  loadAgents,
+  loadToolsCatalog,
+  loadToolsEffective,
+  saveAgentsConfig,
+} from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -323,6 +329,10 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const toolsPanelUsesActiveSession = Boolean(
+    resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
+  );
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -966,6 +976,13 @@ export function renderApp(state: AppViewState) {
                     error: state.toolsCatalogError,
                     result: state.toolsCatalogResult,
                   },
+                  toolsEffective: {
+                    loading: state.toolsEffectiveLoading,
+                    error: state.toolsEffectiveError,
+                    result: state.toolsEffectiveResult,
+                  },
+                  runtimeSessionKey: state.sessionKey,
+                  runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
                   modelCatalog: state.chatModelCatalog ?? [],
                   onRefresh: async () => {
                     await loadAgents(state);
@@ -986,6 +1003,12 @@ export function renderApp(state: AppViewState) {
                     }
                     if (state.agentsPanel === "tools" && refreshedAgentId) {
                       void loadToolsCatalog(state, refreshedAgentId);
+                      if (refreshedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId: refreshedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
                     }
                     if (state.agentsPanel === "channels") {
                       void loadChannels(state, false);
@@ -1011,12 +1034,23 @@ export function renderApp(state: AppViewState) {
                     state.toolsCatalogResult = null;
                     state.toolsCatalogError = null;
                     state.toolsCatalogLoading = false;
+                    state.toolsEffectiveResult = null;
+                    state.toolsEffectiveResultKey = null;
+                    state.toolsEffectiveError = null;
+                    state.toolsEffectiveLoading = false;
+                    state.toolsEffectiveLoadingKey = null;
                     void loadAgentIdentity(state, agentId);
                     if (state.agentsPanel === "files") {
                       void loadAgentFiles(state, agentId);
                     }
                     if (state.agentsPanel === "tools") {
                       void loadToolsCatalog(state, agentId);
+                      if (agentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
                     }
                     if (state.agentsPanel === "skills") {
                       void loadAgentSkills(state, agentId);
@@ -1045,6 +1079,24 @@ export function renderApp(state: AppViewState) {
                         state.toolsCatalogError
                       ) {
                         void loadToolsCatalog(state, resolvedAgentId);
+                      }
+                      if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        const toolsRequestKey = `${resolvedAgentId}:${state.sessionKey}`;
+                        if (
+                          state.toolsEffectiveResultKey !== toolsRequestKey ||
+                          state.toolsEffectiveError
+                        ) {
+                          void loadToolsEffective(state, {
+                            agentId: resolvedAgentId,
+                            sessionKey: state.sessionKey,
+                          });
+                        }
+                      } else {
+                        state.toolsEffectiveResult = null;
+                        state.toolsEffectiveResultKey = null;
+                        state.toolsEffectiveError = null;
+                        state.toolsEffectiveLoading = false;
+                        state.toolsEffectiveLoadingKey = null;
                       }
                     }
                     if (panel === "channels") {

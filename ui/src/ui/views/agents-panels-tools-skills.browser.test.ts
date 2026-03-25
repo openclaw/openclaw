@@ -16,6 +16,11 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     toolsCatalogLoading: false,
     toolsCatalogError: null,
     toolsCatalogResult: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    runtimeSessionKey: "main",
+    runtimeSessionMatchesSelectedAgent: true,
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: () => undefined,
@@ -98,5 +103,43 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+  });
+
+  it("renders effective runtime tools separately from the config catalog", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          toolsEffectiveResult: {
+            agentId: "main",
+            profile: "messaging",
+            groups: [
+              {
+                id: "channel",
+                label: "Channel tools",
+                source: "channel",
+                tools: [
+                  {
+                    id: "message",
+                    label: "Message Actions",
+                    description: "Send and manage messages in this channel",
+                    rawDescription: "Send and manage messages in this channel",
+                    source: "channel",
+                    channelId: "discord",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Available Right Now");
+    expect(text).toContain("Message Actions");
+    expect(text).toContain("Channel: discord");
   });
 });

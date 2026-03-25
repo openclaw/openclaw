@@ -219,6 +219,37 @@ describe("getMemorySearchManager caching", () => {
     expect(mockPrimary.close).toHaveBeenCalledTimes(2);
   });
 
+  it("reports real qmd index counts for status-only requests", async () => {
+    const agentId = "status-counts-agent";
+    const cfg = createQmdCfg(agentId);
+    mockPrimary.status.mockReturnValueOnce({
+      ...createManagerStatus({
+        backend: "qmd",
+        provider: "qmd",
+        model: "qmd",
+        requestedProvider: "qmd",
+        withMemorySourceCounts: true,
+      }),
+      files: 10,
+      chunks: 42,
+      sourceCounts: [{ source: "memory" as const, files: 10, chunks: 42 }],
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const manager = requireManager(result);
+
+    expect(manager.status()).toMatchObject({
+      backend: "qmd",
+      files: 10,
+      chunks: 42,
+      sourceCounts: [{ source: "memory", files: 10, chunks: 42 }],
+    });
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(createQmdManagerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, mode: "status" }),
+    );
+  });
+
   it("reuses cached full qmd manager for status-only requests", async () => {
     const agentId = "status-reuses-full-agent";
     const cfg = createQmdCfg(agentId);

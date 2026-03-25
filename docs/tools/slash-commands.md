@@ -75,6 +75,7 @@ Text + native (when enabled):
 
 - `/help`
 - `/commands`
+- `/tools [compact|verbose]` (show what the current agent can use right now; `verbose` adds descriptions)
 - `/skill <name> [input]` (run a skill by name)
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/allowlist` (list/add/remove allowlist entries)
@@ -156,6 +157,22 @@ Notes:
   - Skills may optionally declare `command-dispatch: tool` to route the command directly to a tool (deterministic, no model).
   - Example: `/prose` (OpenProse plugin) — see [OpenProse](/prose).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
+
+## `/tools`
+
+`/tools` answers a runtime question, not a config question: **what this agent can use right now in
+this conversation**.
+
+- Default `/tools` is compact and optimized for quick scanning.
+- `/tools verbose` adds short descriptions.
+- Native-command surfaces that support arguments expose the same mode switch as `compact|verbose`.
+- Results are session-scoped, so changing agent, channel, thread, sender authorization, or model can
+  change the output.
+- `/tools` includes tools that are actually reachable at runtime, including core tools, connected
+  plugin tools, and channel-owned tools.
+
+For profile and override editing, use the Control UI Tools panel or config/catalog surfaces instead
+of treating `/tools` as a static catalog.
 
 ## Usage surfaces (what shows where)
 
