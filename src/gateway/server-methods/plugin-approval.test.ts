@@ -141,6 +141,84 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
+    it("rejects invalid severity value", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        severity: "extreme",
+      });
+      await handlers["plugin.approval.request"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: expect.any(String) }),
+      );
+    });
+
+    it("rejects title exceeding max length", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "x".repeat(81),
+        description: "D",
+      });
+      await handlers["plugin.approval.request"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: expect.any(String) }),
+      );
+    });
+
+    it("rejects description exceeding max length", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "x".repeat(257),
+      });
+      await handlers["plugin.approval.request"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: expect.any(String) }),
+      );
+    });
+
+    it("rejects timeoutMs exceeding max", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        timeoutMs: 700_000,
+      });
+      await handlers["plugin.approval.request"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: expect.any(String) }),
+      );
+    });
+
+    it("generates plugin-prefixed IDs", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "T", description: "D" },
+        {
+          respond,
+          context: {
+            broadcast: vi.fn(),
+            logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+            hasExecApprovalClients: () => false,
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      );
+      await handlers["plugin.approval.request"](opts);
+      const result = respond.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+      expect(result?.id).toEqual(expect.stringMatching(/^plugin:/));
+    });
+
     it("rejects plugin-provided id field", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", {

@@ -1,7 +1,10 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../../infra/plugin-approvals.js";
+import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+} from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -48,8 +51,10 @@ export function createPluginApprovalHandlers(
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = Math.min(
+        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+        MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+      );
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         value?.trim() || null;
@@ -69,8 +74,10 @@ export function createPluginApprovalHandlers(
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
 
-      // Always server-generate the ID — never accept plugin-provided IDs
+      // Always server-generate the ID — never accept plugin-provided IDs.
+      // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, null);
+      record.id = `plugin:${record.id}`;
 
       let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {

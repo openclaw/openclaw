@@ -583,6 +583,27 @@ describe("/approve command", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(2);
   });
 
+  it("routes plugin-prefixed IDs directly to plugin.approval.resolve", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin:abc-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin:abc-123", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("does not fall back to plugin resolve for non-id errors", async () => {
     const cfg = {
       commands: { text: true },
