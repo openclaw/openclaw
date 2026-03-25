@@ -367,6 +367,22 @@ export function loadSessionEntry(sessionKey: string) {
   return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
 }
 
+export function resolveFreshestSessionEntryFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): SessionEntry | undefined {
+  const matches = storeKeys
+    .map((key) => store[key])
+    .filter((entry): entry is SessionEntry => Boolean(entry));
+  if (matches.length === 0) {
+    return undefined;
+  }
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return [...matches].toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+}
+
 /**
  * Find a session entry by exact or case-insensitive key match.
  * Returns both the entry and the actual store key it was found under,

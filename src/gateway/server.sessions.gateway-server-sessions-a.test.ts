@@ -1014,6 +1014,55 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.preview prefers the freshest duplicate row for a legacy mixed-case main alias", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+
+    const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
+    const freshTranscriptPath = path.join(dir, "sess-fresh-main.jsonl");
+    await fs.writeFile(
+      staleTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-stale-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "stale preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-fresh-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "fresh preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:work": {
+            sessionId: "sess-stale-main",
+            updatedAt: 1,
+          },
+          "agent:ops:WORK": {
+            sessionId: "sess-fresh-main",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await openClient();
+    const entry = await getMainPreviewEntry(ws);
+    expect(entry?.items[0]?.text).toContain("fresh preview");
+
+    ws.close();
+  });
+
   test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
