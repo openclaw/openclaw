@@ -177,7 +177,7 @@ export async function runRestartScript(scriptPath: string): Promise<void> {
       `ws.Run "cmd.exe /d /s /c """"${quotedBat}""""""", 0, False`,
       // Self-cleanup: delete the VBScript wrapper.
       'Set fso = CreateObject("Scripting.FileSystemObject")',
-      'fso.DeleteFile WScript.ScriptFullName',
+      "fso.DeleteFile WScript.ScriptFullName",
     ].join("\r\n");
     await fs.writeFile(vbsPath, vbsContent, "utf8");
     const child = spawn("wscript.exe", [vbsPath], {
