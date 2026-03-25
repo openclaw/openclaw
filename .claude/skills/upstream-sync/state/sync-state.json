@@ -1,54 +1,10 @@
 {
-  "lastSyncedTag": "v2026.3.13-1",
-  "lastSyncedAt": "2026-03-17T00:30:00Z",
-  "lastSyncedCommit": "192f205ebd",
-  "backupTag": "backup/pre-sync-v2026.3.13-1-20260316",
+  "lastSyncedTag": "v2026.3.22",
+  "lastSyncedAt": "2026-03-25T17:00:00Z",
+  "lastSyncedCommit": "fb62a125bc",
+  "backupTag": "backup/pre-sync-v2026.3.22",
   "cumulativeSkipped": 0,
-  "currentSync": {
-    "targetTag": "v2026.3.22",
-    "fromTag": "v2026.3.13-1",
-    "startedAt": "2026-03-24T00:00:00Z",
-    "reportFile": "Project-tasks/releases/sync-v2026.3.22-report.md",
-    "notes": "Major release: plugin-sdk overhaul, channel-to-extensions migration complete, security hardening batch, image_generate tool, 9 breaking changes. 2521 total commits; ~525 planned cherry-picks.",
-    "phases": {
-      "security": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 24
-      },
-      "provider-refactor": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 220
-      },
-      "bugfixes": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 180
-      },
-      "features": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 80
-      },
-      "review": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 12
-      },
-      "ui-inspiration": {
-        "status": "pending",
-        "branch": null,
-        "pr": null,
-        "commits": 9
-      }
-    }
-  },
+  "currentSync": null,
   "paperclip": {
     "lastSyncedCommit": null,
     "lastSyncedAt": null,
