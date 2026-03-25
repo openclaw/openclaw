@@ -64,6 +64,10 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import {
+  consumeCompactionSafeguardCancelReason,
+  setCompactionSafeguardCancelReason,
+} from "../pi-extensions/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -83,6 +87,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -251,51 +256,6 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     estTokens: tokenEstimationFailed ? undefined : estTokens,
     contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
   };
-}
-
-function classifyCompactionReason(reason?: string): string {
-  const text = (reason ?? "").trim().toLowerCase();
-  if (!text) {
-    return "unknown";
-  }
-  if (text.includes("nothing to compact")) {
-    return "no_compactable_entries";
-  }
-  if (text.includes("below threshold")) {
-    return "below_threshold";
-  }
-  if (text.includes("already compacted")) {
-    return "already_compacted_recently";
-  }
-  if (text.includes("still exceeds target")) {
-    return "live_context_still_exceeds_target";
-  }
-  if (text.includes("guard")) {
-    return "guard_blocked";
-  }
-  if (text.includes("summary")) {
-    return "summary_failed";
-  }
-  if (text.includes("timed out") || text.includes("timeout")) {
-    return "timeout";
-  }
-  if (
-    text.includes("400") ||
-    text.includes("401") ||
-    text.includes("403") ||
-    text.includes("429")
-  ) {
-    return "provider_error_4xx";
-  }
-  if (
-    text.includes("500") ||
-    text.includes("502") ||
-    text.includes("503") ||
-    text.includes("504")
-  ) {
-    return "provider_error_5xx";
-  }
-  return "unknown";
 }
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
@@ -741,6 +701,7 @@ export async function compactEmbeddedPiSessionDirect(
   });
 
   let restoreSkillEnv: (() => void) | undefined;
+  let compactionSessionManager: unknown = null;
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
@@ -1004,6 +965,7 @@ export async function compactEmbeddedPiSessionDirect(
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
       });
+      compactionSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
@@ -1162,7 +1124,10 @@ export async function compactEmbeddedPiSessionDirect(
           // the sanity check below becomes a no-op instead of crashing compaction.
         }
         const result = await compactWithSafetyTimeout(
-          () => session.compact(params.customInstructions),
+          () => {
+            setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
+            return session.compact(params.customInstructions);
+          },
           compactionTimeoutMs,
           {
             abortSignal: params.abortSignal,
@@ -1260,7 +1225,10 @@ export async function compactEmbeddedPiSessionDirect(
       await sessionLock.release();
     }
   } catch (err) {
-    const reason = describeUnknownError(err);
+    const reason = resolveCompactionFailureReason({
+      reason: describeUnknownError(err),
+      safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
+    });
     return fail(reason);
   } finally {
     restoreSkillEnv?.();
