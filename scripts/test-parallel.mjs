@@ -37,9 +37,12 @@ const parseCliArgs = (args) => {
       continue;
     }
     if (arg === "--mode") {
-      wrapper.mode = args[index + 1] ?? null;
-      index += 1;
-      continue;
+      const nextValue = args[index + 1] ?? null;
+      if (nextValue === "ci" || nextValue === "local") {
+        wrapper.mode = nextValue;
+        index += 1;
+        continue;
+      }
     }
     if (arg === "--profile") {
       wrapper.profile = args[index + 1] ?? null;
@@ -52,7 +55,11 @@ const parseCliArgs = (args) => {
       continue;
     }
     if (arg === "--files") {
-      wrapper.files.push(args[index + 1] ?? "");
+      const nextValue = args[index + 1] ?? "";
+      if (!nextValue || nextValue === "--" || nextValue.startsWith("-")) {
+        throw new Error(`Invalid --files value: ${String(nextValue || "<missing>")}`);
+      }
+      wrapper.files.push(nextValue);
       index += 1;
       continue;
     }
@@ -66,7 +73,13 @@ const parseCliArgs = (args) => {
   return wrapper;
 };
 
-const rawCli = parseCliArgs(process.argv.slice(2));
+let rawCli;
+try {
+  rawCli = parseCliArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(`[test-parallel] ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(2);
+}
 if (rawCli.showHelp) {
   console.log(
     [
@@ -89,7 +102,8 @@ const request = {
   mode: rawCli.mode,
   profile: rawCli.profile,
   surfaces: rawCli.surfaces,
-  passthroughArgs: [...rawCli.files, ...rawCli.passthroughArgs],
+  fileFilters: rawCli.files,
+  passthroughArgs: rawCli.passthroughArgs,
 };
 
 if (rawCli.explain) {

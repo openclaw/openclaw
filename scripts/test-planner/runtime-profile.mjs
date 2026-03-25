@@ -38,7 +38,7 @@ export function resolveRuntimeProfile(env = process.env, options = {}) {
   const hostMemoryGiB =
     parsePositiveInt(env.OPENCLAW_TEST_HOST_MEMORY_GIB) ?? Math.floor(totalMemoryBytes / 1024 ** 3);
   const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
-  const lowMemLocalHost = !isCI && hostMemoryGiB <= 64;
+  const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
   const nodeMajor = Number.parseInt(
     (options.nodeVersion ?? process.versions.node).split(".")[0] ?? "",
     10,

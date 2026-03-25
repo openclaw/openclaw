@@ -13,8 +13,9 @@ import {
   hasFatalTestRunOutput,
   resolveTestRunExitCode,
 } from "../test-parallel-utils.mjs";
+import { countExplicitEntryFilters, getExplicitEntryFilters } from "./vitest-args.mjs";
 
-const pnpm = "pnpm";
+const resolvePnpmCommand = (runtimeProfile) => (runtimeProfile.isWindows ? "pnpm.cmd" : "pnpm");
 
 const sanitizeArtifactName = (value) => {
   const normalized = value
@@ -31,44 +32,6 @@ const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=DEP0060",
   "--disable-warning=MaxListenersExceededWarning",
 ];
-const OPTION_TAKES_VALUE = new Set([
-  "-t",
-  "-c",
-  "-r",
-  "--testNamePattern",
-  "--config",
-  "--root",
-  "--dir",
-  "--reporter",
-  "--outputFile",
-  "--pool",
-  "--execArgv",
-  "--vmMemoryLimit",
-  "--maxWorkers",
-  "--environment",
-  "--shard",
-  "--changed",
-  "--sequence",
-  "--inspect",
-  "--inspectBrk",
-  "--testTimeout",
-  "--hookTimeout",
-  "--bail",
-  "--retry",
-  "--diff",
-  "--exclude",
-  "--project",
-  "--slowTestThreshold",
-  "--teardownTimeout",
-  "--attachmentsDir",
-  "--mode",
-  "--api",
-  "--browser",
-  "--maxConcurrency",
-  "--mergeReports",
-  "--configLoader",
-  "--experimental",
-]);
 
 const formatElapsedMs = (elapsedMs) =>
   elapsedMs >= 1000 ? `${(elapsedMs / 1000).toFixed(1)}s` : `${Math.round(elapsedMs)}ms`;
@@ -107,33 +70,6 @@ export function createExecutionArtifacts(env = process.env) {
   };
   return { ensureTempArtifactDir, writeTempJsonArtifact, cleanupTempArtifacts };
 }
-
-const parseEntryTail = (entryArgs) => {
-  const fileFilters = [];
-  let consumeNextAsOptionValue = false;
-  for (const arg of entryArgs.slice(2)) {
-    if (consumeNextAsOptionValue) {
-      consumeNextAsOptionValue = false;
-      continue;
-    }
-    if (arg === "--" || typeof arg !== "string") {
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      consumeNextAsOptionValue = !arg.includes("=") && OPTION_TAKES_VALUE.has(arg);
-      continue;
-    }
-    fileFilters.push(arg);
-  }
-  return fileFilters;
-};
-
-const countExplicitEntryFilters = (entryArgs) => {
-  const fileFilters = parseEntryTail(entryArgs);
-  return fileFilters.length > 0 ? fileFilters.length : null;
-};
-
-const getExplicitEntryFilters = (entryArgs) => parseEntryTail(entryArgs);
 
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
@@ -176,6 +112,7 @@ export function formatExplanation(explanation) {
 export async function executePlan(plan, options = {}) {
   const env = options.env ?? process.env;
   const artifacts = options.artifacts ?? createExecutionArtifacts(env);
+  const pnpm = resolvePnpmCommand(plan.runtimeProfile);
   const children = new Set();
   const windowsCiArgs = plan.runtimeProfile.isWindowsCi
     ? ["--dangerouslyIgnoreUnhandledErrors"]
@@ -442,7 +379,7 @@ export async function executePlan(plan, options = {}) {
             VITEST_GROUP: unit.id,
             NODE_OPTIONS: resolvedNodeOptions,
           },
-          shell: plan.runtimeProfile.isWindows,
+          shell: false,
         });
         captureTreeSample("spawn");
         if (memoryTraceEnabled) {

@@ -10,85 +10,16 @@ import {
 } from "../test-runner-manifest.mjs";
 import { loadTestCatalog, normalizeRepoPath } from "./catalog.mjs";
 import { resolveRuntimeProfile } from "./runtime-profile.mjs";
-
-const OPTION_TAKES_VALUE = new Set([
-  "-t",
-  "-c",
-  "-r",
-  "--testNamePattern",
-  "--config",
-  "--root",
-  "--dir",
-  "--reporter",
-  "--outputFile",
-  "--pool",
-  "--execArgv",
-  "--vmMemoryLimit",
-  "--maxWorkers",
-  "--environment",
-  "--shard",
-  "--changed",
-  "--sequence",
-  "--inspect",
-  "--inspectBrk",
-  "--testTimeout",
-  "--hookTimeout",
-  "--bail",
-  "--retry",
-  "--diff",
-  "--exclude",
-  "--project",
-  "--slowTestThreshold",
-  "--teardownTimeout",
-  "--attachmentsDir",
-  "--mode",
-  "--api",
-  "--browser",
-  "--maxConcurrency",
-  "--mergeReports",
-  "--configLoader",
-  "--experimental",
-]);
-
-const SINGLE_RUN_ONLY_FLAGS = new Set(["--coverage", "--outputFile", "--mergeReports"]);
+import {
+  countExplicitEntryFilters,
+  parsePassthroughArgs,
+  SINGLE_RUN_ONLY_FLAGS,
+} from "./vitest-args.mjs";
 
 const parseEnvNumber = (env, name, fallback) => {
   const parsed = Number.parseInt(env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
-
-export const parsePassthroughArgs = (args) => {
-  const fileFilters = [];
-  const optionArgs = [];
-  let consumeNextAsOptionValue = false;
-
-  for (const arg of args) {
-    if (consumeNextAsOptionValue) {
-      optionArgs.push(arg);
-      consumeNextAsOptionValue = false;
-      continue;
-    }
-    if (arg === "--") {
-      optionArgs.push(arg);
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      optionArgs.push(arg);
-      consumeNextAsOptionValue = !arg.includes("=") && OPTION_TAKES_VALUE.has(arg);
-      continue;
-    }
-    fileFilters.push(arg);
-  }
-
-  return { fileFilters, optionArgs };
-};
-
-const countExplicitEntryFilters = (entryArgs) => {
-  const { fileFilters } = parsePassthroughArgs(entryArgs.slice(2));
-  return fileFilters.length > 0 ? fileFilters.length : null;
-};
-
-const getExplicitEntryFilters = (entryArgs) => parsePassthroughArgs(entryArgs.slice(2)).fileFilters;
 
 const normalizeSurfaces = (values = []) => [
   ...new Set(
@@ -220,12 +151,12 @@ const resolveDefaultWorkerBudget = (runtime) => {
     };
   }
   if (runtime.lowMemLocalHost) {
-    return { unit: 2, unitIsolated: 1, extensions: 1, gateway: 1 };
+    return { unit: 2, unitIsolated: 1, extensions: 4, gateway: 1 };
   }
   return {
     unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
     unitIsolated: 1,
-    extensions: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
+    extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
     gateway: 1,
   };
 };
@@ -355,7 +286,7 @@ const buildDefaultUnits = (context, request) => {
       timings: unitTimingManifest,
       hotspots: unitMemoryHotspotManifest,
     });
-  context.unitMemoryIsolatedFiles = [...memoryHeavyUnitFiles].filter(
+  const unitMemoryIsolatedFiles = [...memoryHeavyUnitFiles].filter(
     (file) => !catalog.unitBehaviorOverrideSet.has(file),
   );
   const unitSchedulingOverrideSet = new Set([
@@ -512,7 +443,7 @@ const buildDefaultUnits = (context, request) => {
       );
     }
 
-    for (const file of context.unitMemoryIsolatedFiles) {
+    for (const file of unitMemoryIsolatedFiles) {
       units.push(
         createExecutionUnit(context, {
           id: `unit-${path.basename(file, ".test.ts")}-memory-isolated`,
@@ -674,7 +605,7 @@ const buildDefaultUnits = (context, request) => {
     );
   }
 
-  return units;
+  return { units, unitMemoryIsolatedFiles };
 };
 
 const createTargetedUnit = (context, classification, filters) => {
@@ -784,11 +715,12 @@ const buildTargetedUnits = (context, request) => {
   if (request.fileFilters.length === 0) {
     return [];
   }
+  const unitMemoryIsolatedFiles = request.unitMemoryIsolatedFiles ?? [];
   const groups = request.fileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = context.catalog.resolveFilterMatches(fileFilter);
     if (matchedFiles.length === 0) {
       const classification = context.catalog.classifyTestFile(normalizeRepoPath(fileFilter), {
-        unitMemoryIsolatedFiles: context.unitMemoryIsolatedFiles,
+        unitMemoryIsolatedFiles,
       });
       const key = `${classification.legacyBasePinned ? "base-pinned" : classification.surface}:${
         classification.isolated ? "isolated" : "default"
@@ -800,7 +732,7 @@ const buildTargetedUnits = (context, request) => {
     }
     for (const matchedFile of matchedFiles) {
       const classification = context.catalog.classifyTestFile(matchedFile, {
-        unitMemoryIsolatedFiles: context.unitMemoryIsolatedFiles,
+        unitMemoryIsolatedFiles,
       });
       const key = `${classification.legacyBasePinned ? "base-pinned" : classification.surface}:${
         classification.isolated ? "isolated" : "default"
@@ -818,7 +750,7 @@ const buildTargetedUnits = (context, request) => {
         createTargetedUnit(
           context,
           context.catalog.classifyTestFile(file, {
-            unitMemoryIsolatedFiles: context.unitMemoryIsolatedFiles,
+            unitMemoryIsolatedFiles,
           }),
           [file],
         ),
@@ -996,7 +928,11 @@ export function explainExecutionTarget(request, options = {}) {
 
 export function buildExecutionPlan(request, options = {}) {
   const env = options.env ?? process.env;
-  const { fileFilters, optionArgs } = parsePassthroughArgs(request.passthroughArgs ?? []);
+  const explicitFileFilters = (request.fileFilters ?? []).map((value) => normalizeRepoPath(value));
+  const { fileFilters: passthroughFileFilters, optionArgs } = parsePassthroughArgs(
+    request.passthroughArgs ?? [],
+  );
+  const fileFilters = [...explicitFileFilters, ...passthroughFileFilters];
   const passthroughMetadataFlags = new Set(["-h", "--help", "--listTags", "--clearCache"]);
   const passthroughMetadataOnly =
     (request.passthroughArgs ?? []).length > 0 &&
@@ -1055,8 +991,13 @@ export function buildExecutionPlan(request, options = {}) {
     );
   }
 
-  let units = buildDefaultUnits(context, { ...request, fileFilters });
-  const targetedUnits = buildTargetedUnits(context, { ...request, fileFilters });
+  const defaultPlanning = buildDefaultUnits(context, { ...request, fileFilters });
+  let units = defaultPlanning.units;
+  const targetedUnits = buildTargetedUnits(context, {
+    ...request,
+    fileFilters,
+    unitMemoryIsolatedFiles: defaultPlanning.unitMemoryIsolatedFiles,
+  });
   if (context.configuredShardCount !== null && context.shardCount > 1) {
     units = expandUnitsAcrossTopLevelShards(context, units);
   }

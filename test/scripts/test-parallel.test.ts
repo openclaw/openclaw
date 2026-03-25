@@ -175,6 +175,7 @@ describe("scripts/test-parallel lane planning", () => {
         env: {
           ...process.env,
           CI: "",
+          GITHUB_ACTIONS: "",
           RUNNER_OS: "macOS",
           OPENCLAW_TEST_HOST_CPU_COUNT: "10",
           OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
@@ -203,5 +204,46 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("surface=base");
     expect(output).toContain("reasons=base-surface,base-pinned-manifest");
     expect(output).toContain("pool=forks");
+  });
+
+  it("passes through vitest --mode values that are not wrapper runtime overrides", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync(
+      "node",
+      [
+        "scripts/test-parallel.mjs",
+        "--plan",
+        "--mode",
+        "development",
+        "src/infra/outbound/deliver.test.ts",
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          CI: "",
+          GITHUB_ACTIONS: "",
+          RUNNER_OS: "Linux",
+          OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(output).toContain("runtimeProfile=local-high-mem");
+    expect(output).toContain("unit-deliver-isolated filters=1");
+  });
+
+  it("rejects wrapper --files values that look like options", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+
+    expect(() =>
+      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--files", "--config"], {
+        cwd: repoRoot,
+        env: process.env,
+        encoding: "utf8",
+      }),
+    ).toThrowError(/Invalid --files value/u);
   });
 });

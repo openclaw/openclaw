@@ -48,4 +48,21 @@ describe("resolveLocalVitestMaxWorkers", () => {
       ).runtimeProfileName,
     ).toBe("macmini");
   });
+
+  it("does not classify 64 GiB non-macOS hosts as generic low-memory locals", () => {
+    const runtime = resolveRuntimeProfile(
+      {
+        RUNNER_OS: "Linux",
+      },
+      {
+        cpuCount: 16,
+        totalMemoryBytes: 64 * 1024 ** 3,
+        platform: "linux",
+        mode: "local",
+      },
+    );
+
+    expect(runtime.lowMemLocalHost).toBe(false);
+    expect(runtime.runtimeProfileName).toBe("local-mid-mem");
+  });
 });
