@@ -1643,6 +1643,7 @@ describe("QmdMemoryManager", () => {
         backend: "qmd",
         qmd: {
           includeDefaultMemory: false,
+          searchMode: "query",
           update: { interval: "0s", debounceMs: 60_000, onBoot: false },
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
           mcporter: { enabled: true, serverName: "qmd", startDaemon: false },

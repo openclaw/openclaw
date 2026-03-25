@@ -1284,6 +1284,32 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.qmdMcpToolVersion = "v2";
   }
 
+  /**
+   * Build the `searches` array for QMD 1.5+ `query` tool, respecting
+   * the configured searchMode so lexical-only or vector-only modes
+   * don't trigger unnecessary LLM/embedding work.
+   */
+  private buildV2Searches(
+    query: string,
+    searchCommand?: string,
+  ): Array<{ type: string; query: string }> {
+    switch (searchCommand) {
+      case "search":
+        // BM25 keyword search only
+        return [{ type: "lex", query }];
+      case "vsearch":
+        // Vector search only
+        return [{ type: "vec", query }];
+      default:
+        // Full hybrid: lex + vec + hyde (query expansion)
+        return [
+          { type: "lex", query },
+          { type: "vec", query },
+          { type: "hyde", query },
+        ];
+    }
+  }
+
   private isToolNotFoundError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
     const lower = message.toLowerCase();
@@ -1364,11 +1390,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       effectiveTool === "query"
         ? {
             // QMD 1.5+ "query" tool accepts typed sub-queries via `searches` array.
-            searches: [
-              { type: "lex", query: params.query },
-              { type: "vec", query: params.query },
-              { type: "hyde", query: params.query },
-            ],
+            // Derive sub-query types from searchCommand to respect searchMode config.
+            searches: this.buildV2Searches(params.query, params.searchCommand),
             limit: params.limit,
           }
         : {
