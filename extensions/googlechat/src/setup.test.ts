@@ -1,0 +1,186 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+  type WizardPrompter,
+} from "../../../test/helpers/extensions/setup-wizard.js";
+import {
+  expectLifecyclePatch,
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+import type { OpenClawConfig } from "../runtime-api.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { googlechatPlugin } from "./channel.js";
+import { googlechatSetupAdapter } from "./setup-core.js";
+
+const hoisted = vi.hoisted(() => ({
+  startGoogleChatMonitor: vi.fn(),
+}));
+
+vi.mock("./monitor.js", async () => {
+  const actual = await vi.importActual<typeof import("./monitor.js")>("./monitor.js");
+  return {
+    ...actual,
+    startGoogleChatMonitor: hoisted.startGoogleChatMonitor,
+  };
+});
+
+const googlechatConfigure = createPluginSetupWizardConfigure(googlechatPlugin);
+
+function buildAccount(): ResolvedGoogleChatAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    credentialSource: "inline",
+    credentials: {},
+    config: {
+      webhookPath: "/googlechat",
+      webhookUrl: "https://example.com/googlechat",
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    },
+  };
+}
+
+describe("googlechat setup", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects env auth for non-default accounts", () => {
+    if (!googlechatSetupAdapter.validateInput) {
+      throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
+    }
+    expect(
+      googlechatSetupAdapter.validateInput({
+        accountId: "secondary",
+        input: { useEnv: true },
+      } as never),
+    ).toBe("GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.");
+  });
+
+  it("requires inline or file credentials when env auth is not used", () => {
+    if (!googlechatSetupAdapter.validateInput) {
+      throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
+    }
+    expect(
+      googlechatSetupAdapter.validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, token: "", tokenFile: "" },
+      } as never),
+    ).toBe("Google Chat requires --token (service account JSON) or --token-file.");
+  });
+
+  it("builds a patch from token-file and trims optional webhook fields", () => {
+    if (!googlechatSetupAdapter.applyAccountConfig) {
+      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
+    }
+    expect(
+      googlechatSetupAdapter.applyAccountConfig({
+        cfg: { channels: { googlechat: {} } },
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          name: "Default",
+          tokenFile: "/tmp/googlechat.json",
+          audienceType: " app-url ",
+          audience: " https://example.com/googlechat ",
+          webhookPath: " /googlechat ",
+          webhookUrl: " https://example.com/googlechat/hook ",
+        },
+      } as never),
+    ).toEqual({
+      channels: {
+        googlechat: {
+          enabled: true,
+          name: "Default",
+          serviceAccountFile: "/tmp/googlechat.json",
+          audienceType: "app-url",
+          audience: "https://example.com/googlechat",
+          webhookPath: "/googlechat",
+          webhookUrl: "https://example.com/googlechat/hook",
+        },
+      },
+    });
+  });
+
+  it("prefers inline token patch when token-file is absent", () => {
+    if (!googlechatSetupAdapter.applyAccountConfig) {
+      throw new Error("Expected googlechatSetupAdapter.applyAccountConfig to be defined");
+    }
+    expect(
+      googlechatSetupAdapter.applyAccountConfig({
+        cfg: { channels: { googlechat: {} } },
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          name: "Default",
+          token: { client_email: "bot@example.com" },
+        },
+      } as never),
+    ).toEqual({
+      channels: {
+        googlechat: {
+          enabled: true,
+          name: "Default",
+          serviceAccount: { client_email: "bot@example.com" },
+        },
+      },
+    });
+  });
+
+  it("configures service-account auth and webhook audience", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Service account JSON path") {
+          return "/tmp/googlechat-service-account.json";
+        }
+        if (message === "App URL") {
+          return "https://example.com/googlechat";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: googlechatConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.googlechat?.enabled).toBe(true);
+    expect(result.cfg.channels?.googlechat?.serviceAccountFile).toBe(
+      "/tmp/googlechat-service-account.json",
+    );
+    expect(result.cfg.channels?.googlechat?.audienceType).toBe("app-url");
+    expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
+  });
+
+  it("keeps startAccount pending until abort, then unregisters", async () => {
+    const unregister = vi.fn();
+    hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);
+
+    const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
+      startAccount: googlechatPlugin.gateway!.startAccount!,
+      account: buildAccount(),
+    });
+    await expectPendingUntilAbort({
+      waitForStarted: waitForStartedMocks(hoisted.startGoogleChatMonitor),
+      isSettled,
+      abort,
+      task,
+      assertBeforeAbort: () => {
+        expect(unregister).not.toHaveBeenCalled();
+      },
+      assertAfterAbort: () => {
+        expect(unregister).toHaveBeenCalledOnce();
+      },
+    });
+    expectLifecyclePatch(patches, { running: true });
+    expectLifecyclePatch(patches, { running: false });
+  });
+});
