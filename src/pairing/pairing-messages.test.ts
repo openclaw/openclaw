@@ -52,12 +52,14 @@ describe("buildPairingReply", () => {
     it(`formats pairing reply for ${testCase.channel}`, () => {
       const text = buildPairingReply(testCase);
       expect(text).toContain(testCase.idLine);
-      expect(text).toContain(`Pairing code: ${testCase.code}`);
+      expect(text).toContain("Pairing code:");
+      expect(text).toContain(`\n\`\`\`\n${testCase.code}\n\`\`\`\n`);
       // CLI commands should respect OPENCLAW_PROFILE when set (most tests run with isolated profile)
       const commandRe = new RegExp(
         `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
       );
       expect(text).toMatch(commandRe);
+      expect(text).toContain("\n```\n");
     });
   }
 });
