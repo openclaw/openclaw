@@ -71,6 +71,20 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### Sage
+
+Safety for Agents — Agent Detection & Response (ADR) layer for OpenClaw.
+Guards commands, files, and web requests using configurable YAML threat rules
+and real-time URL reputation checking. By Gen Digital.
+
+- **clawhub:** `@gendigital/sage-openclaw`
+- **npm:** `@gendigital/sage-openclaw`
+- **repo:** [github.com/gendigitalinc/sage](https://github.com/gendigitalinc/sage)
+
+```bash
+openclaw plugins install @gendigital/sage-openclaw
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
