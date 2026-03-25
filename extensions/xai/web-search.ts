@@ -100,7 +100,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
       execute: async (args: Record<string, unknown>) => {
         const apiKey = resolveWebSearchProviderCredential({
           credentialValue: getScopedCredentialValue(ctx.searchConfig, "grok"),
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
           envVars: ["XAI_API_KEY"],
         });
 

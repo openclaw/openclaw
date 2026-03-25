@@ -24,7 +24,7 @@ describe("xai web search config resolution", () => {
     expect(
       resolveWebSearchProviderCredential({
         credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-        path: "tools.web.search.grok.apiKey",
+        path: "plugins.entries.xai.config.webSearch.apiKey",
         envVars: ["XAI_API_KEY"],
       }),
     ).toBe("xai-test-key");
@@ -35,7 +35,7 @@ describe("xai web search config resolution", () => {
       expect(
         resolveWebSearchProviderCredential({
           credentialValue: getScopedCredentialValue({}, "grok"),
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
           envVars: ["XAI_API_KEY"],
         }),
       ).toBeUndefined();
