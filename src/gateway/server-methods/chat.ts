@@ -18,7 +18,10 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -1415,7 +1418,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     let imageModelFallbacks: string[] | undefined;
     if (parsedImages.length > 0) {
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
-      const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      let imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
+      const imageModelConfigFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+      let usedPrimaryFromFallback = false;
+      if (!imageModelPrimary && imageModelConfigFallbacks.length > 0) {
+        imageModelPrimary = imageModelConfigFallbacks[0];
+        usedPrimaryFromFallback = true;
+      }
+      const effectiveImageModelFallbacks = usedPrimaryFromFallback
+        ? imageModelConfigFallbacks.slice(1)
+        : imageModelConfigFallbacks;
       if (imageModelPrimary) {
         // Resolve per-agent default provider for correct model resolution
         const agentDefault = resolveDefaultModelForAgent({ cfg, agentId });
@@ -1460,11 +1472,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (imageModelPrimary) {
             addResolvedModelKey(imageModelPrimary);
           }
-          if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
-            for (const fb of imageModelConfig.fallbacks) {
-              if (fb?.trim()) {
-                addResolvedModelKey(fb);
-              }
+          for (const fb of imageModelConfigFallbacks) {
+            if (fb?.trim()) {
+              addResolvedModelKey(fb);
             }
           }
 
@@ -1505,9 +1515,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             // User's stored model is an image model but NOT in allowlist
             // The stored model will be cleared anyway, switch to configured imageModel
             imageModelOverride = imageModelPrimary;
-            if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+            if (effectiveImageModelFallbacks.length > 0) {
               const filtered = filterFallbacksByAllowlist({
-                fallbacks: imageModelConfig.fallbacks,
+                fallbacks: effectiveImageModelFallbacks,
                 cfg,
                 agentId,
                 aliasIndex,
@@ -1531,9 +1541,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             // User's stored model is not an image model
             // Switch to imageModel
             imageModelOverride = imageModelPrimary;
-            if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+            if (effectiveImageModelFallbacks.length > 0) {
               const filtered = filterFallbacksByAllowlist({
-                fallbacks: imageModelConfig.fallbacks,
+                fallbacks: effectiveImageModelFallbacks,
                 cfg,
                 agentId,
                 aliasIndex,
@@ -1558,9 +1568,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           // No stored override, switch to imageModel
           imageModelOverride = imageModelPrimary;
           // Filter fallbacks against agent allowlist
-          if (typeof imageModelConfig === "object" && Array.isArray(imageModelConfig.fallbacks)) {
+          if (effectiveImageModelFallbacks.length > 0) {
             const filtered = filterFallbacksByAllowlist({
-              fallbacks: imageModelConfig.fallbacks,
+              fallbacks: effectiveImageModelFallbacks,
               cfg,
               agentId,
               aliasIndex,
