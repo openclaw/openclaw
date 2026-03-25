@@ -20,14 +20,18 @@ vi.mock("./send.js", () => ({
   sendCardFeishu: sendCardFeishuMock,
 }));
 
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        chunkMarkdownText: (text: string) => [text],
-      },
+// Shared runtime mock object so individual tests can override methods via spyOn
+const feishuRuntimeMock = {
+  channel: {
+    text: {
+      chunkMarkdownText: (text: string) => [text],
+      resolveTextChunkLimit: () => 4000,
     },
-  }),
+  },
+};
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => feishuRuntimeMock,
 }));
 
 import { feishuOutbound } from "./outbound.js";
@@ -647,5 +651,34 @@ describe("feishuOutbound.sendPayload", () => {
     expect(sendMediaFeishuMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "https://example.com/legacy.png" }),
     );
+  });
+
+  it("chunks long text-only fallback using resolveTextChunkLimit", async () => {
+    // Temporarily override chunkMarkdownText on the shared mock object to simulate splitting
+    const chunkerSpy = vi
+      .spyOn(feishuRuntimeMock.channel.text, "chunkMarkdownText")
+      .mockReturnValue(["chunk1", "chunk2"]);
+    try {
+      await sendPayload({
+        cfg: {} as any,
+        to: "chat_1",
+        text: "long text that exceeds limit",
+        accountId: "main",
+        payload: { channelData: {} },
+      } as any);
+
+      // Should have sent two separate messages (one per chunk)
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ text: "chunk1" }),
+      );
+      expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ text: "chunk2" }),
+      );
+    } finally {
+      chunkerSpy.mockRestore();
+    }
   });
 });

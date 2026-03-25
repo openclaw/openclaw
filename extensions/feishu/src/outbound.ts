@@ -103,6 +103,29 @@ async function sendOutboundText(params: {
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
 }
 
+/**
+ * Chunk `text` and dispatch each piece through `sendOutboundText`, matching the
+ * core delivery loop's sendTextChunks behaviour for the feishu channel.
+ * Returns the result of the last chunk (the one callers use as the delivery result).
+ */
+async function sendOutboundTextChunked(
+  params: Parameters<typeof sendOutboundText>[0],
+): Promise<ReturnType<typeof sendOutboundText>> {
+  const { cfg, accountId } = params;
+  const runtime = getFeishuRuntime();
+  const textLimit = runtime.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
+    fallbackLimit: 4000,
+  });
+  const chunks = runtime.channel.text.chunkMarkdownText(params.text, textLimit);
+  // If chunker returned nothing (e.g. empty string), fall through to a single send.
+  const parts = chunks.length > 0 ? chunks : [params.text];
+  let lastResult!: Awaited<ReturnType<typeof sendOutboundText>>;
+  for (const chunk of parts) {
+    lastResult = await sendOutboundText({ ...params, text: chunk });
+  }
+  return lastResult;
+}
+
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
@@ -154,8 +177,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
 
     if (mediaUrls.length > 0) {
       // Send text first (if any), then media.
+      // Use the chunked variant so long text respects the configured Feishu message limit,
+      // matching what the core delivery loop does when it routes through sendTextChunks.
       if (text?.trim()) {
-        await sendOutboundText({
+        await sendOutboundTextChunked({
           cfg,
           to,
           text,
@@ -218,9 +243,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
+    // Chunk the text to respect the configured Feishu message limit, matching the
+    // core delivery loop's sendTextChunks behaviour for non-payload text sends.
     return attachChannelToResult(
       "feishu",
-      await sendOutboundText({
+      await sendOutboundTextChunked({
         cfg,
         to,
         text,
