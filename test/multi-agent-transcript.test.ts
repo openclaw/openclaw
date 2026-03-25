@@ -107,7 +107,8 @@ describe("Multi-Agent Group Transcript", () => {
 
       const result = resolveMultiAgentTranscriptConfig(cfg, "group123");
       expect(result?.resolvedPath).not.toContain("~");
-      expect(result?.resolvedPath).toContain("test/transcript.md");
+      // Check path contains the filename (path separators vary by OS)
+      expect(result?.resolvedPath).toContain("transcript.md");
     });
   });
 
