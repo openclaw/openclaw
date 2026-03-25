@@ -271,8 +271,12 @@ export async function runEmbeddedPiAgent(
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  // Agent turns routinely take 30-120 s; warn only when the session-lane queue
+  // wait genuinely exceeds 30 s (indicating a stall, not normal LLM latency).
   const enqueueSession =
-    params.enqueue ?? ((task, opts) => enqueueCommandInLane(sessionLane, task, opts));
+    params.enqueue ??
+    ((task, opts) =>
+      enqueueCommandInLane(sessionLane, task, { warnAfterMs: 30_000, ...opts }));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

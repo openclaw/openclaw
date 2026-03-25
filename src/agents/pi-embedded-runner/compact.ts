@@ -1050,8 +1050,9 @@ export async function compactEmbeddedPiSession(
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  return enqueueCommandInLane(sessionLane, () =>
-    enqueueGlobal(async () => {
+  // Compaction waits behind active agent turns; use the same 30 s warn threshold
+  // as runEmbeddedPiAgent to avoid false-positive stall warnings during normal LLM latency.
+  return enqueueCommandInLane(sessionLane, () => enqueueGlobal(async () => {
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -1171,6 +1172,7 @@ export async function compactEmbeddedPiSession(
         await contextEngine.dispose?.();
       }
     }),
+    { warnAfterMs: 30_000 },
   );
 }
 
