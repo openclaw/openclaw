@@ -4,6 +4,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
 const execFileAsync = promisify(execFile);
+const MAX_QUERY_LEN = 512;
 
 export default {
   id: "windows-search",
@@ -63,18 +64,39 @@ export default {
             };
           }
 
-          const safeQuery = query.replace(/"/g, '""').replace(/'/g, "''");
+          const trimmedQuery = String(query ?? "").trim();
+          const boundedQuery = trimmedQuery.slice(0, MAX_QUERY_LEN);
+          const safeQuery = boundedQuery
+            .replace(/[\r\n]/g, " ")
+            .replace(/"/g, '""')
+            .replace(/'/g, "''");
           const safeLimit = Math.max(1, Math.min(1000, limit));
           const normalizedExtensionRaw =
-            typeof extension === "string" ? extension.trim().toLowerCase() : "";
+            typeof extension === "string"
+              ? extension
+                  .replace(/[\r\n]/g, " ")
+                  .trim()
+                  .toLowerCase()
+              : "";
           const normalizedExtension =
             normalizedExtensionRaw && !normalizedExtensionRaw.startsWith(".")
               ? `.${normalizedExtensionRaw}`
               : normalizedExtensionRaw;
-          const safeExtension = normalizedExtension.replace(/"/g, '""').replace(/'/g, "''");
-          const normalizedScopeRaw = typeof scope === "string" ? scope.trim() : "";
+          const extPattern = /^\.[a-z0-9_-]{1,16}$/;
+          const validatedExtension = extPattern.test(normalizedExtension)
+            ? normalizedExtension
+            : "";
+          const safeExtension = validatedExtension
+            .replace(/[\r\n]/g, " ")
+            .replace(/"/g, '""')
+            .replace(/'/g, "''");
+          const normalizedScopeRaw =
+            typeof scope === "string" ? scope.replace(/[\r\n]/g, " ").trim() : "";
           const normalizedScope = normalizeWindowsSearchScope(normalizedScopeRaw);
-          const safeScope = normalizedScope.replace(/"/g, '""').replace(/'/g, "''");
+          const safeScope = normalizedScope
+            .replace(/[\r\n]/g, " ")
+            .replace(/"/g, '""')
+            .replace(/'/g, "''");
           const safeDaysAgo =
             typeof days_ago === "number" && Number.isFinite(days_ago)
               ? Math.max(0, Math.min(3650, Math.floor(days_ago)))
@@ -94,17 +116,20 @@ $ext = '${safeExtension}'
 $scope = '${safeScope}'
 $daysAgo = ${safeDaysAgo}
 $limit = ${safeLimit}
+$queryLike = $query.Replace("'", "''").Replace("\\", "\\\\").Replace("_", "\\_").Replace("%", "\\%").Replace("[", "\\[").Replace("]", "\\]").Replace("*", "\\*")
 try {
     $con = New-Object -ComObject ADODB.Connection
     $rs = New-Object -ComObject ADODB.Recordset
     $con.Open("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
     $whereParts = @()
-    $whereParts += "System.FileName LIKE '%$query%'"
+    $whereParts += "System.FileName LIKE '%$queryLike%' ESCAPE '\\\\'"
     if ($scope) {
-        $whereParts += "SCOPE = '$scope'"
+        $scopeSql = $scope.Replace("'", "''")
+        $whereParts += "SCOPE = '$scopeSql'"
     }
     if ($ext -and $ext -ne '.') {
-        $whereParts += "System.FileExtension = '$ext'"
+        $extSql = $ext.Replace("'", "''")
+        $whereParts += "System.FileExtension = '$extSql'"
     }
     if ($daysAgo -gt 0) {
         $from = (Get-Date).AddDays(-$daysAgo).ToString("yyyy-MM-ddTHH:mm:ss")
@@ -204,12 +229,29 @@ try {
               content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
               details: payload,
             };
-          } catch (err: any) {
-            api.logger.warn(`Windows search failed: ${err.message}`);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            const error =
+              err instanceof Error
+                ? { name: err.name, message: err.message, stack: err.stack }
+                : { message: String(err) };
+            api.logger.warn(
+              JSON.stringify({
+                event: "windows_search_failed",
+                code: "search_failed",
+                error,
+                context: {
+                  limit: safeLimit,
+                  days_ago: safeDaysAgo,
+                  has_scope: Boolean(normalizedScope),
+                  has_extension: Boolean(validatedExtension),
+                },
+              }),
+            );
             const payload = {
               status: "error",
               code: "search_failed",
-              message: String(err?.message ?? err),
+              message,
             };
             return {
               content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
