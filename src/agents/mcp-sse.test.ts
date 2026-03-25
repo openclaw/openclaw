@@ -94,6 +94,30 @@ describe("resolveSseMcpServerLaunchConfig", () => {
     }
   });
 
+  it("redacts sensitive query params in invalid URL errors", () => {
+    const result = resolveSseMcpServerLaunchConfig({
+      url: "mcp.example.com/sse?token=secret123&api_key=key456",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("token=***");
+      expect(result.reason).toContain("api_key=***");
+      expect(result.reason).not.toContain("secret123");
+      expect(result.reason).not.toContain("key456");
+    }
+  });
+
+  it("redacts embedded credentials in invalid URL errors", () => {
+    const result = resolveSseMcpServerLaunchConfig({
+      url: "//user:pass@mcp.example.com/sse",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain("***:***@");
+      expect(result.reason).not.toContain("user:pass");
+    }
+  });
+
   it("rejects non-http protocols", () => {
     const result = resolveSseMcpServerLaunchConfig({ url: "ftp://example.com/sse" });
     expect(result.ok).toBe(false);
