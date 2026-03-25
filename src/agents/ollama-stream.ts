@@ -194,6 +194,74 @@ function parseJsonPreservingUnsafeIntegers(input: string): unknown {
   return JSON.parse(quoteUnsafeIntegerLiterals(input)) as unknown;
 }
 
+function makeMarkdownToolCallRe(): RegExp {
+  return /```(?:json)?\s*\n?\s*(\{(?:(?!```)[\s\S])*?"name"\s*:\s*"[^"]+"(?:(?!```)[\s\S])*?\})\s*\n?```/g;
+}
+
+function stripMarkdownToolCallBlocks(input: string, allowedNames?: ReadonlySet<string>): string {
+  return input
+    .replace(makeMarkdownToolCallRe(), (match, raw: string) => {
+      try {
+        const parsed = parseJsonPreservingUnsafeIntegers((raw ?? "").trim()) as Record<string, unknown>;
+        const name = typeof parsed.name === "string" ? parsed.name : undefined;
+        if (!name) {
+          return match;
+        }
+        if (allowedNames && !allowedNames.has(name)) {
+          return match;
+        }
+        return "";
+      } catch {
+        return match;
+      }
+    })
+    .trim();
+}
+
+export function extractMarkdownToolCalls(
+  input: string,
+  allowedNames?: ReadonlySet<string>,
+): OllamaToolCall[] {
+  const result: OllamaToolCall[] = [];
+  const re = makeMarkdownToolCallRe();
+
+  for (const match of input.matchAll(re)) {
+    const raw = (match[1] ?? match[0] ?? "").trim();
+    if (!raw) {
+      continue;
+    }
+    try {
+      const parsed = parseJsonPreservingUnsafeIntegers(raw) as Record<string, unknown>;
+      const name = typeof parsed.name === "string" ? parsed.name : undefined;
+      if (!name) {
+        continue;
+      }
+      if (allowedNames && !allowedNames.has(name)) {
+        log.debug(`Skipping markdown tool call for unregistered tool '${name}'`);
+        continue;
+      }
+      const args =
+        parsed.arguments != null && typeof parsed.arguments === "object" && !Array.isArray(parsed.arguments)
+          ? (parsed.arguments as Record<string, unknown>)
+          : parsed.parameters != null &&
+              typeof parsed.parameters === "object" &&
+              !Array.isArray(parsed.parameters)
+            ? (parsed.parameters as Record<string, unknown>)
+            : {};
+      result.push({
+        function: {
+          name,
+          arguments: args,
+        },
+      });
+    } catch {
+      log.warn(`Skipping malformed markdown tool call: ${raw.slice(0, 120)}`);
+    }
+  }
+
+  return result;
+}
+
 // ── Ollama /api/chat response types ─────────────────────────────────────────
 
 interface OllamaChatResponse {
@@ -524,6 +592,17 @@ export function createOllamaStreamFn(
         finalResponse.message.content = accumulatedContent;
         if (accumulatedToolCalls.length > 0) {
           finalResponse.message.tool_calls = accumulatedToolCalls;
+        } else if (accumulatedContent && ollamaTools.length > 0) {
+          const allowedNames = new Set(ollamaTools.map((tool) => tool.function.name));
+          const markdownToolCalls = extractMarkdownToolCalls(accumulatedContent, allowedNames);
+          if (markdownToolCalls.length > 0) {
+            accumulatedToolCalls.push(...markdownToolCalls);
+            finalResponse.message.content = stripMarkdownToolCallBlocks(
+              accumulatedContent,
+              allowedNames,
+            );
+            finalResponse.message.tool_calls = accumulatedToolCalls;
+          }
         }
 
         const assistantMessage = buildAssistantMessage(finalResponse, {

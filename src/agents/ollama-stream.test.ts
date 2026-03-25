@@ -4,6 +4,7 @@ import {
   createOllamaStreamFn,
   convertToOllamaMessages,
   buildAssistantMessage,
+  extractMarkdownToolCalls,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
 } from "./ollama-stream.js";
@@ -312,6 +313,98 @@ describe("parseNdjsonStream", () => {
   });
 });
 
+describe("extractMarkdownToolCalls", () => {
+  it("extracts fenced json tool calls for registered tools", () => {
+    const toolCalls = extractMarkdownToolCalls(
+      [
+        "I can do that.",
+        "```json",
+        '{"name":"bash","arguments":{"command":"ls","thread":9223372036854775807}}',
+        "```",
+      ].join("\n"),
+      new Set(["bash"]),
+    );
+
+    expect(toolCalls).toEqual([
+      {
+        function: {
+          name: "bash",
+          arguments: {
+            command: "ls",
+            thread: "9223372036854775807",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("ignores fenced json blocks for tools that are not registered", () => {
+    const toolCalls = extractMarkdownToolCalls(
+      [
+        "```json",
+        '{"name":"dangerous_tool","arguments":{"command":"rm -rf /"}}',
+        "```",
+      ].join("\n"),
+      new Set(["bash"]),
+    );
+
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("keeps unregistered fenced json visible when a registered tool call is also extracted", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"First tool.\\n```json\\n{\\"name\\":\\"bash\\",\\"arguments\\":{\\"command\\":\\"ls -la\\"}}\\n```\\nSecond tool stays visible.\\n```json\\n{\\"name\\":\\"dangerous_tool\\",\\"arguments\\":{\\"command\\":\\"rm -rf /\\"}}\\n```"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":4,"eval_count":2}',
+      ],
+      async () => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "list files" }],
+              tools: [
+                {
+                  name: "bash",
+                  description: "Run a shell command",
+                  parameters: { type: "object", properties: { command: { type: "string" } } },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.reason).toBe("toolUse");
+        expect(doneEvent.message.content).toEqual([
+          {
+            type: "text",
+            text:
+              'First tool.\n\nSecond tool stays visible.\n```json\n{"name":"dangerous_tool","arguments":{"command":"rm -rf /"}}\n```',
+          },
+          expect.objectContaining({
+            type: "toolCall",
+            name: "bash",
+            arguments: { command: "ls -la" },
+          }),
+        ]);
+      },
+    );
+  });
+});
+
 async function withMockNdjsonFetch(
   lines: string[],
   run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
@@ -542,6 +635,55 @@ describe("createOllamaStreamFn", () => {
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":2}',
       ],
       [{ type: "text", text: "final answer" }],
+    );
+  });
+
+  it("recovers fenced json tool calls when Ollama emits markdown instead of native tool_calls", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"I can do that.\\n```json\\n{\\"name\\":\\"bash\\",\\"arguments\\":{\\"command\\":\\"ls -la\\"}}\\n```"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":4,"eval_count":2}',
+      ],
+      async () => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "list files" }],
+              tools: [
+                {
+                  name: "bash",
+                  description: "Run a shell command",
+                  parameters: { type: "object", properties: { command: { type: "string" } } },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+        const doneEvent = events.at(-1);
+        if (!doneEvent || doneEvent.type !== "done") {
+          throw new Error("Expected done event");
+        }
+
+        expect(doneEvent.reason).toBe("toolUse");
+        expect(doneEvent.message.content).toEqual([
+          { type: "text", text: "I can do that." },
+          expect.objectContaining({
+            type: "toolCall",
+            name: "bash",
+            arguments: { command: "ls -la" },
+          }),
+        ]);
+      },
     );
   });
 });
