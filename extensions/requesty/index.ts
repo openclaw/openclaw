@@ -18,9 +18,7 @@ const REQUESTY_BASE_URL = "https://router.requesty.ai/v1";
 const REQUESTY_DEFAULT_MAX_TOKENS = 8192;
 const REQUESTY_CACHE_TTL_MODEL_PREFIXES = ["anthropic/"] as const;
 
-function buildDynamicRequestyModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel {
+function buildDynamicRequestyModel(ctx: ProviderResolveDynamicModelContext): ProviderRuntimeModel {
   return {
     id: ctx.modelId,
     name: ctx.modelId,

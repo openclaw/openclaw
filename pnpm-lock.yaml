@@ -555,6 +555,8 @@ importers:
 
   extensions/qianfan: {}
 
+  extensions/requesty: {}
+
   extensions/sglang: {}
 
   extensions/signal: {}

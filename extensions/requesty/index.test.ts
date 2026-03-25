@@ -7,8 +7,7 @@ import {
 import plugin from "./index.js";
 
 const REQUESTY_API_KEY = process.env.REQUESTY_API_KEY ?? "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_REQUESTY_PLUGIN_MODEL?.trim() || "openai/gpt-4o";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_REQUESTY_PLUGIN_MODEL?.trim() || "openai/gpt-4o";
 const liveEnabled = REQUESTY_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
@@ -21,8 +20,7 @@ const registerRequestyPlugin = () =>
 
 describe("requesty plugin", () => {
   it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } =
-      registerRequestyPlugin();
+    const { providers, speechProviders, mediaProviders, imageProviders } = registerRequestyPlugin();
 
     expect(providers).toHaveLength(1);
     expect(

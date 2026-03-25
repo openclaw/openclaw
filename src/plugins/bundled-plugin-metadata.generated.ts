@@ -2680,6 +2680,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "requesty",
+    idHint: "requesty",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/requesty-provider",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw Requesty provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "requesty",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["requesty"],
+      providerAuthEnvVars: {
+        requesty: ["REQUESTY_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "requesty",
+          method: "api-key",
+          choiceId: "requesty-api-key",
+          choiceLabel: "Requesty API key",
+          groupId: "requesty",
+          groupLabel: "Requesty",
+          groupHint: "API key",
+          optionKey: "requestyApiKey",
+          cliFlag: "--requesty-api-key",
+          cliOption: "--requesty-api-key <key>",
+          cliDescription: "Requesty API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "sglang",
     idHint: "sglang",
     source: {
