@@ -34,6 +34,24 @@ function rewritePackageEntry(entry) {
   return `./${rewritten}`;
 }
 
+function resolveLightRuntimeEntry(manifestMetadata) {
+  if (!manifestMetadata || typeof manifestMetadata !== "object") {
+    return undefined;
+  }
+  // Emit both metadata keys in bundled package.json so old and new runtime
+  // consumers agree on the lightweight setup/runtime entrypoint.
+  const lightRuntimeApi =
+    typeof manifestMetadata["light-runtime-api"] === "string"
+      ? manifestMetadata["light-runtime-api"].trim()
+      : "";
+  if (lightRuntimeApi) {
+    return lightRuntimeApi;
+  }
+  const setupEntry =
+    typeof manifestMetadata.setupEntry === "string" ? manifestMetadata.setupEntry : "";
+  return setupEntry.trim() || undefined;
+}
+
 function ensurePathInsideRoot(rootDir, rawPath) {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -212,11 +230,16 @@ export function copyBundledPluginMetadata(params = {}) {
 
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     if (packageJson.openclaw && "extensions" in packageJson.openclaw) {
+      const runtimeEntry = resolveLightRuntimeEntry(packageJson.openclaw);
+      const rewrittenRuntimeEntry = rewritePackageEntry(runtimeEntry);
       packageJson.openclaw = {
         ...packageJson.openclaw,
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
-        ...(typeof packageJson.openclaw.setupEntry === "string"
-          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+        ...(rewrittenRuntimeEntry
+          ? {
+              setupEntry: rewrittenRuntimeEntry,
+              "light-runtime-api": rewrittenRuntimeEntry,
+            }
           : {}),
       };
     }

@@ -8,6 +8,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "light-runtime-api": "./setup-entry.ts",
     "setupEntry": "./setup-entry.ts"
   }
 }

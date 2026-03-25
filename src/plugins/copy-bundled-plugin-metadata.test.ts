@@ -75,8 +75,38 @@ describe("copyBundledPluginMetadata", () => {
     expect(bundledManifest.skills).toEqual(["./skills"]);
     const packageJson = JSON.parse(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "package.json"), "utf8"),
-    ) as { openclaw?: { extensions?: string[] } };
+    ) as {
+      openclaw?: { extensions?: string[]; setupEntry?: string; "light-runtime-api"?: string };
+    };
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+  });
+
+  it("mirrors light-runtime-api and setupEntry in bundled package metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-light-runtime-");
+    const pluginDir = path.join(repoRoot, "extensions", "whatsapp");
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "whatsapp",
+      configSchema: { type: "object" },
+      channels: ["whatsapp"],
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/whatsapp",
+      openclaw: {
+        extensions: ["./index.ts"],
+        "light-runtime-api": "./setup-entry.ts",
+      },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    const packageJson = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "dist", "extensions", "whatsapp", "package.json"),
+        "utf8",
+      ),
+    ) as { openclaw?: { setupEntry?: string; "light-runtime-api"?: string } };
+    expect(packageJson.openclaw?.setupEntry).toBe("./setup-entry.js");
+    expect(packageJson.openclaw?.["light-runtime-api"]).toBe("./setup-entry.js");
   });
 
   it("relocates node_modules-backed skill paths into bundled-skills and rewrites the manifest", () => {

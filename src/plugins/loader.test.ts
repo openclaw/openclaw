@@ -2015,6 +2015,107 @@ module.exports = {
     expect(registry.channels).toHaveLength(1);
   });
 
+  it("uses package light-runtime-api for enabled but unconfigured channel loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/light-runtime-test",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            "light-runtime-api": "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "light-runtime-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["light-runtime-test"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "light-runtime-test",
+  register(api) {
+    api.registerChannel({
+      plugin: {
+        id: "light-runtime-test",
+        meta: {
+          id: "light-runtime-test",
+          label: "Light Runtime Test",
+          selectionLabel: "Light Runtime Test",
+          docsPath: "/channels/light-runtime-test",
+          blurb: "full entry should not run while unconfigured",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "light-runtime-test",
+    meta: {
+      id: "light-runtime-test",
+      label: "Light Runtime Test",
+      selectionLabel: "Light Runtime Test",
+      docsPath: "/channels/light-runtime-test",
+      blurb: "light runtime",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["light-runtime-test"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.channelSetups).toHaveLength(1);
+    expect(registry.channels).toHaveLength(1);
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

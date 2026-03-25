@@ -6,6 +6,7 @@ import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifes
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  resolvePackageSetupEntry,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
   type PackageManifest,
@@ -562,7 +563,7 @@ function discoverInDirectory(params: {
     const manifest = readPackageManifest(fullPath, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
+    const setupEntryPath = resolvePackageSetupEntry(manifest ?? undefined);
     const setupSource =
       typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
         ? resolvePackageEntrySource({
@@ -697,7 +698,7 @@ function discoverFromPath(params: {
     const manifest = readPackageManifest(resolved, rejectHardlinks);
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-    const setupEntryPath = getPackageManifestMetadata(manifest ?? undefined)?.setupEntry;
+    const setupEntryPath = resolvePackageSetupEntry(manifest ?? undefined);
     const setupSource =
       typeof setupEntryPath === "string" && setupEntryPath.trim().length > 0
         ? resolvePackageEntrySource({

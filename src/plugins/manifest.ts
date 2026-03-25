@@ -244,6 +244,11 @@ export type PluginPackageInstall = {
 
 export type OpenClawPackageManifest = {
   extensions?: string[];
+  /**
+   * Compatibility bridge for newer app/runtime builds that renamed the
+   * lightweight setup-only entry metadata from `setupEntry`.
+   */
+  "light-runtime-api"?: string;
   setupEntry?: string;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
@@ -276,6 +281,22 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+export function resolvePackageSetupEntry(
+  manifest: PackageManifest | undefined,
+): string | undefined {
+  const metadata = getPackageManifestMetadata(manifest);
+  if (!metadata) {
+    return undefined;
+  }
+  const lightRuntimeApi =
+    typeof metadata["light-runtime-api"] === "string" ? metadata["light-runtime-api"].trim() : "";
+  if (lightRuntimeApi) {
+    return lightRuntimeApi;
+  }
+  const setupEntry = typeof metadata.setupEntry === "string" ? metadata.setupEntry.trim() : "";
+  return setupEntry || undefined;
 }
 
 export function resolvePackageExtensionEntries(
