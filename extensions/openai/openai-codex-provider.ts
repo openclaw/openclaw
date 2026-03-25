@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
@@ -53,62 +54,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
-
-type CodexJwtPayload = {
-  iss?: unknown;
-  sub?: unknown;
-  "https://api.openai.com/profile"?: {
-    email?: unknown;
-  };
-  "https://api.openai.com/auth"?: {
-    chatgpt_account_user_id?: unknown;
-    chatgpt_user_id?: unknown;
-    user_id?: unknown;
-  };
-};
-
-function normalizeNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return value.trim() || undefined;
-}
-
-function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
-  const parts = accessToken.split(".");
-  if (parts.length !== 3) {
-    return null;
-  }
-
-  try {
-    const decoded = Buffer.from(parts[1], "base64url").toString("utf8");
-    const parsed = JSON.parse(decoded);
-    return parsed && typeof parsed === "object" ? (parsed as CodexJwtPayload) : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveCodexStableSubject(payload: CodexJwtPayload | null): string | undefined {
-  const auth = payload?.["https://api.openai.com/auth"];
-  const accountUserId = normalizeNonEmptyString(auth?.chatgpt_account_user_id);
-  if (accountUserId) {
-    return accountUserId;
-  }
-
-  const userId =
-    normalizeNonEmptyString(auth?.chatgpt_user_id) ?? normalizeNonEmptyString(auth?.user_id);
-  if (userId) {
-    return userId;
-  }
-
-  const iss = normalizeNonEmptyString(payload?.iss);
-  const sub = normalizeNonEmptyString(payload?.sub);
-  if (iss && sub) {
-    return `${iss}|${sub}`;
-  }
-  return sub;
-}
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -207,6 +152,7 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
+      displayName: cred.displayName,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -238,14 +184,10 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     return { profiles: [] };
   }
 
-  const payload = decodeCodexJwtPayload(creds.access);
-  const resolvedEmail =
-    normalizeNonEmptyString(payload?.["https://api.openai.com/profile"]?.email) ??
-    normalizeNonEmptyString(creds.email);
-  const stableSubject = resolveCodexStableSubject(payload);
-  const resolvedEmailOrFallback =
-    resolvedEmail ??
-    (stableSubject ? `id-${Buffer.from(stableSubject).toString("base64url")}` : undefined);
+  const identity = resolveCodexAuthIdentity({
+    accessToken: creds.access,
+    email: typeof creds.email === "string" ? creds.email : undefined,
+  });
 
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
@@ -253,7 +195,8 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
-    email: resolvedEmailOrFallback,
+    email: identity.email,
+    profileName: identity.profileName,
   });
 }
 
