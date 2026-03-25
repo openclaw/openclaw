@@ -449,6 +449,17 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Episodic memory configuration. */
+  episodic?: {
+    /** Enable episodic memory encoding after session compaction (default: false). */
+    enabled?: boolean;
+    /** Chat model used to extract episodes (default: gpt-4o-mini). */
+    encoderModel?: string;
+    /** Minimum conversation turns before encoding is attempted (default: 3). */
+    minConversationTurns?: number;
+    /** Minimum importance score for an episode to be stored (default: 0.3). */
+    importanceThreshold?: number;
+  };
 };
 
 type WebSearchLegacyProviderConfig = {

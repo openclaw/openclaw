@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
 import {
@@ -27,6 +28,8 @@ import {
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
+import { EpisodeEncoder } from "./episodic/encoder.js";
+import { EpisodicStore } from "./episodic/store.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -320,10 +323,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
+    const base = await this.searchCore(query, opts);
+    const episodic = await this.searchEpisodic(query, opts).catch((err) => {
+      log.warn(`episodic search skipped: ${String(err)}`);
+      return [] as MemorySearchResult[];
+    });
+    return [...base, ...episodic];
+  }
+
+  private async searchCore(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+    },
+  ): Promise<MemorySearchResult[]> {
     const cleaned = query.trim();
     if (!cleaned) {
       return [];
     }
+    await this.ensureProviderInitialized();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
@@ -425,6 +445,77 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           entry.score >= relaxedMinScore,
       )
       .slice(0, maxResults);
+  }
+
+  /** Search episodic memory if enabled. Returns empty array when disabled or unavailable. */
+  private async searchEpisodic(
+    query: string,
+    opts?: { maxResults?: number; minScore?: number },
+  ): Promise<MemorySearchResult[]> {
+    const memSearch = resolveMemorySearchConfig(this.cfg, this.agentId);
+    // Type-cast to access episodic field added in types.tools.ts
+    const episodicCfg = (memSearch as { episodic?: { enabled?: boolean } } | null)?.episodic;
+    if (!episodicCfg?.enabled) {
+      return [];
+    }
+
+    const agentBaseDir = resolveAgentDir(this.cfg, this.agentId);
+    const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
+    const store = new EpisodicStore(dbPath);
+    try {
+      const encoder = new EpisodeEncoder();
+      let queryEmbedding: Float32Array | undefined;
+      try {
+        queryEmbedding = await encoder.generateEmbedding(query);
+      } catch {
+        // Embedding unavailable — fall back to keyword matching in store.getAll()
+      }
+
+      const minScore = opts?.minScore ?? this.settings.query.minScore;
+      const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+      const episodes = store.getAll(this.agentId);
+      const queryWords = query.toLowerCase().split(/\s+/);
+
+      const results: MemorySearchResult[] = [];
+      for (const ep of episodes) {
+        let score: number;
+        if (queryEmbedding && ep.embedding && ep.embedding.length > 0) {
+          // Cosine similarity
+          let dot = 0,
+            normA = 0,
+            normB = 0;
+          for (let i = 0; i < queryEmbedding.length; i++) {
+            dot += queryEmbedding[i] * ep.embedding[i];
+            normA += queryEmbedding[i] * queryEmbedding[i];
+            normB += ep.embedding[i] * ep.embedding[i];
+          }
+          score = normA > 0 && normB > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
+        } else {
+          // Keyword fallback
+          const text = (ep.summary + " " + (ep.details ?? "")).toLowerCase();
+          const matches = queryWords.filter((w) => text.includes(w)).length;
+          score = (matches / Math.max(queryWords.length, 1)) * 0.5;
+        }
+
+        if (score < minScore) {
+          continue;
+        }
+
+        results.push({
+          path: `episodic:${ep.id}`,
+          startLine: 0,
+          endLine: 0,
+          score,
+          snippet: ep.details ? `${ep.summary}\n${ep.details}` : ep.summary,
+          source: "episodes",
+          citation: ep.created_at,
+        });
+      }
+
+      return results.toSorted((a, b) => b.score - a.score).slice(0, maxResults);
+    } finally {
+      store.close();
+    }
   }
 
   private hasIndexedContent(): boolean {

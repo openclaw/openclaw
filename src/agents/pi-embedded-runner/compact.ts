@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -17,6 +18,7 @@ import {
 } from "../../context-engine/index.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -105,6 +107,8 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+
+const memLog = createSubsystemLogger("memory");
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
@@ -260,6 +264,7 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
   };
 }
+
 
 function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>

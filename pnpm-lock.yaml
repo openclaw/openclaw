@@ -649,6 +649,9 @@ importers:
       jimp:
         specifier: ^1.6.0
         version: 1.6.0
+      libsignal:
+        specifier: ^2.0.1
+        version: 2.0.1
     devDependencies:
       openclaw:
         specifier: workspace:*
@@ -4864,6 +4867,9 @@ packages:
 
   koffi@2.15.2:
     resolution: {integrity: sha512-r9tjJLVRSOhCRWdVyQlF3/Ugzeg13jlzS4czS82MAgLff4W+BcYOW7g8Y62t9O5JYjYOLAjAovAZDNlDfZNu+g==}
+
+  libsignal@2.0.1:
+    resolution: {integrity: sha512-kqdl/BK5i0WCa4NxhtiBsjSzztB/FtUp3mVVLKBFicWH8rDsq95tEIqNcCaVlflLxOm6T/HRb/zv8IsCe7aopA==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -11444,6 +11450,10 @@ snapshots:
 
   koffi@2.15.2:
     optional: true
+
+  libsignal@2.0.1:
+    dependencies:
+      protobufjs: 6.8.8
 
   lie@3.3.0:
     dependencies:

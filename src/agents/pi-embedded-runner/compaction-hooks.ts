@@ -1,12 +1,20 @@
+import path from "node:path";
+
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createEpisodeEncoder } from "../../memory/episodic/encoder.js";
+import { EpisodicStore } from "../../memory/episodic/store.js";
+import { buildSessionEntry } from "../../memory/session-files.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import { log } from "./logger.js";
+
+const memLog = createSubsystemLogger("memory");
 
 function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
   const mode = config?.agents?.defaults?.compaction?.postIndexSync;
@@ -78,6 +86,63 @@ function syncPostCompactionSessionMemory(params: {
   return Promise.resolve();
 }
 
+async function runPostCompactionEpisodicEncoding(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionFile: string;
+}): Promise<void> {
+  const memSearch = resolveMemorySearchConfig(params.config, params.agentId);
+  const episodicCfg = (
+    memSearch as { episodic?: { enabled?: boolean; minConversationTurns?: number } } | null
+  )?.episodic;
+  if (!episodicCfg?.enabled) {
+    return;
+  }
+
+  const entry = await buildSessionEntry(params.sessionFile);
+  if (!entry || !entry.content.trim()) {
+    return;
+  }
+
+  const minTurns = episodicCfg.minConversationTurns ?? 3;
+  const turnCount = (entry.content.match(/^(User|Assistant):/gm) ?? []).length;
+  if (turnCount < minTurns) {
+    return;
+  }
+
+  const encoder = createEpisodeEncoder(params.config, params.agentId);
+  const episodes = await encoder.encode(entry.content, params.agentId);
+  if (episodes.length === 0) {
+    return;
+  }
+
+  const agentBaseDir = resolveAgentDir(params.config, params.agentId);
+  const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
+  const store = new EpisodicStore(dbPath);
+  try {
+    const sessionKey = path.basename(params.sessionFile, ".jsonl");
+    for (const ep of episodes) {
+      store.create({
+        agent_id: params.agentId,
+        session_key: sessionKey,
+        created_at: new Date().toISOString(),
+        summary: ep.summary,
+        details: ep.details,
+        participants: ep.participants,
+        importance: ep.importance,
+        emotional_valence: ep.emotional_valence,
+        emotional_arousal: ep.emotional_arousal,
+        topic_tags: ep.topic_tags,
+      });
+    }
+    memLog.info(
+      `episodic: stored ${episodes.length} episode(s) from ${path.basename(params.sessionFile)}`,
+    );
+  } finally {
+    store.close();
+  }
+}
+
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -94,6 +159,22 @@ export async function runPostCompactionSideEffects(params: {
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),
   });
+  // Episodic memory encoding — runs after session memory sync, never breaks main flow
+  if (params.config) {
+    const agentId = resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.config,
+    });
+    try {
+      await runPostCompactionEpisodicEncoding({
+        config: params.config,
+        agentId,
+        sessionFile,
+      });
+    } catch (err) {
+      memLog.warn(`episodic encoding skipped (post-compaction): ${String(err)}`);
+    }
+  }
 }
 
 export type CompactionHookRunner = {
