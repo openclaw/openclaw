@@ -27,7 +27,11 @@ export async function checkGatewayHealth(params: {
     healthOk = true;
   } catch (err) {
     const message = String(err);
-    if (message.includes("gateway closed")) {
+    const lowerMessage = message.toLowerCase();
+    if (lowerMessage.includes("pairing required")) {
+      note("Gateway requires pairing before this check can run.", "Gateway");
+      note(gatewayDetails.message, "Gateway connection");
+    } else if (lowerMessage.includes("gateway closed")) {
       note("Gateway not running.", "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
