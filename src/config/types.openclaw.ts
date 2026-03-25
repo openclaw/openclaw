@@ -24,6 +24,7 @@ import type {
 } from "./types.messages.js";
 import type { ModelsConfig } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
+import type { PairingConfig } from "./types.pairing.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
@@ -113,6 +114,7 @@ export type OpenClawConfig = {
   approvals?: ApprovalsConfig;
   session?: SessionConfig;
   web?: WebConfig;
+  pairing?: PairingConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;

@@ -13,6 +13,7 @@ import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
+import { createOutboundSendDepsFromCliSource } from "../cli/outbound-send-mapping.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -24,6 +25,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { registerPairingNotifyHook } from "../pairing/notify-owner.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -151,6 +153,16 @@ export async function startGatewaySidecars(params: {
     }
   } catch (err) {
     params.logHooks.error(`failed to load hooks: ${String(err)}`);
+  }
+
+  // Register pairing request owner notification hook.
+  try {
+    registerPairingNotifyHook({
+      cfg: params.cfg,
+      sendDeps: createOutboundSendDepsFromCliSource(params.deps),
+    });
+  } catch (err) {
+    params.log.warn(`pairing notify hook registration failed: ${String(err)}`);
   }
 
   // Launch configured channels so gateway replies via the surface the message came from.
