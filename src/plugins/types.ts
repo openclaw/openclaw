@@ -1702,6 +1702,7 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+  metadata?: Record<string, unknown>;
 };
 
 // Tool context
