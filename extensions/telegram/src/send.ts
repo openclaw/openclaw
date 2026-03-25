@@ -55,6 +55,8 @@ const InputFileCtor: typeof grammy.InputFile =
           public readonly fileName?: string,
         ) {}
       } as unknown as typeof grammy.InputFile);
+const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
+const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
 
 type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -789,40 +791,33 @@ export async function sendMessageTelegram(
   const sendChunkedText = async (rawText: string, context: string) =>
     await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
-  /**
-   * Validates photo dimensions against Telegram Bot API requirements.
-   * Falls back to sending as document if dimensions are invalid.
-   * 
-   * Telegram photo requirements (as of 2026-03):
-   * - Sum of width + height must not exceed 10,000px
-   * - Both dimensions must be at least 1px (practically minimum ~10x10)
-   * 
-   * @param buffer - Image buffer to validate
-   * @param verbose - Whether to log validation warnings
-   * @returns true if valid for sendPhoto, false if should use sendDocument instead
-   */
-  async function validatePhotoDimensions(
-    buffer: Buffer,
-    verbose?: boolean,
-  ): Promise<boolean> {
+  async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
     try {
-      // Dynamic import for sharp (CommonJS module in ESM context)
       const mod = (await import("sharp")) as unknown as { default?: Sharp };
       const sharp = mod.default ?? (mod as unknown as Sharp);
-      const instance = sharp(buffer);
-      const metadata = await instance.metadata();
-      const width = metadata.width ?? 0;
-      const height = metadata.height ?? 0;
+      const metadata = await sharp(buffer).metadata();
+      const width = metadata.width;
+      const height = metadata.height;
 
-      if (width + height > 10000) {
+      if (typeof width !== "number" || typeof height !== "number") {
+        return true;
+      }
+
+      const shorterSide = Math.min(width, height);
+      const longerSide = Math.max(width, height);
+      const isValidPhoto =
+        width + height <= MAX_TELEGRAM_PHOTO_DIMENSION_SUM &&
+        shorterSide > 0 &&
+        longerSide <= shorterSide * MAX_TELEGRAM_PHOTO_ASPECT_RATIO;
+
+      if (!isValidPhoto) {
         sendLogger.warn(
-          `Photo dimensions (${width}x${height}) exceed Telegram limit (sum > 10,000px). Sending as document instead.`,
+          `Photo dimensions (${width}x${height}) are not valid for Telegram photos. Sending as document instead.`,
         );
         return false;
       }
       return true;
     } catch (err) {
-      // If we can't read dimensions, let Telegram handle it (backward compatible)
       logVerbose(`Failed to validate photo dimensions: ${formatErrorMessage(err)}`);
       return true;
     }
@@ -842,14 +837,11 @@ export async function sendMessageTelegram(
       contentType: media.contentType,
       fileName: media.fileName,
     });
-    
+
     // Validate photo dimensions before attempting sendPhoto
-    let forceDocumentDueToInvalidDimensions = false;
+    let sendImageAsPhoto = true;
     if (kind === "image" && !isGif && !opts.forceDocument) {
-      const isValidPhoto = await validatePhotoDimensions(media.buffer, opts.verbose);
-      if (!isValidPhoto) {
-        forceDocumentDueToInvalidDimensions = true;
-      }
+      sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
@@ -907,7 +899,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "image" && !opts.forceDocument && !forceDocumentDueToInvalidDimensions) {
+      if (kind === "image" && !opts.forceDocument && sendImageAsPhoto) {
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>

@@ -10,8 +10,14 @@ import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-m
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
-  getTelegramSendTestMocks();
+const {
+  botApi,
+  botCtorSpy,
+  loadConfig,
+  loadWebMedia,
+  maybePersistResolvedTelegramTarget,
+  sharpMetadata,
+} = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -1048,6 +1054,43 @@ describe("sendMessageTelegram", () => {
     });
     expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
     expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
+  it.each([
+    { name: "oversized dimensions", width: 6000, height: 5001 },
+    { name: "oversized aspect ratio", width: 4000, height: 100 },
+  ])("sends images as documents when Telegram rejects $name", async ({ width, height }) => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendDocument, sendPhoto } as unknown as {
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    sharpMetadata.width = width;
+    sharpMetadata.height = height;
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
 
