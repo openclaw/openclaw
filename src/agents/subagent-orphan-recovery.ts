@@ -108,9 +108,9 @@ async function resumeOrphanedSession(params: {
     });
     if (!remapped) {
       log.warn(
-        `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating resume as accepted to avoid duplicate restarts`,
+        `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating as failure`,
       );
-      return true;
+      return false;
     }
     log.info(`resumed orphaned session: ${params.sessionKey}`);
     return true;

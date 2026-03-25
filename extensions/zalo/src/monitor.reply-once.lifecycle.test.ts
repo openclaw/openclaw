@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import {
-  createLifecycleMonitorSetup,
+  createLifecycleAccount,
+  createLifecycleConfig,
   createTextUpdate,
-  postWebhookReplay,
+  getZaloRuntimeMock,
+  postWebhookUpdate,
   resetLifecycleTestState,
-  setLifecycleRuntimeCore,
   sendMessageMock,
   settleAsyncWork,
   startWebhookLifecycleMonitor,
@@ -27,34 +29,32 @@ describe("Zalo reply-once lifecycle", () => {
 
   beforeEach(() => {
     resetLifecycleTestState();
-    setLifecycleRuntimeCore({
-      routing: {
-        resolveAgentRoute:
-          resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-      },
-      reply: {
-        finalizeInboundContext:
-          finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
-        dispatchReplyWithBufferedBlockDispatcher:
-          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-      },
-      session: {
-        recordInboundSession:
-          recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-      },
-    });
+
+    getZaloRuntimeMock.mockReturnValue(
+      createPluginRuntimeMock({
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          reply: {
+            finalizeInboundContext:
+              finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyWithBufferedBlockDispatcher:
+              dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+          },
+          session: {
+            recordInboundSession:
+              recordInboundSessionMock as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+          },
+        },
+      }),
+    );
   });
 
   afterEach(() => {
     resetLifecycleTestState();
   });
-
-  function createReplyOnceMonitorSetup() {
-    return createLifecycleMonitorSetup({
-      accountId: "acct-zalo-lifecycle",
-      dmPolicy: "open",
-    });
-  }
 
   it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
@@ -63,25 +63,41 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const { abort, route, run } = await startWebhookLifecycleMonitor(createReplyOnceMonitorSetup());
+    const { abort, route, run } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+    });
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
+        const payload = createTextUpdate({
+          messageId: `zalo-replay-${Date.now()}`,
+          userId: "user-1",
+          userName: "User One",
+          chatId: "dm-chat-1",
+        });
+        const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
           secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-replay-${Date.now()}`,
-            userId: "user-1",
-            userName: "User One",
-            chatId: "dm-chat-1",
-          }),
+          payload,
+        });
+        const second = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
         });
 
         expect(first.status).toBe(200);
-        expect(replay.status).toBe(200);
+        expect(second.status).toBe(200);
         await settleAsyncWork();
       },
     );
@@ -128,24 +144,38 @@ describe("Zalo reply-once lifecycle", () => {
       },
     );
 
-    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor(
-      createReplyOnceMonitorSetup(),
-    );
+    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-lifecycle",
+        dmPolicy: "open",
+      }),
+    });
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
+        const payload = createTextUpdate({
+          messageId: `zalo-retry-${Date.now()}`,
+          userId: "user-1",
+          userName: "User One",
+          chatId: "dm-chat-1",
+        });
+        const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
           secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-retry-${Date.now()}`,
-            userId: "user-1",
-            userName: "User One",
-            chatId: "dm-chat-1",
-          }),
-          settleBeforeReplay: true,
+          payload,
+        });
+        await settleAsyncWork();
+        const replay = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
         });
 
         expect(first.status).toBe(200);

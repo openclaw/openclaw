@@ -15,7 +15,6 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
-  type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -124,33 +123,6 @@ function buildPluginGroups(params: {
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-export function buildToolsCatalogResult(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  agentId?: string;
-  includePlugins?: boolean;
-}): ToolsCatalogResult {
-  const agentId = params.agentId?.trim() || resolveDefaultAgentId(params.cfg);
-  const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups();
-  if (includePlugins) {
-    const existingToolNames = new Set(
-      groups.flatMap((group) => group.tools.map((tool) => tool.id)),
-    );
-    groups.push(
-      ...buildPluginGroups({
-        cfg: params.cfg,
-        agentId,
-        existingToolNames,
-      }),
-    );
-  }
-  return {
-    agentId,
-    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-    groups,
-  };
-}
-
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond }) => {
     if (!validateToolsCatalogParams(params)) {
@@ -168,13 +140,27 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
+    const includePlugins = params.includePlugins !== false;
+    const groups = buildCoreGroups();
+    if (includePlugins) {
+      const existingToolNames = new Set(
+        groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+      );
+      groups.push(
+        ...buildPluginGroups({
+          cfg: resolved.cfg,
+          agentId: resolved.agentId,
+          existingToolNames,
+        }),
+      );
+    }
     respond(
       true,
-      buildToolsCatalogResult({
-        cfg: resolved.cfg,
+      {
         agentId: resolved.agentId,
-        includePlugins: params.includePlugins,
-      }),
+        profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+        groups,
+      },
       undefined,
     );
   },

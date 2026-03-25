@@ -24,13 +24,7 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
-});
-
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
-
-function createExecApprovals(): ExecApprovalsResolved {
-  return {
+  const approvals: ExecApprovalsResolved = {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
@@ -59,7 +53,10 @@ function createExecApprovals(): ExecApprovalsResolved {
       agents: {},
     },
   };
-}
+  return { ...mod, resolveExecApprovals: () => approvals };
+});
+
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 
 async function loadFreshBashExecPathModulesForTest() {
   vi.resetModules();
@@ -73,7 +70,36 @@ async function loadFreshBashExecPathModulesForTest() {
   });
   vi.doMock("../infra/exec-approvals.js", async (importOriginal) => {
     const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-    return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+    const approvals: ExecApprovalsResolved = {
+      path: "/tmp/exec-approvals.json",
+      socketPath: "/tmp/exec-approvals.sock",
+      token: "token",
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      agent: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+        autoAllowSkills: false,
+      },
+      allowlist: [],
+      file: {
+        version: 1,
+        socket: { path: "/tmp/exec-approvals.sock", token: "token" },
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "full",
+          autoAllowSkills: false,
+        },
+        agents: {},
+      },
+    };
+    return { ...mod, resolveExecApprovals: () => approvals };
   });
   const bashExec = await import("./bash-tools.exec.js");
   return {

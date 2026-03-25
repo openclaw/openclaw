@@ -1,9 +1,6 @@
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -12,12 +9,36 @@ const LIVE_MODEL_ID =
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-const registerOpenRouterPlugin = () =>
-  registerProviderPlugin({
-    plugin,
-    id: "openrouter",
-    name: "OpenRouter Provider",
-  });
+function registerOpenRouterPlugin() {
+  const providers: unknown[] = [];
+  const speechProviders: unknown[] = [];
+  const mediaProviders: unknown[] = [];
+  const imageProviders: unknown[] = [];
+
+  plugin.register(
+    createTestPluginApi({
+      id: "openrouter",
+      name: "OpenRouter Provider",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      registerProvider: (provider) => {
+        providers.push(provider);
+      },
+      registerSpeechProvider: (provider) => {
+        speechProviders.push(provider);
+      },
+      registerMediaUnderstandingProvider: (provider) => {
+        mediaProviders.push(provider);
+      },
+      registerImageGenerationProvider: (provider) => {
+        imageProviders.push(provider);
+      },
+    }),
+  );
+
+  return { providers, speechProviders, mediaProviders, imageProviders };
+}
 
 describe("openrouter plugin", () => {
   it("registers the expected provider surfaces", () => {
@@ -41,7 +62,12 @@ describe("openrouter plugin", () => {
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
     const { providers } = registerOpenRouterPlugin();
-    const provider = requireRegisteredProvider(providers, "openrouter");
+    const provider =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      providers.find((entry) => (entry as any).id === "openrouter");
+    if (!provider) {
+      throw new Error("openrouter provider was not registered");
+    }
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const resolved = (provider as any).resolveDynamicModel?.({

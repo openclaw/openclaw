@@ -170,6 +170,7 @@ async function processStreamOffDiscordMessage() {
 }
 
 beforeAll(async () => {
+  vi.resetModules();
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));

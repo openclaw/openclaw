@@ -124,15 +124,14 @@ export class MatrixRecoveryKeyStore {
     };
   }
 
-  private resolveEncodedRecoveryKeyInput(params: {
+  storeEncodedRecoveryKey(params: {
     encodedPrivateKey: string;
     keyId?: string | null;
     keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
   }): {
-    encodedPrivateKey: string;
-    privateKey: Uint8Array;
-    keyId: string | null;
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
+    encodedPrivateKey?: string;
+    keyId?: string | null;
+    createdAt?: string;
   } {
     const encodedPrivateKey = params.encodedPrivateKey.trim();
     if (!encodedPrivateKey) {
@@ -146,34 +145,18 @@ export class MatrixRecoveryKeyStore {
         `Invalid Matrix recovery key: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const keyId =
-      typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;
-    return {
-      encodedPrivateKey,
-      privateKey,
-      keyId,
-      keyInfo: params.keyInfo ?? this.loadStoredRecoveryKey()?.keyInfo,
-    };
-  }
 
-  storeEncodedRecoveryKey(params: {
-    encodedPrivateKey: string;
-    keyId?: string | null;
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
-  }): {
-    encodedPrivateKey?: string;
-    keyId?: string | null;
-    createdAt?: string;
-  } {
-    const prepared = this.resolveEncodedRecoveryKeyInput(params);
+    const normalizedKeyId =
+      typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;
+    const keyInfo = params.keyInfo ?? this.loadStoredRecoveryKey()?.keyInfo;
     this.saveRecoveryKeyToDisk({
-      keyId: prepared.keyId,
-      keyInfo: prepared.keyInfo,
-      privateKey: prepared.privateKey,
-      encodedPrivateKey: prepared.encodedPrivateKey,
+      keyId: normalizedKeyId,
+      keyInfo,
+      privateKey,
+      encodedPrivateKey,
     });
-    if (prepared.keyId) {
-      this.rememberSecretStorageKey(prepared.keyId, prepared.privateKey, prepared.keyInfo);
+    if (normalizedKeyId) {
+      this.rememberSecretStorageKey(normalizedKeyId, privateKey, keyInfo);
     }
     return this.getRecoveryKeySummary() ?? {};
   }
@@ -183,15 +166,29 @@ export class MatrixRecoveryKeyStore {
     keyId?: string | null;
     keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
   }): void {
-    const prepared = this.resolveEncodedRecoveryKeyInput(params);
+    const encodedPrivateKey = params.encodedPrivateKey.trim();
+    if (!encodedPrivateKey) {
+      throw new Error("Matrix recovery key is required");
+    }
+    let privateKey: Uint8Array;
+    try {
+      privateKey = decodeRecoveryKey(encodedPrivateKey);
+    } catch (err) {
+      throw new Error(
+        `Invalid Matrix recovery key: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const normalizedKeyId =
+      typeof params.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : null;
     this.discardStagedRecoveryKey();
     this.stagedRecoveryKey = {
       version: 1,
       createdAt: new Date().toISOString(),
-      keyId: prepared.keyId,
-      encodedPrivateKey: prepared.encodedPrivateKey,
-      privateKeyBase64: Buffer.from(prepared.privateKey).toString("base64"),
-      keyInfo: prepared.keyInfo,
+      keyId: normalizedKeyId,
+      encodedPrivateKey,
+      privateKeyBase64: Buffer.from(privateKey).toString("base64"),
+      keyInfo: params.keyInfo ?? this.loadStoredRecoveryKey()?.keyInfo,
     };
   }
 

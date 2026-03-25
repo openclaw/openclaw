@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 98,
+            "line": 95,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 1049,
+            "line": 961,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 1058,
+            "line": 970,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2377,7 +2377,7 @@
           "exportName": "buildCommandsPaginationKeyboard",
           "kind": "function",
           "source": {
-            "line": 196,
+            "line": 89,
             "path": "src/auto-reply/reply/commands-info.ts"
           }
         },
@@ -2404,7 +2404,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 844,
+            "line": 841,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -3009,7 +3009,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 163,
+            "line": 162,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3045,7 +3045,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 437,
+            "line": 436,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 414,
+            "line": 413,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 246,
+            "line": 245,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3081,7 +3081,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 277,
+            "line": 276,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3135,7 +3135,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 155,
+            "line": 158,
             "path": "src/channels/registry.ts"
           }
         },
@@ -3230,15 +3230,6 @@
           }
         },
         {
-          "declaration": "export function resolveGatewayPort(cfg?: OpenClawConfig | undefined, env?: ProcessEnv): number;",
-          "exportName": "resolveGatewayPort",
-          "kind": "function",
-          "source": {
-            "line": 285,
-            "path": "src/config/paths.ts"
-          }
-        },
-        {
           "declaration": "export function resolveTailnetHostWithRunner(runCommandWithTimeout?: TailscaleStatusCommandRunner | undefined): Promise<string | null>;",
           "exportName": "resolveTailnetHostWithRunner",
           "kind": "function",
@@ -3279,7 +3270,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 143,
+            "line": 142,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3288,7 +3279,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 155,
+            "line": 154,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3360,7 +3351,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 138,
+            "line": 137,
             "path": "src/plugin-sdk/core.ts"
           }
         },

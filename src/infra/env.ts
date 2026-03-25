@@ -1,15 +1,8 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
+const log = createSubsystemLogger("env");
 const loggedEnv = new Set<string>();
-
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  if (!log) {
-    log = createSubsystemLogger("env");
-  }
-  return log;
-}
 
 type AcceptedEnvOption = {
   key: string;
@@ -41,9 +34,7 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     return;
   }
   loggedEnv.add(option.key);
-  getLog().info(
-    `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
-  );
+  log.info(`env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`);
 }
 
 export function normalizeZaiEnv(): void {

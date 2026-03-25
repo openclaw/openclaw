@@ -386,8 +386,9 @@ export async function resolveReplyDirectives(params: {
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
-    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
+  const agentReasoningDefault = agentEntry?.reasoningDefault as ReasoningLevel | undefined;
+  const hasAgentReasoningDefault = agentReasoningDefault !== undefined;
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
@@ -433,18 +434,20 @@ export async function resolveReplyDirectives(params: {
     (await modelState.resolveDefaultThinkingLevel()) ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
-  // When neither directive nor session nor agent set reasoning, default to model capability
-  // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
-  // to avoid redundant Reasoning: output alongside internal thinking blocks.
-  const hasAgentReasoningDefault =
-    agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
+  // When neither directive nor session set reasoning, default to model capability
+  // (e.g. OpenRouter with reasoning: true). Skip auto-enabling when thinking is
+  // active, including model-inferred defaults, or internal thinking blocks can
+  // be emitted as visible "Reasoning:" messages.
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
-    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
-    hasAgentReasoningDefault;
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    if (hasAgentReasoningDefault) {
+      resolvedReasoningLevel = agentReasoningDefault;
+    } else {
+      resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    }
   }
 
   let contextTokens = resolveContextTokens({

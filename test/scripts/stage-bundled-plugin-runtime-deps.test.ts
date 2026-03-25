@@ -5,14 +5,13 @@ import { resolveNpmRunner } from "../../scripts/stage-bundled-plugin-runtime-dep
 describe("resolveNpmRunner", () => {
   it("anchors npm staging to the active node toolchain when npm-cli.js exists", () => {
     const execPath = "/Users/test/.nodenv/versions/24.13.0/bin/node";
-    const expectedNpmCliPath = path.posix.resolve(
-      path.posix.dirname(execPath),
+    const expectedNpmCliPath = path.resolve(
+      path.dirname(execPath),
       "../lib/node_modules/npm/bin/npm-cli.js",
     );
 
     const runner = resolveNpmRunner({
       execPath,
-      env: {},
       existsSync: (candidate: string) => candidate === expectedNpmCliPath,
       platform: "darwin",
     });
@@ -24,74 +23,10 @@ describe("resolveNpmRunner", () => {
     });
   });
 
-  it("anchors Windows npm staging to the adjacent npm-cli.js without a shell", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const expectedNpmCliPath = path.win32.resolve(
-      path.win32.dirname(execPath),
-      "node_modules/npm/bin/npm-cli.js",
-    );
-
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate: string) => candidate === expectedNpmCliPath,
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: execPath,
-      args: [expectedNpmCliPath],
-      shell: false,
-    });
-  });
-
-  it("uses an adjacent npm.exe on Windows without a shell", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const expectedNpmExePath = path.win32.resolve(path.win32.dirname(execPath), "npm.exe");
-
-    const runner = resolveNpmRunner({
-      execPath,
-      env: {},
-      existsSync: (candidate: string) => candidate === expectedNpmExePath,
-      npmArgs: ["install", "--silent"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: expectedNpmExePath,
-      args: ["install", "--silent"],
-      shell: false,
-    });
-  });
-
-  it("wraps an adjacent npm.cmd via cmd.exe without enabling shell mode", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    const runner = resolveNpmRunner({
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      execPath,
-      env: {},
-      existsSync: (candidate: string) => candidate === npmCmdPath,
-      npmArgs: ["install", "--omit=dev"],
-      platform: "win32",
-    });
-
-    expect(runner).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", `${npmCmdPath} install --omit=dev`],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("prefixes PATH with the active node dir when falling back to bare npm", () => {
+  it("falls back to bare npm when npm-cli.js is unavailable", () => {
     expect(
       resolveNpmRunner({
         execPath: "/tmp/node",
-        env: {
-          PATH: "/usr/bin:/bin",
-        },
         existsSync: () => false,
         platform: "linux",
       }),
@@ -99,22 +34,20 @@ describe("resolveNpmRunner", () => {
       command: "npm",
       args: [],
       shell: false,
-      env: {
-        PATH: `/tmp${path.delimiter}/usr/bin:/bin`,
-      },
     });
   });
 
-  it("fails closed on Windows when no toolchain-local npm CLI exists", () => {
-    expect(() =>
+  it("keeps shell mode for bare npm fallback on Windows", () => {
+    expect(
       resolveNpmRunner({
         execPath: "C:\\node\\node.exe",
-        env: {
-          Path: "C:\\Windows\\System32",
-        },
         existsSync: () => false,
         platform: "win32",
       }),
-    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
+    ).toEqual({
+      command: "npm",
+      args: [],
+      shell: true,
+    });
   });
 });

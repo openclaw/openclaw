@@ -705,23 +705,6 @@ export abstract class MemoryManagerSyncOps {
       log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
       return;
     }
-    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
-    );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
-    );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
-    const deleteFtsRowsByPathSourceAndModel =
-      this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-        : null;
 
     const files = await listMemoryFiles(
       this.workspaceDir,
@@ -743,11 +726,6 @@ export abstract class MemoryManagerSyncOps {
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingRows = selectSourceFileState.all("memory") as Array<{
-      path: string;
-      hash: string;
-    }>;
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -759,7 +737,10 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const record = this.db
+        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+        .get(entry.path, "memory") as { hash: string } | undefined;
+      if (!params.needsFullReindex && record?.hash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -780,20 +761,27 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    for (const stale of existingRows) {
+    const staleRows = this.db
+      .prepare(`SELECT path FROM files WHERE source = ?`)
+      .all("memory") as Array<{ path: string }>;
+    for (const stale of staleRows) {
       if (activePaths.has(stale.path)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "memory");
-      if (deleteVectorRowsByPathAndSource) {
+      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      try {
+        this.db
+          .prepare(
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+          )
+          .run(stale.path, "memory");
+      } catch {}
+      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      if (this.fts.enabled && this.fts.available) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "memory", this.provider.model);
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "memory", this.provider.model);
         } catch {}
       }
     }
@@ -809,24 +797,6 @@ export abstract class MemoryManagerSyncOps {
       log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
       return;
     }
-    const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
-    const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
-    );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
-    );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
-    const deleteFtsRowsByPathSourceAndModel =
-      this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-        : null;
 
     const targetSessionFiles = params.needsFullReindex
       ? null
@@ -837,15 +807,6 @@ export abstract class MemoryManagerSyncOps {
     const activePaths = targetSessionFiles
       ? null
       : new Set(files.map((file) => sessionPathForFile(file)));
-    const existingRows =
-      activePaths === null
-        ? null
-        : (selectSourceFileState.all("sessions") as Array<{
-            path: string;
-            hash: string;
-          }>);
-    const existingHashes =
-      existingRows === null ? null : new Map(existingRows.map((row) => [row.path, row.hash]));
     const indexAll =
       params.needsFullReindex || Boolean(targetSessionFiles) || this.sessionsDirtyFiles.size === 0;
     log.debug("memory sync: indexing session files", {
@@ -887,16 +848,10 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const existingHash =
-        existingHashes?.get(entry.path) ??
-        (
-          selectFileHash.get(entry.path, "sessions") as
-            | {
-                hash: string;
-              }
-            | undefined
-        )?.hash;
-      if (!params.needsFullReindex && existingHash === entry.hash) {
+      const record = this.db
+        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+        .get(entry.path, "sessions") as { hash: string } | undefined;
+      if (!params.needsFullReindex && record?.hash === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -925,20 +880,31 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
 
-    for (const stale of existingRows ?? []) {
+    const staleRows = this.db
+      .prepare(`SELECT path FROM files WHERE source = ?`)
+      .all("sessions") as Array<{ path: string }>;
+    for (const stale of staleRows) {
       if (activePaths.has(stale.path)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
+      this.db
+        .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
+        .run(stale.path, "sessions");
+      try {
+        this.db
+          .prepare(
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+          )
+          .run(stale.path, "sessions");
+      } catch {}
+      this.db
+        .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
+        .run(stale.path, "sessions");
+      if (this.fts.enabled && this.fts.available) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-        } catch {}
-      }
-      deleteChunksByPathAndSource.run(stale.path, "sessions");
-      if (deleteFtsRowsByPathSourceAndModel) {
-        try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "sessions", this.provider.model);
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "sessions", this.provider.model);
         } catch {}
       }
     }

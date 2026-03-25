@@ -1,5 +1,5 @@
 import {
-  getLatestSubagentRunByChildSessionKey,
+  getSubagentRunByChildSessionKey,
   replaceSubagentRunAfterSteer,
 } from "../agents/subagent-registry.js";
 
@@ -11,7 +11,7 @@ export function reactivateCompletedSubagentSession(params: {
   if (!runId) {
     return false;
   }
-  const existing = getLatestSubagentRunByChildSessionKey(params.sessionKey);
+  const existing = getSubagentRunByChildSessionKey(params.sessionKey);
   if (!existing || typeof existing.endedAt !== "number") {
     return false;
   }

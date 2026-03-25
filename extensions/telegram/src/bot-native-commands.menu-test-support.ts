@@ -46,10 +46,6 @@ vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
 }));
 
-vi.mock("./bot/delivery.replies.js", () => ({
-  deliverReplies,
-}));
-
 export async function waitForRegisteredCommands(
   setMyCommands: ReturnType<typeof vi.fn>,
 ): Promise<RegisteredCommand[]> {
@@ -93,7 +89,7 @@ export function createNativeCommandTestParams(
     counts: { block: 0, final: 0, tool: 0 },
   };
   const telegramDeps: TelegramBotDeps = {
-    loadConfig: vi.fn(() => cfg) as TelegramBotDeps["loadConfig"],
+    loadConfig: vi.fn(() => ({}) as OpenClawConfig) as TelegramBotDeps["loadConfig"],
     resolveStorePath: vi.fn(
       (storePath?: string) => storePath ?? "/tmp/sessions.json",
     ) as TelegramBotDeps["resolveStorePath"],

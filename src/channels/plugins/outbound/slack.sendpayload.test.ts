@@ -1,12 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import { createSlackOutboundPayloadHarness } from "../contracts/suites.js";
+import { primeChannelOutboundSendMock } from "../contracts/suites.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
   sendResults?: Array<{ messageId: string }>;
 }) {
-  return createSlackOutboundPayloadHarness(params);
+  const sendSlack = vi.fn();
+  primeChannelOutboundSendMock(
+    sendSlack,
+    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
+    params.sendResults,
+  );
+  const ctx = {
+    cfg: {},
+    to: "C12345",
+    text: "",
+    payload: params.payload,
+    deps: {
+      sendSlack,
+    },
+  };
+  return {
+    run: async () => await slackOutbound.sendPayload!(ctx),
+    sendMock: sendSlack,
+    to: ctx.to,
+  };
 }
 
 describe("slackOutbound sendPayload", () => {

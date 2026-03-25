@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -22,8 +22,6 @@ const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
 const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
-const WEBHOOK_TEST_YIELD_MS = 0;
-const WEBHOOK_DRAIN_GUARD_MS = 5;
 
 function collectResponseBody(
   res: IncomingMessage,
@@ -98,33 +96,9 @@ vi.mock("./bot.js", () => ({
 
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 
-function resetTelegramWebhookMocks(): void {
-  handlerSpy.mockReset();
-  handlerSpy.mockImplementation((..._args: unknown[]): unknown => undefined);
-
-  setWebhookSpy.mockReset();
-  deleteWebhookSpy.mockReset();
-  deleteWebhookSpy.mockImplementation(async () => true);
-  initSpy.mockReset();
-  initSpy.mockImplementation(async () => undefined);
-  stopSpy.mockReset();
-  webhookCallbackSpy.mockReset();
-  webhookCallbackSpy.mockImplementation(() => handlerSpy);
-  createTelegramBotSpy.mockReset();
-  createTelegramBotSpy.mockImplementation(() => ({
-    init: initSpy,
-    api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
-    stop: stopSpy,
-  }));
-}
-
-beforeAll(async () => {
+beforeEach(async () => {
   vi.resetModules();
   ({ startTelegramWebhook } = await import("./webhook.js"));
-});
-
-beforeEach(() => {
-  resetTelegramWebhookMocks();
 });
 
 async function fetchWithTimeout(
@@ -289,12 +263,12 @@ async function postWebhookPayloadWithChunkPlan(params: {
         bytesQueued = offset;
         chunksQueued += 1;
         if (chunksQueued % 10 === 0) {
-          await sleep(WEBHOOK_TEST_YIELD_MS);
+          await sleep(1 + Math.floor(rng() * 3));
         }
         if (!canContinue) {
           // Windows CI occasionally stalls on waiting for drain indefinitely.
           // Bound the wait, then continue queuing this small (~1MB) payload.
-          await Promise.race([once(req, "drain"), sleep(WEBHOOK_DRAIN_GUARD_MS)]);
+          await Promise.race([once(req, "drain"), sleep(25)]);
         }
       }
       phase = "awaiting-response";
@@ -594,7 +568,7 @@ describe("startTelegramWebhook", () => {
   it("keeps webhook payload readable when callback delays body read", async () => {
     handlerSpy.mockImplementationOnce(async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(WEBHOOK_TEST_YIELD_MS);
+      await sleep(10);
       await reply(JSON.stringify(update));
     });
 
@@ -621,7 +595,7 @@ describe("startTelegramWebhook", () => {
     const seenPayloads: string[] = [];
     const delayedHandler = async (...args: unknown[]) => {
       const [update, reply] = args as [unknown, (json: string) => Promise<void>];
-      await sleep(WEBHOOK_TEST_YIELD_MS);
+      await sleep(10);
       seenPayloads.push(JSON.stringify(update));
       await reply("ok");
     };
@@ -665,7 +639,7 @@ describe("startTelegramWebhook", () => {
           ) => {
             seenUpdates.push(update);
             void (async () => {
-              await sleep(WEBHOOK_TEST_YIELD_MS);
+              await sleep(10);
               await reply("ok");
             })();
           },

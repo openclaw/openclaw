@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSlackMedia = vi.fn();
 
@@ -68,13 +68,10 @@ function mockSuccessfulMediaDownload(client: ReturnType<typeof createClient>) {
 }
 
 describe("downloadSlackFile", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
-    ({ downloadSlackFile } = await import("./actions.js"));
-  });
-
-  beforeEach(() => {
     resolveSlackMedia.mockReset();
+    ({ downloadSlackFile } = await import("./actions.js"));
   });
 
   it("returns null when files.info has no private download URL", async () => {

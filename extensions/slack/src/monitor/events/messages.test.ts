@@ -53,6 +53,7 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ registerSlackMessageEvents } = await import("./messages.js"));
 });
 

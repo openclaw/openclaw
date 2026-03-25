@@ -2,14 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import {
-  inspectBundleServerRuntimeSupport,
-  loadEnabledBundleConfig,
-  readBundleJsonObject,
-  resolveBundleJsonOpenFailure,
-} from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
   CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -17,6 +11,8 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./types.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
@@ -47,6 +43,45 @@ const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
   cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
+
+function readPluginJsonObject(params: {
+  rootDir: string;
+  relativePath: string;
+  allowMissing?: boolean;
+}): { ok: true; raw: Record<string, unknown> } | { ok: false; error: string } {
+  const absolutePath = path.join(params.rootDir, params.relativePath);
+  const opened = openBoundaryFileSync({
+    absolutePath,
+    rootPath: params.rootDir,
+    boundaryLabel: "plugin root",
+    rejectHardlinks: true,
+  });
+  if (!opened.ok) {
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => {
+        if (params.allowMissing) {
+          return { ok: true, raw: {} };
+        }
+        return { ok: false, error: `unable to read ${params.relativePath}: path` };
+      },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unable to read ${params.relativePath}: ${failure.reason}`,
+      }),
+    });
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    if (!isRecord(raw)) {
+      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
+    }
+    return { ok: true, raw };
+  } catch (error) {
+    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
 
 function resolveBundleMcpConfigPaths(params: {
   raw: Record<string, unknown>;
@@ -223,15 +258,10 @@ function loadBundleMcpConfig(params: {
   bundleFormat: PluginBundleFormat;
 }): { config: BundleMcpConfig; diagnostics: string[] } {
   const manifestRelativePath = MANIFEST_PATH_BY_FORMAT[params.bundleFormat];
-  const manifestLoaded = readBundleJsonObject({
+  const manifestLoaded = readPluginJsonObject({
     rootDir: params.rootDir,
     relativePath: manifestRelativePath,
-    onOpenFailure: (failure) =>
-      resolveBundleJsonOpenFailure({
-        failure,
-        relativePath: manifestRelativePath,
-        allowMissing: params.bundleFormat === "claude",
-      }),
+    allowMissing: params.bundleFormat === "claude",
   });
   if (!manifestLoaded.ok) {
     return { config: { mcpServers: {} }, diagnostics: [manifestLoaded.error] };
@@ -269,15 +299,23 @@ export function inspectBundleMcpRuntimeSupport(params: {
   rootDir: string;
   bundleFormat: PluginBundleFormat;
 }): BundleMcpRuntimeSupport {
-  const support = inspectBundleServerRuntimeSupport({
-    loaded: loadBundleMcpConfig(params),
-    resolveServers: (config) => config.mcpServers,
-  });
+  const loaded = loadBundleMcpConfig(params);
+  const supportedServerNames: string[] = [];
+  const unsupportedServerNames: string[] = [];
+  let hasSupportedStdioServer = false;
+  for (const [serverName, server] of Object.entries(loaded.config.mcpServers)) {
+    if (typeof server.command === "string" && server.command.trim().length > 0) {
+      hasSupportedStdioServer = true;
+      supportedServerNames.push(serverName);
+      continue;
+    }
+    unsupportedServerNames.push(serverName);
+  }
   return {
-    hasSupportedStdioServer: support.hasSupportedServer,
-    supportedServerNames: support.supportedServerNames,
-    unsupportedServerNames: support.unsupportedServerNames,
-    diagnostics: support.diagnostics,
+    hasSupportedStdioServer,
+    supportedServerNames,
+    unsupportedServerNames,
+    diagnostics: loaded.diagnostics,
   };
 }
 
@@ -285,11 +323,38 @@ export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): EnabledBundleMcpConfigResult {
-  return loadEnabledBundleConfig({
+  const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
-    cfg: params.cfg,
-    createEmptyConfig: () => ({ mcpServers: {} }),
-    loadBundleConfig: loadBundleMcpConfig,
-    createDiagnostic: (pluginId, message) => ({ pluginId, message }),
+    config: params.cfg,
   });
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  const diagnostics: BundleMcpDiagnostic[] = [];
+  let merged: BundleMcpConfig = { mcpServers: {} };
+
+  for (const record of registry.plugins) {
+    if (record.format !== "bundle" || !record.bundleFormat) {
+      continue;
+    }
+    const enableState = resolveEffectiveEnableState({
+      id: record.id,
+      origin: record.origin,
+      config: normalizedPlugins,
+      rootConfig: params.cfg,
+    });
+    if (!enableState.enabled) {
+      continue;
+    }
+
+    const loaded = loadBundleMcpConfig({
+      pluginId: record.id,
+      rootDir: record.rootDir,
+      bundleFormat: record.bundleFormat,
+    });
+    merged = applyMergePatch(merged, loaded.config) as BundleMcpConfig;
+    for (const message of loaded.diagnostics) {
+      diagnostics.push({ pluginId: record.id, message });
+    }
+  }
+
+  return { config: merged, diagnostics };
 }

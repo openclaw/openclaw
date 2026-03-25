@@ -10,7 +10,6 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
-import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -21,7 +20,6 @@ import {
   createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
-  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
@@ -221,15 +219,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   const systemdUnavailable =
     process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
-    const container = Boolean(
-      resolveDaemonContainerContext(service.command?.environment ?? process.env),
-    );
     defaultRuntime.error(errorText("systemd user services unavailable."));
-    for (const hint of renderSystemdUnavailableHints({
-      wsl: isWSLEnv(),
-      kind: classifySystemdUnavailableDetail(service.runtime?.detail),
-      container,
-    })) {
+    for (const hint of renderSystemdUnavailableHints({ wsl: isWSLEnv() })) {
       defaultRuntime.error(errorText(hint));
     }
     spacer();

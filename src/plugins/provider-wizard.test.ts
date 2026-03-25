@@ -20,46 +20,6 @@ function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, 
   } satisfies ProviderPlugin;
 }
 
-function createSglangSetupProvider() {
-  return makeProvider({
-    id: "sglang",
-    label: "SGLang",
-    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
-    wizard: {
-      setup: {
-        choiceLabel: "SGLang setup",
-        groupId: "sglang",
-        groupLabel: "SGLang",
-      },
-    },
-  });
-}
-
-function createSglangConfig() {
-  return {
-    plugins: {
-      allow: ["sglang"],
-    },
-  };
-}
-
-function resolveWizardOptionsTwice(params: {
-  config?: object;
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-}) {
-  resolveProviderWizardOptions({
-    config: params.config ?? createSglangConfig(),
-    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
-    env: params.env,
-  });
-  resolveProviderWizardOptions({
-    config: params.config ?? createSglangConfig(),
-    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
-    env: params.env,
-  });
-}
-
 describe("provider wizard boundaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -288,8 +248,23 @@ describe("provider wizard boundaries", () => {
   });
 
   it("invalidates the wizard cache when config or env contents change in place", () => {
-    const provider = createSglangSetupProvider();
-    const config = createSglangConfig();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {
+      plugins: {
+        allow: ["sglang"],
+      },
+    };
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home-a" } as NodeJS.ProcessEnv;
     resolvePluginProviders.mockReturnValue([provider]);
 
@@ -316,36 +291,95 @@ describe("provider wizard boundaries", () => {
   });
 
   it("skips provider-wizard memoization when plugin cache opt-outs are set", () => {
-    const provider = createSglangSetupProvider();
-    const config = createSglangConfig();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {
+      plugins: {
+        allow: ["sglang"],
+      },
+    };
     const env = {
       OPENCLAW_HOME: "/tmp/openclaw-home",
       OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
     } as NodeJS.ProcessEnv;
     resolvePluginProviders.mockReturnValue([provider]);
 
-    resolveWizardOptionsTwice({ config, env });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
 
   it("skips provider-wizard memoization when discovery cache ttl is zero", () => {
-    const provider = createSglangSetupProvider();
-    const config = createSglangConfig();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
+    const config = {
+      plugins: {
+        allow: ["sglang"],
+      },
+    };
     const env = {
       OPENCLAW_HOME: "/tmp/openclaw-home",
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
     } as NodeJS.ProcessEnv;
     resolvePluginProviders.mockReturnValue([provider]);
 
-    resolveWizardOptionsTwice({ config, env });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
+    resolveProviderWizardOptions({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
 
   it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
     vi.useFakeTimers();
-    const provider = createSglangSetupProvider();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
     const config = {};
     const env = {
       OPENCLAW_HOME: "/tmp/openclaw-home",
@@ -376,7 +410,18 @@ describe("provider wizard boundaries", () => {
   });
 
   it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
-    const provider = createSglangSetupProvider();
+    const provider = makeProvider({
+      id: "sglang",
+      label: "SGLang",
+      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+      wizard: {
+        setup: {
+          choiceLabel: "SGLang setup",
+          groupId: "sglang",
+          groupLabel: "SGLang",
+        },
+      },
+    });
     const config = {};
     const env = {
       OPENCLAW_HOME: "/tmp/openclaw-home",

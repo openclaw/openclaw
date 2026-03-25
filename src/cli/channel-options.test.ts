@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -19,16 +19,13 @@ vi.mock("../channels/registry.js", () => ({
   CHAT_CHANNEL_ORDER: ["telegram", "discord"],
 }));
 
-let resolveCliChannelOptions: typeof import("./channel-options.js").resolveCliChannelOptions;
-let __testing: typeof import("./channel-options.js").__testing;
-
-beforeAll(async () => {
-  ({ resolveCliChannelOptions, __testing } = await import("./channel-options.js"));
-});
+async function loadModule() {
+  return await import("./channel-options.js");
+}
 
 describe("resolveCliChannelOptions", () => {
   afterEach(() => {
-    __testing.resetPrecomputedChannelOptionsForTests();
+    vi.resetModules();
     vi.clearAllMocks();
   });
 
@@ -37,7 +34,8 @@ describe("resolveCliChannelOptions", () => {
       JSON.stringify({ channelOptions: ["cached", "telegram", "cached"] }),
     );
 
-    expect(resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
+    const mod = await loadModule();
+    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
   });
 
   it("falls back to core channel order when metadata is missing", async () => {
@@ -45,14 +43,16 @@ describe("resolveCliChannelOptions", () => {
       throw new Error("ENOENT");
     });
 
-    expect(resolveCliChannelOptions()).toEqual(["telegram", "discord"]);
+    const mod = await loadModule();
+    expect(mod.resolveCliChannelOptions()).toEqual(["telegram", "discord"]);
   });
 
   it("ignores external catalog env during CLI bootstrap", async () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
     readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "telegram"] }));
 
-    expect(resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
+    const mod = await loadModule();
+    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 });

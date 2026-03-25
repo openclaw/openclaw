@@ -2,11 +2,7 @@
 
 import ts from "typescript";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import {
-  collectCallExpressionLines,
-  runAsScript,
-  unwrapExpression,
-} from "./lib/ts-guard-utils.mjs";
+import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const sourceRoots = [
   "src/channels",
@@ -54,18 +50,27 @@ function collectOsTmpdirImports(sourceFile) {
 export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
-  return collectCallExpressionLines(ts, sourceFile, (node) => {
-    const callee = unwrapExpression(node.expression);
-    if (
-      ts.isPropertyAccessExpression(callee) &&
-      callee.name.text === "tmpdir" &&
-      ts.isIdentifier(callee.expression) &&
-      osNamespaceOrDefault.has(callee.expression.text)
-    ) {
-      return callee;
+  const lines = [];
+
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapExpression(node.expression);
+      if (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === "tmpdir" &&
+        ts.isIdentifier(callee.expression) &&
+        osNamespaceOrDefault.has(callee.expression.text)
+      ) {
+        lines.push(toLine(sourceFile, callee));
+      } else if (ts.isIdentifier(callee) && namedTmpdir.has(callee.text)) {
+        lines.push(toLine(sourceFile, callee));
+      }
     }
-    return ts.isIdentifier(callee) && namedTmpdir.has(callee.text) ? callee : null;
-  });
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return lines;
 }
 
 export async function main() {

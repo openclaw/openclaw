@@ -10,50 +10,31 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
 ];
 
-function createResetFixture(entry: Partial<SessionEntry> = {}) {
-  const cfg = {} as OpenClawConfig;
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
-  const sessionEntry: SessionEntry = {
-    sessionId: "s1",
-    updatedAt: Date.now(),
-    ...entry,
-  };
-  return {
-    cfg,
-    aliasIndex,
-    sessionEntry,
-    sessionStore: { "agent:main:dm:1": sessionEntry } as Record<string, SessionEntry>,
-    sessionCtx: { BodyStripped: "minimax summarize" },
-    ctx: { ChatType: "direct" },
-  };
-}
-
-async function applyResetFixture(params: {
-  resetTriggered: boolean;
-  sessionEntry?: Partial<SessionEntry>;
-}) {
-  const fixture = createResetFixture(params.sessionEntry);
-  await applyResetModelOverride({
-    cfg: fixture.cfg,
-    resetTriggered: params.resetTriggered,
-    bodyStripped: "minimax summarize",
-    sessionCtx: fixture.sessionCtx,
-    ctx: fixture.ctx,
-    sessionEntry: fixture.sessionEntry,
-    sessionStore: fixture.sessionStore,
-    sessionKey: "agent:main:dm:1",
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: fixture.aliasIndex,
-    modelCatalog,
-  });
-  return fixture;
-}
-
 describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
-    const { sessionEntry, sessionCtx } = await applyResetFixture({
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
       resetTriggered: true,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+      modelCatalog,
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
@@ -62,13 +43,32 @@ describe("applyResetModelOverride", () => {
   });
 
   it("clears auth profile overrides when reset applies a model", async () => {
-    const { sessionEntry } = await applyResetFixture({
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      authProfileOverride: "anthropic:default",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
       resetTriggered: true,
-      sessionEntry: {
-        authProfileOverride: "anthropic:default",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 2,
-      },
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+      modelCatalog,
     });
 
     expect(sessionEntry.authProfileOverride).toBeUndefined();
@@ -77,8 +77,29 @@ describe("applyResetModelOverride", () => {
   });
 
   it("skips when resetTriggered is false", async () => {
-    const { sessionEntry, sessionCtx } = await applyResetFixture({
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
       resetTriggered: false,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+      modelCatalog,
     });
 
     expect(sessionEntry.providerOverride).toBeUndefined();

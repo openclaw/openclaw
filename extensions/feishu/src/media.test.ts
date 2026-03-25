@@ -24,7 +24,6 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
-  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
 
 vi.mock("./targets.js", () => ({

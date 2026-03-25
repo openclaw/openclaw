@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, type Mock, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -200,7 +200,7 @@ async function withAgentScopeOverrides<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     await loadFreshModelsStatusCommandModuleForTest();
   });
 

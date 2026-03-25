@@ -57,8 +57,6 @@ const mockedModuleIds = [
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
-let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
-let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
 let originalForceStderr: boolean;
@@ -78,19 +76,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
-  originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
-  observedProcessTitle = originalProcessTitle;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
-  Object.defineProperty(process, "title", {
-    configurable: true,
-    enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
-    get: () => observedProcessTitle,
-    set: (value: string) => {
-      observedProcessTitle = value;
-    },
-  });
   loggingState.forceConsoleToStderr = false;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
@@ -98,16 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.argv = originalProcessArgv;
-  if (originalProcessTitleDescriptor && "value" in originalProcessTitleDescriptor) {
-    Object.defineProperty(process, "title", {
-      ...originalProcessTitleDescriptor,
-      value: originalProcessTitle,
-    });
-  } else if (originalProcessTitleDescriptor) {
-    Object.defineProperty(process, "title", originalProcessTitleDescriptor);
-  } else {
-    process.title = originalProcessTitle;
-  }
+  process.title = originalProcessTitle;
   loggingState.forceConsoleToStderr = originalForceStderr;
   if (originalNodeNoWarnings === undefined) {
     delete process.env.NODE_NO_WARNINGS;

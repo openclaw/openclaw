@@ -70,10 +70,9 @@ function createSubagentRuntimeRegistry() {
 
 async function createSubagentRuntime(): Promise<PluginRuntime["subagent"]> {
   const serverPlugins = await import("../server-plugins.js");
-  const serverPluginBootstrap = await import("../server-plugin-bootstrap.js");
   const runtimeModule = await import("../../plugins/runtime/index.js");
   loadOpenClawPlugins.mockReturnValue(createSubagentRuntimeRegistry());
-  serverPluginBootstrap.loadGatewayStartupPlugins({
+  serverPlugins.loadGatewayPlugins({
     cfg: {},
     workspaceDir: "/tmp",
     log: {

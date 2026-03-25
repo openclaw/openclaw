@@ -18,11 +18,7 @@ import {
   normalizeOptionalAccountId,
 } from "../../routing/session-key.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import {
-  rejectUnauthorizedCommand,
-  requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
-} from "./command-gates.js";
+import { rejectUnauthorizedCommand, requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
@@ -385,15 +381,6 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
-  }
-
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/allowlist write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
   }
 
   const disabled = requireCommandFlagEnabled(params.cfg, {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
@@ -410,11 +410,8 @@ async function loadProviderAuthOnboardModules(): Promise<void> {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     await loadProviderAuthOnboardModules();
-  });
-
-  beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();

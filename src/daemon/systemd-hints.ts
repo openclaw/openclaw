@@ -1,29 +1,20 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import {
-  classifySystemdUnavailableDetail,
-  type SystemdUnavailableKind,
-} from "./systemd-unavailable.js";
-
-type SystemdUnavailableHintOptions = {
-  wsl?: boolean;
-  kind?: SystemdUnavailableKind | null;
-  container?: boolean;
-};
 
 export function isSystemdUnavailableDetail(detail?: string): boolean {
-  return classifySystemdUnavailableDetail(detail) !== null;
+  if (!detail) {
+    return false;
+  }
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("systemctl --user unavailable") ||
+    normalized.includes("systemctl not available") ||
+    normalized.includes("not been booted with systemd") ||
+    normalized.includes("failed to connect to bus") ||
+    normalized.includes("systemd user services are required")
+  );
 }
 
-function renderSystemdHeadlessServerHints(): string[] {
-  return [
-    "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
-    "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
-  ];
-}
-
-export function renderSystemdUnavailableHints(
-  options: SystemdUnavailableHintOptions = {},
-): string[] {
+export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): string[] {
   if (options.wsl) {
     return [
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
@@ -33,9 +24,6 @@ export function renderSystemdUnavailableHints(
   }
   return [
     "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-    ...(options.container || options.kind !== "user_bus_unavailable"
-      ? []
-      : renderSystemdHeadlessServerHints()),
     `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
   ];
 }

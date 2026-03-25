@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
-  expectExplicitMatrixClientConfig,
-  expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
 } from "../client-resolver.test-helpers.js";
@@ -61,7 +59,17 @@ describe("action client helpers", () => {
 
     const result = await withResolvedActionClient({ accountId: "default" }, async () => "ok");
 
-    await expectOneOffSharedMatrixClient();
+    expect(getActiveMatrixClientMock).toHaveBeenCalledWith("default");
+    expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
+    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+      cfg: {},
+      timeoutMs: undefined,
+      accountId: "default",
+      startClient: false,
+    });
+    const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
+    expect(sharedClient.prepareForOneOff).toHaveBeenCalledTimes(1);
+    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
     expect(result).toBe("ok");
   });
 
@@ -139,9 +147,12 @@ describe("action client helpers", () => {
     });
     await withResolvedActionClient({}, async () => {});
 
-    await expectOneOffSharedMatrixClient({
+    expect(getActiveMatrixClientMock).toHaveBeenCalledWith("ops");
+    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
       cfg: loadConfigMock(),
+      timeoutMs: undefined,
       accountId: "ops",
+      startClient: false,
     });
   });
 
@@ -156,9 +167,16 @@ describe("action client helpers", () => {
 
     await withResolvedActionClient({ cfg: explicitCfg, accountId: "ops" }, async () => {});
 
-    expectExplicitMatrixClientConfig({
+    expect(getMatrixRuntimeMock).not.toHaveBeenCalled();
+    expect(resolveMatrixAuthContextMock).toHaveBeenCalledWith({
       cfg: explicitCfg,
       accountId: "ops",
+    });
+    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+      cfg: explicitCfg,
+      timeoutMs: undefined,
+      accountId: "ops",
+      startClient: false,
     });
   });
 

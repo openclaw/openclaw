@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
@@ -21,18 +21,8 @@ vi.mock("./backup-verify.js", () => ({
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
 
-  async function resetTempHome() {
-    await fs.rm(tempHome.home, { recursive: true, force: true });
-    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
-    delete process.env.OPENCLAW_CONFIG_PATH;
-  }
-
-  beforeAll(async () => {
-    tempHome = await createTempHomeEnv("openclaw-backup-test-");
-  });
-
   beforeEach(async () => {
-    await resetTempHome();
+    tempHome = await createTempHomeEnv("openclaw-backup-test-");
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -47,9 +37,6 @@ describe("backup commands", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-  });
-
-  afterAll(async () => {
     await tempHome.restore();
   });
 

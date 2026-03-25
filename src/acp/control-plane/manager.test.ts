@@ -1,6 +1,6 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
@@ -35,7 +35,6 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
 
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
 let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
-let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
 
 const baseCfg = {
   acp: {
@@ -150,17 +149,10 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
-    ({
-      AcpSessionManager,
-      __testing: { resetAcpSessionManagerForTests },
-    } = await import("./manager.js"));
+    ({ AcpSessionManager } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
-  });
-
-  beforeEach(() => {
-    resetAcpSessionManagerForTests();
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();

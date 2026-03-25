@@ -30,6 +30,7 @@ async function withProcessPlatform<T>(
     value: platform,
   });
   try {
+    vi.resetModules();
     return await run();
   } finally {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -61,7 +62,8 @@ describe("isPidAlive", () => {
       [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
     });
     await withLinuxProcessPlatform(async () => {
-      expect(isPidAlive(zombiePid)).toBe(false);
+      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
+      expect(freshIsPidAlive(zombiePid)).toBe(false);
     });
   });
 
@@ -72,7 +74,8 @@ describe("isPidAlive", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     await withLinuxProcessPlatform(async () => {
-      expect(isPidAlive(42)).toBe(true);
+      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
+      expect(freshIsPidAlive(42)).toBe(true);
     });
 
     expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
@@ -95,18 +98,20 @@ describe("getProcessStartTime", () => {
     });
 
     await withLinuxProcessPlatform(async () => {
-      expect(getProcessStartTime(process.pid)).toBe(98765);
-      expect(getProcessStartTime(42)).toBe(55555);
-      expect(getProcessStartTime(43)).toBeNull();
-      expect(getProcessStartTime(44)).toBe(66666);
-      expect(getProcessStartTime(45)).toBeNull();
-      expect(getProcessStartTime(46)).toBeNull();
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(process.pid)).toBe(98765);
+      expect(fresh(42)).toBe(55555);
+      expect(fresh(43)).toBeNull();
+      expect(fresh(44)).toBe(66666);
+      expect(fresh(45)).toBeNull();
+      expect(fresh(46)).toBeNull();
     });
   });
 
   it("returns null on non-Linux platforms", () => {
     return withProcessPlatform("darwin", async () => {
-      expect(getProcessStartTime(process.pid)).toBeNull();
+      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
+      expect(fresh(process.pid)).toBeNull();
     });
   });
 

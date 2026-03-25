@@ -66,6 +66,7 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
 
 describe("registerSlackMemberEvents", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ registerSlackMemberEvents } = await import("./members.js"));
     ({ createSlackSystemEventTestHarness: initSlackHarness } =
       await import("./system-event-test-harness.js"));

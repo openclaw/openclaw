@@ -10,6 +10,7 @@ let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDis
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({
     clearDiscordComponentEntries,
     registerDiscordComponentEntries,

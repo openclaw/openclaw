@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -18,16 +18,13 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
 let mod: typeof import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
-    mod = await import("./pw-tools-core.js");
-  });
-
-  beforeEach(() => {
     for (const fn of Object.values(tmpDirMocks)) {
       fn.mockClear();
     }
     tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp/openclaw");
+    mod = await import("./pw-tools-core.js");
   });
 
   async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {

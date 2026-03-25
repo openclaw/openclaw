@@ -123,10 +123,6 @@ let unregisterSessionBindingAdapter: typeof import("../infra/outbound/session-bi
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 type PluginBindingRequest = Awaited<ReturnType<typeof requestPluginConversationBinding>>;
-type PluginBindingRequestInput = Parameters<typeof requestPluginConversationBinding>[0];
-type PluginBindingDecision = Parameters<
-  typeof resolvePluginConversationBindingApproval
->[0]["decision"];
 type ConversationBindingModule = typeof import("./conversation-binding.js");
 
 const conversationBindingModuleUrl = new URL("./conversation-binding.ts", import.meta.url).href;
@@ -156,82 +152,14 @@ function createAdapter(channel: string, accountId: string): SessionBindingAdapte
   };
 }
 
-function createDiscordCodexBindRequest(
-  conversationId: string,
-  summary: string,
-  accountId = "isolated",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot: "/plugins/codex-a",
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "discord",
-      accountId,
-      conversationId,
-    },
-    binding: { summary },
-  };
-}
-
-function createTelegramCodexBindRequest(
-  conversationId: string,
-  threadId: string,
-  summary: string,
-  pluginRoot = "/plugins/codex-a",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot,
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "telegram",
-      accountId: "default",
-      conversationId,
-      parentConversationId: "-10099",
-      threadId,
-    },
-    binding: { summary },
-  };
-}
-
-async function requestPendingBinding(
-  input: PluginBindingRequestInput,
-  requestBinding = requestPluginConversationBinding,
-) {
-  const request = await requestBinding(input);
-  expect(request.status).toBe("pending");
-  if (request.status !== "pending") {
-    throw new Error("expected pending bind request");
-  }
-  return request;
-}
-
-async function approveBindingRequest(
-  approvalId: string,
-  decision: PluginBindingDecision,
-  resolveApproval = resolvePluginConversationBindingApproval,
-) {
-  return await resolveApproval({
-    approvalId,
-    decision,
-    senderId: "user-1",
-  });
-}
-
-async function importDuplicateConversationBindingModules() {
-  const first = await importConversationBindingModule(`first-${Date.now()}`);
-  const second = await importConversationBindingModule(`second-${Date.now()}`);
-  first.__testing.reset();
-  return { first, second };
-}
-
 async function resolveRequestedBinding(request: PluginBindingRequest) {
   expect(["pending", "bound"]).toContain(request.status);
   if (request.status === "pending") {
-    const approved = await approveBindingRequest(request.approvalId, "allow-once");
+    const approved = await resolvePluginConversationBindingApproval({
+      approvalId: request.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    });
     expect(approved.status).toBe("approved");
     if (approved.status !== "approved") {
       throw new Error("expected approved bind result");
@@ -318,62 +246,138 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("requires a fresh approval again after allow-once is consumed", async () => {
-    const firstRequest = await requestPendingBinding(
-      createDiscordCodexBindRequest("channel:1", "Bind this conversation to Codex thread 123."),
-    );
-    const approved = await approveBindingRequest(firstRequest.approvalId, "allow-once");
+    const firstRequest = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:1",
+      },
+      binding: { summary: "Bind this conversation to Codex thread 123." },
+    });
+
+    expect(firstRequest.status).toBe("pending");
+    if (firstRequest.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    const approved = await resolvePluginConversationBindingApproval({
+      approvalId: firstRequest.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    });
 
     expect(approved.status).toBe("approved");
 
-    const secondRequest = await requestPluginConversationBinding(
-      createDiscordCodexBindRequest("channel:2", "Bind this conversation to Codex thread 456."),
-    );
+    const secondRequest = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:2",
+      },
+      binding: { summary: "Bind this conversation to Codex thread 456." },
+    });
 
     expect(secondRequest.status).toBe("pending");
   });
 
   it("persists always-allow by plugin root plus channel/account only", async () => {
-    const firstRequest = await requestPendingBinding(
-      createDiscordCodexBindRequest("channel:1", "Bind this conversation to Codex thread 123."),
-    );
-    const approved = await approveBindingRequest(firstRequest.approvalId, "allow-always");
+    const firstRequest = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:1",
+      },
+      binding: { summary: "Bind this conversation to Codex thread 123." },
+    });
+
+    expect(firstRequest.status).toBe("pending");
+    if (firstRequest.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
+
+    const approved = await resolvePluginConversationBindingApproval({
+      approvalId: firstRequest.approvalId,
+      decision: "allow-always",
+      senderId: "user-1",
+    });
 
     expect(approved.status).toBe("approved");
 
-    const sameScope = await requestPluginConversationBinding(
-      createDiscordCodexBindRequest("channel:2", "Bind this conversation to Codex thread 456."),
-    );
+    const sameScope = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "isolated",
+        conversationId: "channel:2",
+      },
+      binding: { summary: "Bind this conversation to Codex thread 456." },
+    });
 
     expect(sameScope.status).toBe("bound");
 
-    const differentAccount = await requestPluginConversationBinding(
-      createDiscordCodexBindRequest(
-        "channel:3",
-        "Bind this conversation to Codex thread 789.",
-        "work",
-      ),
-    );
+    const differentAccount = await requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "discord",
+        accountId: "work",
+        conversationId: "channel:3",
+      },
+      binding: { summary: "Bind this conversation to Codex thread 789." },
+    });
 
     expect(differentAccount.status).toBe("pending");
   });
 
   it("shares pending bind approvals across duplicate module instances", async () => {
-    const { first, second } = await importDuplicateConversationBindingModules();
-    const request = await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:77",
-        "77",
-        "Bind this conversation to Codex thread abc.",
-      ),
-      first.requestPluginConversationBinding,
-    );
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
 
     await expect(
-      approveBindingRequest(
-        request.approvalId,
-        "allow-once",
-        second.resolvePluginConversationBindingApproval,
-      ),
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
     ).resolves.toMatchObject({
       status: "approved",
       binding: expect.objectContaining({
@@ -387,34 +391,56 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("shares persistent approvals across duplicate module instances", async () => {
-    const { first, second } = await importDuplicateConversationBindingModules();
-    const request = await requestPendingBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:77",
-        "77",
-        "Bind this conversation to Codex thread abc.",
-      ),
-      first.requestPluginConversationBinding,
-    );
+    const first = await importConversationBindingModule(`first-${Date.now()}`);
+    const second = await importConversationBindingModule(`second-${Date.now()}`);
+
+    first.__testing.reset();
+
+    const request = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        threadId: "77",
+      },
+      binding: { summary: "Bind this conversation to Codex thread abc." },
+    });
+
+    expect(request.status).toBe("pending");
+    if (request.status !== "pending") {
+      throw new Error("expected pending bind request");
+    }
 
     await expect(
-      approveBindingRequest(
-        request.approvalId,
-        "allow-always",
-        second.resolvePluginConversationBindingApproval,
-      ),
+      second.resolvePluginConversationBindingApproval({
+        approvalId: request.approvalId,
+        decision: "allow-always",
+        senderId: "user-1",
+      }),
     ).resolves.toMatchObject({
       status: "approved",
       decision: "allow-always",
     });
 
-    const rebound = await first.requestPluginConversationBinding(
-      createTelegramCodexBindRequest(
-        "-10099:topic:78",
-        "78",
-        "Bind this conversation to Codex thread def.",
-      ),
-    );
+    const rebound = await first.requestPluginConversationBinding({
+      pluginId: "codex",
+      pluginName: "Codex App Server",
+      pluginRoot: "/plugins/codex-a",
+      requestedBySenderId: "user-1",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10099:topic:78",
+        parentConversationId: "-10099",
+        threadId: "78",
+      },
+      binding: { summary: "Bind this conversation to Codex thread def." },
+    });
 
     expect(rebound.status).toBe("bound");
 

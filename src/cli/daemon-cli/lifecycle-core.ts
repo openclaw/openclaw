@@ -52,10 +52,7 @@ async function maybeAugmentSystemdHints(hints: string[]): Promise<string[]> {
   if (systemdAvailable) {
     return hints;
   }
-  return [
-    ...hints,
-    ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
-  ];
+  return [...hints, ...renderSystemdUnavailableHints({ wsl: await isWSL() })];
 }
 
 function createActionIO(params: { action: DaemonAction; json: boolean }) {

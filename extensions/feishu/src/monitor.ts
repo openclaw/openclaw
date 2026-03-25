@@ -1,5 +1,5 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
+import { listEnabledFeishuAccounts, resolveFeishuAccount } from "./accounts.js";
 import {
   monitorSingleAccount,
   resolveReactionSyntheticEvent,
@@ -37,10 +37,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   const log = opts.runtime?.log ?? console.log;
 
   if (opts.accountId) {
-    const account = resolveFeishuRuntimeAccount(
-      { cfg, accountId: opts.accountId },
-      { requireEventSecrets: true },
-    );
+    const account = resolveFeishuAccount({ cfg, accountId: opts.accountId });
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }

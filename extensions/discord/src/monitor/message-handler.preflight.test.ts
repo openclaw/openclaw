@@ -27,6 +27,7 @@ let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({
     preflightDiscordMessage,
     resolvePreflightMentionRequirement,

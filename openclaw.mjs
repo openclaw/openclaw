@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
@@ -86,6 +85,8 @@ const installProcessWarningFilter = async () => {
   }
 };
 
+await installProcessWarningFilter();
+
 const tryImport = async (specifier) => {
   try {
     await import(specifier);
@@ -125,56 +126,10 @@ const buildMissingEntryErrorMessage = async () => {
   return lines.join("\n");
 };
 
-const isBareRootHelpInvocation = (argv) =>
-  argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
-
-const loadPrecomputedRootHelpText = () => {
-  try {
-    const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.rootHelpText === "string" && parsed.rootHelpText.length > 0
-      ? parsed.rootHelpText
-      : null;
-  } catch {
-    return null;
-  }
-};
-
-const tryOutputBareRootHelp = async () => {
-  if (!isBareRootHelpInvocation(process.argv)) {
-    return false;
-  }
-  const precomputed = loadPrecomputedRootHelpText();
-  if (precomputed) {
-    process.stdout.write(precomputed);
-    return true;
-  }
-  for (const specifier of ["./dist/cli/program/root-help.js", "./dist/cli/program/root-help.mjs"]) {
-    try {
-      const mod = await import(specifier);
-      if (typeof mod.outputRootHelp === "function") {
-        mod.outputRootHelp();
-        return true;
-      }
-    } catch (err) {
-      if (isDirectModuleNotFoundError(err, specifier)) {
-        continue;
-      }
-      throw err;
-    }
-  }
-  return false;
-};
-
-if (await tryOutputBareRootHelp()) {
+if (await tryImport("./dist/entry.js")) {
+  // OK
+} else if (await tryImport("./dist/entry.mjs")) {
   // OK
 } else {
-  await installProcessWarningFilter();
-  if (await tryImport("./dist/entry.js")) {
-    // OK
-  } else if (await tryImport("./dist/entry.mjs")) {
-    // OK
-  } else {
-    throw new Error(await buildMissingEntryErrorMessage());
-  }
+  throw new Error(await buildMissingEntryErrorMessage());
 }

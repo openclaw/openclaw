@@ -15,9 +15,7 @@ import {
   originalFetch,
 } from "./server-context.remote-tab-ops.harness.js";
 
-afterEach(async () => {
-  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
-  await closePlaywrightBrowserConnection().catch(() => {});
+afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });

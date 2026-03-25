@@ -1,66 +1,85 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import {
-  createLifecycleMonitorSetup,
+  createLifecycleAccount,
+  createLifecycleConfig,
   createTextUpdate,
-  postWebhookReplay,
+  getZaloRuntimeMock,
+  postWebhookUpdate,
   resetLifecycleTestState,
-  setLifecycleRuntimeCore,
   sendMessageMock,
   settleAsyncWork,
   startWebhookLifecycleMonitor,
 } from "../../../test/helpers/extensions/zalo-lifecycle.js";
 import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { PluginRuntime } from "../runtime-api.js";
 
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
-
   beforeEach(() => {
     resetLifecycleTestState();
-    setLifecycleRuntimeCore({
-      pairing: {
-        readAllowFromStore: readAllowFromStoreMock,
-        upsertPairingRequest: upsertPairingRequestMock,
-      },
-      commands: {
-        shouldComputeCommandAuthorized: vi.fn(() => false),
-        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
-      },
-    });
+
+    getZaloRuntimeMock.mockReturnValue(
+      createPluginRuntimeMock({
+        channel: {
+          pairing: {
+            readAllowFromStore:
+              readAllowFromStoreMock as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+            upsertPairingRequest:
+              upsertPairingRequestMock as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+        },
+      }),
+    );
   });
 
   afterEach(() => {
     resetLifecycleTestState();
   });
 
-  function createPairingMonitorSetup() {
-    return createLifecycleMonitorSetup({
-      accountId: "acct-zalo-pairing",
-      dmPolicy: "pairing",
-      allowFrom: [],
-    });
-  }
-
   it("emits one pairing reply across duplicate webhook replay and scopes reads and writes to accountId", async () => {
-    const { abort, route, run } = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const { abort, route, run } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-pairing",
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-pairing",
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
+    });
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
+        const payload = createTextUpdate({
+          messageId: `zalo-pairing-${Date.now()}`,
+          userId: "user-unauthorized",
+          userName: "Unauthorized User",
+          chatId: "dm-pairing-1",
+        });
+        const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
           secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-pairing-${Date.now()}`,
-            userId: "user-unauthorized",
-            userName: "Unauthorized User",
-            chatId: "dm-pairing-1",
-          }),
+          payload,
+        });
+        const second = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
         });
 
         expect(first.status).toBe(200);
-        expect(replay.status).toBe(200);
+        expect(second.status).toBe(200);
         await settleAsyncWork();
       },
     );
@@ -97,24 +116,40 @@ describe("Zalo pairing lifecycle", () => {
   it("does not emit a second pairing reply when replay arrives after the first send fails", async () => {
     sendMessageMock.mockRejectedValueOnce(new Error("pairing send failed"));
 
-    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor(
-      createPairingMonitorSetup(),
-    );
+    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor({
+      account: createLifecycleAccount({
+        accountId: "acct-zalo-pairing",
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
+      config: createLifecycleConfig({
+        accountId: "acct-zalo-pairing",
+        dmPolicy: "pairing",
+        allowFrom: [],
+      }),
+    });
 
     await withServer(
       (req, res) => route.handler(req, res),
       async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
+        const payload = createTextUpdate({
+          messageId: `zalo-pairing-retry-${Date.now()}`,
+          userId: "user-unauthorized",
+          userName: "Unauthorized User",
+          chatId: "dm-pairing-1",
+        });
+        const first = await postWebhookUpdate({
           baseUrl,
           path: "/hooks/zalo",
           secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-pairing-retry-${Date.now()}`,
-            userId: "user-unauthorized",
-            userName: "Unauthorized User",
-            chatId: "dm-pairing-1",
-          }),
-          settleBeforeReplay: true,
+          payload,
+        });
+        await settleAsyncWork();
+        const replay = await postWebhookUpdate({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
         });
 
         expect(first.status).toBe(200);

@@ -55,10 +55,6 @@ const cleanupTempArtifacts = () => {
   if (tempArtifactDir === null) {
     return;
   }
-  if (process.env.OPENCLAW_TEST_KEEP_TEMP_ARTIFACTS === "1") {
-    console.error(`[test-parallel] keeping temp artifacts at ${tempArtifactDir}`);
-    return;
-  }
   fs.rmSync(tempArtifactDir, { recursive: true, force: true });
   tempArtifactDir = null;
 };
@@ -116,10 +112,9 @@ const parsePoolOverride = (value, fallback) => {
   }
   return fallback;
 };
-// Even on low-memory or fully serial hosts, keep the unit lane split so
-// long-lived workers do not accumulate the whole unit transform graph.
-const shouldSplitUnitRuns = true;
-const useLowProfileUnitSchedulingDefaults = testProfile === "low" || testProfile === "serial";
+// Even on low-memory hosts, keep the isolated lane split so files like
+// git-commit.test.ts still get the worker/process isolation they require.
+const shouldSplitUnitRuns = testProfile !== "serial";
 let runs = [];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
 const configuredShardCount =
@@ -328,20 +323,26 @@ const parseEnvNumber = (name, fallback) => {
 const allKnownUnitFiles = allKnownTestFiles.filter((file) => {
   return isUnitConfigTestFile(file);
 });
-const defaultHeavyUnitFileLimit = isMacMiniProfile
-  ? 90
-  : useLowProfileUnitSchedulingDefaults
-    ? 36
-    : highMemLocalHost
-      ? 80
-      : 60;
-const defaultHeavyUnitLaneCount = isMacMiniProfile
-  ? 6
-  : useLowProfileUnitSchedulingDefaults
-    ? 4
-    : highMemLocalHost
-      ? 5
-      : 4;
+const defaultHeavyUnitFileLimit =
+  testProfile === "serial"
+    ? 0
+    : isMacMiniProfile
+      ? 90
+      : testProfile === "low"
+        ? 36
+        : highMemLocalHost
+          ? 80
+          : 60;
+const defaultHeavyUnitLaneCount =
+  testProfile === "serial"
+    ? 0
+    : isMacMiniProfile
+      ? 6
+      : testProfile === "low"
+        ? 4
+        : highMemLocalHost
+          ? 5
+          : 4;
 const heavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_HEAVY_UNIT_FILE_LIMIT",
   defaultHeavyUnitFileLimit,
@@ -351,7 +352,8 @@ const heavyUnitLaneCount = parseEnvNumber(
   defaultHeavyUnitLaneCount,
 );
 const heavyUnitMinDurationMs = parseEnvNumber("OPENCLAW_TEST_HEAVY_UNIT_MIN_MS", 1200);
-const defaultMemoryHeavyUnitFileLimit = isCI ? 64 : useLowProfileUnitSchedulingDefaults ? 8 : 16;
+const defaultMemoryHeavyUnitFileLimit =
+  testProfile === "serial" ? 0 : isCI ? 64 : testProfile === "low" ? 8 : 16;
 const memoryHeavyUnitFileLimit = parseEnvNumber(
   "OPENCLAW_TEST_MEMORY_HEAVY_UNIT_FILE_LIMIT",
   defaultMemoryHeavyUnitFileLimit,
@@ -395,9 +397,6 @@ const resolveEntryTimingEstimator = (entry) => {
     return estimateUnitDurationMs;
   }
   if (config === "vitest.channels.config.ts") {
-    return estimateChannelDurationMs;
-  }
-  if (config === "vitest.extensions.config.ts") {
     return estimateChannelDurationMs;
   }
   return null;
@@ -448,69 +447,23 @@ const channelSharedCandidateFiles = allKnownTestFiles.filter(
     channelTestPrefixes.some((prefix) => file.startsWith(prefix)) &&
     !channelIsolatedFileSet.has(file),
 );
-const defaultExtensionsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
-const extensionsBatchTargetMs = parseEnvNumber(
-  "OPENCLAW_TEST_EXTENSIONS_BATCH_TARGET_MS",
-  defaultExtensionsBatchTargetMs,
-);
 const extensionIsolatedEntries = extensionForkIsolatedFiles.map((file) => ({
   name: `extensions-${path.basename(file, ".test.ts")}-isolated`,
   args: ["vitest", "run", "--config", "vitest.extensions.config.ts", "--pool=forks", file],
 }));
-// Shared extensions workers can retain a very large transform graph across
-// hundreds of plugin files on forks/non-isolated runs. Recycle that lane in
-// bounded batches so teardown happens before the worker reaches CI memory-cliff
-// territory and starts surfacing spurious worker-shutdown errors.
-const extensionsSharedBatches = splitFilesByDurationBudget(
-  extensionSharedCandidateFiles,
-  extensionsBatchTargetMs,
-  estimateChannelDurationMs,
-);
-const extensionsSharedEntries = extensionsSharedBatches
-  .filter((batch) => batch.length > 0)
-  .map((batch, batchIndex) => ({
-    name:
-      extensionsSharedBatches.length === 1
-        ? "extensions"
-        : `extensions-batch-${String(batchIndex + 1)}`,
-    serialPhase: "extensions",
-    includeFiles: batch,
-    estimatedDurationMs: estimateEntryFilesDurationMs(
-      { args: ["vitest", "run", "--config", "vitest.extensions.config.ts"] },
-      batch,
-    ),
-    env: {
-      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-        `vitest-extensions-include-${String(batchIndex + 1)}`,
-        batch,
-      ),
-    },
-    args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
-  }));
 const channelIsolatedEntries = channelIsolatedFiles.map((file) => ({
   name: `${path.basename(file, ".test.ts")}-channels-isolated`,
   args: ["vitest", "run", "--config", "vitest.channels.config.ts", "--pool=forks", file],
 }));
-const defaultUnitFastLaneCount = testProfile === "low" ? 8 : isCI && !isWindows ? 3 : 1;
+const defaultUnitFastLaneCount = isCI && !isWindows ? 3 : 1;
 const unitFastLaneCount = Math.max(
   1,
   parseEnvNumber("OPENCLAW_TEST_UNIT_FAST_LANES", defaultUnitFastLaneCount),
 );
-const defaultUnitFastBatchTargetMs = useLowProfileUnitSchedulingDefaults
-  ? 10_000
-  : isCI && !isWindows
-    ? 45_000
-    : highMemLocalHost
-      ? 45_000
-      : 0;
+const defaultUnitFastBatchTargetMs = isCI && !isWindows ? 45_000 : 0;
 const unitFastBatchTargetMs = parseEnvNumber(
   "OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS",
   defaultUnitFastBatchTargetMs,
-);
-const defaultChannelsBatchTargetMs = isCI && !isWindows ? 30_000 : 0;
-const channelsBatchTargetMs = parseEnvNumber(
-  "OPENCLAW_TEST_CHANNELS_BATCH_TARGET_MS",
-  defaultChannelsBatchTargetMs,
 );
 // Heap snapshots on current main show long-lived unit-fast workers retaining
 // transformed Vitest/Vite module graphs rather than app objects. Multiple
@@ -553,33 +506,6 @@ const unitFastEntries = unitFastBuckets.flatMap((files, index) => {
       ],
     }));
 });
-// Shared channel workers retain large transformed module graphs across files on
-// threads/non-isolated runs. Recycle that lane in bounded batches so the
-// process gets torn down before unrelated channel files inherit the full graph.
-const channelsSharedBatches = splitFilesByDurationBudget(
-  channelSharedCandidateFiles,
-  channelsBatchTargetMs,
-  estimateChannelDurationMs,
-);
-const channelsSharedEntries = channelsSharedBatches
-  .filter((batch) => batch.length > 0)
-  .map((batch, batchIndex) => ({
-    name:
-      channelsSharedBatches.length === 1 ? "channels" : `channels-batch-${String(batchIndex + 1)}`,
-    serialPhase: "channels",
-    includeFiles: batch,
-    estimatedDurationMs: estimateEntryFilesDurationMs(
-      { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
-      batch,
-    ),
-    env: {
-      OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
-        `vitest-channels-include-${String(batchIndex + 1)}`,
-        batch,
-      ),
-    },
-    args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
-  }));
 const heavyUnitBuckets = packFilesByDuration(
   timedHeavyUnitFiles,
   heavyUnitLaneCount,
@@ -661,14 +587,49 @@ const baseRuns = [
             ],
           },
         ]),
-  ...(includeExtensionsSuite ? [...extensionIsolatedEntries, ...extensionsSharedEntries] : []),
+  ...(includeExtensionsSuite
+    ? [
+        ...extensionIsolatedEntries,
+        {
+          name: "extensions",
+          includeFiles: extensionSharedCandidateFiles,
+          env:
+            extensionSharedCandidateFiles.length > 0
+              ? {
+                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+                    "vitest-extensions-include",
+                    extensionSharedCandidateFiles,
+                  ),
+                }
+              : undefined,
+          args: ["vitest", "run", "--config", "vitest.extensions.config.ts", ...noIsolateArgs],
+        },
+      ]
+    : []),
   ...(includeChannelsSuite
     ? [
         ...channelIsolatedEntries.map((entry) => ({
           ...entry,
           args: [...entry.args.slice(0, 5), ...noIsolateArgs, ...entry.args.slice(5)],
         })),
-        ...channelsSharedEntries,
+        {
+          name: "channels",
+          includeFiles: channelSharedCandidateFiles,
+          estimatedDurationMs: estimateEntryFilesDurationMs(
+            { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
+            channelSharedCandidateFiles,
+          ),
+          env:
+            channelSharedCandidateFiles.length > 0
+              ? {
+                  OPENCLAW_VITEST_INCLUDE_FILE: writeTempJsonArtifact(
+                    "vitest-channels-include",
+                    channelSharedCandidateFiles,
+                  ),
+                }
+              : undefined,
+          args: ["vitest", "run", "--config", "vitest.channels.config.ts", ...noIsolateArgs],
+        },
       ]
     : []),
   ...(includeGatewaySuite
@@ -1198,15 +1159,11 @@ const memoryTraceEnabled =
     (rawMemoryTrace !== "0" && rawMemoryTrace !== "false" && isCI));
 const memoryTracePollMs = Math.max(250, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_POLL_MS", 1000));
 const memoryTraceTopCount = Math.max(1, parseEnvNumber("OPENCLAW_TEST_MEMORY_TRACE_TOP_COUNT", 6));
-const requestedHeapSnapshotIntervalMs = Math.max(
+const heapSnapshotIntervalMs = Math.max(
   0,
   parseEnvNumber("OPENCLAW_TEST_HEAPSNAPSHOT_INTERVAL_MS", 0),
 );
-const heapSnapshotMinIntervalMs = 1000;
-const heapSnapshotIntervalMs =
-  requestedHeapSnapshotIntervalMs > 0
-    ? Math.max(heapSnapshotMinIntervalMs, requestedHeapSnapshotIntervalMs)
-    : 0;
+const heapSnapshotMinIntervalMs = 5000;
 const heapSnapshotEnabled =
   process.platform !== "win32" && heapSnapshotIntervalMs >= heapSnapshotMinIntervalMs;
 const heapSnapshotSignal = process.env.OPENCLAW_TEST_HEAPSNAPSHOT_SIGNAL?.trim() || "SIGUSR2";
@@ -1689,10 +1646,7 @@ if (serialPrefixRuns.length > 0) {
   if (failedSerialPrefix !== undefined) {
     process.exit(failedSerialPrefix);
   }
-  // Low-profile runs favor stability over overlap once we leave the shared
-  // unit-fast batches; the isolated memory-heavy lanes can still trip over
-  // each other when two singleton Vitest processes overlap.
-  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 1 : undefined;
+  const deferredRunConcurrency = isMacMiniProfile ? 3 : testProfile === "low" ? 2 : undefined;
   const failedDeferredParallel = isMacMiniProfile
     ? await runEntriesWithLimit(deferredParallelRuns, passthroughOptionArgs, deferredRunConcurrency)
     : deferredRunConcurrency

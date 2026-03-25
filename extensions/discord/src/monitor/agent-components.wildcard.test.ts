@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let buildDiscordComponentCustomId: typeof import("../components.js").buildDiscordComponentCustomId;
 let buildDiscordModalCustomId: typeof import("../components.js").buildDiscordModalCustomId;
@@ -10,7 +10,8 @@ let createDiscordComponentRoleSelect: typeof import("./agent-components.js").cre
 let createDiscordComponentStringSelect: typeof import("./agent-components.js").createDiscordComponentStringSelect;
 let createDiscordComponentUserSelect: typeof import("./agent-components.js").createDiscordComponentUserSelect;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ buildDiscordComponentCustomId, buildDiscordModalCustomId } = await import("../components.js"));
   ({
     createDiscordComponentButton,

@@ -174,16 +174,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const purpose = params.purpose === "status" ? "status" : "default";
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}:${purpose}`;
     const statusOnly = params.purpose === "status";
-    if (statusOnly) {
-      return new MemoryIndexManager({
-        cacheKey: key,
-        cfg,
-        agentId,
-        workspaceDir,
-        settings,
-        purpose: params.purpose,
-      });
-    }
     const existing = INDEX_CACHE.get(key);
     if (existing) {
       return existing;
@@ -192,7 +182,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (pending) {
       return pending;
     }
+    if (statusOnly) {
+      const manager = new MemoryIndexManager({
+        cacheKey: key,
+        cfg,
+        agentId,
+        workspaceDir,
+        settings,
+        purpose: params.purpose,
+      });
+      INDEX_CACHE.set(key, manager);
+      return manager;
+    }
     const createPromise = (async () => {
+      const providerResult = await MemoryIndexManager.loadProviderResult({
+        cfg,
+        agentId,
+        settings,
+      });
       const refreshed = INDEX_CACHE.get(key);
       if (refreshed) {
         return refreshed;
@@ -203,6 +210,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         agentId,
         workspaceDir,
         settings,
+        providerResult,
         purpose: params.purpose,
       });
       INDEX_CACHE.set(key, manager);
@@ -328,21 +336,17 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
-    const cleaned = query.trim();
-    if (!cleaned) {
-      return [];
-    }
+    await this.ensureProviderInitialized();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
         log.warn(`memory sync failed (search): ${String(err)}`);
       });
     }
-    const hasIndexedContent = this.hasIndexedContent();
-    if (!hasIndexedContent) {
+    const cleaned = query.trim();
+    if (!cleaned) {
       return [];
     }
-    await this.ensureProviderInitialized();
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const hybrid = this.settings.query.hybrid;
@@ -433,26 +437,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           entry.score >= relaxedMinScore,
       )
       .slice(0, maxResults);
-  }
-
-  private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
-      | {
-          found?: number;
-        }
-      | undefined;
-    if (chunkRow?.found === 1) {
-      return true;
-    }
-    if (!this.fts.enabled || !this.fts.available) {
-      return false;
-    }
-    const ftsRow = this.db.prepare(`SELECT 1 as found FROM ${FTS_TABLE} LIMIT 1`).get() as
-      | {
-          found?: number;
-        }
-      | undefined;
-    return ftsRow?.found === 1;
   }
 
   private async searchVector(
@@ -694,42 +678,46 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   status(): MemoryProviderStatus {
     const sourceFilter = this.buildSourceFilter();
-    const aggregateRows = this.db
-      .prepare(
-        `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source\n` +
-          `UNION ALL\n` +
-          `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
-      )
-      .all(...sourceFilter.params, ...sourceFilter.params) as Array<{
-      kind: "files" | "chunks";
-      source: MemorySource;
+    const files = this.db
+      .prepare(`SELECT COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql}`)
+      .get(...sourceFilter.params) as {
       c: number;
-    }>;
-    const aggregateState = (() => {
+    };
+    const chunks = this.db
+      .prepare(`SELECT COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql}`)
+      .get(...sourceFilter.params) as {
+      c: number;
+    };
+    const sourceCounts = (() => {
       const sources = Array.from(this.sources);
+      if (sources.length === 0) {
+        return [];
+      }
       const bySource = new Map<MemorySource, { files: number; chunks: number }>();
       for (const source of sources) {
         bySource.set(source, { files: 0, chunks: 0 });
       }
-      let files = 0;
-      let chunks = 0;
-      for (const row of aggregateRows) {
-        const count = row.c ?? 0;
+      const fileRows = this.db
+        .prepare(
+          `SELECT source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source`,
+        )
+        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+      for (const row of fileRows) {
         const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
-        if (row.kind === "files") {
-          entry.files = count;
-          files += count;
-        } else {
-          entry.chunks = count;
-          chunks += count;
-        }
+        entry.files = row.c ?? 0;
         bySource.set(row.source, entry);
       }
-      return {
-        files,
-        chunks,
-        sourceCounts: sources.map((source) => Object.assign({ source }, bySource.get(source)!)),
-      };
+      const chunkRows = this.db
+        .prepare(
+          `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
+        )
+        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+      for (const row of chunkRows) {
+        const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
+        entry.chunks = row.c ?? 0;
+        bySource.set(row.source, entry);
+      }
+      return sources.map((source) => Object.assign({ source }, bySource.get(source)!));
     })();
 
     const searchMode = this.provider || !this.providerInitialized ? "hybrid" : "fts-only";
@@ -741,8 +729,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     return {
       backend: "builtin",
-      files: aggregateState.files,
-      chunks: aggregateState.chunks,
+      files: files?.c ?? 0,
+      chunks: chunks?.c ?? 0,
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
@@ -751,7 +739,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
-      sourceCounts: aggregateState.sourceCounts,
+      sourceCounts,
       cache: this.cache.enabled
         ? {
             enabled: true,

@@ -1,5 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import { getActivePluginChannelRegistryVersion } from "../plugins/runtime.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type { ShouldHandleTextCommandsParams } from "./commands-registry.types.js";
 
 let cachedNativeCommandSurfaces: Set<string> | null = null;
@@ -10,7 +10,7 @@ export function isNativeCommandSurface(surface?: string): boolean {
   if (!normalized) {
     return false;
   }
-  const registryVersion = getActivePluginChannelRegistryVersion();
+  const registryVersion = getActivePluginRegistryVersion();
   if (!cachedNativeCommandSurfaces || cachedNativeCommandSurfacesVersion !== registryVersion) {
     cachedNativeCommandSurfaces = new Set(
       listChannelPlugins()

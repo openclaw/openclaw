@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { collectArchitectureSmells, main } from "../scripts/check-architecture-smells.mjs";
-import { createCapturedIo } from "./helpers/captured-io.js";
+
+function createCapturedIo() {
+  let stdout = "";
+  let stderr = "";
+  return {
+    io: {
+      stdout: {
+        write(chunk) {
+          stdout += String(chunk);
+        },
+      },
+      stderr: {
+        write(chunk) {
+          stderr += String(chunk);
+        },
+      },
+    },
+    readStdout: () => stdout,
+    readStderr: () => stderr,
+  };
+}
 
 describe("architecture smell inventory", () => {
   it("produces stable sorted output", async () => {

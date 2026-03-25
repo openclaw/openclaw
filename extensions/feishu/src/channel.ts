@@ -33,9 +33,8 @@ import {
 } from "../runtime-api.js";
 import type { ChannelMessageActionName } from "../runtime-api.js";
 import {
-  inspectFeishuCredentials,
   resolveFeishuAccount,
-  resolveFeishuRuntimeAccount,
+  resolveFeishuCredentials,
   listFeishuAccountIds,
   listEnabledFeishuAccounts,
   resolveDefaultFeishuAccountId,
@@ -101,7 +100,7 @@ function describeFeishuMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const enabled =
     cfg.channels?.feishu?.enabled !== false &&
-    Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
+    Boolean(resolveFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
   if (listEnabledFeishuAccounts(cfg).length === 0) {
     return {
       actions: [],
@@ -978,10 +977,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       gateway: {
         startAccount: async (ctx) => {
           const { monitorFeishuProvider } = await import("./monitor.js");
-          const account = resolveFeishuRuntimeAccount(
-            { cfg: ctx.cfg, accountId: ctx.accountId },
-            { requireEventSecrets: true },
-          );
+          const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
           const port = account.config?.webhookPort ?? null;
           ctx.setStatus({ accountId: ctx.accountId, port });
           ctx.log?.info(

@@ -111,7 +111,6 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
 
     const internal = manager as unknown as { mistral?: MistralEmbeddingClient };
     expect(internal.mistral).toBe(mistralClient);
@@ -145,7 +144,6 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;
@@ -187,7 +185,6 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;

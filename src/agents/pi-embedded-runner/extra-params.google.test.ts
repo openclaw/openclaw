@@ -1,11 +1,17 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) =>
-  createPiAiStreamSimpleMock(() => importOriginal<typeof import("@mariozechner/pi-ai")>()),
-);
+vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+  return {
+    ...original,
+    streamSimple: vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(),
+    })),
+  };
+});
 
 describe("extra-params: Google thinking payload compatibility", () => {
   it("strips negative thinking budgets and fills Gemini 3.1 thinkingLevel", () => {

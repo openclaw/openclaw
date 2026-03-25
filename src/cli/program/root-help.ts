@@ -23,23 +23,7 @@ function buildRootHelpProgram(): Command {
   return program;
 }
 
-export function renderRootHelpText(): string {
-  const program = buildRootHelpProgram();
-  let output = "";
-  const originalWrite = process.stdout.write.bind(process.stdout);
-  const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
-    output += String(chunk);
-    return true;
-  }) as typeof process.stdout.write;
-  process.stdout.write = captureWrite;
-  try {
-    program.outputHelp();
-  } finally {
-    process.stdout.write = originalWrite;
-  }
-  return output;
-}
-
 export function outputRootHelp(): void {
-  process.stdout.write(renderRootHelpText());
+  const program = buildRootHelpProgram();
+  program.outputHelp();
 }

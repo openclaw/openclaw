@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import {
   adaptScopedAccountAccessor,
@@ -267,7 +266,7 @@ describe("createScopedDmSecurityResolver", () => {
       allowFrom: ["Owner"],
       policyPath: "channels.demo.accounts.alt.dmPolicy",
       allowFromPath: "channels.demo.accounts.alt.",
-      approveHint: formatPairingApproveHint("demo"),
+      approveHint: "Approve via: openclaw pairing list demo / openclaw pairing approve demo <code>",
       normalizeEntry: expect.any(Function),
     });
   });

@@ -153,10 +153,7 @@ export async function maybeRepairGatewayDaemon(params: {
       const systemdAvailable = await isSystemdUserServiceAvailable().catch(() => false);
       if (!systemdAvailable) {
         const wsl = await isWSL();
-        note(
-          renderSystemdUnavailableHints({ wsl, kind: "generic_unavailable" }).join("\n"),
-          "Gateway",
-        );
+        note(renderSystemdUnavailableHints({ wsl }).join("\n"), "Gateway");
         return;
       }
     }

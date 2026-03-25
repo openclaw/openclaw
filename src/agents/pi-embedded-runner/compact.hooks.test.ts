@@ -14,7 +14,7 @@ import {
   resolveModelMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
-  resetCompactSessionStateMocks,
+  sanitizeSessionHistoryMock,
   sessionAbortCompactionMock,
   sessionMessages,
   sessionCompactImpl,
@@ -122,7 +122,44 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       tokensBefore: 120,
       details: { ok: true },
     });
-    resetCompactSessionStateMocks();
+    sanitizeSessionHistoryMock.mockReset();
+    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
+      return params.messages;
+    });
+    getMemorySearchManagerMock.mockReset();
+    getMemorySearchManagerMock.mockResolvedValue({
+      manager: {
+        sync: vi.fn(async () => {}),
+      },
+    });
+    resolveMemorySearchConfigMock.mockReset();
+    resolveMemorySearchConfigMock.mockReturnValue({
+      sources: ["sessions"],
+      sync: {
+        sessions: {
+          postCompactionForce: true,
+        },
+      },
+    });
+    resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdMock.mockReturnValue("main");
+    estimateTokensMock.mockReset();
+    estimateTokensMock.mockReturnValue(10);
+    sessionAbortCompactionMock.mockReset();
+    sessionMessages.splice(
+      0,
+      sessionMessages.length,
+      { role: "user", content: "hello", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 2 },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "output" }],
+        isError: false,
+        timestamp: 3,
+      },
+    );
     unregisterApiProviders(getCustomApiRegistrySourceId("ollama"));
   });
 

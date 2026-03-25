@@ -4,7 +4,6 @@ import {
   type OpenClawConfig,
   type ResolvedLineAccount,
 } from "../runtime-api.js";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { LineChannelConfigSchema } from "./config-schema.js";
 
@@ -36,12 +35,13 @@ export const lineChannelPluginCommon = {
   configSchema: LineChannelConfigSchema,
   config: {
     ...lineConfigAdapter,
-    isConfigured: (account: ResolvedLineAccount) => hasLineCredentials(account),
+    isConfigured: (account: ResolvedLineAccount) =>
+      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
     describeAccount: (account: ResolvedLineAccount) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: hasLineCredentials(account),
+      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
       tokenSource: account.tokenSource ?? undefined,
     }),
   },
@@ -51,8 +51,16 @@ export const lineChannelPluginCommon = {
 >;
 
 export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolean {
-  return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
+  const resolved = resolveLineAccount({ cfg, accountId });
+  return Boolean(resolved.channelAccessToken.trim() && resolved.channelSecret.trim());
+}
+
+export function parseLineAllowFromId(raw: string): string | null {
+  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
+  if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../runtime-api.js";
-export { parseLineAllowFromId };

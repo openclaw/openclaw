@@ -114,26 +114,6 @@ function runDockerSetup(
   });
 }
 
-async function resetDockerLog(sandbox: DockerSetupSandbox) {
-  await writeFile(sandbox.logPath, "");
-}
-
-async function readDockerLog(sandbox: DockerSetupSandbox) {
-  return readFile(sandbox.logPath, "utf8");
-}
-
-async function readDockerLogLines(sandbox: DockerSetupSandbox) {
-  return (await readDockerLog(sandbox)).split("\n").filter(Boolean);
-}
-
-function isGatewayStartLine(line: string) {
-  return line.includes("compose") && line.includes(" up -d") && line.includes("openclaw-gateway");
-}
-
-function findGatewayStartLineIndex(lines: string[]) {
-  return lines.findIndex((line) => isGatewayStartLine(line));
-}
-
 async function runDockerSetupWithUnsetGatewayToken(
   sandbox: DockerSetupSandbox,
   suffix: string,
@@ -224,38 +204,11 @@ describe("scripts/docker/setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:/home/node");
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
-    const log = await readDockerLog(activeSandbox);
+    const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
-    expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon",
-    );
-    expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.mode local",
-    );
-    expect(log).toContain(
-      "run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.bind lan",
-    );
-    expect(log).toContain(
-      'run --rm --no-deps --entrypoint node openclaw-gateway dist/index.js config set gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] --strict-json',
-    );
-    expect(log).not.toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
-  });
-
-  it("avoids shared-network openclaw-cli before the gateway is started", async () => {
-    const activeSandbox = requireSandbox(sandbox);
-
-    await resetDockerLog(activeSandbox);
-    const result = runDockerSetup(activeSandbox);
-    expect(result.status).toBe(0);
-
-    const lines = await readDockerLogLines(activeSandbox);
-    const gatewayStartIdx = findGatewayStartLineIndex(lines);
-    expect(gatewayStartIdx).toBeGreaterThanOrEqual(0);
-
-    const prestartLines = lines.slice(0, gatewayStartIdx);
-    expect(prestartLines.some((line) => /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line))).toBe(
-      false,
-    );
+    expect(log).toContain("run --rm openclaw-cli onboard --mode local --no-install-daemon");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.mode local");
+    expect(log).toContain("run --rm openclaw-cli config set gateway.bind lan");
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
@@ -302,12 +255,11 @@ describe("scripts/docker/setup.sh", () => {
     expect(sessionsDirStat.isDirectory()).toBe(true);
 
     // Verify that a root-user chown step runs before setup.
-    const log = await readDockerLog(activeSandbox);
+    const log = await readFile(activeSandbox.logPath, "utf8");
     const chownIdx = log.indexOf("--user root");
     const onboardIdx = log.indexOf("onboard");
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
-    expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
   });
 
   it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
@@ -366,7 +318,7 @@ describe("scripts/docker/setup.sh", () => {
 
   it("treats OPENCLAW_SANDBOX=0 as disabled", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    await resetDockerLog(activeSandbox);
+    await writeFile(activeSandbox.logPath, "");
 
     const result = runDockerSetup(activeSandbox, {
       OPENCLAW_SANDBOX: "0",
@@ -376,7 +328,7 @@ describe("scripts/docker/setup.sh", () => {
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_SANDBOX=");
 
-    const log = await readDockerLog(activeSandbox);
+    const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=");
     expect(log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
@@ -384,7 +336,7 @@ describe("scripts/docker/setup.sh", () => {
 
   it("resets stale sandbox mode and overlay when sandbox is not active", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    await resetDockerLog(activeSandbox);
+    await writeFile(activeSandbox.logPath, "");
     await writeFile(
       join(activeSandbox.rootDir, "docker-compose.sandbox.yml"),
       "services:\n  openclaw-gateway:\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n",
@@ -397,14 +349,14 @@ describe("scripts/docker/setup.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("Sandbox requires Docker CLI");
-    const log = await readDockerLog(activeSandbox);
+    const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("config set agents.defaults.sandbox.mode off");
     await expect(stat(join(activeSandbox.rootDir, "docker-compose.sandbox.yml"))).rejects.toThrow();
   });
 
   it("skips sandbox gateway restart when sandbox config writes fail", async () => {
     const activeSandbox = requireSandbox(sandbox);
-    await resetDockerLog(activeSandbox);
+    await writeFile(activeSandbox.logPath, "");
     const socketPath = join(activeSandbox.rootDir, "sandbox.sock");
 
     await withUnixSocket(socketPath, async () => {
@@ -418,10 +370,15 @@ describe("scripts/docker/setup.sh", () => {
       expect(result.stderr).toContain("Failed to set agents.defaults.sandbox.scope");
       expect(result.stderr).toContain("Skipping gateway restart to avoid exposing Docker socket");
 
-      const log = await readDockerLog(activeSandbox);
-      const gatewayStarts = (await readDockerLogLines(activeSandbox)).filter((line) =>
-        isGatewayStartLine(line),
-      );
+      const log = await readFile(activeSandbox.logPath, "utf8");
+      const gatewayStarts = log
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes("compose") &&
+            line.includes(" up -d") &&
+            line.includes("openclaw-gateway"),
+        );
       expect(gatewayStarts).toHaveLength(2);
       expect(log).toContain(
         "run --rm --no-deps openclaw-cli config set agents.defaults.sandbox.mode non-main",

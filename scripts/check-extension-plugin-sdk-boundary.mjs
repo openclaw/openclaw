@@ -4,14 +4,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import {
-  diffInventoryEntries,
-  normalizeRepoPath,
-  resolveRepoSpecifier,
-  visitModuleSpecifiers,
-  writeLine,
-} from "./lib/guard-inventory-utils.mjs";
-import { toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionsRoot = path.join(repoRoot, "extensions");
@@ -55,6 +47,10 @@ const ruleTextByMode = {
     "Rule: production extensions/** must not use relative imports that escape their own extension package root",
 };
 
+function normalizePath(filePath) {
+  return path.relative(repoRoot, filePath).split(path.sep).join("/");
+}
+
 function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
@@ -83,7 +79,7 @@ async function collectExtensionSourceFiles(rootDir) {
       if (!entry.isFile() || !isCodeFile(entry.name)) {
         continue;
       }
-      const relativePath = normalizeRepoPath(repoRoot, fullPath);
+      const relativePath = normalizePath(fullPath);
       if (isTestLikeFile(relativePath)) {
         continue;
       }
@@ -91,9 +87,7 @@ async function collectExtensionSourceFiles(rootDir) {
     }
   }
   await walk(rootDir);
-  return out.toSorted((left, right) =>
-    normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
-  );
+  return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
 }
 
 async function collectParsedExtensionSourceFiles() {
@@ -124,8 +118,22 @@ async function collectParsedExtensionSourceFiles() {
   return await parsedExtensionSourceFilesPromise;
 }
 
+function toLine(sourceFile, node) {
+  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+}
+
+function resolveSpecifier(specifier, importerFile) {
+  if (specifier.startsWith(".")) {
+    return normalizePath(path.resolve(path.dirname(importerFile), specifier));
+  }
+  if (specifier.startsWith("/")) {
+    return normalizePath(specifier);
+  }
+  return null;
+}
+
 function resolveExtensionRoot(filePath) {
-  const relativePath = normalizeRepoPath(repoRoot, filePath);
+  const relativePath = normalizePath(filePath);
   const segments = relativePath.split("/");
   if (segments[0] !== "extensions" || !segments[1]) {
     return null;
@@ -192,12 +200,11 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
     "relative-outside-package": [],
   };
   const extensionRoot = resolveExtensionRoot(filePath);
-  const relativeFile = normalizeRepoPath(repoRoot, filePath);
 
   function push(kind, specifierNode, specifier) {
-    const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+    const resolvedPath = resolveSpecifier(specifier, filePath);
     const baseEntry = {
-      file: relativeFile,
+      file: normalizePath(filePath),
       line: toLine(sourceFile, specifierNode),
       kind,
       specifier,
@@ -224,9 +231,27 @@ function collectEntriesByModeFromSourceFile(sourceFile, filePath) {
     }
   }
 
-  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
-    push(kind, specifierNode, specifier);
-  });
+  function visit(node) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      push("import", node.moduleSpecifier, node.moduleSpecifier.text);
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      push("export", node.moduleSpecifier, node.moduleSpecifier.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      push("dynamic-import", node.arguments[0], node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
   return entriesByMode;
 }
 
@@ -278,7 +303,16 @@ export async function readExpectedInventory(mode) {
 }
 
 export function diffInventory(expected, actual) {
-  return diffInventoryEntries(expected, actual, compareEntries);
+  const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
+  const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
+  return {
+    missing: expected
+      .filter((entry) => !actualKeys.has(JSON.stringify(entry)))
+      .toSorted(compareEntries),
+    unexpected: actual
+      .filter((entry) => !expectedKeys.has(JSON.stringify(entry)))
+      .toSorted(compareEntries),
+  };
 }
 
 function formatInventoryHuman(mode, inventory) {
@@ -299,6 +333,10 @@ function formatInventoryHuman(mode, inventory) {
     lines.push(`    resolved: ${entry.resolvedPath}`);
   }
   return lines.join("\n");
+}
+
+function writeLine(stream, text) {
+  stream.write(`${text}\n`);
 }
 
 export async function runExtensionPluginSdkBoundaryCheck(argv = process.argv.slice(2), io) {

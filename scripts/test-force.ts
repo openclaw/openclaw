@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
-import { resolveGatewayPort } from "../src/config/config.js";
+
+const DEFAULT_PORT = 18789;
 
 function killGatewayListeners(port: number): PortProcess[] {
   try {
@@ -43,7 +44,7 @@ function runTests() {
 }
 
 function main() {
-  const port = resolveGatewayPort(undefined, process.env);
+  const port = Number.parseInt(process.env.OPENCLAW_GATEWAY_PORT ?? `${DEFAULT_PORT}`, 10);
 
   console.log(`🧹 test:force - clearing gateway on port ${port}`);
   const killed = killGatewayListeners(port);

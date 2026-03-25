@@ -58,25 +58,6 @@ vi.mock("./graph-chat.js", () => ({
   buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
 }));
 
-function mockContinueConversationFailure(error: string) {
-  const mockContinueConversation = vi.fn().mockRejectedValue(new Error(error));
-  mockState.resolveMSTeamsSendContext.mockResolvedValue({
-    adapter: { continueConversation: mockContinueConversation },
-    appId: "app-id",
-    conversationId: "19:conversation@thread.tacv2",
-    ref: {
-      user: { id: "user-1" },
-      agent: { id: "agent-1" },
-      conversation: { id: "19:conversation@thread.tacv2" },
-      channelId: "msteams",
-    },
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    conversationType: "personal",
-    tokenProvider: {},
-  });
-  return mockContinueConversation;
-}
-
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
     mockState.loadOutboundMediaFromUrl.mockReset();
@@ -331,7 +312,21 @@ describe("editMessageMSTeams", () => {
   });
 
   it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Service unavailable");
+    const mockContinueConversation = vi.fn().mockRejectedValue(new Error("Service unavailable"));
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: { continueConversation: mockContinueConversation },
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      tokenProvider: {},
+    });
 
     await expect(
       editMessageMSTeams({
@@ -392,7 +387,21 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("throws a descriptive error when continueConversation fails", async () => {
-    mockContinueConversationFailure("Not found");
+    const mockContinueConversation = vi.fn().mockRejectedValue(new Error("Not found"));
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: { continueConversation: mockContinueConversation },
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      tokenProvider: {},
+    });
 
     await expect(
       deleteMessageMSTeams({

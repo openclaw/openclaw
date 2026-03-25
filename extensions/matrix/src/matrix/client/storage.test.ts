@@ -32,11 +32,6 @@ let resolveMatrixStoragePaths: typeof import("./storage.js").resolveMatrixStorag
 
 describe("matrix client storage paths", () => {
   const tempDirs: string[] = [];
-  const defaultStorageAuth = {
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    accessToken: "secret-token",
-  };
 
   beforeAll(async () => {
     ({ maybeMigrateLegacyStorage, resolveMatrixStoragePaths } = await import("./storage.js"));
@@ -95,105 +90,6 @@ describe("matrix client storage paths", () => {
     } as NodeJS.ProcessEnv;
   }
 
-  function resolveDefaultStoragePaths(
-    overrides: Partial<{
-      homeserver: string;
-      userId: string;
-      accessToken: string;
-      accountId: string;
-      deviceId: string;
-    }> = {},
-  ) {
-    return resolveMatrixStoragePaths({
-      ...defaultStorageAuth,
-      ...overrides,
-      env: {},
-    });
-  }
-
-  function writeLegacyMatrixStorage(
-    stateDir: string,
-    params: {
-      storageBody?: string;
-      withCrypto?: boolean;
-    } = {},
-  ) {
-    const legacyRoot = path.join(stateDir, "matrix");
-    if (params.withCrypto ?? true) {
-      fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
-    }
-    if (params.storageBody !== undefined) {
-      fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), params.storageBody);
-    }
-    return legacyRoot;
-  }
-
-  function writeJson(rootDir: string, filename: string, value: Record<string, unknown>) {
-    fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
-  }
-
-  function seedExistingStorageRoot(params: {
-    accessToken: string;
-    deviceId?: string;
-    storageBody?: string;
-    storageMeta?: Record<string, unknown>;
-    startupVerificationDeviceId?: string;
-  }) {
-    const storagePaths = resolveDefaultStoragePaths({
-      accessToken: params.accessToken,
-      ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
-    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
-    fs.writeFileSync(storagePaths.storagePath, params.storageBody ?? '{"legacy":true}');
-    if (params.storageMeta) {
-      writeJson(storagePaths.rootDir, "storage-meta.json", params.storageMeta);
-    }
-    if (params.startupVerificationDeviceId) {
-      writeJson(storagePaths.rootDir, "startup-verification.json", {
-        deviceId: params.startupVerificationDeviceId,
-      });
-    }
-    return storagePaths;
-  }
-
-  function seedCanonicalStorageRoot(params: {
-    stateDir: string;
-    accessToken: string;
-    storageMeta: Record<string, unknown>;
-  }) {
-    const canonicalPaths = resolveMatrixAccountStorageRoot({
-      stateDir: params.stateDir,
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accessToken: params.accessToken,
-    });
-    fs.mkdirSync(canonicalPaths.rootDir, { recursive: true });
-    writeJson(canonicalPaths.rootDir, "storage-meta.json", params.storageMeta);
-    return canonicalPaths;
-  }
-
-  function expectCanonicalRootForNewDevice(stateDir: string) {
-    const newerCanonicalPaths = seedCanonicalStorageRoot({
-      stateDir,
-      accessToken: "secret-token-new",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
-        deviceId: "NEWDEVICE",
-      },
-    });
-
-    const resolvedPaths = resolveDefaultStoragePaths({
-      accessToken: "secret-token-new",
-      deviceId: "NEWDEVICE",
-    });
-
-    expect(resolvedPaths.rootDir).toBe(newerCanonicalPaths.rootDir);
-    expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
-  }
-
   it("uses the simplified matrix runtime root for account-scoped storage", () => {
     const stateDir = setupStateDir();
 
@@ -226,8 +122,15 @@ describe("matrix client storage paths", () => {
 
   it("falls back to migrating the older flat matrix storage layout", async () => {
     const stateDir = setupStateDir();
-    const storagePaths = resolveDefaultStoragePaths();
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), '{"legacy":true}');
     const env = createMigrationEnv(stateDir);
 
     await maybeMigrateLegacyStorage({
@@ -245,11 +148,17 @@ describe("matrix client storage paths", () => {
 
   it("continues migrating whichever legacy artifact is still missing", async () => {
     const stateDir = setupStateDir();
-    const storagePaths = resolveDefaultStoragePaths();
-    const legacyRoot = writeLegacyMatrixStorage(stateDir);
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
     const env = createMigrationEnv(stateDir);
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     fs.writeFileSync(storagePaths.storagePath, '{"new":true}');
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
 
     await maybeMigrateLegacyStorage({
       storagePaths,
@@ -266,8 +175,15 @@ describe("matrix client storage paths", () => {
 
   it("refuses to migrate legacy storage when the snapshot step fails", async () => {
     const stateDir = setupStateDir();
-    const storagePaths = resolveDefaultStoragePaths();
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), '{"legacy":true}');
     const env = createMigrationEnv(stateDir);
     createBackupArchiveMock.mockRejectedValueOnce(new Error("snapshot failed"));
 
@@ -283,8 +199,15 @@ describe("matrix client storage paths", () => {
 
   it("rolls back moved legacy storage when the crypto move fails", async () => {
     const stateDir = setupStateDir();
-    const storagePaths = resolveDefaultStoragePaths();
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), '{"legacy":true}');
     const env = createMigrationEnv(stateDir);
     const realRenameSync = fs.renameSync.bind(fs);
     const renameSync = vi.spyOn(fs, "renameSync");
@@ -317,8 +240,16 @@ describe("matrix client storage paths", () => {
         },
       },
     });
-    const storagePaths = resolveDefaultStoragePaths({ accountId: "ops" });
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      accountId: "ops",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), '{"legacy":true}');
     const env = createMigrationEnv(stateDir);
 
     await expect(
@@ -353,7 +284,9 @@ describe("matrix client storage paths", () => {
       accessToken: "default-token",
       env: {},
     });
-    const legacyRoot = writeLegacyMatrixStorage(stateDir, { storageBody: '{"legacy":true}' });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+    fs.writeFileSync(path.join(legacyRoot, "bot-storage.json"), '{"legacy":true}');
     const env = createMigrationEnv(stateDir);
 
     await expect(
@@ -367,13 +300,21 @@ describe("matrix client storage paths", () => {
   });
 
   it("reuses an existing token-hash storage root after the access token changes", () => {
-    setupStateDir();
-    const oldStoragePaths = seedExistingStorageRoot({
+    const stateDir = setupStateDir();
+    const oldStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-old",
+      env: {},
     });
+    fs.mkdirSync(oldStoragePaths.rootDir, { recursive: true });
+    fs.writeFileSync(oldStoragePaths.storagePath, '{"legacy":true}');
 
-    const rotatedStoragePaths = resolveDefaultStoragePaths({
+    const rotatedStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-new",
+      env: {},
     });
 
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
@@ -382,22 +323,37 @@ describe("matrix client storage paths", () => {
   });
 
   it("reuses an existing token-hash storage root for the same device after the access token changes", () => {
-    setupStateDir();
-    const oldStoragePaths = seedExistingStorageRoot({
+    const stateDir = setupStateDir();
+    const oldStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
-        deviceId: "DEVICE123",
-      },
+      env: {},
     });
+    fs.mkdirSync(oldStoragePaths.rootDir, { recursive: true });
+    fs.writeFileSync(oldStoragePaths.storagePath, '{"legacy":true}');
+    fs.writeFileSync(
+      path.join(oldStoragePaths.rootDir, "storage-meta.json"),
+      JSON.stringify(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accountId: "default",
+          accessTokenHash: oldStoragePaths.tokenHash,
+          deviceId: "DEVICE123",
+        },
+        null,
+        2,
+      ),
+    );
 
-    const rotatedStoragePaths = resolveDefaultStoragePaths({
+    const rotatedStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-new",
       deviceId: "DEVICE123",
+      env: {},
     });
 
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
@@ -407,20 +363,32 @@ describe("matrix client storage paths", () => {
 
   it("prefers a populated older token-hash storage root over a newer empty root", () => {
     const stateDir = setupStateDir();
-    const oldStoragePaths = seedExistingStorageRoot({
+    const oldStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-old",
+      env: {},
     });
+    fs.mkdirSync(oldStoragePaths.rootDir, { recursive: true });
+    fs.writeFileSync(oldStoragePaths.storagePath, '{"legacy":true}');
 
-    const newerCanonicalPaths = seedCanonicalStorageRoot({
+    const newerCanonicalPaths = resolveMatrixAccountStorageRoot({
       stateDir,
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-new",
-      storageMeta: {
-        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
-      },
     });
+    fs.mkdirSync(newerCanonicalPaths.rootDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(newerCanonicalPaths.rootDir, "storage-meta.json"),
+      JSON.stringify({ accessTokenHash: newerCanonicalPaths.tokenHash }, null, 2),
+    );
 
-    const resolvedPaths = resolveDefaultStoragePaths({
+    const resolvedPaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-new",
+      env: {},
     });
 
     expect(resolvedPaths.rootDir).toBe(oldStoragePaths.rootDir);
@@ -429,19 +397,96 @@ describe("matrix client storage paths", () => {
 
   it("does not reuse a populated sibling storage root from a different device", () => {
     const stateDir = setupStateDir();
-    seedExistingStorageRoot({
+    const oldStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-old",
       deviceId: "OLDDEVICE",
-      startupVerificationDeviceId: "OLDDEVICE",
+      env: {},
     });
-    expectCanonicalRootForNewDevice(stateDir);
+    fs.mkdirSync(oldStoragePaths.rootDir, { recursive: true });
+    fs.writeFileSync(oldStoragePaths.storagePath, '{"legacy":true}');
+    fs.writeFileSync(
+      path.join(oldStoragePaths.rootDir, "startup-verification.json"),
+      JSON.stringify({ deviceId: "OLDDEVICE" }, null, 2),
+    );
+
+    const newerCanonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token-new",
+    });
+    fs.mkdirSync(newerCanonicalPaths.rootDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(newerCanonicalPaths.rootDir, "storage-meta.json"),
+      JSON.stringify(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accountId: "default",
+          accessTokenHash: newerCanonicalPaths.tokenHash,
+          deviceId: "NEWDEVICE",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const resolvedPaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token-new",
+      deviceId: "NEWDEVICE",
+      env: {},
+    });
+
+    expect(resolvedPaths.rootDir).toBe(newerCanonicalPaths.rootDir);
+    expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
   });
 
   it("does not reuse a populated sibling storage root with ambiguous device metadata", () => {
     const stateDir = setupStateDir();
-    seedExistingStorageRoot({
+    const oldStoragePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "secret-token-old",
+      env: {},
     });
-    expectCanonicalRootForNewDevice(stateDir);
+    fs.mkdirSync(oldStoragePaths.rootDir, { recursive: true });
+    fs.writeFileSync(oldStoragePaths.storagePath, '{"legacy":true}');
+
+    const newerCanonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token-new",
+    });
+    fs.mkdirSync(newerCanonicalPaths.rootDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(newerCanonicalPaths.rootDir, "storage-meta.json"),
+      JSON.stringify(
+        {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accountId: "default",
+          accessTokenHash: newerCanonicalPaths.tokenHash,
+          deviceId: "NEWDEVICE",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const resolvedPaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token-new",
+      deviceId: "NEWDEVICE",
+      env: {},
+    });
+
+    expect(resolvedPaths.rootDir).toBe(newerCanonicalPaths.rootDir);
+    expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
   });
 });

@@ -13,10 +13,6 @@ import {
 } from "./attempt.spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
-const embeddedSessionId = "embedded-session";
-const sessionFile = "/tmp/session.jsonl";
-const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
-const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -35,65 +31,6 @@ function createTestContextEngine(params: Partial<AttemptContextEngine>): Attempt
   } as AttemptContextEngine;
 }
 
-async function runBootstrap(
-  sessionKey: string,
-  contextEngine: AttemptContextEngine,
-  overrides: Partial<Parameters<typeof runAttemptContextEngineBootstrap>[0]> = {},
-) {
-  await runAttemptContextEngineBootstrap({
-    hadSessionFile: true,
-    contextEngine,
-    sessionId: embeddedSessionId,
-    sessionKey,
-    sessionFile,
-    sessionManager: hoisted.sessionManager,
-    runtimeContext: {},
-    runMaintenance: hoisted.runContextEngineMaintenanceMock,
-    warn: () => {},
-    ...overrides,
-  });
-}
-
-async function runAssemble(
-  sessionKey: string,
-  contextEngine: AttemptContextEngine,
-  overrides: Partial<Parameters<typeof assembleAttemptContextEngine>[0]> = {},
-) {
-  await assembleAttemptContextEngine({
-    contextEngine,
-    sessionId: embeddedSessionId,
-    sessionKey,
-    messages: [seedMessage],
-    tokenBudget: 2048,
-    modelId: "gpt-test",
-    ...overrides,
-  });
-}
-
-async function finalizeTurn(
-  sessionKey: string,
-  contextEngine: AttemptContextEngine,
-  overrides: Partial<Parameters<typeof finalizeAttemptContextEngineTurn>[0]> = {},
-) {
-  await finalizeAttemptContextEngineTurn({
-    contextEngine,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
-    sessionIdUsed: embeddedSessionId,
-    sessionKey,
-    sessionFile,
-    messagesSnapshot: [doneMessage],
-    prePromptMessageCount: 0,
-    tokenBudget: 2048,
-    runtimeContext: {},
-    runMaintenance: hoisted.runContextEngineMaintenanceMock,
-    sessionManager: hoisted.sessionManager,
-    warn: () => {},
-    ...overrides,
-  });
-}
-
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
 
@@ -110,9 +47,43 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       afterTurn,
     });
 
-    await runBootstrap(sessionKey, contextEngine);
-    await runAssemble(sessionKey, contextEngine);
-    await finalizeTurn(sessionKey, contextEngine);
+    await runAttemptContextEngineBootstrap({
+      hadSessionFile: true,
+      contextEngine,
+      sessionId: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager: hoisted.sessionManager,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      warn: () => {},
+    });
+    await assembleAttemptContextEngine({
+      contextEngine,
+      sessionId: "embedded-session",
+      sessionKey,
+      messages: [{ role: "user", content: "seed", timestamp: 1 } as AgentMessage],
+      tokenBudget: 2048,
+      modelId: "gpt-test",
+    });
+    await finalizeAttemptContextEngineTurn({
+      contextEngine,
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      messagesSnapshot: [
+        { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage,
+      ],
+      prePromptMessageCount: 0,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      sessionManager: hoisted.sessionManager,
+      warn: () => {},
+    });
 
     expectCalledWithSessionKey(bootstrap, sessionKey);
     expectCalledWithSessionKey(assemble, sessionKey);
@@ -123,8 +94,25 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const contextEngine = createTestContextEngine({ bootstrap, assemble });
 
-    await runBootstrap(sessionKey, contextEngine);
-    await runAssemble(sessionKey, contextEngine);
+    await runAttemptContextEngineBootstrap({
+      hadSessionFile: true,
+      contextEngine,
+      sessionId: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager: hoisted.sessionManager,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      warn: () => {},
+    });
+    await assembleAttemptContextEngine({
+      contextEngine,
+      sessionId: "embedded-session",
+      sessionKey,
+      messages: [{ role: "user", content: "seed", timestamp: 1 } as AgentMessage],
+      tokenBudget: 2048,
+      modelId: "gpt-test",
+    });
 
     expect(assemble).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -139,9 +127,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       async (_params: { sessionKey?: string; messages: AgentMessage[] }) => ({ ingestedCount: 1 }),
     );
 
-    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, ingestBatch }), {
-      messagesSnapshot: [seedMessage, doneMessage],
+    await finalizeAttemptContextEngineTurn({
+      contextEngine: createTestContextEngine({
+        bootstrap,
+        assemble,
+        ingestBatch,
+      }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      messagesSnapshot: [
+        { role: "user", content: "seed", timestamp: 1 } as AgentMessage,
+        { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage,
+      ],
       prePromptMessageCount: 1,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      sessionManager: hoisted.sessionManager,
+      warn: () => {},
     });
 
     expectCalledWithSessionKey(ingestBatch, sessionKey);
@@ -153,9 +160,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       ingested: true,
     }));
 
-    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, ingest }), {
-      messagesSnapshot: [seedMessage, doneMessage],
+    await finalizeAttemptContextEngineTurn({
+      contextEngine: createTestContextEngine({
+        bootstrap,
+        assemble,
+        ingest,
+      }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      messagesSnapshot: [
+        { role: "user", content: "seed", timestamp: 1 } as AgentMessage,
+        { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage,
+      ],
       prePromptMessageCount: 1,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      sessionManager: hoisted.sessionManager,
+      warn: () => {},
     });
 
     expect(ingest).toHaveBeenCalled();
@@ -173,7 +199,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       throw new Error("afterTurn failed");
     });
 
-    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, afterTurn }));
+    await finalizeAttemptContextEngineTurn({
+      contextEngine: createTestContextEngine({
+        bootstrap,
+        assemble,
+        afterTurn,
+      }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      messagesSnapshot: [
+        { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage,
+      ],
+      prePromptMessageCount: 0,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      sessionManager: hoisted.sessionManager,
+      warn: () => {},
+    });
 
     expect(afterTurn).toHaveBeenCalled();
     expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
@@ -184,9 +231,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   it("runs startup maintenance for existing sessions even without bootstrap()", async () => {
     const { assemble } = createContextEngineBootstrapAndAssemble();
 
-    await runBootstrap(
-      sessionKey,
-      createTestContextEngine({
+    await runAttemptContextEngineBootstrap({
+      hadSessionFile: true,
+      contextEngine: createTestContextEngine({
         assemble,
         maintain: async () => ({
           changed: false,
@@ -195,7 +242,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           reason: "test maintenance",
         }),
       }),
-    );
+      sessionId: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager: hoisted.sessionManager,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      warn: () => {},
+    });
 
     expect(hoisted.runContextEngineMaintenanceMock).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "bootstrap" }),
@@ -208,9 +262,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       throw new Error("ingestBatch failed");
     });
 
-    await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, ingestBatch }), {
-      messagesSnapshot: [seedMessage, doneMessage],
+    await finalizeAttemptContextEngineTurn({
+      contextEngine: createTestContextEngine({
+        bootstrap,
+        assemble,
+        ingestBatch,
+      }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: "embedded-session",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      messagesSnapshot: [
+        { role: "user", content: "seed", timestamp: 1 } as AgentMessage,
+        { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage,
+      ],
       prePromptMessageCount: 1,
+      tokenBudget: 2048,
+      runtimeContext: {},
+      runMaintenance: hoisted.runContextEngineMaintenanceMock,
+      sessionManager: hoisted.sessionManager,
+      warn: () => {},
     });
 
     expect(ingestBatch).toHaveBeenCalled();

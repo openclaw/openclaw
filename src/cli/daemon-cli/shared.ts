@@ -4,7 +4,6 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 import {
   buildPlatformRuntimeLogHints,
@@ -18,7 +17,6 @@ import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
-export { resolveDaemonContainerContext };
 
 export function createDaemonInstallActionContext(jsonFlag: unknown) {
   const json = Boolean(jsonFlag);
@@ -183,7 +181,7 @@ export function renderRuntimeHints(
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.OPENCLAW_PROFILE;
-  const container = resolveDaemonContainerContext(env);
+  const container = env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim();
   const hints = buildPlatformServiceStartHints({
     installCommand: formatCliCommand("openclaw gateway install", env),
     startCommand: formatCliCommand("openclaw gateway", env),
@@ -201,7 +199,7 @@ export function filterContainerGenericHints(
   hints: string[],
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  if (!resolveDaemonContainerContext(env)) {
+  if (!(env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim())) {
     return hints;
   }
   return hints.filter(

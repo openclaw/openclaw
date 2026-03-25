@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { buildDispatchInboundCaptureMock } from "../../../../src/channels/plugins/contracts/inbound-testkit.js";
 import type { OpenClawConfig } from "../../../../src/config/types.js";
@@ -100,16 +100,13 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
+    capturedCtx = undefined;
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
       await import("./event-handler.test-harness.js"));
     ({ createSignalEventHandler } = await import("./event-handler.js"));
     ({ renderSignalMentions } = await import("./mentions.js"));
-  });
-
-  beforeEach(() => {
-    capturedCtx = undefined;
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {

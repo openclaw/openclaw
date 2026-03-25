@@ -57,117 +57,6 @@ async function importInteractiveModule(cacheBust: string): Promise<InteractiveMo
   return (await import(`${interactiveModuleUrl}?t=${cacheBust}`)) as InteractiveModule;
 }
 
-function createTelegramDispatchParams(params: {
-  data: string;
-  callbackId: string;
-}): Extract<InteractiveDispatchParams, { channel: "telegram" }> {
-  return {
-    channel: "telegram",
-    data: params.data,
-    callbackId: params.callbackId,
-    ctx: {
-      accountId: "default",
-      callbackId: params.callbackId,
-      conversationId: "-10099:topic:77",
-      parentConversationId: "-10099",
-      senderId: "user-1",
-      senderUsername: "ada",
-      threadId: 77,
-      isGroup: true,
-      isForum: true,
-      auth: { isAuthorizedSender: true },
-      callbackMessage: {
-        messageId: 55,
-        chatId: "-10099",
-        messageText: "Pick a thread",
-      },
-    },
-    respond: {
-      reply: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-      editButtons: vi.fn(async () => {}),
-      clearButtons: vi.fn(async () => {}),
-      deleteMessage: vi.fn(async () => {}),
-    },
-  };
-}
-
-function createDiscordDispatchParams(params: {
-  data: string;
-  interactionId: string;
-  interaction?: Partial<DiscordInteractiveDispatchContext["interaction"]>;
-}): Extract<InteractiveDispatchParams, { channel: "discord" }> {
-  return {
-    channel: "discord",
-    data: params.data,
-    interactionId: params.interactionId,
-    ctx: {
-      accountId: "default",
-      interactionId: params.interactionId,
-      conversationId: "channel-1",
-      parentConversationId: "parent-1",
-      guildId: "guild-1",
-      senderId: "user-1",
-      senderUsername: "ada",
-      auth: { isAuthorizedSender: true },
-      interaction: {
-        kind: "button",
-        messageId: "message-1",
-        values: ["allow"],
-        ...params.interaction,
-      },
-    },
-    respond: {
-      acknowledge: vi.fn(async () => {}),
-      reply: vi.fn(async () => {}),
-      followUp: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-      clearComponents: vi.fn(async () => {}),
-    },
-  };
-}
-
-function createSlackDispatchParams(params: {
-  data: string;
-  interactionId: string;
-  interaction?: Partial<SlackInteractiveDispatchContext["interaction"]>;
-}): Extract<InteractiveDispatchParams, { channel: "slack" }> {
-  return {
-    channel: "slack",
-    data: params.data,
-    interactionId: params.interactionId,
-    ctx: {
-      accountId: "default",
-      interactionId: params.interactionId,
-      conversationId: "C123",
-      parentConversationId: "C123",
-      threadId: "1710000000.000100",
-      senderId: "user-1",
-      senderUsername: "ada",
-      auth: { isAuthorizedSender: true },
-      interaction: {
-        kind: "button",
-        actionId: "codex",
-        blockId: "codex_actions",
-        messageTs: "1710000000.000200",
-        threadTs: "1710000000.000100",
-        value: "approve:thread-1",
-        selectedValues: ["approve:thread-1"],
-        selectedLabels: ["Approve"],
-        triggerId: "trigger-1",
-        responseUrl: "https://hooks.slack.test/response",
-        ...params.interaction,
-      },
-    },
-    respond: {
-      acknowledge: vi.fn(async () => {}),
-      reply: vi.fn(async () => {}),
-      followUp: vi.fn(async () => {}),
-      editMessage: vi.fn(async () => {}),
-    },
-  };
-}
-
 async function expectDedupedInteractiveDispatch(params: {
   baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
@@ -245,10 +134,35 @@ describe("plugin interactive handlers", () => {
       }),
     ).toEqual({ ok: true });
 
-    const baseParams = createTelegramDispatchParams({
+    const baseParams = {
+      channel: "telegram" as const,
       data: "codex:resume:thread-1",
       callbackId: "cb-1",
-    });
+      ctx: {
+        accountId: "default",
+        callbackId: "cb-1",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        senderId: "user-1",
+        senderUsername: "ada",
+        threadId: 77,
+        isGroup: true,
+        isForum: true,
+        auth: { isAuthorizedSender: true },
+        callbackMessage: {
+          messageId: 55,
+          chatId: "-10099",
+          messageText: "Pick a thread",
+        },
+      },
+      respond: {
+        reply: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+        editButtons: vi.fn(async () => {}),
+        clearButtons: vi.fn(async () => {}),
+        deleteMessage: vi.fn(async () => {}),
+      },
+    };
 
     await expectDedupedInteractiveDispatch({
       baseParams,
@@ -282,12 +196,35 @@ describe("plugin interactive handlers", () => {
     ).toEqual({ ok: true });
 
     await expect(
-      second.dispatchPluginInteractiveHandler(
-        createTelegramDispatchParams({
-          data: "codexapp:resume:thread-1",
+      second.dispatchPluginInteractiveHandler({
+        channel: "telegram",
+        data: "codexapp:resume:thread-1",
+        callbackId: "cb-shared-1",
+        ctx: {
+          accountId: "default",
           callbackId: "cb-shared-1",
-        }),
-      ),
+          conversationId: "-10099:topic:77",
+          parentConversationId: "-10099",
+          senderId: "user-1",
+          senderUsername: "ada",
+          threadId: 77,
+          isGroup: true,
+          isForum: true,
+          auth: { isAuthorizedSender: true },
+          callbackMessage: {
+            messageId: 55,
+            chatId: "-10099",
+            messageText: "Pick a thread",
+          },
+        },
+        respond: {
+          reply: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          editButtons: vi.fn(async () => {}),
+          clearButtons: vi.fn(async () => {}),
+          deleteMessage: vi.fn(async () => {}),
+        },
+      }),
     ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
 
     expect(handler).toHaveBeenCalledWith(
@@ -332,11 +269,33 @@ describe("plugin interactive handlers", () => {
       }),
     ).toEqual({ ok: true });
 
-    const baseParams = createDiscordDispatchParams({
+    const baseParams = {
+      channel: "discord" as const,
       data: "codex:approve:thread-1",
       interactionId: "ix-1",
-      interaction: { kind: "button", values: ["allow"] },
-    });
+      ctx: {
+        accountId: "default",
+        interactionId: "ix-1",
+        conversationId: "channel-1",
+        parentConversationId: "parent-1",
+        guildId: "guild-1",
+        senderId: "user-1",
+        senderUsername: "ada",
+        auth: { isAuthorizedSender: true },
+        interaction: {
+          kind: "button" as const,
+          messageId: "message-1",
+          values: ["allow"],
+        },
+      },
+      respond: {
+        acknowledge: vi.fn(async () => {}),
+        reply: vi.fn(async () => {}),
+        followUp: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+        clearComponents: vi.fn(async () => {}),
+      },
+    };
 
     await expectDedupedInteractiveDispatch({
       baseParams,
@@ -371,11 +330,30 @@ describe("plugin interactive handlers", () => {
 
     await expect(
       dispatchPluginInteractiveHandler({
-        ...createDiscordDispatchParams({
-          data: "codex:approve:thread-1",
+        channel: "discord",
+        data: "codex:approve:thread-1",
+        interactionId: "ix-ack-1",
+        ctx: {
+          accountId: "default",
           interactionId: "ix-ack-1",
-          interaction: { kind: "button", values: undefined },
-        }),
+          conversationId: "channel-1",
+          parentConversationId: "parent-1",
+          guildId: "guild-1",
+          senderId: "user-1",
+          senderUsername: "ada",
+          auth: { isAuthorizedSender: true },
+          interaction: {
+            kind: "button",
+            messageId: "message-1",
+          },
+        },
+        respond: {
+          acknowledge: vi.fn(async () => {}),
+          reply: vi.fn(async () => {}),
+          followUp: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          clearComponents: vi.fn(async () => {}),
+        },
         onMatched: async () => {
           callOrder.push("ack");
         },
@@ -397,11 +375,40 @@ describe("plugin interactive handlers", () => {
       }),
     ).toEqual({ ok: true });
 
-    const baseParams = createSlackDispatchParams({
+    const baseParams = {
+      channel: "slack" as const,
       data: "codex:approve:thread-1",
       interactionId: "slack-ix-1",
-      interaction: { kind: "button" },
-    });
+      ctx: {
+        channel: "slack" as const,
+        accountId: "default",
+        interactionId: "slack-ix-1",
+        conversationId: "C123",
+        parentConversationId: "C123",
+        threadId: "1710000000.000100",
+        senderId: "U123",
+        senderUsername: "ada",
+        auth: { isAuthorizedSender: true },
+        interaction: {
+          kind: "button" as const,
+          actionId: "codex",
+          blockId: "codex_actions",
+          messageTs: "1710000000.000200",
+          threadTs: "1710000000.000100",
+          value: "approve:thread-1",
+          selectedValues: ["approve:thread-1"],
+          selectedLabels: ["Approve"],
+          triggerId: "trigger-1",
+          responseUrl: "https://hooks.slack.test/response",
+        },
+      },
+      respond: {
+        acknowledge: vi.fn(async () => {}),
+        reply: vi.fn(async () => {}),
+        followUp: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+      },
+    };
 
     await expectDedupedInteractiveDispatch({
       baseParams,
@@ -467,12 +474,35 @@ describe("plugin interactive handlers", () => {
     ).toEqual({ ok: true });
 
     await expect(
-      dispatchPluginInteractiveHandler(
-        createTelegramDispatchParams({
-          data: "codex:bind",
+      dispatchPluginInteractiveHandler({
+        channel: "telegram",
+        data: "codex:bind",
+        callbackId: "cb-bind",
+        ctx: {
+          accountId: "default",
           callbackId: "cb-bind",
-        }),
-      ),
+          conversationId: "-10099:topic:77",
+          parentConversationId: "-10099",
+          senderId: "user-1",
+          senderUsername: "ada",
+          threadId: 77,
+          isGroup: true,
+          isForum: true,
+          auth: { isAuthorizedSender: true },
+          callbackMessage: {
+            messageId: 55,
+            chatId: "-10099",
+            messageText: "Pick a thread",
+          },
+        },
+        respond: {
+          reply: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          editButtons: vi.fn(async () => {}),
+          clearButtons: vi.fn(async () => {}),
+          deleteMessage: vi.fn(async () => {}),
+        },
+      }),
     ).resolves.toEqual({
       matched: true,
       handled: true,
@@ -561,13 +591,33 @@ describe("plugin interactive handlers", () => {
     ).toEqual({ ok: true });
 
     await expect(
-      dispatchPluginInteractiveHandler(
-        createDiscordDispatchParams({
-          data: "codex:bind",
+      dispatchPluginInteractiveHandler({
+        channel: "discord",
+        data: "codex:bind",
+        interactionId: "ix-bind",
+        ctx: {
+          accountId: "default",
           interactionId: "ix-bind",
-          interaction: { kind: "button", values: ["allow"] },
-        }),
-      ),
+          conversationId: "channel-1",
+          parentConversationId: "parent-1",
+          guildId: "guild-1",
+          senderId: "user-1",
+          senderUsername: "ada",
+          auth: { isAuthorizedSender: true },
+          interaction: {
+            kind: "button",
+            messageId: "message-1",
+            values: ["allow"],
+          },
+        },
+        respond: {
+          acknowledge: vi.fn(async () => {}),
+          reply: vi.fn(async () => {}),
+          followUp: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+          clearComponents: vi.fn(async () => {}),
+        },
+      }),
     ).resolves.toEqual({
       matched: true,
       handled: true,
@@ -653,18 +703,39 @@ describe("plugin interactive handlers", () => {
     ).toEqual({ ok: true });
 
     await expect(
-      dispatchPluginInteractiveHandler(
-        createSlackDispatchParams({
-          data: "codex:bind",
+      dispatchPluginInteractiveHandler({
+        channel: "slack",
+        data: "codex:bind",
+        interactionId: "slack-bind",
+        ctx: {
+          accountId: "default",
           interactionId: "slack-bind",
+          conversationId: "C123",
+          parentConversationId: "C123",
+          threadId: "1710000000.000100",
+          senderId: "user-1",
+          senderUsername: "ada",
+          auth: { isAuthorizedSender: true },
           interaction: {
             kind: "button",
+            actionId: "codex",
+            blockId: "codex_actions",
+            messageTs: "1710000000.000200",
+            threadTs: "1710000000.000100",
             value: "bind",
             selectedValues: ["bind"],
             selectedLabels: ["Bind"],
+            triggerId: "trigger-1",
+            responseUrl: "https://hooks.slack.test/response",
           },
-        }),
-      ),
+        },
+        respond: {
+          acknowledge: vi.fn(async () => {}),
+          reply: vi.fn(async () => {}),
+          followUp: vi.fn(async () => {}),
+          editMessage: vi.fn(async () => {}),
+        },
+      }),
     ).resolves.toEqual({
       matched: true,
       handled: true,
@@ -722,10 +793,35 @@ describe("plugin interactive handlers", () => {
       }),
     ).toEqual({ ok: true });
 
-    const baseParams = createTelegramDispatchParams({
+    const baseParams = {
+      channel: "telegram" as const,
       data: "codex:resume:thread-1",
       callbackId: "cb-throw",
-    });
+      ctx: {
+        accountId: "default",
+        callbackId: "cb-throw",
+        conversationId: "-10099:topic:77",
+        parentConversationId: "-10099",
+        senderId: "user-1",
+        senderUsername: "ada",
+        threadId: 77,
+        isGroup: true,
+        isForum: true,
+        auth: { isAuthorizedSender: true },
+        callbackMessage: {
+          messageId: 55,
+          chatId: "-10099",
+          messageText: "Pick a thread",
+        },
+      },
+      respond: {
+        reply: vi.fn(async () => {}),
+        editMessage: vi.fn(async () => {}),
+        editButtons: vi.fn(async () => {}),
+        clearButtons: vi.fn(async () => {}),
+        deleteMessage: vi.fn(async () => {}),
+      },
+    };
 
     await expect(dispatchPluginInteractiveHandler(baseParams)).rejects.toThrow("boom");
     await expect(dispatchPluginInteractiveHandler(baseParams)).resolves.toEqual({

@@ -41,15 +41,12 @@ type TestAccount = {
 };
 
 function createTestPlugin(params?: {
-  id?: ChannelId;
-  order?: number;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
 }): ChannelPlugin<TestAccount> {
-  const id = params?.id ?? "discord";
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
   const config: ChannelPlugin<TestAccount>["config"] = {
@@ -70,14 +67,13 @@ function createTestPlugin(params?: {
     gateway.startAccount = params.startAccount;
   }
   return {
-    id,
+    id: "discord",
     meta: {
-      id,
-      label: id,
-      selectionLabel: id,
-      docsPath: `/channels/${id}`,
+      id: "discord",
+      label: "Discord",
+      selectionLabel: "Discord",
+      docsPath: "/channels/discord",
       blurb: "test stub",
-      ...(params?.order === undefined ? {} : { order: params.order }),
     },
     capabilities: { chatTypes: ["direct"] },
     config,
@@ -93,15 +89,13 @@ function createDeferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve: resolvePromise };
 }
 
-function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
+function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
   const registry = createEmptyPluginRegistry();
-  for (const plugin of plugins) {
-    registry.channels.push({
-      pluginId: plugin.id,
-      source: "test",
-      plugin,
-    });
-  }
+  registry.channels.push({
+    pluginId: plugin.id,
+    source: "test",
+    plugin,
+  });
   setActivePluginRegistry(registry);
 }
 
@@ -109,17 +103,11 @@ function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
   resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
-  channelIds?: ChannelId[];
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
-  const channelIds = options?.channelIds ?? ["discord"];
-  for (const channelId of channelIds) {
-    channelLogs[channelId] ??= log.child(channelId);
-    channelRuntimeEnvs[channelId] ??= runtime;
-  }
   return createChannelManager({
     loadConfig: () => options?.loadConfig?.() ?? {},
     channelLogs,
@@ -278,23 +266,6 @@ describe("server-channels auto restart", () => {
 
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
-  });
-
-  it("continues starting later channels after one startup failure", async () => {
-    const failingStart = vi.fn(async () => {
-      throw new Error("missing runtime");
-    });
-    const succeedingStart = vi.fn(async () => {});
-    installTestRegistry(
-      createTestPlugin({ id: "discord", order: 1, startAccount: failingStart }),
-      createTestPlugin({ id: "slack", order: 2, startAccount: succeedingStart }),
-    );
-    const manager = createManager({ channelIds: ["discord", "slack"] });
-
-    await expect(manager.startChannels()).resolves.toBeUndefined();
-
-    expect(failingStart).toHaveBeenCalledTimes(1);
-    expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
   it("reuses plugin account resolution for health monitor overrides", () => {

@@ -1,7 +1,6 @@
 export * from "openclaw/plugin-sdk/matrix";
 export {
   assertHttpUrlTargetsPrivateNetwork,
-  buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,

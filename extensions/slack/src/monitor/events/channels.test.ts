@@ -33,6 +33,7 @@ function createChannelContext(params?: {
 
 describe("registerSlackChannelEvents", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ registerSlackChannelEvents } = await import("./channels.js"));
     ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
   });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 async function runRetryAfterCase(params: {
@@ -29,11 +29,6 @@ async function runRetryAfterCase(params: {
 }
 
 afterEach(() => {
-  vi.clearAllTimers();
-  vi.useRealTimers();
-});
-
-beforeEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });

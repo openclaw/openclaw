@@ -77,13 +77,6 @@ function createChatHeaderState(
     if (method === "models.list") {
       return { models: catalog };
     }
-    if (method === "tools.effective") {
-      return {
-        agentId: "main",
-        profile: "coding",
-        groups: [],
-      };
-    }
     throw new Error(`Unexpected request: ${method}`);
   });
   const state = {
@@ -127,13 +120,6 @@ function createChatHeaderState(
     basePath: "",
     hello: null,
     agentsList: null,
-    agentsPanel: "overview",
-    agentsSelectedId: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     applySettings(next: AppViewState["settings"]) {
       state.settings = next;
     },
@@ -816,42 +802,6 @@ describe("chat view", () => {
     expect(request).not.toHaveBeenCalledWith("chat.history", expect.anything());
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
-    vi.unstubAllGlobals();
-  });
-
-  it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-      } satisfies Partial<Response>),
-    );
-    const { state, request } = createChatHeaderState();
-    state.agentsPanel = "tools";
-    state.agentsSelectedId = "main";
-    state.toolsEffectiveResultKey = "main:main";
-    state.toolsEffectiveResult = {
-      agentId: "main",
-      profile: "coding",
-      groups: [],
-    };
-    const container = document.createElement("div");
-    render(renderChatSessionSelect(state), container);
-
-    const modelSelect = container.querySelector<HTMLSelectElement>(
-      'select[data-chat-model-select="true"]',
-    );
-    expect(modelSelect).not.toBeNull();
-
-    modelSelect!.value = "openai/gpt-5-mini";
-    modelSelect!.dispatchEvent(new Event("change", { bubbles: true }));
-    await flushTasks();
-
-    expect(request).toHaveBeenCalledWith("tools.effective", {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
     vi.unstubAllGlobals();
   });
 

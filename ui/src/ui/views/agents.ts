@@ -9,7 +9,6 @@ import type {
   ModelCatalogEntry,
   SkillStatusReport,
   ToolsCatalogResult,
-  ToolsEffectiveResult,
 } from "../types.ts";
 import { renderAgentOverview } from "./agents-panels-overview.ts";
 import {
@@ -67,12 +66,6 @@ export type ToolsCatalogState = {
   result: ToolsCatalogResult | null;
 };
 
-export type ToolsEffectiveState = {
-  loading: boolean;
-  error: string | null;
-  result: ToolsEffectiveResult | null;
-};
-
 export type AgentsProps = {
   basePath: string;
   loading: boolean;
@@ -89,9 +82,6 @@ export type AgentsProps = {
   agentIdentityById: Record<string, AgentIdentityResult>;
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
-  toolsEffective: ToolsEffectiveState;
-  runtimeSessionKey: string;
-  runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
@@ -264,12 +254,6 @@ export function renderAgents(props: AgentsProps) {
                         toolsCatalogLoading: props.toolsCatalog.loading,
                         toolsCatalogError: props.toolsCatalog.error,
                         toolsCatalogResult: props.toolsCatalog.result,
-                        toolsEffectiveLoading: props.toolsEffective.loading,
-                        toolsEffectiveError: props.toolsEffective.error,
-                        toolsEffectiveResult: props.toolsEffective.result,
-                        runtimeSessionKey: props.runtimeSessionKey,
-                        runtimeSessionMatchesSelectedAgent:
-                          props.runtimeSessionMatchesSelectedAgent,
                         onProfileChange: props.onToolsProfileChange,
                         onOverridesChange: props.onToolsOverridesChange,
                         onConfigReload: props.onConfigReload,

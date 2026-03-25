@@ -1,8 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ DiscordMessageListener } = await import("./listeners.js"));
 });
 

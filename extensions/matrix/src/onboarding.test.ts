@@ -1,11 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
-import {
-  installMatrixOnboardingEnvRestoreHooks,
-  createMatrixWizardPrompter,
-  runMatrixAddAccountAllowlistConfigure,
-  runMatrixInteractiveConfigure,
-} from "./onboarding.test-harness.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -15,7 +11,26 @@ vi.mock("./matrix/deps.js", () => ({
 }));
 
 describe("matrix onboarding", () => {
-  installMatrixOnboardingEnvRestoreHooks();
+  const previousEnv = {
+    MATRIX_HOMESERVER: process.env.MATRIX_HOMESERVER,
+    MATRIX_USER_ID: process.env.MATRIX_USER_ID,
+    MATRIX_ACCESS_TOKEN: process.env.MATRIX_ACCESS_TOKEN,
+    MATRIX_PASSWORD: process.env.MATRIX_PASSWORD,
+    MATRIX_DEVICE_ID: process.env.MATRIX_DEVICE_ID,
+    MATRIX_DEVICE_NAME: process.env.MATRIX_DEVICE_NAME,
+    MATRIX_OPS_HOMESERVER: process.env.MATRIX_OPS_HOMESERVER,
+    MATRIX_OPS_ACCESS_TOKEN: process.env.MATRIX_OPS_ACCESS_TOKEN,
+  };
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
 
   it("offers env shortcut for non-default account when scoped env vars are present", async () => {
     installMatrixTestRuntime();
@@ -28,21 +43,33 @@ describe("matrix onboarding", () => {
     process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-env-token";
 
     const confirmMessages: string[] = [];
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-      },
-      onConfirm: (message) => {
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix already configured. What do you want to do?") {
+          return "add-account";
+        }
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix account name") {
+          return "ops";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
         confirmMessages.push(message);
-        return message.startsWith("Matrix env vars detected");
-      },
-    });
+        if (message.startsWith("Matrix env vars detected")) {
+          return true;
+        }
+        return false;
+      }),
+    } as unknown as WizardPrompter;
 
-    const result = await runMatrixInteractiveConfigure({
+    const result = await matrixOnboardingAdapter.configureInteractive!({
       cfg: {
         channels: {
           matrix: {
@@ -55,9 +82,14 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
+      options: undefined,
+      accountOverrides: {},
       shouldPromptAccountIds: true,
+      forceAllowFrom: false,
       configured: true,
+      label: "Matrix",
     });
 
     expect(result).not.toBe("skip");
@@ -81,21 +113,36 @@ describe("matrix onboarding", () => {
   it("promotes legacy top-level Matrix config before adding a named account", async () => {
     installMatrixTestRuntime();
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix already configured. What do you want to do?": "add-account",
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix account name": "ops",
-        "Matrix homeserver URL": "https://matrix.ops.example.org",
-        "Matrix access token": "ops-token",
-        "Matrix device name (optional)": "",
-      },
-      onConfirm: async () => false,
-    });
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix already configured. What do you want to do?") {
+          return "add-account";
+        }
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix account name") {
+          return "ops";
+        }
+        if (message === "Matrix homeserver URL") {
+          return "https://matrix.ops.example.org";
+        }
+        if (message === "Matrix access token") {
+          return "ops-token";
+        }
+        if (message === "Matrix device name (optional)") {
+          return "";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async () => false),
+    } as unknown as WizardPrompter;
 
-    const result = await runMatrixInteractiveConfigure({
+    const result = await matrixOnboardingAdapter.configureInteractive!({
       cfg: {
         channels: {
           matrix: {
@@ -105,9 +152,14 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
+      options: undefined,
+      accountOverrides: {},
       shouldPromptAccountIds: true,
+      forceAllowFrom: false,
       configured: true,
+      label: "Matrix",
     });
 
     expect(result).not.toBe("skip");
@@ -133,19 +185,28 @@ describe("matrix onboarding", () => {
     installMatrixTestRuntime();
 
     const notes: string[] = [];
-    const prompter = createMatrixWizardPrompter({
-      notes,
-      onText: async () => {
+    const prompter = {
+      note: vi.fn(async (message: unknown) => {
+        notes.push(String(message));
+      }),
+      text: vi.fn(async () => {
         throw new Error("stop-after-help");
-      },
-      onConfirm: async () => false,
-      onSelect: async () => "token",
-    });
+      }),
+      confirm: vi.fn(async () => false),
+      select: vi.fn(async () => "token"),
+    } as unknown as WizardPrompter;
 
     await expect(
-      runMatrixInteractiveConfigure({
+      matrixOnboardingAdapter.configureInteractive!({
         cfg: { channels: {} } as CoreConfig,
+        runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
         prompter,
+        options: undefined,
+        accountOverrides: {},
+        shouldPromptAccountIds: false,
+        forceAllowFrom: false,
+        configured: false,
+        label: "Matrix",
       }),
     ).rejects.toThrow("stop-after-help");
 
@@ -159,25 +220,47 @@ describe("matrix onboarding", () => {
   it("prompts for private-network access when onboarding an internal http homeserver", async () => {
     installMatrixTestRuntime();
 
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix auth method": "token",
-      },
-      text: {
-        "Matrix homeserver URL": "http://localhost.localdomain:8008",
-        "Matrix access token": "ops-token",
-        "Matrix device name (optional)": "",
-      },
-      confirm: {
-        "Allow private/internal Matrix homeserver traffic for this account?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
-      },
-      onConfirm: async () => false,
-    });
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix homeserver URL") {
+          return "http://localhost.localdomain:8008";
+        }
+        if (message === "Matrix access token") {
+          return "ops-token";
+        }
+        if (message === "Matrix device name (optional)") {
+          return "";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Allow private/internal Matrix homeserver traffic for this account?") {
+          return true;
+        }
+        if (message === "Enable end-to-end encryption (E2EE)?") {
+          return false;
+        }
+        return false;
+      }),
+    } as unknown as WizardPrompter;
 
-    const result = await runMatrixInteractiveConfigure({
+    const result = await matrixOnboardingAdapter.configureInteractive!({
       cfg: {} as CoreConfig,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
+      options: undefined,
+      accountOverrides: {},
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+      configured: false,
+      label: "Matrix",
     });
 
     expect(result).not.toBe("skip");
@@ -224,7 +307,53 @@ describe("matrix onboarding", () => {
   it("writes allowlists and room access to the selected Matrix account", async () => {
     installMatrixTestRuntime();
 
-    const result = await runMatrixAddAccountAllowlistConfigure({
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix already configured. What do you want to do?") {
+          return "add-account";
+        }
+        if (message === "Matrix auth method") {
+          return "token";
+        }
+        if (message === "Matrix rooms access") {
+          return "allowlist";
+        }
+        throw new Error(`unexpected select prompt: ${message}`);
+      }),
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Matrix account name") {
+          return "ops";
+        }
+        if (message === "Matrix homeserver URL") {
+          return "https://matrix.ops.example.org";
+        }
+        if (message === "Matrix access token") {
+          return "ops-token";
+        }
+        if (message === "Matrix device name (optional)") {
+          return "Ops Gateway";
+        }
+        if (message === "Matrix allowFrom (full @user:server; display name only if unique)") {
+          return "@alice:example.org";
+        }
+        if (message === "Matrix rooms allowlist (comma-separated)") {
+          return "!ops-room:example.org";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      }),
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enable end-to-end encryption (E2EE)?") {
+          return false;
+        }
+        if (message === "Configure Matrix rooms access?") {
+          return true;
+        }
+        return false;
+      }),
+    } as unknown as WizardPrompter;
+
+    const result = await matrixOnboardingAdapter.configureInteractive!({
       cfg: {
         channels: {
           matrix: {
@@ -237,9 +366,14 @@ describe("matrix onboarding", () => {
           },
         },
       } as CoreConfig,
-      allowFromInput: "@alice:example.org",
-      roomsAllowlistInput: "!ops-room:example.org",
-      deviceName: "Ops Gateway",
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
+      prompter,
+      options: undefined,
+      accountOverrides: {},
+      shouldPromptAccountIds: true,
+      forceAllowFrom: true,
+      configured: true,
+      label: "Matrix",
     });
 
     expect(result).not.toBe("skip");

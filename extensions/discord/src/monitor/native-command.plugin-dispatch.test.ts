@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
@@ -12,8 +12,6 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 type EnsureConfiguredBindingRouteReadyFn =
   typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
-
-let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
   vi.fn<EnsureConfiguredBindingRouteReadyFn>(async () => ({
@@ -83,80 +81,13 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createConfiguredAcpBinding(params: {
-  channelId: string;
-  peerKind: "channel" | "direct";
-  agentId?: string;
-}) {
-  return {
-    type: "acp",
-    agentId: params.agentId ?? "codex",
-    match: {
-      channel: "discord",
-      accountId: "default",
-      peer: { kind: params.peerKind, id: params.channelId },
-    },
-    acp: {
-      mode: "persistent",
-    },
-  } as const;
-}
-
-function createConfiguredAcpCase(params: {
-  channelType: ChannelType;
-  channelId: string;
-  peerKind: "channel" | "direct";
-  guildId?: string;
-  guildName?: string;
-  includeChannelAccess?: boolean;
-  agentId?: string;
-}) {
-  return {
-    cfg: {
-      commands: {
-        useAccessGroups: false,
-      },
-      ...(params.includeChannelAccess === false
-        ? {}
-        : params.channelType === ChannelType.DM
-          ? {
-              channels: {
-                discord: {
-                  dm: { enabled: true, policy: "open" },
-                },
-              },
-            }
-          : {
-              channels: {
-                discord: {
-                  guilds: {
-                    [params.guildId!]: {
-                      channels: {
-                        [params.channelId]: { allow: true, requireMention: false },
-                      },
-                    },
-                  },
-                },
-              },
-            }),
-      bindings: [
-        createConfiguredAcpBinding({
-          channelId: params.channelId,
-          peerKind: params.peerKind,
-          agentId: params.agentId,
-        }),
-      ],
-    } as OpenClawConfig,
-    interaction: createInteraction({
-      channelType: params.channelType,
-      channelId: params.channelId,
-      guildId: params.guildId,
-      guildName: params.guildName,
-    }),
-  };
+async function loadCreateDiscordNativeCommand() {
+  vi.resetModules();
+  return (await import("./native-command.js")).createDiscordNativeCommand;
 }
 
 async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeCommandSpec) {
+  const createDiscordNativeCommand = await loadCreateDiscordNativeCommand();
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -169,6 +100,7 @@ async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeComma
 }
 
 async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
+  const createDiscordNativeCommand = await loadCreateDiscordNativeCommand();
   return createDiscordNativeCommand({
     command: {
       name: params.name,
@@ -282,10 +214,6 @@ async function expectBoundStatusCommandDispatch(params: {
 }
 
 describe("Discord native plugin command dispatch", () => {
-  beforeAll(async () => {
-    ({ createDiscordNativeCommand } = await import("./native-command.js"));
-  });
-
   beforeEach(async () => {
     vi.clearAllMocks();
     clearPluginCommands();
@@ -442,11 +370,42 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   it("routes native slash commands through configured ACP Discord channel bindings", async () => {
-    const { cfg, interaction } = createConfiguredAcpCase({
+    const guildId = "1459246755253325866";
+    const channelId = "1478836151241412759";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      channels: {
+        discord: {
+          guilds: {
+            [guildId]: {
+              channels: {
+                [channelId]: { allow: true, requireMention: false },
+              },
+            },
+          },
+        },
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: channelId },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
       channelType: ChannelType.GuildText,
-      channelId: "1478836151241412759",
-      peerKind: "channel",
-      guildId: "1459246755253325866",
+      channelId,
+      guildId,
       guildName: "Ops",
     });
 
@@ -512,10 +471,34 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   it("routes Discord DM native slash commands through configured ACP bindings", async () => {
-    const { cfg, interaction } = createConfiguredAcpCase({
+    const channelId = "dm-1";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "direct", id: channelId },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({
       channelType: ChannelType.DM,
-      channelId: "dm-1",
-      peerKind: "direct",
+      channelId,
     });
 
     await expectBoundStatusCommandDispatch({
@@ -526,13 +509,32 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
-    const { cfg, interaction } = createConfiguredAcpCase({
+    const guildId = "1459246755253325866";
+    const channelId = "1479098716916023408";
+    const cfg = {
+      commands: {
+        useAccessGroups: false,
+      },
+      bindings: [
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: channelId },
+          },
+          acp: {
+            mode: "persistent",
+          },
+        },
+      ],
+    } as OpenClawConfig;
+    const interaction = createInteraction({
       channelType: ChannelType.GuildText,
-      channelId: "1479098716916023408",
-      peerKind: "channel",
-      guildId: "1459246755253325866",
+      channelId,
+      guildId,
       guildName: "Ops",
-      includeChannelAccess: false,
     });
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: false,

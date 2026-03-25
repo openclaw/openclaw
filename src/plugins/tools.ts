@@ -20,13 +20,6 @@ export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefine
   return pluginToolMeta.get(tool);
 }
 
-export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
-  const meta = pluginToolMeta.get(source);
-  if (meta) {
-    pluginToolMeta.set(target, meta);
-  }
-}
-
 function normalizeAllowlist(list?: string[]) {
   return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
 }

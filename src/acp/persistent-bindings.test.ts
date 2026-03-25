@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseFeishuConversationId } from "../../extensions/feishu/src/conversation-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
@@ -311,7 +311,7 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-beforeAll(async () => {
+beforeEach(async () => {
   vi.resetModules();
   persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
   lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
@@ -323,9 +323,6 @@ beforeAll(async () => {
     ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
     resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
   };
-});
-
-beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {

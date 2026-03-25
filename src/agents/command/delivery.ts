@@ -1,8 +1,4 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -64,68 +60,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-export function normalizeAgentCommandReplyPayloads(params: {
-  cfg: OpenClawConfig;
-  opts: AgentCommandOpts;
-  outboundSession: OutboundSessionContext | undefined;
-  payloads: RunResult["payloads"];
-  result: RunResult;
-  deliveryChannel?: string;
-  accountId?: string;
-  applyChannelTransforms?: boolean;
-}): ReplyPayload[] {
-  const payloads = params.payloads ?? [];
-  if (payloads.length === 0) {
-    return [];
-  }
-  const channel =
-    params.deliveryChannel && !isInternalMessageChannel(params.deliveryChannel)
-      ? (normalizeChannelId(params.deliveryChannel) ?? params.deliveryChannel)
-      : undefined;
-  if (!channel) {
-    return payloads as ReplyPayload[];
-  }
-
-  const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
-  const agentId =
-    params.outboundSession?.agentId ??
-    resolveSessionAgentId({
-      sessionKey,
-      config: params.cfg,
-    });
-  const replyPrefix = createReplyPrefixContext({
-    cfg: params.cfg,
-    agentId,
-    channel,
-    accountId: params.accountId,
-  });
-  const modelUsed = params.result.meta.agentMeta?.model;
-  const providerUsed = params.result.meta.agentMeta?.provider;
-  if (providerUsed && modelUsed) {
-    replyPrefix.onModelSelected({
-      provider: providerUsed,
-      model: modelUsed,
-      thinkLevel: undefined,
-    });
-  }
-  const responsePrefixContext = replyPrefix.responsePrefixContextProvider();
-  const applyChannelTransforms = params.applyChannelTransforms ?? true;
-
-  const normalizedPayloads: ReplyPayload[] = [];
-  for (const payload of payloads) {
-    const normalized = normalizeReplyPayload(payload as ReplyPayload, {
-      responsePrefix: replyPrefix.responsePrefix,
-      enableSlackInteractiveReplies: replyPrefix.enableSlackInteractiveReplies,
-      applyChannelTransforms,
-      responsePrefixContext,
-    });
-    if (normalized) {
-      normalizedPayloads.push(normalized);
-    }
-  }
-  return normalizedPayloads;
 }
 
 export async function deliverAgentCommandResult(params: {
@@ -239,17 +173,7 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  const normalizedReplyPayloads = normalizeAgentCommandReplyPayloads({
-    cfg,
-    opts,
-    outboundSession,
-    payloads,
-    result,
-    deliveryChannel,
-    accountId: resolvedAccountId,
-    applyChannelTransforms: deliver,
-  });
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(normalizedReplyPayloads);
+  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads ?? []);
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -271,7 +195,7 @@ export async function deliverAgentCommandResult(params: {
     return { payloads: [], meta: result.meta };
   }
 
-  const deliveryPayloads = normalizeOutboundPayloads(normalizedReplyPayloads);
+  const deliveryPayloads = normalizeOutboundPayloads(payloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;

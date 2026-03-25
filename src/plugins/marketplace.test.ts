@@ -24,24 +24,10 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-function mockRemoteMarketplaceClone(manifest: unknown) {
-  runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
-    const repoDir = argv.at(-1);
-    expect(typeof repoDir).toBe("string");
-    await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
-      JSON.stringify(manifest),
-    );
-    return { code: 0, stdout: "", stderr: "", killed: false };
-  });
-}
-
 describe("marketplace plugins", () => {
   afterEach(() => {
     installPluginFromPathMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
-    vi.unstubAllGlobals();
   });
 
   it("lists plugins from a local marketplace root", async () => {
@@ -215,50 +201,26 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("returns a structured error for archive downloads with an empty response body", async () => {
-    await withTempDir(async (rootDir) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(null, { status: 200 })),
-      );
-      await fs.mkdir(path.join(rootDir, ".claude-plugin"), { recursive: true });
+  it("rejects remote marketplace git plugin sources before cloning nested remotes", async () => {
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      const repoDir = argv.at(-1);
+      expect(typeof repoDir).toBe("string");
+      await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
       await fs.writeFile(
-        path.join(rootDir, ".claude-plugin", "marketplace.json"),
+        path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
         JSON.stringify({
           plugins: [
             {
               name: "frontend-design",
-              source: "https://example.com/frontend-design.tgz",
+              source: {
+                type: "git",
+                url: "https://evil.example/repo.git",
+              },
             },
           ],
         }),
       );
-
-      const { installPluginFromMarketplace } = await import("./marketplace.js");
-      const result = await installPluginFromMarketplace({
-        marketplace: path.join(rootDir, ".claude-plugin", "marketplace.json"),
-        plugin: "frontend-design",
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        error: "failed to download https://example.com/frontend-design.tgz: empty response body",
-      });
-      expect(installPluginFromPathMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects remote marketplace git plugin sources before cloning nested remotes", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "git",
-            url: "https://evil.example/repo.git",
-          },
-        },
-      ],
+      return { code: 0, stdout: "", stderr: "", killed: false };
     });
 
     const { listMarketplacePlugins } = await import("./marketplace.js");
@@ -274,16 +236,25 @@ describe("marketplace plugins", () => {
   });
 
   it("rejects remote marketplace absolute plugin paths", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "path",
-            path: "/tmp/frontend-design",
-          },
-        },
-      ],
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      const repoDir = argv.at(-1);
+      expect(typeof repoDir).toBe("string");
+      await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
+        JSON.stringify({
+          plugins: [
+            {
+              name: "frontend-design",
+              source: {
+                type: "path",
+                path: "/tmp/frontend-design",
+              },
+            },
+          ],
+        }),
+      );
+      return { code: 0, stdout: "", stderr: "", killed: false };
     });
 
     const { listMarketplacePlugins } = await import("./marketplace.js");
@@ -299,16 +270,25 @@ describe("marketplace plugins", () => {
   });
 
   it("rejects remote marketplace HTTP plugin paths", async () => {
-    mockRemoteMarketplaceClone({
-      plugins: [
-        {
-          name: "frontend-design",
-          source: {
-            type: "path",
-            path: "https://evil.example/plugin.tgz",
-          },
-        },
-      ],
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      const repoDir = argv.at(-1);
+      expect(typeof repoDir).toBe("string");
+      await fs.mkdir(path.join(repoDir as string, ".claude-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(repoDir as string, ".claude-plugin", "marketplace.json"),
+        JSON.stringify({
+          plugins: [
+            {
+              name: "frontend-design",
+              source: {
+                type: "path",
+                path: "https://evil.example/plugin.tgz",
+              },
+            },
+          ],
+        }),
+      );
+      return { code: 0, stdout: "", stderr: "", killed: false };
     });
 
     const { listMarketplacePlugins } = await import("./marketplace.js");

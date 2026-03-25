@@ -1,9 +1,10 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let __testing: typeof import("./provider.js").__testing;
 
 describe("resolveThreadBindingsEnabled", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ __testing } = await import("./provider.js"));
   });
 

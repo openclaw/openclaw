@@ -16,7 +16,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
-import { inspectFeishuCredentials, listFeishuAccountIds } from "./accounts.js";
+import { listFeishuAccountIds, resolveFeishuCredentials } from "./accounts.js";
 import { probeFeishu } from "./probe.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import type { FeishuConfig } from "./types.js";
@@ -165,7 +165,9 @@ export const feishuSetupWizard: ChannelSetupWizard = {
     resolveConfigured: ({ cfg }) => isFeishuConfigured(cfg),
     resolveStatusLines: async ({ cfg, configured }) => {
       const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-      const resolvedCredentials = inspectFeishuCredentials(feishuCfg);
+      const resolvedCredentials = resolveFeishuCredentials(feishuCfg, {
+        allowUnresolvedSecretRef: true,
+      });
       let probeResult = null;
       if (configured && resolvedCredentials) {
         try {
@@ -184,7 +186,9 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   credentials: [],
   finalize: async ({ cfg, prompter, options }) => {
     const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-    const resolved = inspectFeishuCredentials(feishuCfg);
+    const resolved = resolveFeishuCredentials(feishuCfg, {
+      allowUnresolvedSecretRef: true,
+    });
     const hasConfigSecret = hasConfiguredSecretInput(feishuCfg?.appSecret);
     const hasConfigCreds = Boolean(
       typeof feishuCfg?.appId === "string" && feishuCfg.appId.trim() && hasConfigSecret,

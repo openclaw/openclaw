@@ -54,11 +54,8 @@ async function promptDiscordAllowFrom(params: {
 }): Promise<OpenClawConfig> {
   return await promptLegacyChannelAllowFromForAccount({
     cfg: params.cfg,
-    channel,
     prompter: params.prompter,
     accountId: params.accountId,
-    defaultAccountId: resolveDefaultDiscordSetupAccountId(params.cfg),
-    resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
     noteTitle: "Discord allowlist",
     noteLines: [
       "Allowlist Discord DMs by username (we resolve to user ids).",
@@ -73,12 +70,11 @@ async function promptDiscordAllowFrom(params: {
     placeholder: "@alice, 123456789012345678",
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
-    resolveExisting: (account) => {
-      const config = account.config;
-      return config.allowFrom ?? config.dm?.allowFrom ?? [];
+    resolveExisting: (accountId, cfg) => {
+      const account = resolveDiscordSetupAccountConfig({ cfg, accountId }).config;
+      return account.allowFrom ?? account.dm?.allowFrom ?? [];
     },
-    resolveToken: (account) =>
-      resolveDiscordToken(params.cfg, { accountId: account.accountId }).token,
+    resolveToken: (accountId) => resolveDiscordToken(params.cfg, { accountId }).token,
     resolveEntries: async ({ token, entries }) =>
       (
         await resolveDiscordUserAllowlist({

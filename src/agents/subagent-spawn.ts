@@ -770,11 +770,7 @@ export async function spawnSubagentDirect(
     try {
       await callGateway({
         method: "sessions.delete",
-        params: {
-          key: childSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: threadBindingReady,
-        },
+        params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
         timeoutMs: 10_000,
       });
     } catch {

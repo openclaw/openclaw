@@ -180,21 +180,31 @@ vi.mock("./slash-commands.runtime.js", () => {
 });
 
 type RegisterFn = (params: { ctx: unknown; account: unknown }) => Promise<void>;
-let registerSlackMonitorSlashCommands: RegisterFn;
+let registerSlackMonitorSlashCommandsPromise: Promise<RegisterFn> | undefined;
+
+async function loadRegisterSlackMonitorSlashCommands(): Promise<RegisterFn> {
+  registerSlackMonitorSlashCommandsPromise ??= import("./slash.js").then((module) => {
+    const typed = module as unknown as {
+      registerSlackMonitorSlashCommands: RegisterFn;
+    };
+    return typed.registerSlackMonitorSlashCommands;
+  });
+  return await registerSlackMonitorSlashCommandsPromise;
+}
 
 const { dispatchMock } = getSlackSlashMocks();
 
-beforeAll(async () => {
-  ({ registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
-    registerSlackMonitorSlashCommands: RegisterFn;
-  });
+beforeAll(() => {
+  vi.resetModules();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  registerSlackMonitorSlashCommandsPromise = undefined;
   resetSlackSlashMocks();
 });
 
 async function registerCommands(ctx: unknown, account: unknown) {
+  const registerSlackMonitorSlashCommands = await loadRegisterSlackMonitorSlashCommands();
   await registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 }
 

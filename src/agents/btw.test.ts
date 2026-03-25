@@ -69,17 +69,6 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 const { runBtwSideQuestion } = await import("./btw.js");
-type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
-
-const DEFAULT_AGENT_DIR = "/tmp/agent";
-const DEFAULT_MODEL = "claude-sonnet-4-5";
-const DEFAULT_PROVIDER = "anthropic";
-const DEFAULT_REASONING_LEVEL = "off";
-const DEFAULT_SESSION_KEY = "agent:main:main";
-const DEFAULT_STORE_PATH = "/tmp/sessions.json";
-const DEFAULT_QUESTION = "What changed?";
-const MATH_QUESTION = "What is 17 * 19?";
-const MATH_ANSWER = "323";
 
 function makeAsyncEvents(events: unknown[]) {
   return {
@@ -98,60 +87,6 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
     updatedAt: Date.now(),
     ...overrides,
   };
-}
-
-function createDoneEvent(text: string) {
-  return {
-    type: "done",
-    reason: "stop",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text }],
-      provider: DEFAULT_PROVIDER,
-      api: "anthropic-messages",
-      model: DEFAULT_MODEL,
-      stopReason: "stop",
-      usage: {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 3,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      timestamp: Date.now(),
-    },
-  };
-}
-
-function mockDoneAnswer(text: string) {
-  streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
-}
-
-function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
-  return runBtwSideQuestion({
-    cfg: {} as never,
-    agentDir: DEFAULT_AGENT_DIR,
-    provider: DEFAULT_PROVIDER,
-    model: DEFAULT_MODEL,
-    question: DEFAULT_QUESTION,
-    sessionEntry: createSessionEntry(),
-    resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
-    opts: {},
-    isNewSession: false,
-    ...overrides,
-  });
-}
-
-function runMathSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
-  return runSideQuestion({
-    question: MATH_QUESTION,
-    ...overrides,
-  });
-}
-
-function clearBuiltSessionMessages() {
-  buildSessionContextMock.mockReturnValue({ messages: [] });
 }
 
 describe("runBtwSideQuestion", () => {
@@ -237,16 +172,16 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runBtwSideQuestion({
       cfg: {} as never,
-      agentDir: DEFAULT_AGENT_DIR,
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-      question: DEFAULT_QUESTION,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What changed?",
       sessionEntry: createSessionEntry(),
       sessionStore: {},
-      sessionKey: DEFAULT_SESSION_KEY,
-      storePath: DEFAULT_STORE_PATH,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
       resolvedThinkLevel: "low",
-      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      resolvedReasoningLevel: "off",
       blockReplyChunking: {
         minChars: 1,
         maxChars: 200,
@@ -260,27 +195,73 @@ describe("runBtwSideQuestion", () => {
     expect(result).toBeUndefined();
     expect(onBlockReply).toHaveBeenCalledWith({
       text: "Side answer.",
-      btw: { question: DEFAULT_QUESTION },
+      btw: { question: "What changed?" },
     });
   });
 
   it("returns a final payload when block streaming is unavailable", async () => {
-    mockDoneAnswer("Final answer.");
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final answer." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What changed?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     expect(result).toEqual({ text: "Final answer." });
   });
 
   it("fails when the current branch has no messages", async () => {
-    clearBuiltSessionMessages();
+    buildSessionContextMock.mockReturnValue({ messages: [] });
     streamSimpleMock.mockReturnValue(makeAsyncEvents([]));
 
-    await expect(runSideQuestion()).rejects.toThrow("No active session context.");
+    await expect(
+      runBtwSideQuestion({
+        cfg: {} as never,
+        agentDir: "/tmp/agent",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        question: "What changed?",
+        sessionEntry: createSessionEntry(),
+        resolvedReasoningLevel: "off",
+        opts: {},
+        isNewSession: false,
+      }),
+    ).rejects.toThrow("No active session context.");
   });
 
   it("uses active-run snapshot messages for BTW context while the main run is in flight", async () => {
-    clearBuiltSessionMessages();
+    buildSessionContextMock.mockReturnValue({ messages: [] });
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: "assistant-1",
       messages: [
@@ -293,11 +274,45 @@ describe("runBtwSideQuestion", () => {
         },
       ],
     });
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
     expect(streamSimpleMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -310,7 +325,7 @@ describe("runBtwSideQuestion", () => {
               {
                 type: "text",
                 text: expect.stringContaining(
-                  `<btw_side_question>\n${MATH_QUESTION}\n</btw_side_question>`,
+                  "<btw_side_question>\nWhat is 17 * 19?\n</btw_side_question>",
                 ),
               },
             ],
@@ -322,15 +337,49 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {
-    clearBuiltSessionMessages();
+    buildSessionContextMock.mockReturnValue({ messages: [] });
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: null,
       messages: [],
       inFlightPrompt: "build me a tic-tac-toe game in brainfuck",
     });
-    mockDoneAnswer("You're building a tic-tac-toe game in Brainfuck.");
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "You're building a tic-tac-toe game in Brainfuck." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runSideQuestion({ question: "what are we doing?" });
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "what are we doing?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     expect(result).toEqual({ text: "You're building a tic-tac-toe game in Brainfuck." });
     expect(streamSimpleMock).toHaveBeenCalledWith(
@@ -355,9 +404,43 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("wraps the side question so the model does not treat it as a main-task continuation", async () => {
-    mockDoneAnswer("About 93 million miles.");
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "About 93 million miles." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    await runSideQuestion({ question: "what is the distance to the sun?" });
+    await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "what is the distance to the sun?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     const [, context] = streamSimpleMock.mock.calls[0] ?? [];
     expect(context).toMatchObject({
@@ -388,27 +471,95 @@ describe("runBtwSideQuestion", () => {
       parentId: "assistant-1",
       message: { role: "user" },
     });
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     expect(branchMock).toHaveBeenCalledWith("assistant-1");
     expect(resetLeafMock).not.toHaveBeenCalled();
     expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
   });
 
   it("branches to the active run snapshot leaf when the session is busy", async () => {
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: "assistant-seed",
     });
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     expect(branchMock).toHaveBeenCalledWith("assistant-seed");
     expect(getLeafEntryMock).not.toHaveBeenCalled();
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
   });
 
   it("falls back when the active run snapshot leaf no longer exists", async () => {
@@ -418,33 +569,135 @@ describe("runBtwSideQuestion", () => {
     branchMock.mockImplementationOnce(() => {
       throw new Error("Entry 3235c7c4 not found");
     });
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     expect(branchMock).toHaveBeenCalledWith("assistant-gone");
     expect(resetLeafMock).toHaveBeenCalled();
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
     expect(diagDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),
     );
   });
 
   it("returns the BTW answer without appending transcript custom entries", async () => {
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
     expect(buildSessionContextMock).toHaveBeenCalled();
   });
 
   it("does not log transcript persistence warnings because BTW no longer writes to disk", async () => {
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    const result = await runMathSideQuestion();
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
-    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(result).toEqual({ text: "323" });
     expect(diagDebugMock).not.toHaveBeenCalledWith(
       expect.stringContaining("btw transcript persistence skipped"),
     );
@@ -472,9 +725,43 @@ describe("runBtwSideQuestion", () => {
         },
       ],
     });
-    mockDoneAnswer(MATH_ANSWER);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "323" }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-5",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
 
-    await runMathSideQuestion();
+    await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: "/tmp/agent",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      question: "What is 17 * 19?",
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: "off",
+      opts: {},
+      isNewSession: false,
+    });
 
     const [, context] = streamSimpleMock.mock.calls[0] ?? [];
     expect(context).toMatchObject({

@@ -215,14 +215,14 @@ export async function handleSendChat(
   // Intercept local slash commands (/status, /model, /compact, etc.)
   const parsed = parseSlashCommand(message);
   if (parsed?.command.executeLocal) {
-    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
+    if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.name)) {
       if (messageOverride == null) {
         host.chatMessage = "";
         host.chatAttachments = [];
       }
       enqueueChatMessage(host, message, undefined, isChatResetCommand(message), {
         args: parsed.args,
-        name: parsed.command.key,
+        name: parsed.command.name,
       });
       return;
     }
@@ -231,7 +231,7 @@ export async function handleSendChat(
       host.chatMessage = "";
       host.chatAttachments = [];
     }
-    await dispatchSlashCommand(host, parsed.command.key, parsed.args, {
+    await dispatchSlashCommand(host, parsed.command.name, parsed.args, {
       previousDraft: prevDraft,
       restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
     });
@@ -260,7 +260,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session"].includes(name);
+  return !["stop", "focus", "export"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -295,7 +295,7 @@ async function dispatchSlashCommand(
     case "focus":
       host.onSlashAction?.("toggle-focus");
       return;
-    case "export-session":
+    case "export":
       host.onSlashAction?.("export");
       return;
   }
@@ -318,7 +318,6 @@ async function dispatchSlashCommand(
       ...host.chatModelOverrides,
       [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
-    host.onSlashAction?.("refresh-tools-effective");
   }
 
   if (result.action === "refresh") {

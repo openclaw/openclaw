@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -11,11 +12,8 @@ describe("image-generation runtime helpers", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  beforeEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
   });
 

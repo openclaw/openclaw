@@ -4,12 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import {
-  loadConfigMock,
-  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
-  resetPairingSecurityMocks,
-  upsertPairingRequestMock as pairingUpsertPairingRequestMock,
-} from "./pairing-security.test-harness.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -29,9 +23,13 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
-export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
-export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
+
+export const mockLoadConfig: AnyMockFn = vi.fn().mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
+
+export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
+export const upsertPairingRequestMock: AnyMockFn = vi
+  .fn()
+  .mockResolvedValue({ code: "PAIRCODE", created: true });
 
 export type MockSock = {
   ev: EventEmitter;
@@ -89,6 +87,37 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    loadConfig: () => mockLoadConfig(),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readStoreAllowFromForDmPolicy: async (
+      params: Parameters<typeof actual.readStoreAllowFromForDmPolicy>[0],
+    ) =>
+      await actual.readStoreAllowFromForDmPolicy({
+        ...params,
+        readStore: async (provider, accountId) =>
+          (await readAllowFromStoreMock(provider, accountId)) as string[],
+      }),
+  };
+});
+
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
@@ -114,13 +143,6 @@ export function getSock(): MockSock {
 type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
 export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
 let monitorWebInbox: MonitorWebInbox;
-
-export function getMonitorWebInbox(): MonitorWebInbox {
-  if (!monitorWebInbox) {
-    throw new Error("monitorWebInbox not initialized");
-  }
-  return monitorWebInbox;
-}
 
 export async function settleInboundWork() {
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -202,7 +224,12 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
     vi.resetModules();
     vi.clearAllMocks();
     sessionState.sock = createMockSock();
-    resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
+    mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
+    readAllowFromStoreMock.mockResolvedValue([]);
+    upsertPairingRequestMock.mockResolvedValue({
+      code: "PAIRCODE",
+      created: true,
+    });
     const inboundModule = await import("./inbound.js");
     monitorWebInbox = inboundModule.monitorWebInbox;
     const { resetWebInboundDedupe } = inboundModule;

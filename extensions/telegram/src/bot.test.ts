@@ -51,6 +51,7 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
       await import("../../../src/auto-reply/commands-registry.js"));
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));

@@ -115,32 +115,6 @@ function createUnexpectedConfigureCall(message: string) {
   });
 }
 
-async function expectQuickstartPickerSkipsWithoutRuntime() {
-  const select = vi.fn(async ({ message }: { message: string }) => {
-    if (message === "Select channel (QuickStart)") {
-      return "__skip__";
-    }
-    return "__done__";
-  });
-  const { multiselect, text } = createUnexpectedPromptGuards();
-  const prompter = createPrompter({
-    select: select as unknown as WizardPrompter["select"],
-    multiselect,
-    text,
-  });
-
-  await expect(
-    runSetupChannels({} as OpenClawConfig, prompter, {
-      quickstartDefaults: true,
-    }),
-  ).resolves.toEqual({} as OpenClawConfig);
-
-  expect(select).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Select channel (QuickStart)" }),
-  );
-  expect(multiselect).not.toHaveBeenCalled();
-}
-
 async function runConfiguredTelegramSetup(params: {
   strictUnexpected?: boolean;
   configureWhenConfigured: NonNullable<
@@ -304,11 +278,55 @@ describe("setupChannels", () => {
   });
 
   it("renders the QuickStart channel picker without requiring the LINE runtime", async () => {
-    await expectQuickstartPickerSkipsWithoutRuntime();
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select channel (QuickStart)") {
+        return "__skip__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await expect(
+      runSetupChannels({} as OpenClawConfig, prompter, {
+        quickstartDefaults: true,
+      }),
+    ).resolves.toEqual({} as OpenClawConfig);
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
   });
 
   it("renders the QuickStart channel picker without requiring the Matrix runtime", async () => {
-    await expectQuickstartPickerSkipsWithoutRuntime();
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select channel (QuickStart)") {
+        return "__skip__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await expect(
+      runSetupChannels({} as OpenClawConfig, prompter, {
+        quickstartDefaults: true,
+      }),
+    ).resolves.toEqual({} as OpenClawConfig);
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select channel (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
   });
 
   it("continues Telegram setup when the plugin registry is empty", async () => {

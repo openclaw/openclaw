@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
-import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
+import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();
@@ -15,7 +15,7 @@ type TargetNormalizerCacheEntry = {
 const targetNormalizerCacheByChannelId = new Map<string, TargetNormalizerCacheEntry>();
 
 function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
-  const version = getActivePluginChannelRegistryVersion();
+  const version = getActivePluginRegistryVersion();
   const cached = targetNormalizerCacheByChannelId.get(channelId);
   if (cached?.version === version) {
     return cached.normalizer;

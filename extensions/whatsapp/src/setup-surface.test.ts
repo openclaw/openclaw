@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
@@ -91,14 +91,11 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 }
 
 describe("whatsapp setup wizard", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
+    vi.clearAllMocks();
     const { whatsappPlugin } = await import("./channel.js");
     whatsappConfigure = createPluginSetupWizardConfigure(whatsappPlugin);
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
     pathExistsMock.mockResolvedValue(false);
     listWhatsAppAccountIdsMock.mockReturnValue([]);
     resolveDefaultWhatsAppAccountIdMock.mockReturnValue(DEFAULT_ACCOUNT_ID);

@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import { listSlackAccountIds, resolveSlackAccount } from "./accounts.js";
 
 function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boolean {
   if (!capabilities) {
@@ -20,9 +20,17 @@ export function isSlackInteractiveRepliesEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  const account = resolveSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
-  });
+  if (params.accountId) {
+    const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
+    return resolveInteractiveRepliesFromCapabilities(account.config.capabilities);
+  }
+  const accountIds = listSlackAccountIds(params.cfg);
+  if (accountIds.length === 0) {
+    return resolveInteractiveRepliesFromCapabilities(params.cfg.channels?.slack?.capabilities);
+  }
+  if (accountIds.length > 1) {
+    return false;
+  }
+  const account = resolveSlackAccount({ cfg: params.cfg, accountId: accountIds[0] });
   return resolveInteractiveRepliesFromCapabilities(account.config.capabilities);
 }

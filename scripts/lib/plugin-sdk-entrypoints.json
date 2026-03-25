@@ -35,7 +35,6 @@
   "plugin-runtime",
   "security-runtime",
   "gateway-runtime",
-  "github-copilot-token",
   "cli-runtime",
   "hook-runtime",
   "process-runtime",

@@ -130,33 +130,6 @@ async function runRepair(cfg: OpenClawConfig) {
   await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
 }
 
-async function runNonInteractiveRepair(params: {
-  cfg?: OpenClawConfig;
-  updateInProgress?: boolean;
-}) {
-  Object.defineProperty(process.stdin, "isTTY", {
-    value: false,
-    configurable: true,
-  });
-  if (params.updateInProgress) {
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  } else {
-    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  }
-  await maybeRepairGatewayServiceConfig(
-    params.cfg ?? { gateway: {} },
-    "local",
-    makeDoctorIo(),
-    createDoctorPrompter({
-      runtime: makeDoctorIo(),
-      options: {
-        repair: true,
-        nonInteractive: true,
-      },
-    }),
-  );
-}
-
 const gatewayProgramArguments = [
   "/usr/bin/node",
   "/usr/local/bin/openclaw",
@@ -164,38 +137,6 @@ const gatewayProgramArguments = [
   "--port",
   "18789",
 ];
-
-function createGatewayCommand(entrypoint: string) {
-  return {
-    programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"],
-    environment: {},
-  };
-}
-
-function setupGatewayEntrypointRepairScenario(params: {
-  currentEntrypoint: string;
-  installEntrypoint: string;
-  installWorkingDirectory?: string;
-  realpath?: (value: string) => Promise<string>;
-  realpathError?: Error;
-}) {
-  mocks.readCommand.mockResolvedValue(createGatewayCommand(params.currentEntrypoint));
-  mocks.auditGatewayServiceConfig.mockResolvedValue({
-    ok: true,
-    issues: [],
-  });
-  mocks.buildGatewayInstallPlan.mockResolvedValue({
-    ...createGatewayCommand(params.installEntrypoint),
-    ...(params.installWorkingDirectory ? { workingDirectory: params.installWorkingDirectory } : {}),
-  });
-  if (params.realpath) {
-    fsMocks.realpath.mockImplementation(params.realpath);
-  } else if (params.realpathError) {
-    fsMocks.realpath.mockRejectedValue(params.realpathError);
-  } else {
-    fsMocks.realpath.mockImplementation(async (value: string) => value);
-  }
-}
 
 function setupGatewayTokenRepairScenario() {
   mocks.readCommand.mockResolvedValue({
@@ -322,19 +263,38 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not flag entrypoint mismatch when symlink and realpath match", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint: "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
-      installEntrypoint:
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
         "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
-      realpath: async (value: string) => {
-        if (value.includes("/global/5/node_modules/openclaw/")) {
-          return value.replace(
-            "/global/5/node_modules/openclaw/",
-            "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
-          );
-        }
-        return value;
-      },
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    fsMocks.realpath.mockImplementation(async (value: string) => {
+      if (value.includes("/global/5/node_modules/openclaw/")) {
+        return value.replace(
+          "/global/5/node_modules/openclaw/",
+          "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
+        );
+      }
+      return value;
     });
 
     await runRepair({ gateway: {} });
@@ -348,11 +308,31 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not flag entrypoint mismatch when realpath fails but normalized absolute paths match", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint: "/opt/openclaw/../openclaw/dist/index.js",
-      installEntrypoint: "/opt/openclaw/dist/index.js",
-      realpathError: new Error("no realpath"),
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/opt/openclaw/../openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
     });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/opt/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
 
     await runRepair({ gateway: {} });
 
@@ -365,10 +345,29 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("still flags entrypoint mismatch when canonicalized paths differ", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint:
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
         "/Users/test/.nvm/versions/node/v22.0.0/lib/node_modules/openclaw/dist/index.js",
-      installEntrypoint: "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
     });
 
     await runRepair({ gateway: {} });
@@ -382,16 +381,48 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
-      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
-      installWorkingDirectory: "/tmp",
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: "/tmp",
+      environment: {},
     });
 
-    await runNonInteractiveRepair({
-      cfg: { gateway: {} },
-      updateInProgress: false,
-    });
+    await maybeRepairGatewayServiceConfig(
+      { gateway: {} },
+      "local",
+      makeDoctorIo(),
+      createDoctorPrompter({
+        runtime: makeDoctorIo(),
+        options: {
+          repair: true,
+          nonInteractive: true,
+        },
+      }),
+    );
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
@@ -402,16 +433,49 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("stages service config repairs during non-interactive update repairs", async () => {
-    setupGatewayEntrypointRepairScenario({
-      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
-      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
-      installWorkingDirectory: "/tmp",
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      environment: {},
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: [
+        "/usr/bin/node",
+        "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+        "gateway",
+        "--port",
+        "18789",
+      ],
+      workingDirectory: "/tmp",
+      environment: {},
     });
 
-    await runNonInteractiveRepair({
-      cfg: { gateway: {} },
-      updateInProgress: true,
-    });
+    await maybeRepairGatewayServiceConfig(
+      { gateway: {} },
+      "local",
+      makeDoctorIo(),
+      createDoctorPrompter({
+        runtime: makeDoctorIo(),
+        options: {
+          repair: true,
+          nonInteractive: true,
+        },
+      }),
+    );
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway service entrypoint does not match the current install."),

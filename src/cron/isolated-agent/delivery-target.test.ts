@@ -1,8 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 vi.mock("../../config/sessions.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
@@ -48,46 +45,6 @@ afterAll(() => {
     vi.doUnmock(id);
   }
   vi.resetModules();
-});
-
-function createStubOutbound(label: string): ChannelOutboundAdapter {
-  return {
-    deliveryMode: "gateway",
-    resolveTarget: ({ to }) => {
-      const trimmed = typeof to === "string" ? to.trim() : "";
-      return trimmed
-        ? { ok: true, to: trimmed }
-        : { ok: false, error: new Error(`${label} requires target`) };
-    },
-  };
-}
-
-beforeEach(() => {
-  resetPluginRuntimeStateForTest();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        plugin: createOutboundTestPlugin({
-          id: "telegram",
-          outbound: createStubOutbound("Telegram"),
-        }),
-        source: "test",
-      },
-      {
-        pluginId: "whatsapp",
-        plugin: createOutboundTestPlugin({
-          id: "whatsapp",
-          outbound: createStubOutbound("WhatsApp"),
-        }),
-        source: "test",
-      },
-    ]),
-  );
-});
-
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
 });
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {

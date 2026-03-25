@@ -1,7 +1,8 @@
+import fs from "node:fs";
 import path from "node:path";
-import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mjs";
+import { pathToFileURL } from "node:url";
 import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
-import { reportGeneratedOutputCli, writeGeneratedOutput } from "./lib/generated-output-utils.mjs";
+import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BY = "scripts/generate-bundled-plugin-metadata.mjs";
 const DEFAULT_OUTPUT_PATH = "src/plugins/bundled-plugin-metadata.generated.ts";
@@ -14,6 +15,14 @@ const CANONICAL_PACKAGE_ID_ALIASES = {
   "sglang-provider": "sglang",
   "vllm-provider": "vllm",
 };
+
+function readIfExists(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
 
 function rewriteEntryToBuiltPath(entry) {
   if (typeof entry !== "string" || entry.trim().length === 0) {
@@ -127,14 +136,30 @@ function formatTypeScriptModule(source, { outputPath }) {
 
 export function collectBundledPluginMetadata(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
+  const extensionsRoot = path.join(repoRoot, "extensions");
+  if (!fs.existsSync(extensionsRoot)) {
+    return [];
+  }
+
   const entries = [];
-  for (const source of collectBundledPluginSources({ repoRoot, requirePackageJson: true })) {
-    const manifest = normalizePluginManifest(source.manifest);
+  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+
+    const pluginDir = path.join(extensionsRoot, dirent.name);
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(manifestPath) || !fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    const manifest = normalizePluginManifest(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
     if (!manifest) {
       continue;
     }
 
-    const packageJson = source.packageJson;
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     const packageManifest = normalizePackageManifest(packageJson);
     const extensions = Array.isArray(packageManifest?.extensions)
       ? packageManifest.extensions.filter((entry) => typeof entry === "string" && entry.trim())
@@ -158,7 +183,7 @@ export function collectBundledPluginMetadata(params = {}) {
         : undefined;
 
     entries.push({
-      dirName: source.dirName,
+      dirName: dirent.name,
       idHint: deriveIdHint({
         filePath: sourceEntry,
         packageName: typeof packageJson.name === "string" ? packageJson.name : undefined,
@@ -200,16 +225,39 @@ export function writeBundledPluginMetadataModule(params = {}) {
     renderBundledPluginMetadataModule(collectBundledPluginMetadata({ repoRoot })),
     { outputPath },
   );
-  return writeGeneratedOutput({
-    repoRoot,
-    outputPath: params.outputPath ?? DEFAULT_OUTPUT_PATH,
-    next,
-    check: params.check,
-  });
+  const current = readIfExists(outputPath);
+  const changed = current !== next;
+
+  if (params.check) {
+    return {
+      changed,
+      wrote: false,
+      outputPath,
+    };
+  }
+
+  return {
+    changed,
+    wrote: writeTextFileIfChanged(outputPath, next),
+    outputPath,
+  };
 }
 
-reportGeneratedOutputCli({
-  importMetaUrl: import.meta.url,
-  label: "bundled-plugin-metadata",
-  run: ({ check }) => writeBundledPluginMetadataModule({ check }),
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const result = writeBundledPluginMetadataModule({
+    check: process.argv.includes("--check"),
+  });
+
+  if (result.changed) {
+    if (process.argv.includes("--check")) {
+      console.error(
+        `[bundled-plugin-metadata] stale generated output at ${path.relative(process.cwd(), result.outputPath)}`,
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(
+        `[bundled-plugin-metadata] wrote ${path.relative(process.cwd(), result.outputPath)}`,
+      );
+    }
+  }
+}

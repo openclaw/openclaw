@@ -1,7 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderRootHelpText } from "../src/cli/program/root-help.ts";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -78,7 +77,6 @@ function readBundledChannelCatalogIds(): string[] {
 
 const catalog = readBundledChannelCatalogIds();
 const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...catalog]);
-const rootHelpText = renderRootHelpText();
 
 mkdirSync(distDir, { recursive: true });
 writeFileSync(
@@ -87,7 +85,6 @@ writeFileSync(
     {
       generatedBy: "scripts/write-cli-startup-metadata.ts",
       channelOptions,
-      rootHelpText,
     },
     null,
     2,

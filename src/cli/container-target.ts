@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import {
+  consumeRootOptionToken,
+  FLAG_TERMINATOR,
+  isValueToken,
+} from "../infra/cli-root-options.js";
 import { getPrimaryCommand } from "./argv.js";
-import { takeCliRootOptionValue } from "./root-option-value.js";
 
 type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
@@ -24,6 +27,23 @@ type ContainerRuntimeExec = {
   argsPrefix: string[];
 };
 
+function takeValue(
+  raw: string,
+  next: string | undefined,
+): {
+  value: string | null;
+  consumedNext: boolean;
+} {
+  if (raw.includes("=")) {
+    const [, value] = raw.split("=", 2);
+    const trimmed = (value ?? "").trim();
+    return { value: trimmed || null, consumedNext: false };
+  }
+  const consumedNext = isValueToken(next);
+  const trimmed = consumedNext ? next!.trim() : "";
+  return { value: trimmed || null, consumedNext };
+}
+
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   if (argv.length < 2) {
     return { ok: true, container: null, argv };
@@ -45,7 +65,7 @@ export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
 
     if (arg === "--container" || arg.startsWith("--container=")) {
       const next = args[i + 1];
-      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      const { value, consumedNext } = takeValue(arg, next);
       if (consumedNext) {
         i += 1;
       }
@@ -100,8 +120,8 @@ function isContainerRunning(params: {
   return result.status === 0 && result.stdout.trim() === "true";
 }
 
-function candidateContainerRuntimes(): ContainerRuntimeExec[] {
-  return [
+function candidateContainerRuntimes(env: NodeJS.ProcessEnv): ContainerRuntimeExec[] {
+  const candidates: ContainerRuntimeExec[] = [
     {
       runtime: "podman",
       command: "podman",
@@ -113,6 +133,24 @@ function candidateContainerRuntimes(): ContainerRuntimeExec[] {
       argsPrefix: [],
     },
   ];
+  const podmanUser = env.OPENCLAW_PODMAN_USER?.trim() || "openclaw";
+  const currentUser = env.USER?.trim() || env.LOGNAME?.trim() || "";
+  if (podmanUser && currentUser && podmanUser !== currentUser) {
+    candidates.push({
+      runtime: "podman",
+      command: "sudo",
+      argsPrefix: ["-u", podmanUser, "podman"],
+    });
+  }
+  return candidates;
+}
+
+function describeContainerRuntimeExec(exec: ContainerRuntimeExec): string {
+  if (exec.command === "sudo") {
+    const podmanUser = exec.argsPrefix[1];
+    return `podman (via sudo -u ${podmanUser})`;
+  }
+  return exec.runtime;
 }
 
 function resolveRunningContainer(params: {
@@ -121,7 +159,7 @@ function resolveRunningContainer(params: {
   deps: Pick<ContainerTargetDeps, "spawnSync">;
 }): (ContainerRuntimeExec & { containerName: string }) | null {
   const matches: Array<ContainerRuntimeExec & { containerName: string }> = [];
-  const candidates = candidateContainerRuntimes();
+  const candidates = candidateContainerRuntimes(params.env);
   for (const exec of candidates) {
     if (
       isContainerRunning({
@@ -140,7 +178,7 @@ function resolveRunningContainer(params: {
     return null;
   }
   if (matches.length > 1) {
-    const runtimes = matches.map((match) => match.runtime).join(", ");
+    const runtimes = matches.map(describeContainerRuntimeExec).join(", ");
     throw new Error(
       `Container "${params.containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
     );
@@ -172,19 +210,13 @@ function buildContainerExecArgs(params: {
 }
 
 function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const next = { ...env };
-  // Container-targeted CLI invocations should use the container's own profile
-  // and gateway auth/runtime state rather than inheriting host overrides.
-  delete next.OPENCLAW_PROFILE;
-  delete next.OPENCLAW_GATEWAY_PORT;
-  delete next.OPENCLAW_GATEWAY_URL;
-  delete next.OPENCLAW_GATEWAY_TOKEN;
-  delete next.OPENCLAW_GATEWAY_PASSWORD;
-  // The child CLI should render container-aware follow-up commands via
-  // OPENCLAW_CONTAINER_HINT, but it should not treat itself as still
-  // container-targeted for validation/routing.
-  next.OPENCLAW_CONTAINER = "";
-  return next;
+  return {
+    ...env,
+    // The child CLI should render container-aware follow-up commands via
+    // OPENCLAW_CONTAINER_HINT, but it should not treat itself as still
+    // container-targeted for validation/routing.
+    OPENCLAW_CONTAINER: "",
+  };
 }
 
 function isBlockedContainerCommand(argv: string[]): boolean {

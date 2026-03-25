@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../../../../src/auto-reply/tokens.js";
 import { redactIdentifier } from "../../../../src/logging/redact-identifier.js";
@@ -160,12 +160,8 @@ describe("runWebHeartbeatOnce", () => {
     ...overrides,
   });
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
-    ({ runWebHeartbeatOnce } = await import("./heartbeat-runner.js"));
-  });
-
-  beforeEach(() => {
     state.visibility = { showAlerts: true, showOk: true, useIndicator: false };
     state.store = { k: { updatedAt: 999, sessionId: "s1" } };
     state.snapshot = {
@@ -186,6 +182,7 @@ describe("runWebHeartbeatOnce", () => {
     sender = senderMock as unknown as typeof sendMessageWhatsApp;
     replyResolverMock = vi.fn(async () => undefined);
     replyResolver = replyResolverMock as unknown as typeof getReplyFromConfig;
+    ({ runWebHeartbeatOnce } = await import("./heartbeat-runner.js"));
   });
 
   it("supports manual override body dry-run without sending", async () => {

@@ -18,7 +18,6 @@ describe("doctor command", () => {
     vi.resetModules();
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
-    vi.clearAllMocks();
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {

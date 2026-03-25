@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readAllowFromStoreMock,
   sendMessageMock,
@@ -9,11 +9,6 @@ import {
 
 setupAccessControlTestHarness();
 let checkInboundAccessControl: typeof import("./access-control.js").checkInboundAccessControl;
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ checkInboundAccessControl } = await import("./access-control.js"));
-});
 
 async function checkUnauthorizedWorkDmSender() {
   return checkInboundAccessControl({
@@ -36,6 +31,11 @@ function expectSilentlyBlocked(result: { allowed: boolean }) {
 }
 
 describe("checkInboundAccessControl pairing grace", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ checkInboundAccessControl } = await import("./access-control.js"));
+  });
+
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
     return await checkInboundAccessControl({
@@ -72,6 +72,11 @@ describe("checkInboundAccessControl pairing grace", () => {
 });
 
 describe("WhatsApp dmPolicy precedence", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ checkInboundAccessControl } = await import("./access-control.js"));
+  });
+
   it("uses account-level dmPolicy instead of channel-level (#8736)", async () => {
     // Channel-level says "pairing" but the account-level says "allowlist".
     // The account-level override should take precedence, so an unauthorized

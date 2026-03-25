@@ -1,83 +1,189 @@
-import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createFeishuLifecycleConfig,
-  createFeishuLifecycleReplyDispatcher,
-  createFeishuTextMessageEvent,
-  createResolvedFeishuLifecycleAccount,
-  expectFeishuReplyPipelineDedupedAcrossReplay,
-  expectFeishuReplyPipelineDedupedAfterPostSendFailure,
-  expectFeishuReplyDispatcherSentFinalReplyOnce,
-  installFeishuLifecycleReplyRuntime,
-  mockFeishuReplyOnceDispatch,
-  restoreFeishuLifecycleStateDir,
-  setFeishuLifecycleStateDir,
-  setupFeishuLifecycleHandler,
-} from "../../../test/helpers/extensions/feishu-lifecycle.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { monitorSingleAccount } from "./monitor.account.js";
+import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-const {
-  createEventDispatcherMock,
-  createFeishuReplyDispatcherMock,
-  dispatchReplyFromConfigMock,
-  finalizeInboundContextMock,
-  resolveAgentRouteMock,
-  resolveBoundConversationMock,
-  touchBindingMock,
-  withReplyDispatcherMock,
-} = getFeishuLifecycleTestMocks();
+const createEventDispatcherMock = vi.hoisted(() => vi.fn());
+const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
+const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
+const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const createFeishuReplyDispatcherMock = vi.hoisted(() => vi.fn());
+const resolveBoundConversationMock = vi.hoisted(() =>
+  vi.fn<
+    () => {
+      bindingId: string;
+      targetSessionKey: string;
+    } | null
+  >(() => null),
+);
+const touchBindingMock = vi.hoisted(() => vi.fn());
+const resolveAgentRouteMock = vi.hoisted(() => vi.fn());
+const dispatchReplyFromConfigMock = vi.hoisted(() => vi.fn());
+const withReplyDispatcherMock = vi.hoisted(() => vi.fn());
+const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx) => ctx));
+const getMessageFeishuMock = vi.hoisted(() => vi.fn(async () => null));
+const listFeishuThreadMessagesMock = vi.hoisted(() => vi.fn(async () => []));
+const sendMessageFeishuMock = vi.hoisted(() =>
+  vi.fn(async () => ({ messageId: "om_sent", chatId: "oc_group_1" })),
+);
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 let lastRuntime: RuntimeEnv | null = null;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-const lifecycleConfig = createFeishuLifecycleConfig({
-  accountId: "acct-lifecycle",
-  appId: "cli_test",
-  appSecret: "secret_test",
-  accountConfig: {
-    groupPolicy: "open",
-    groups: {
-      oc_group_1: {
-        requireMention: false,
-        groupSessionScope: "group_topic_sender",
-        replyInThread: "enabled",
-      },
-    },
-  },
-}) as ClawdbotConfig;
 
-const lifecycleAccount = createResolvedFeishuLifecycleAccount({
-  accountId: "acct-lifecycle",
-  appId: "cli_test",
-  appSecret: "secret_test",
-  config: {
-    groupPolicy: "open",
-    groups: {
-      oc_group_1: {
-        requireMention: false,
-        groupSessionScope: "group_topic_sender",
-        replyInThread: "enabled",
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    createEventDispatcher: createEventDispatcherMock,
+  };
+});
+
+vi.mock("./monitor.transport.js", () => ({
+  monitorWebSocket: monitorWebSocketMock,
+  monitorWebhook: monitorWebhookMock,
+}));
+
+vi.mock("./thread-bindings.js", () => ({
+  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
+}));
+
+vi.mock("./reply-dispatcher.js", () => ({
+  createFeishuReplyDispatcher: createFeishuReplyDispatcherMock,
+}));
+
+vi.mock("./send.js", () => ({
+  getMessageFeishu: getMessageFeishuMock,
+  listFeishuThreadMessages: listFeishuThreadMessagesMock,
+  sendMessageFeishu: sendMessageFeishuMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+  return {
+    ...actual,
+    getSessionBindingService: () => ({
+      resolveByConversation: resolveBoundConversationMock,
+      touch: touchBindingMock,
+    }),
+  };
+});
+
+vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    resolveByConversation: resolveBoundConversationMock,
+    touch: touchBindingMock,
+  }),
+}));
+
+function createLifecycleConfig(): ClawdbotConfig {
+  return {
+    messages: {
+      inbound: {
+        debounceMs: 0,
+        byChannel: {
+          feishu: 0,
+        },
       },
     },
-  },
-}) as ResolvedFeishuAccount;
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: {
+          "acct-lifecycle": {
+            enabled: true,
+            appId: "cli_test",
+            appSecret: "secret_test", // pragma: allowlist secret
+            connectionMode: "websocket",
+            groupPolicy: "open",
+            requireMention: false,
+            resolveSenderNames: false,
+            groups: {
+              oc_group_1: {
+                requireMention: false,
+                groupSessionScope: "group_topic_sender",
+                replyInThread: "enabled",
+              },
+            },
+          },
+        },
+      },
+    },
+  } as ClawdbotConfig;
+}
+
+function createLifecycleAccount(): ResolvedFeishuAccount {
+  return {
+    accountId: "acct-lifecycle",
+    selectionSource: "explicit",
+    enabled: true,
+    configured: true,
+    appId: "cli_test",
+    appSecret: "secret_test", // pragma: allowlist secret
+    domain: "feishu",
+    config: {
+      enabled: true,
+      connectionMode: "websocket",
+      groupPolicy: "open",
+      requireMention: false,
+      resolveSenderNames: false,
+      groups: {
+        oc_group_1: {
+          requireMention: false,
+          groupSessionScope: "group_topic_sender",
+          replyInThread: "enabled",
+        },
+      },
+    },
+  } as unknown as ResolvedFeishuAccount;
+}
+
+function createTextEvent(messageId: string) {
+  return {
+    sender: {
+      sender_id: { open_id: "ou_sender_1" },
+      sender_type: "user",
+    },
+    message: {
+      message_id: messageId,
+      root_id: "om_root_topic_1",
+      thread_id: "omt_topic_1",
+      chat_id: "oc_group_1",
+      chat_type: "group" as const,
+      message_type: "text",
+      content: JSON.stringify({ text: "hello from topic" }),
+      create_time: "1710000000000",
+    },
+  };
+}
 
 async function setupLifecycleMonitor() {
-  lastRuntime = createRuntimeEnv();
-  return setupFeishuLifecycleHandler({
-    createEventDispatcherMock,
-    onRegister: (registered) => {
-      handlers = registered;
-    },
-    runtime: lastRuntime,
-    cfg: lifecycleConfig,
-    account: lifecycleAccount,
-    handlerKey: "im.message.receive_v1",
-    missingHandlerMessage: "missing im.message.receive_v1 handler",
+  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+    handlers = registered;
   });
+  createEventDispatcherMock.mockReturnValue({ register });
+
+  lastRuntime = createRuntimeEnv();
+
+  await monitorSingleAccount({
+    cfg: createLifecycleConfig(),
+    account: createLifecycleAccount(),
+    runtime: lastRuntime,
+    botOpenIdSource: {
+      kind: "prefetched",
+      botOpenId: "ou_bot_1",
+      botName: "Bot",
+    },
+  });
+
+  const onMessage = handlers["im.message.receive_v1"];
+  if (!onMessage) {
+    throw new Error("missing im.message.receive_v1 handler");
+  }
+  return onMessage;
 }
 
 describe("Feishu reply-once lifecycle", () => {
@@ -86,9 +192,22 @@ describe("Feishu reply-once lifecycle", () => {
     vi.clearAllMocks();
     handlers = {};
     lastRuntime = null;
-    setFeishuLifecycleStateDir("openclaw-feishu-lifecycle");
+    process.env.OPENCLAW_STATE_DIR = `/tmp/openclaw-feishu-lifecycle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-    createFeishuReplyDispatcherMock.mockReturnValue(createFeishuLifecycleReplyDispatcher());
+    const dispatcher = {
+      sendToolResult: vi.fn(() => false),
+      sendBlockReply: vi.fn(() => false),
+      sendFinalReply: vi.fn(async () => true),
+      waitForIdle: vi.fn(async () => {}),
+      getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      markComplete: vi.fn(),
+    };
+
+    createFeishuReplyDispatcherMock.mockReturnValue({
+      dispatcher,
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+    });
 
     resolveBoundConversationMock.mockReturnValue({
       bindingId: "binding-1",
@@ -104,42 +223,94 @@ describe("Feishu reply-once lifecycle", () => {
       matchedBy: "default",
     });
 
-    mockFeishuReplyOnceDispatch({
-      dispatchReplyFromConfigMock,
-      replyText: "reply once",
+    dispatchReplyFromConfigMock.mockImplementation(async ({ dispatcher }) => {
+      await dispatcher.sendFinalReply({ text: "reply once" });
+      return {
+        queuedFinal: false,
+        counts: { final: 1 },
+      };
     });
 
     withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
 
-    installFeishuLifecycleReplyRuntime({
-      resolveAgentRouteMock,
-      finalizeInboundContextMock,
-      dispatchReplyFromConfigMock,
-      withReplyDispatcherMock,
-      storePath: "/tmp/feishu-lifecycle-sessions.json",
-    });
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        channel: {
+          debounce: {
+            resolveInboundDebounceMs: vi.fn(() => 0),
+            createInboundDebouncer: <T>(params: {
+              onFlush?: (items: T[]) => Promise<void>;
+              onError?: (err: unknown, items: T[]) => void;
+            }) => ({
+              enqueue: async (item: T) => {
+                try {
+                  await params.onFlush?.([item]);
+                } catch (err) {
+                  params.onError?.(err, [item]);
+                }
+              },
+              flushKey: async () => {},
+            }),
+          },
+          text: {
+            hasControlCommand: vi.fn(() => false),
+          },
+          routing: {
+            resolveAgentRoute:
+              resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: vi.fn(() => ({})),
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext:
+              finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
+            dispatchReplyFromConfig:
+              dispatchReplyFromConfigMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
+            withReplyDispatcher:
+              withReplyDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+          },
+          commands: {
+            shouldComputeCommandAuthorized: vi.fn(() => false),
+            resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          },
+          session: {
+            readSessionUpdatedAt: vi.fn(),
+            resolveStorePath: vi.fn(() => "/tmp/feishu-lifecycle-sessions.json"),
+          },
+          pairing: {
+            readAllowFromStore: vi.fn().mockResolvedValue([]),
+            upsertPairingRequest: vi.fn(),
+            buildPairingReply: vi.fn(),
+          },
+        },
+        media: {
+          detectMime: vi.fn(async () => "text/plain"),
+        },
+      }) as unknown as PluginRuntime,
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+      return;
+    }
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
   });
 
   it("routes a topic-bound inbound event and emits one reply across duplicate replay", async () => {
     const onMessage = await setupLifecycleMonitor();
-    const event = createFeishuTextMessageEvent({
-      messageId: "om_lifecycle_once",
-      chatId: "oc_group_1",
-      rootId: "om_root_topic_1",
-      threadId: "omt_topic_1",
-      text: "hello from topic",
-    });
+    const event = createTextEvent("om_lifecycle_once");
 
-    await expectFeishuReplyPipelineDedupedAcrossReplay({
-      handler: onMessage,
-      event,
-      dispatchReplyFromConfigMock,
-      createFeishuReplyDispatcherMock,
+    await onMessage(event);
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    });
+    await onMessage(event);
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(createFeishuReplyDispatcherMock).toHaveBeenCalledTimes(1);
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();
@@ -163,33 +334,38 @@ describe("Feishu reply-once lifecycle", () => {
       }),
     );
     expect(touchBindingMock).toHaveBeenCalledWith("binding-1");
-    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
+
+    const dispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
+      sendFinalReply: ReturnType<typeof vi.fn>;
+    };
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
   it("does not duplicate delivery when the first attempt fails after sending the reply", async () => {
     const onMessage = await setupLifecycleMonitor();
-    const event = createFeishuTextMessageEvent({
-      messageId: "om_lifecycle_retry",
-      chatId: "oc_group_1",
-      rootId: "om_root_topic_1",
-      threadId: "omt_topic_1",
-      text: "hello from topic",
-    });
+    const event = createTextEvent("om_lifecycle_retry");
 
     dispatchReplyFromConfigMock.mockImplementationOnce(async ({ dispatcher }) => {
       await dispatcher.sendFinalReply({ text: "reply once" });
       throw new Error("post-send failure");
     });
 
-    await expectFeishuReplyPipelineDedupedAfterPostSendFailure({
-      handler: onMessage,
-      event,
-      dispatchReplyFromConfigMock,
-      runtimeErrorMock: lastRuntime?.error as ReturnType<typeof vi.fn>,
+    await onMessage(event);
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
+    });
+    await onMessage(event);
+    await vi.waitFor(() => {
+      expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+      expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     });
 
     expect(lastRuntime?.error).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
+    const dispatcher = createFeishuReplyDispatcherMock.mock.results[0]?.value.dispatcher as {
+      sendFinalReply: ReturnType<typeof vi.fn>;
+    };
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 });

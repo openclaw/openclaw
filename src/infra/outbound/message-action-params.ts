@@ -10,27 +10,6 @@ import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boo
 
 export const readBooleanParam = readBooleanParamShared;
 
-const SANDBOX_MEDIA_PARAM_KEYS = ["media", "path", "filePath", "mediaUrl", "fileUrl"] as const;
-
-function readMediaParam(
-  args: Record<string, unknown>,
-  key: (typeof SANDBOX_MEDIA_PARAM_KEYS)[number],
-): string | undefined {
-  return readStringParam(args, key, { trim: false });
-}
-
-function readAttachmentMediaHint(args: Record<string, unknown>): string | undefined {
-  return readMediaParam(args, "media") ?? readMediaParam(args, "mediaUrl");
-}
-
-function readAttachmentFileHint(args: Record<string, unknown>): string | undefined {
-  return (
-    readMediaParam(args, "path") ??
-    readMediaParam(args, "filePath") ??
-    readMediaParam(args, "fileUrl")
-  );
-}
-
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -211,8 +190,9 @@ export async function normalizeSandboxMediaParams(params: {
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
-  for (const key of SANDBOX_MEDIA_PARAM_KEYS) {
-    const raw = readMediaParam(params.args, key);
+  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  for (const key of mediaKeys) {
+    const raw = readStringParam(params.args, key, { trim: false });
     if (!raw) {
       continue;
     }
@@ -262,8 +242,10 @@ async function hydrateAttachmentActionPayload(params: {
   allowMessageCaptionFallback?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const mediaHint = readAttachmentMediaHint(params.args);
-  const fileHint = readAttachmentFileHint(params.args);
+  const mediaHint = readStringParam(params.args, "media", { trim: false });
+  const fileHint =
+    readStringParam(params.args, "path", { trim: false }) ??
+    readStringParam(params.args, "filePath", { trim: false });
   const contentTypeParam =
     readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
 

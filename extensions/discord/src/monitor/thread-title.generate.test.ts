@@ -1,18 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
-  completeWithPreparedSimpleCompletionModelMock: vi.fn(),
+  completeMock: vi.fn(),
   prepareSimpleCompletionModelForAgentMock: vi.fn(),
   extractAssistantTextMock: vi.fn(),
+}));
+
+vi.mock("@mariozechner/pi-ai", () => ({
+  complete: hoisted.completeMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
   return {
     ...actual,
-    completeWithPreparedSimpleCompletionModel:
-      hoisted.completeWithPreparedSimpleCompletionModelMock,
     prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgentMock,
     extractAssistantText: hoisted.extractAssistantTextMock,
   };
@@ -20,12 +22,9 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
 
 let generateThreadTitle: typeof import("./thread-title.js").generateThreadTitle;
 
-beforeAll(async () => {
-  ({ generateThreadTitle } = await import("./thread-title.js"));
-});
-
-beforeEach(() => {
-  hoisted.completeWithPreparedSimpleCompletionModelMock.mockReset();
+beforeEach(async () => {
+  vi.resetModules();
+  hoisted.completeMock.mockReset();
   hoisted.prepareSimpleCompletionModelForAgentMock.mockReset();
   hoisted.extractAssistantTextMock.mockReset();
 
@@ -45,8 +44,9 @@ beforeEach(() => {
       mode: "api-key",
     },
   });
-  hoisted.completeWithPreparedSimpleCompletionModelMock.mockResolvedValue({});
+  hoisted.completeMock.mockResolvedValue({});
   hoisted.extractAssistantTextMock.mockReturnValue("Generated title");
+  ({ generateThreadTitle } = await import("./thread-title.js"));
 });
 
 describe("generateThreadTitle", () => {
@@ -118,7 +118,7 @@ describe("generateThreadTitle", () => {
     });
 
     expect(result).toBeNull();
-    expect(hoisted.completeWithPreparedSimpleCompletionModelMock).not.toHaveBeenCalled();
+    expect(hoisted.completeMock).not.toHaveBeenCalled();
   });
 
   it("returns null when shared completion prep fails", async () => {
@@ -138,7 +138,7 @@ describe("generateThreadTitle", () => {
     });
 
     expect(result).toBeNull();
-    expect(hoisted.completeWithPreparedSimpleCompletionModelMock).not.toHaveBeenCalled();
+    expect(hoisted.completeMock).not.toHaveBeenCalled();
   });
 
   it("builds contextual prompt and forwards completion options", async () => {
@@ -151,10 +151,8 @@ describe("generateThreadTitle", () => {
     });
 
     expect(result).toBe("Generated title");
-    expect(hoisted.completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    expect(
-      hoisted.completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context,
-    ).toEqual(
+    expect(hoisted.completeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.completeMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         systemPrompt:
           "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.",
@@ -166,13 +164,10 @@ describe("generateThreadTitle", () => {
         ],
       }),
     );
-    expect(
-      hoisted.completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.context
-        ?.messages?.[0]?.content,
-    ).toContain("Channel description: Deploy updates and incident notes");
-    expect(
-      hoisted.completeWithPreparedSimpleCompletionModelMock.mock.calls[0]?.[0]?.options,
-    ).toEqual(
+    expect(hoisted.completeMock.mock.calls[0]?.[1]?.messages?.[0]?.content).toContain(
+      "Channel description: Deploy updates and incident notes",
+    );
+    expect(hoisted.completeMock.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({
         maxTokens: 24,
         temperature: 0.2,
@@ -181,9 +176,7 @@ describe("generateThreadTitle", () => {
   });
 
   it("returns null when completion throws", async () => {
-    hoisted.completeWithPreparedSimpleCompletionModelMock.mockRejectedValueOnce(
-      new Error("network timeout"),
-    );
+    hoisted.completeMock.mockRejectedValueOnce(new Error("network timeout"));
 
     const result = await generateThreadTitle({
       cfg: {} as OpenClawConfig,

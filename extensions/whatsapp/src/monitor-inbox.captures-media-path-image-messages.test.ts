@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_ACCOUNT_ID,
   getAuthDir,
-  getMonitorWebInbox,
   getSock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
@@ -27,9 +26,10 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     inboundLoggerInfoMock.mockReset();
-    monitorWebInbox = getMonitorWebInbox();
+    ({ monitorWebInbox } = await import("./inbound.js"));
   });
 
   async function openMonitor(onMessage = vi.fn()) {

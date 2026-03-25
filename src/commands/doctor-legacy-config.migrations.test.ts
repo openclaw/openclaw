@@ -318,10 +318,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       provider: "default",
       id: "GEMINI_API_KEY",
     });
-    expect(res.config.models?.providers?.google?.baseUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
-    );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
@@ -345,10 +341,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.models?.providers?.google?.apiKey).toBe("env-gemini-key");
-    expect(res.config.models?.providers?.google?.baseUrl).toBe(
-      "https://generativelanguage.googleapis.com/v1beta",
-    );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );

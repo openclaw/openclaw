@@ -1,5 +1,5 @@
 import { join, parse } from "node:path";
-import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../src/infra/wsl.js", () => ({
   isWSL2Sync: () => false,
@@ -38,11 +38,13 @@ describe("extractGeminiCliCredentials", () => {
   `;
 
   let originalPath: string | undefined;
-  let extractGeminiCliCredentials: typeof import("./oauth.credentials.js").extractGeminiCliCredentials;
-  let clearCredentialsCache: typeof import("./oauth.credentials.js").clearCredentialsCache;
-  let setOAuthCredentialsFsForTest: typeof import("./oauth.credentials.js").setOAuthCredentialsFsForTest;
+
+  async function loadCredentialsModule() {
+    return await import("./oauth.credentials.js");
+  }
 
   async function installMockFs() {
+    const { setOAuthCredentialsFsForTest } = await loadCredentialsModule();
     setOAuthCredentialsFsForTest({
       existsSync: (...args) => mockExistsSync(...args),
       readFileSync: (...args) => mockReadFileSync(...args),
@@ -154,11 +156,6 @@ describe("extractGeminiCliCredentials", () => {
     });
   }
 
-  beforeAll(async () => {
-    ({ extractGeminiCliCredentials, clearCredentialsCache, setOAuthCredentialsFsForTest } =
-      await import("./oauth.credentials.js"));
-  });
-
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
@@ -167,6 +164,7 @@ describe("extractGeminiCliCredentials", () => {
 
   afterEach(async () => {
     process.env.PATH = originalPath;
+    const { setOAuthCredentialsFsForTest } = await loadCredentialsModule();
     setOAuthCredentialsFsForTest();
   });
 
@@ -174,6 +172,7 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -181,6 +180,7 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials from oauth2.js in known path", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
@@ -190,6 +190,7 @@ describe("extractGeminiCliCredentials", () => {
   it("extracts credentials when PATH entry is an npm global shim", async () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     const result = extractGeminiCliCredentials();
 
@@ -199,6 +200,7 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js cannot be found", async () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -206,6 +208,7 @@ describe("extractGeminiCliCredentials", () => {
   it("returns null when oauth2.js lacks credentials", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
@@ -213,6 +216,7 @@ describe("extractGeminiCliCredentials", () => {
   it("caches credentials after first extraction", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await loadCredentialsModule();
     clearCredentialsCache();
 
     // First call

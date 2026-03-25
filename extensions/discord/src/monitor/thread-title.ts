@@ -1,5 +1,5 @@
+import { complete } from "@mariozechner/pi-ai";
 import {
-  completeWithPreparedSimpleCompletionModel,
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -14,6 +14,8 @@ const DISCORD_THREAD_TITLE_MAX_TOKENS = 24;
 const DISCORD_THREAD_TITLE_TEMPERATURE = 0.2;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
   "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
+
+type ThreadTitleModel = Parameters<typeof complete>[0];
 
 export async function generateThreadTitle(params: {
   cfg: OpenClawConfig;
@@ -53,7 +55,7 @@ export async function generateThreadTitle(params: {
     const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
     const response = await completeThreadTitle({
       model: prepared.model,
-      auth: prepared.auth,
+      apiKey: prepared.auth.apiKey,
       userMessage,
       timeoutMs,
     });
@@ -66,18 +68,17 @@ export async function generateThreadTitle(params: {
 }
 
 async function completeThreadTitle(params: {
-  model: Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["model"];
-  auth: Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["auth"];
+  model: ThreadTitleModel;
+  apiKey: string | undefined;
   userMessage: string;
   timeoutMs: number;
 }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), params.timeoutMs);
   try {
-    return await completeWithPreparedSimpleCompletionModel({
-      model: params.model,
-      auth: params.auth,
-      context: {
+    return await complete(
+      params.model,
+      {
         systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
         messages: [
           {
@@ -87,12 +88,13 @@ async function completeThreadTitle(params: {
           },
         ],
       },
-      options: {
+      {
+        apiKey: params.apiKey,
         maxTokens: DISCORD_THREAD_TITLE_MAX_TOKENS,
         temperature: DISCORD_THREAD_TITLE_TEMPERATURE,
         signal: controller.signal,
       },
-    });
+    );
   } finally {
     clearTimeout(timer);
   }

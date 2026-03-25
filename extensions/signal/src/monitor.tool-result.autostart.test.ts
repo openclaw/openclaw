@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
-  createSignalToolResultConfig,
   createMockSignalDaemonHandle,
   config,
   getSignalToolResultTestMocks,
@@ -31,8 +30,27 @@ function createMonitorRuntime() {
   };
 }
 
+function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const base = config as OpenClawConfig;
+  const channels = (base.channels ?? {}) as Record<string, unknown>;
+  const signal = (channels.signal ?? {}) as Record<string, unknown>;
+  return {
+    ...base,
+    channels: {
+      ...channels,
+      signal: {
+        ...signal,
+        autoStart: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        ...overrides,
+      },
+    },
+  };
+}
+
 function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
-  setSignalToolResultTestConfig(createSignalToolResultConfig(overrides));
+  setSignalToolResultTestConfig(createSignalConfig(overrides));
 }
 
 function createAutoAbortController() {

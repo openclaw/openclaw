@@ -1,36 +1,28 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const originalFetch = globalThis.fetch;
 
 let chromeModule: typeof import("./chrome.js");
 let InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
 let pwAiModule: typeof import("./pw-ai-module.js");
-let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
 let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
 let createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
 let createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
 let createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
 let makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
 
-beforeAll(async () => {
+beforeEach(async () => {
   vi.resetModules();
   await import("./server-context.chrome-test-harness.js");
   chromeModule = await import("./chrome.js");
   ({ InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js"));
   pwAiModule = await import("./pw-ai-module.js");
-  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
   ({ createBrowserRouteContext } = await import("./server-context.js"));
   ({ createJsonListFetchMock, createRemoteRouteHarness, createSequentialPageLister, makeState } =
     await import("./server-context.remote-tab-ops.harness.js"));
 });
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = originalFetch;
-});
-
-afterEach(async () => {
-  await closePlaywrightBrowserConnection().catch(() => {});
+afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });

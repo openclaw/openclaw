@@ -7,7 +7,6 @@ const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
-  resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
 
 vi.mock("./client.js", () => ({

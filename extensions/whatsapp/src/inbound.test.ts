@@ -6,6 +6,7 @@ let extractText: typeof import("./inbound.js").extractText;
 
 describe("web inbound helpers", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ extractLocationData, extractMediaPlaceholder, extractText } = await import("./inbound.js"));
   });
 

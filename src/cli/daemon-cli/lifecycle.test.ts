@@ -1,5 +1,4 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
 
 type RestartHealthSnapshot = {
   healthy: boolean;
@@ -99,7 +98,6 @@ vi.mock("./lifecycle-core.js", () => ({
 describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
-  let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
@@ -129,8 +127,6 @@ describe("runDaemonRestart health checks", () => {
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_CONTAINER_HINT", "OPENCLAW_PROFILE"]);
-    delete process.env.OPENCLAW_CONTAINER_HINT;
     service.readCommand.mockReset();
     service.restart.mockReset();
     runServiceRestart.mockReset();
@@ -183,7 +179,6 @@ describe("runDaemonRestart health checks", () => {
   });
 
   afterEach(() => {
-    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
@@ -231,7 +226,6 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails restart when gateway remains unhealthy", async () => {
-    const { formatCliCommand } = await import("../command-format.js");
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [],
@@ -242,10 +236,7 @@ describe("runDaemonRestart health checks", () => {
 
     await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
       message: "Gateway restart timed out after 60s waiting for health checks.",
-      hints: [
-        formatCliCommand("openclaw gateway status --deep"),
-        formatCliCommand("openclaw doctor"),
-      ],
+      hints: ["openclaw gateway status --deep", "openclaw doctor"],
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);

@@ -57,14 +57,14 @@ export async function listSpawnedSessionKeys(params: {
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit)
       ? Math.max(1, Math.floor(params.limit))
-      : undefined;
+      : 500;
   try {
     const list = await sessionsResolutionDeps.callGateway<{ sessions: Array<{ key?: unknown }> }>({
       method: "sessions.list",
       params: {
         includeGlobal: false,
         includeUnknown: false,
-        ...(limit !== undefined ? { limit } : {}),
+        limit,
         spawnedBy: params.requesterSessionKey,
       },
     });
@@ -86,20 +86,6 @@ export async function isRequesterSpawnedSessionVisible(params: {
 }): Promise<boolean> {
   if (params.requesterSessionKey === params.targetSessionKey) {
     return true;
-  }
-  try {
-    const resolved = await sessionsResolutionDeps.callGateway<{ key?: string }>({
-      method: "sessions.resolve",
-      params: {
-        key: params.targetSessionKey,
-        spawnedBy: params.requesterSessionKey,
-      },
-    });
-    if (typeof resolved?.key === "string" && resolved.key.trim() === params.targetSessionKey) {
-      return true;
-    }
-  } catch {
-    // Fall back to the spawned-session listing path below.
   }
   const keys = await listSpawnedSessionKeys({
     requesterSessionKey: params.requesterSessionKey,

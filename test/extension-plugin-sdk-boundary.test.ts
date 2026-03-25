@@ -3,7 +3,6 @@ import {
   collectExtensionPluginSdkBoundaryInventory,
   main,
 } from "../scripts/check-extension-plugin-sdk-boundary.mjs";
-import { createCapturedIo } from "./helpers/captured-io.js";
 
 const srcOutsideInventoryPromise =
   collectExtensionPluginSdkBoundaryInventory("src-outside-plugin-sdk");
@@ -25,6 +24,27 @@ async function getJsonOutput(
     exitCode,
     stderr: captured.readStderr(),
     json: JSON.parse(captured.readStdout()),
+  };
+}
+
+function createCapturedIo() {
+  let stdout = "";
+  let stderr = "";
+  return {
+    io: {
+      stdout: {
+        write(chunk) {
+          stdout += String(chunk);
+        },
+      },
+      stderr: {
+        write(chunk) {
+          stderr += String(chunk);
+        },
+      },
+    },
+    readStdout: () => stdout,
+    readStderr: () => stderr,
   };
 }
 

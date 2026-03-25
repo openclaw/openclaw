@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
-import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 
 const readConfigFileSnapshot = vi.fn();
 const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
@@ -22,7 +21,7 @@ describe("requireValidConfigSnapshot", () => {
     vi.clearAllMocks();
   });
 
-  function createValidSnapshot() {
+  it("returns config without emitting compatibility advice by default", async () => {
     readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
@@ -30,21 +29,19 @@ describe("requireValidConfigSnapshot", () => {
       issues: [],
     });
     buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
     ]);
-  }
-
-  function createRuntime() {
-    return {
+    const runtime = {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
-  }
-
-  it("returns config without emitting compatibility advice by default", async () => {
-    createValidSnapshot();
-    const runtime = createRuntime();
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime);
@@ -57,8 +54,26 @@ describe("requireValidConfigSnapshot", () => {
   });
 
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
-    createValidSnapshot();
-    const runtime = createRuntime();
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: { plugins: {} },
+      issues: [],
+    });
+    buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
@@ -81,7 +96,11 @@ describe("requireValidConfigSnapshot", () => {
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
-    const runtime = createRuntime();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
 
     const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as authModule from "../agents/model-auth.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
@@ -45,7 +45,8 @@ let GEMINI_EMBEDDING_2_MODELS: typeof import("./embeddings-gemini.js").GEMINI_EM
 let isGeminiEmbedding2Model: typeof import("./embeddings-gemini.js").isGeminiEmbedding2Model;
 let resolveGeminiOutputDimensionality: typeof import("./embeddings-gemini.js").resolveGeminiOutputDimensionality;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.useRealTimers();
   vi.doUnmock("undici");
   vi.resetModules();
   ({
@@ -57,11 +58,6 @@ beforeAll(async () => {
     isGeminiEmbedding2Model,
     resolveGeminiOutputDimensionality,
   } = await import("./embeddings-gemini.js"));
-});
-
-beforeEach(() => {
-  vi.useRealTimers();
-  vi.doUnmock("undici");
 });
 
 afterEach(() => {

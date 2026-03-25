@@ -33,8 +33,6 @@ export {
   getSandboxBackendManager,
   registerSandboxBackend,
   requireSandboxBackendFactory,
-  resolveWritableRenameTargets,
-  resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
   shellEscape,
   uploadDirectoryToSshTarget,
