@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildAnthropicVertexProvider,
@@ -20,6 +21,10 @@ import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  normalizeGoogleGenerativeAiBaseUrl,
+  shouldNormalizeGoogleGenerativeAiProviderConfig,
+} from "./google-generative-ai.js";
 import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
 export {
@@ -331,7 +336,12 @@ function normalizeProviderModels(
 }
 
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
-  return normalizeProviderModels(provider, normalizeGoogleModelId);
+  const modelNormalized = normalizeProviderModels(provider, normalizeGoogleModelId);
+  const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
+  if (normalizedBaseUrl !== modelNormalized.baseUrl) {
+    return { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl };
+  }
+  return modelNormalized;
 }
 
 function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
@@ -608,7 +618,7 @@ export function normalizeProviders(params: {
       }
     }
 
-    if (normalizedKey === "google" || normalizedKey === "google-vertex") {
+    if (shouldNormalizeGoogleGenerativeAiProviderConfig(normalizedKey, normalizedProvider)) {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
       if (googleNormalized !== normalizedProvider) {
         mutated = true;

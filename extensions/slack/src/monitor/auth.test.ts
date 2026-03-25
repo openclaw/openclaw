@@ -26,7 +26,6 @@ describe("resolveSlackEffectiveAllowFrom", () => {
   const prevTtl = process.env.OPENCLAW_SLACK_PAIRING_ALLOWFROM_CACHE_TTL_MS;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ clearSlackAllowFromCacheForTest, resolveSlackEffectiveAllowFrom } =
       await import("./auth.js"));
   });
