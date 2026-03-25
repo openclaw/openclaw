@@ -13,8 +13,11 @@ vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime,
+  writeRuntimeJson: (runtime: { log: (...args: unknown[]) => void }, value: unknown, space = 2) =>
+    runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
 const { registerSystemCli } = await import("./system-cli.js");

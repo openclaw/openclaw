@@ -134,4 +134,13 @@ describe("RateLimiter", () => {
     // user2 should still be allowed
     expect(limiter.check("user2")).toBe(true);
   });
+
+  it("caps tracked users to prevent unbounded growth", () => {
+    const limiter = new RateLimiter(1, 60, 3);
+    expect(limiter.check("user1")).toBe(true);
+    expect(limiter.check("user2")).toBe(true);
+    expect(limiter.check("user3")).toBe(true);
+    expect(limiter.check("user4")).toBe(true);
+    expect(limiter.size()).toBeLessThanOrEqual(3);
+  });
 });

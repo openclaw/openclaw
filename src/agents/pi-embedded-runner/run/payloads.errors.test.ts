@@ -40,6 +40,35 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
   };
 
+  function expectSinglePayloadSummary(
+    payloads: ReturnType<typeof buildPayloads>,
+    expected: { text: string; isError?: boolean },
+  ) {
+    expectSinglePayloadText(payloads, expected.text);
+    if (expected.isError === undefined) {
+      expect(payloads[0]?.isError).toBeUndefined();
+      return;
+    }
+    expect(payloads[0]?.isError).toBe(expected.isError);
+  }
+
+  function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
+    const payloads = buildPayloads(params);
+    expect(payloads).toHaveLength(0);
+  }
+
+  function expectNoSyntheticCompletionForSession(sessionKey: string) {
+    expectNoPayloads({
+      sessionKey,
+      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+  }
+
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
@@ -83,9 +112,22 @@ describe("buildEmbeddedRunPayloads", () => {
       model: "claude-3-5-sonnet",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"));
-    expect(payloads[0]?.isError).toBe(true);
+    expectSinglePayloadSummary(payloads, {
+      text: formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet"),
+      isError: true,
+    });
+  });
+
+  it("does not emit a synthetic billing error for successful turns with stale errorMessage", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: "insufficient credits for embedding model",
+        content: [{ type: "text", text: "Handle payment required errors in your API." }],
+      }),
+    });
+
+    expectSinglePayloadText(payloads, "Handle payment required errors in your API.");
   });
 
   it("suppresses raw error JSON even when errorMessage is missing", () => {
@@ -130,45 +172,23 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it("does not add synthetic completion text when tools run without final assistant text", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
       lastAssistant: makeStoppedAssistant(),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text for channel sessions", () => {
-    const payloads = buildPayloads({
-      sessionKey: "agent:main:discord:channel:c123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-
-    expect(payloads).toHaveLength(0);
+    expectNoSyntheticCompletionForSession("agent:main:discord:channel:c123");
   });
 
   it("does not add synthetic completion text for group sessions", () => {
-    const payloads = buildPayloads({
-      sessionKey: "agent:main:telegram:group:g123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-
-    expect(payloads).toHaveLength(0);
+    expectNoSyntheticCompletionForSession("agent:main:telegram:group:g123");
   });
 
   it("does not add synthetic completion text when messaging tool already delivered output", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       toolMetas: [{ toolName: "message_send", meta: "sent to #ops" }],
       didSendViaMessagingTool: true,
@@ -178,25 +198,19 @@ describe("buildEmbeddedRunPayloads", () => {
         content: [],
       }),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text when the run still has a tool error", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
       lastToolError: { toolName: "browser", error: "url required" },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("does not add synthetic completion text when no tools ran", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastAssistant: makeStoppedAssistant(),
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
@@ -241,52 +255,32 @@ describe("buildEmbeddedRunPayloads", () => {
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBeUndefined();
-    expect(payloads[0]?.text).toContain("recovered");
-  });
-
-  it("suppresses recoverable tool errors containing 'required' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "url required" },
+    expectSinglePayloadSummary(payloads, {
+      text: "Checked the page and recovered with final answer.",
     });
-
-    // Recoverable errors should not be sent to the user
-    expect(payloads).toHaveLength(0);
   });
 
-  it("suppresses recoverable tool errors containing 'missing' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "url missing" },
-    });
-
-    expect(payloads).toHaveLength(0);
-  });
-
-  it("suppresses recoverable tool errors containing 'invalid' for non-mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "invalid parameter: url" },
-    });
-
-    expect(payloads).toHaveLength(0);
-  });
+  it.each(["url required", "url missing", "invalid parameter: url"])(
+    "suppresses recoverable non-mutating tool error: %s",
+    (error) => {
+      expectNoPayloads({
+        lastToolError: { toolName: "browser", error },
+      });
+    },
+  );
 
   it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       config: { messages: { suppressToolErrors: true } },
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    const payloads = buildPayloads({
+    expectNoPayloads({
       lastToolError: { toolName: "exec", error: "command not found" },
       suppressToolErrorWarnings: true,
     });
-
-    expect(payloads).toHaveLength(0);
   });
 
   it.each([
@@ -345,8 +339,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("Status loaded.");
+    expectSinglePayloadSummary(payloads, { text: "Status loaded." });
   });
 
   it("dedupes identical tool warning text already present in assistant output", () => {
@@ -370,8 +363,7 @@ describe("buildEmbeddedRunPayloads", () => {
       },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(warningText);
+    expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
   it("includes non-recoverable tool error details when verbose mode is on", () => {

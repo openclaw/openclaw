@@ -1,11 +1,58 @@
 const TELEPHONY_SAMPLE_RATE = 8000;
+const RESAMPLE_FILTER_TAPS = 31;
+const RESAMPLE_CUTOFF_GUARD = 0.94;
 
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
 }
 
+function sinc(x: number): number {
+  if (x === 0) {
+    return 1;
+  }
+  return Math.sin(Math.PI * x) / (Math.PI * x);
+}
+
 /**
- * Resample 16-bit PCM (little-endian mono) to 8kHz using linear interpolation.
+ * Build a finite low-pass kernel centered on `srcPos`.
+ * The kernel is windowed (Hann) to reduce ringing artifacts.
+ */
+function sampleBandlimited(
+  input: Buffer,
+  inputSamples: number,
+  srcPos: number,
+  cutoffCyclesPerSample: number,
+): number {
+  const half = Math.floor(RESAMPLE_FILTER_TAPS / 2);
+  const center = Math.floor(srcPos);
+  let weighted = 0;
+  let weightSum = 0;
+
+  for (let tap = -half; tap <= half; tap++) {
+    const sampleIndex = center + tap;
+    if (sampleIndex < 0 || sampleIndex >= inputSamples) {
+      continue;
+    }
+
+    const distance = sampleIndex - srcPos;
+    const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
+    const tapIndex = tap + half;
+    const window = 0.5 - 0.5 * Math.cos((2 * Math.PI * tapIndex) / (RESAMPLE_FILTER_TAPS - 1));
+    const coeff = lowPass * window;
+    weighted += input.readInt16LE(sampleIndex * 2) * coeff;
+    weightSum += coeff;
+  }
+
+  if (weightSum === 0) {
+    const nearest = Math.max(0, Math.min(inputSamples - 1, Math.round(srcPos)));
+    return input.readInt16LE(nearest * 2);
+  }
+
+  return weighted / weightSum;
+}
+
+/**
+ * Resample 16-bit PCM (little-endian mono) to 8kHz using a windowed low-pass kernel.
  */
 export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer {
   if (inputSampleRate === TELEPHONY_SAMPLE_RATE) {
@@ -19,17 +66,15 @@ export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer 
   const ratio = inputSampleRate / TELEPHONY_SAMPLE_RATE;
   const outputSamples = Math.floor(inputSamples / ratio);
   const output = Buffer.alloc(outputSamples * 2);
+  const maxCutoff = 0.5;
+  const downsampleCutoff = ratio > 1 ? maxCutoff / ratio : maxCutoff;
+  const cutoffCyclesPerSample = Math.max(0.01, downsampleCutoff * RESAMPLE_CUTOFF_GUARD);
 
   for (let i = 0; i < outputSamples; i++) {
     const srcPos = i * ratio;
-    const srcIndex = Math.floor(srcPos);
-    const frac = srcPos - srcIndex;
-
-    const s0 = input.readInt16LE(srcIndex * 2);
-    const s1Index = Math.min(srcIndex + 1, inputSamples - 1);
-    const s1 = input.readInt16LE(s1Index * 2);
-
-    const sample = Math.round(s0 + frac * (s1 - s0));
+    const sample = Math.round(
+      sampleBandlimited(input, inputSamples, srcPos, cutoffCyclesPerSample),
+    );
     output.writeInt16LE(clamp16(sample), i * 2);
   }
 

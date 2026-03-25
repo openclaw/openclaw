@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmScope } from "../config/types.base.js";
+import type { ToolProfileId } from "../config/types.tools.js";
 
 export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
+export const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
-export function applyOnboardingLocalWorkspaceConfig(
+export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
 ): OpenClawConfig {
@@ -23,6 +25,10 @@ export function applyOnboardingLocalWorkspaceConfig(
     session: {
       ...baseConfig.session,
       dmScope: baseConfig.session?.dmScope ?? ONBOARDING_DEFAULT_DM_SCOPE,
+    },
+    tools: {
+      ...baseConfig.tools,
+      profile: baseConfig.tools?.profile ?? ONBOARDING_DEFAULT_TOOLS_PROFILE,
     },
   };
 }

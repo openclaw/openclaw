@@ -1,9 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
 import { wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
     const out = renderTable({
       width: 40,
@@ -48,44 +57,13 @@ describe("renderTable", () => {
       ],
     });
 
-    const ESC = "\u001b";
-    for (let i = 0; i < out.length; i += 1) {
-      if (out[i] !== ESC) {
-        continue;
-      }
-
-      // SGR: ESC [ ... m
-      if (out[i + 1] === "[") {
-        let j = i + 2;
-        while (j < out.length) {
-          const ch = out[j];
-          if (ch === "m") {
-            break;
-          }
-          if (ch && ch >= "0" && ch <= "9") {
-            j += 1;
-            continue;
-          }
-          if (ch === ";") {
-            j += 1;
-            continue;
-          }
-          break;
-        }
-        expect(out[j]).toBe("m");
-        i = j;
-        continue;
-      }
-
-      // OSC-8: ESC ] 8 ; ; ... ST (ST = ESC \)
-      if (out[i + 1] === "]" && out.slice(i + 2, i + 5) === "8;;") {
-        const st = out.indexOf(`${ESC}\\`, i + 5);
-        expect(st).toBeGreaterThanOrEqual(0);
-        i = st + 1;
-        continue;
-      }
-
-      throw new Error(`Unexpected escape sequence at index ${i}`);
+    const ansiToken = new RegExp(String.raw`\u001b\[[0-9;]*m|\u001b\]8;;.*?\u001b\\`, "gs");
+    let escapeIndex = out.indexOf("\u001b");
+    while (escapeIndex >= 0) {
+      ansiToken.lastIndex = escapeIndex;
+      const match = ansiToken.exec(out);
+      expect(match?.index).toBe(escapeIndex);
+      escapeIndex = out.indexOf("\u001b", escapeIndex + 1);
     }
   });
 
@@ -114,6 +92,38 @@ describe("renderTable", () => {
     }
   });
 
+  it("trims leading spaces on wrapped ANSI-colored continuation lines", () => {
+    const out = renderTable({
+      width: 113,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Skill", header: "Skill", minWidth: 18, flex: true },
+        { key: "Description", header: "Description", minWidth: 24, flex: true },
+        { key: "Source", header: "Source", minWidth: 10 },
+      ],
+      rows: [
+        {
+          Status: "✓ ready",
+          Skill: "🌤️ weather",
+          Description:
+            `\x1b[2mGet current weather and forecasts via wttr.in or Open-Meteo. ` +
+            `Use when: user asks about weather, temperature, or forecasts for any location.` +
+            `\x1b[0m`,
+          Source: "openclaw-bundled",
+        },
+      ],
+    });
+
+    const lines = out
+      .trimEnd()
+      .split("\n")
+      .filter((line) => line.includes("Use when"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("\u001b[2mUse when");
+    expect(lines[0]).not.toContain("│  Use when");
+    expect(lines[0]).not.toContain("│ \x1b[2m Use when");
+  });
+
   it("respects explicit newlines in cell values", () => {
     const out = renderTable({
       width: 48,
@@ -129,6 +139,81 @@ describe("renderTable", () => {
     const line2Index = lines.findIndex((line) => line.includes("line2"));
     expect(line1Index).toBeGreaterThan(-1);
     expect(line2Index).toBe(line1Index + 1);
+  });
+
+  it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
+    const width = 72;
+    const out = renderTable({
+      width,
+      columns: [
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Skill", header: "Skill", minWidth: 18 },
+        { key: "Description", header: "Description", minWidth: 18, flex: true },
+        { key: "Source", header: "Source", minWidth: 10 },
+      ],
+      rows: [
+        {
+          Status: "✗ missing",
+          Skill: "📸 peekaboo",
+          Description: "Capture screenshots from macOS windows and keep table wrapping stable.",
+          Source: "openclaw-bundled",
+        },
+      ],
+    });
+
+    for (const line of out.trimEnd().split("\n")) {
+      expect(visibleWidth(line)).toBe(width);
+    }
+  });
+
+  it("consumes unsupported escape sequences without hanging", () => {
+    const out = renderTable({
+      width: 48,
+      columns: [
+        { key: "K", header: "K", minWidth: 6 },
+        { key: "V", header: "V", minWidth: 12, flex: true },
+      ],
+      rows: [{ K: "row", V: "before \x1b[2J after" }],
+    });
+
+    expect(out).toContain("before");
+    expect(out).toContain("after");
+  });
+
+  it("falls back to ASCII borders on legacy Windows consoles", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.stubEnv("WT_SESSION", "");
+    vi.stubEnv("TERM_PROGRAM", "");
+    vi.stubEnv("TERM", "vt100");
+
+    const out = renderTable({
+      columns: [
+        { key: "A", header: "A", minWidth: 6 },
+        { key: "B", header: "B", minWidth: 10, flex: true },
+      ],
+      rows: [{ A: "row", B: "value" }],
+    });
+
+    expect(out).toContain("+");
+    expect(out).not.toContain("┌");
+  });
+
+  it("keeps unicode borders on modern Windows terminals", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.stubEnv("WT_SESSION", "1");
+    vi.stubEnv("TERM", "");
+    vi.stubEnv("TERM_PROGRAM", "");
+
+    const out = renderTable({
+      columns: [
+        { key: "A", header: "A", minWidth: 6 },
+        { key: "B", header: "B", minWidth: 10, flex: true },
+      ],
+      rows: [{ A: "row", B: "value" }],
+    });
+
+    expect(out).toContain("┌");
+    expect(out).not.toContain("+");
   });
 });
 

@@ -5,8 +5,6 @@ export const AUTH_CHOICE_LEGACY_ALIASES_FOR_CLI: ReadonlyArray<AuthChoice> = [
   "oauth",
   "claude-cli",
   "codex-cli",
-  "minimax-cloud",
-  "minimax",
 ];
 
 export function normalizeLegacyOnboardAuthChoice(

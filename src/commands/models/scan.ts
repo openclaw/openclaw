@@ -2,16 +2,16 @@ import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompt
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
-import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../terminal/prompt-style.js";
 import { pad, truncate } from "./list.format.js";
+import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -167,7 +167,7 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
   const probe = opts.probe ?? true;
   let storedKey: string | undefined;
   if (probe) {
@@ -217,7 +217,7 @@ export async function modelsScanCommand(
       );
       printScanTable(sortScanResults(results), runtime);
     } else {
-      runtime.log(JSON.stringify(results, null, 2));
+      writeRuntimeJson(runtime, results);
     }
     return;
   }
@@ -328,20 +328,14 @@ export async function modelsScanCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          selected,
-          selectedImages,
-          setDefault: Boolean(opts.setDefault),
-          setImage: Boolean(opts.setImage),
-          results,
-          warnings: [],
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      selected,
+      selectedImages,
+      setDefault: Boolean(opts.setDefault),
+      setImage: Boolean(opts.setImage),
+      results,
+      warnings: [],
+    });
     return;
   }
 

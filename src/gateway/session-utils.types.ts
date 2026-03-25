@@ -1,5 +1,10 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type {
+  GatewayAgentRow as SharedGatewayAgentRow,
+  SessionsListResultBase,
+  SessionsPatchResultBase,
+} from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
 
 export type GatewaySessionsDefaults = {
@@ -8,8 +13,11 @@ export type GatewaySessionsDefaults = {
   contextTokens: number | null;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
 export type GatewaySessionRow = {
   key: string;
+  spawnedBy?: string;
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -26,6 +34,7 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  fastMode?: boolean;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -34,6 +43,13 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  estimatedCostUsd?: number;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  parentSessionKey?: string;
+  childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
@@ -44,17 +60,7 @@ export type GatewaySessionRow = {
   lastAccountId?: string;
 };
 
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-    avatar?: string;
-    avatarUrl?: string;
-  };
-};
+export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";
@@ -72,18 +78,9 @@ export type SessionsPreviewResult = {
   previews: SessionsPreviewEntry[];
 };
 
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
+export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
+export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
   resolved?: {
     modelProvider?: string;

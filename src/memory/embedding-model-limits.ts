@@ -8,6 +8,8 @@ const KNOWN_EMBEDDING_MAX_INPUT_TOKENS: Record<string, number> = {
   "openai:text-embedding-3-large": 8192,
   "openai:text-embedding-ada-002": 8191,
   "gemini:text-embedding-004": 2048,
+  "gemini:gemini-embedding-001": 2048,
+  "gemini:gemini-embedding-2-preview": 8192,
   "voyage:voyage-3": 32000,
   "voyage:voyage-3-lite": 16000,
   "voyage:voyage-code-3": 32000,

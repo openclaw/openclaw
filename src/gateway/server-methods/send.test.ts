@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { sendHandlers } from "./send.js";
 import type { GatewayRequestContext } from "./types.js";
+
+type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
-  resolveOutboundTarget: vi.fn(() => ({ ok: true, to: "resolved" })),
+  resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
   resolveMessageChannelSelection: vi.fn(),
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
@@ -30,6 +30,23 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
 }));
 
+const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
+let sendHandlers: typeof import("./send.js").sendHandlers;
+
+function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+  if (typeof params.sessionKey === "string") {
+    const match = params.sessionKey.match(/^agent:([^:]+)/i);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return "main";
+}
+
+function passthroughPluginAutoEnable(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: ({
     sessionKey,
@@ -37,21 +54,13 @@ vi.mock("../../agents/agent-scope.js", () => ({
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => {
-    if (typeof sessionKey === "string") {
-      const match = sessionKey.match(/^agent:([^:]+)/i);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-    return "main";
-  },
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+  resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -80,6 +89,11 @@ vi.mock("../../config/sessions.js", async () => {
     recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
   };
 });
+
+async function loadFreshSendHandlersForTest() {
+  vi.resetModules();
+  ({ sendHandlers } = await import("./send.js"));
+}
 
 const makeContext = (): GatewayRequestContext =>
   ({
@@ -112,6 +126,21 @@ async function runPoll(params: Record<string, unknown>) {
   return { respond };
 }
 
+function expectDeliverySessionMirror(params: { agentId: string; sessionKey: string }) {
+  expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect.objectContaining({
+      session: expect.objectContaining({
+        agentId: params.agentId,
+        key: params.sessionKey,
+      }),
+      mirror: expect.objectContaining({
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+      }),
+    }),
+  );
+}
+
 function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
 }
@@ -119,7 +148,7 @@ function mockDeliverySuccess(messageId: string) {
 describe("gateway send mirroring", () => {
   let registrySeq = 0;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
@@ -130,6 +159,7 @@ describe("gateway send mirroring", () => {
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    await loadFreshSendHandlersForTest();
   });
 
   it("accepts media-only sends without message", async () => {
@@ -311,6 +341,7 @@ describe("gateway send mirroring", () => {
           sessionKey: "agent:main:main",
           text: "caption",
           mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+          idempotencyKey: "idem-2",
         }),
       }),
     );
@@ -392,7 +423,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:resolved",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:work:slack:channel:resolved",
           agentId: "work",
@@ -412,15 +446,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-session-agent",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
@@ -437,7 +466,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:main:slack:channel:c1",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:main:slack:channel:c1",
           agentId: "work",
@@ -458,15 +490,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-agent-blank",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
-        mirror: expect.objectContaining({
-          sessionKey: "agent:work:slack:channel:c1",
-          agentId: "work",
-        }),
-      }),
-    );
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("forwards threadId to outbound delivery when provided", async () => {
@@ -488,7 +515,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("returns invalid request when outbound target resolution fails", async () => {
-    vi.mocked(resolveOutboundTarget).mockReturnValue({
+    mocks.resolveOutboundTarget.mockReturnValue({
       ok: false,
       error: new Error("target not found"),
     });

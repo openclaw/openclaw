@@ -2,34 +2,30 @@
  * Type definitions for the Synology Chat channel plugin.
  */
 
-/** Raw channel config from openclaw.json channels.synology-chat */
-export interface SynologyChatChannelConfig {
+type SynologyChatConfigFields = {
   enabled?: boolean;
   token?: string;
   incomingUrl?: string;
   nasHost?: string;
   webhookPath?: string;
+  dangerouslyAllowNameMatching?: boolean;
+  dangerouslyAllowInheritedWebhookPath?: boolean;
   dmPolicy?: "open" | "allowlist" | "disabled";
   allowedUserIds?: string | string[];
   rateLimitPerMinute?: number;
   botName?: string;
   allowInsecureSsl?: boolean;
+};
+
+export type SynologyWebhookPathSource = "default" | "inherited-base" | "explicit";
+
+/** Raw channel config from openclaw.json channels.synology-chat */
+export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
   accounts?: Record<string, SynologyChatAccountRaw>;
 }
 
 /** Raw per-account config (overrides base config) */
-export interface SynologyChatAccountRaw {
-  enabled?: boolean;
-  token?: string;
-  incomingUrl?: string;
-  nasHost?: string;
-  webhookPath?: string;
-  dmPolicy?: "open" | "allowlist" | "disabled";
-  allowedUserIds?: string | string[];
-  rateLimitPerMinute?: number;
-  botName?: string;
-  allowInsecureSsl?: boolean;
-}
+export interface SynologyChatAccountRaw extends SynologyChatConfigFields {}
 
 /** Fully resolved account config with defaults applied */
 export interface ResolvedSynologyChatAccount {
@@ -39,6 +35,9 @@ export interface ResolvedSynologyChatAccount {
   incomingUrl: string;
   nasHost: string;
   webhookPath: string;
+  webhookPathSource: SynologyWebhookPathSource;
+  dangerouslyAllowNameMatching: boolean;
+  dangerouslyAllowInheritedWebhookPath: boolean;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
   rateLimitPerMinute: number;

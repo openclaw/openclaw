@@ -9,6 +9,8 @@ export type BrowserExecutable = {
   path: string;
 };
 
+const CHROME_VERSION_RE = /(\d+)(?:\.\d+){0,3}/;
+
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
   "com.google.Chrome.beta",
@@ -453,6 +455,22 @@ function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecu
   return null;
 }
 
+function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | null {
+  for (const candidate of candidates) {
+    if (exists(candidate)) {
+      return {
+        kind:
+          candidate.toLowerCase().includes("sxs") || candidate.toLowerCase().includes("canary")
+            ? "canary"
+            : "chrome",
+        path: candidate,
+      };
+    }
+  }
+
+  return null;
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -506,6 +524,18 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
+export function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+  return findFirstChromeExecutable([
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    path.join(
+      os.homedir(),
+      "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ),
+  ]);
+}
+
 export function findChromeExecutableLinux(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     { kind: "chrome", path: "/usr/bin/google-chrome" },
@@ -523,6 +553,16 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
   ];
 
   return findFirstExecutable(candidates);
+}
+
+export function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
+  return findFirstChromeExecutable([
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome-beta",
+    "/usr/bin/google-chrome-unstable",
+    "/snap/bin/google-chrome",
+  ]);
 }
 
 export function findChromeExecutableWindows(): BrowserExecutable | null {
@@ -594,6 +634,56 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   });
 
   return findFirstExecutable(candidates);
+}
+
+export function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
+  const localAppData = process.env.LOCALAPPDATA ?? "";
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const joinWin = path.win32.join;
+  const candidates: string[] = [];
+
+  if (localAppData) {
+    candidates.push(joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"));
+    candidates.push(joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"));
+  }
+
+  candidates.push(joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"));
+  candidates.push(joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"));
+
+  return findFirstChromeExecutable(candidates);
+}
+
+export function resolveGoogleChromeExecutableForPlatform(
+  platform: NodeJS.Platform,
+): BrowserExecutable | null {
+  if (platform === "darwin") {
+    return findGoogleChromeExecutableMac();
+  }
+  if (platform === "linux") {
+    return findGoogleChromeExecutableLinux();
+  }
+  if (platform === "win32") {
+    return findGoogleChromeExecutableWindows();
+  }
+  return null;
+}
+
+export function readBrowserVersion(executablePath: string): string | null {
+  const output = execText(executablePath, ["--version"], 2000);
+  if (!output) {
+    return null;
+  }
+  return output.replace(/\s+/g, " ").trim();
+}
+
+export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
+  const match = String(rawVersion ?? "").match(CHROME_VERSION_RE);
+  if (!match?.[1]) {
+    return null;
+  }
+  const major = Number.parseInt(match[1], 10);
+  return Number.isFinite(major) ? major : null;
 }
 
 export function resolveBrowserExecutableForPlatform(

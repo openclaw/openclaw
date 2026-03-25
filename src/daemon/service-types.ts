@@ -9,6 +9,8 @@ export type GatewayServiceInstallArgs = {
   description?: string;
 };
 
+export type GatewayServiceStageArgs = GatewayServiceInstallArgs;
+
 export type GatewayServiceManageArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
@@ -19,6 +21,8 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
 };
 
+export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };
+
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
 };
@@ -27,6 +31,7 @@ export type GatewayServiceCommandConfig = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 };
 

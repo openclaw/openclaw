@@ -20,6 +20,8 @@ export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixtu
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
+export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"] as const;
+
 const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
   if (!flags || flags.length === 0) {
     return NO_FLAGS;
@@ -312,4 +314,10 @@ export function renderSafeBinDeniedFlagsDocBullets(
   return bins
     .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
     .join("\n");
+}
+
+export function renderDefaultSafeBinsDocText(
+  defaults: readonly string[] = DEFAULT_SAFE_BINS,
+): string {
+  return defaults.map((bin) => `\`${bin}\``).join(", ");
 }

@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -10,6 +11,8 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -193,6 +196,13 @@ export const sendHandlers: GatewayRequestHandlers = {
             meta: { channel },
           };
         }
+        const idLikeTarget = await maybeResolveIdLikeTarget({
+          cfg,
+          channel,
+          input: resolved.to,
+          accountId,
+        });
+        const deliveryTarget = idLikeTarget?.to ?? resolved.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
@@ -202,7 +212,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           .filter(Boolean)
           .join("\n");
         const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -224,7 +234,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               agentId: effectiveAgentId,
               accountId,
-              target: resolved.to,
+              target: deliveryTarget,
+              resolvedTarget: idLikeTarget,
               threadId,
             })
           : null;
@@ -237,13 +248,18 @@ export const sendHandlers: GatewayRequestHandlers = {
             route: derivedRoute,
           });
         }
+        const outboundSession = buildOutboundSessionContext({
+          cfg,
+          agentId: effectiveAgentId,
+          sessionKey: providedSessionKey ?? derivedRoute?.sessionKey,
+        });
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
-          to: resolved.to,
+          to: deliveryTarget,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
-          agentId: effectiveAgentId,
+          session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
@@ -253,6 +269,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                idempotencyKey: idem,
               }
             : derivedRoute
               ? {
@@ -260,6 +277,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   agentId: effectiveAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  idempotencyKey: idem,
                 }
               : undefined,
         });

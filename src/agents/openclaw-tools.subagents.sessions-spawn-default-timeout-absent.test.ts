@@ -1,69 +1,49 @@
-import { describe, expect, it, vi } from "vitest";
-import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import "./test-helpers/fast-core-tools.js";
+import {
+  getCallGatewayMock,
+  getSessionsSpawnTool,
+  resetSessionsSpawnConfigOverride,
+  setSessionsSpawnConfigOverride,
+  setupSessionsSpawnGatewayMock,
+} from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      agents: {
-        defaults: {
-          subagents: {
-            maxConcurrent: 8,
-          },
-        },
-      },
-      routing: {
-        sessions: {
-          mainKey: "agent:test:main",
-        },
-      },
-    }),
-  };
-});
+const MAIN_SESSION_KEY = "agent:test:main";
 
-vi.mock("../gateway/call.js", () => {
-  return {
-    callGateway: vi.fn(async ({ method }: { method: string }) => {
-      if (method === "agent") {
-        return { runId: "run-456" };
-      }
-      return {};
-    }),
-  };
-});
-
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => null,
-}));
-
-type GatewayCall = { method: string; params?: Record<string, unknown> };
-
-async function getGatewayCalls(): Promise<GatewayCall[]> {
-  const { callGateway } = await import("../gateway/call.js");
-  return (callGateway as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
-    (call) => call[0] as GatewayCall,
-  );
+function configureDefaultsWithoutTimeout() {
+  setSessionsSpawnConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    agents: { defaults: { subagents: { maxConcurrent: 8 } } },
+  });
 }
 
-function findLastCall(calls: GatewayCall[], predicate: (call: GatewayCall) => boolean) {
-  for (let i = calls.length - 1; i >= 0; i -= 1) {
-    const call = calls[i];
-    if (call && predicate(call)) {
-      return call;
+function readSpawnTimeout(calls: Array<{ method?: string; params?: unknown }>): number | undefined {
+  const spawn = calls.find((entry) => {
+    if (entry.method !== "agent") {
+      return false;
     }
-  }
-  return undefined;
+    const params = entry.params as { lane?: string } | undefined;
+    return params?.lane === "subagent";
+  });
+  const params = spawn?.params as { timeout?: number } | undefined;
+  return params?.timeout;
 }
 
 describe("sessions_spawn default runTimeoutSeconds (config absent)", () => {
+  beforeEach(() => {
+    resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    getCallGatewayMock().mockClear();
+  });
+
   it("falls back to 0 (no timeout) when config key is absent", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+    configureDefaultsWithoutTimeout();
+    const gateway = setupSessionsSpawnGatewayMock({});
+    const tool = await getSessionsSpawnTool({ agentSessionKey: MAIN_SESSION_KEY });
+
     const result = await tool.execute("call-1", { task: "hello" });
     expect(result.details).toMatchObject({ status: "accepted" });
-
-    const calls = await getGatewayCalls();
-    const agentCall = findLastCall(calls, (call) => call.method === "agent");
-    expect(agentCall?.params?.timeout).toBe(0);
+    expect(readSpawnTimeout(gateway.calls)).toBe(0);
   });
 });

@@ -1,3 +1,5 @@
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -7,8 +9,8 @@ import {
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk";
-import { z } from "zod";
+} from "../runtime-api.js";
+import { buildSecretInputSchema } from "./secret-input.js";
 
 export const NextcloudTalkRoomSchema = z
   .object({
@@ -27,10 +29,10 @@ export const NextcloudTalkAccountSchemaBase = z
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
-    botSecret: z.string().optional(),
+    botSecret: buildSecretInputSchema().optional(),
     botSecretFile: z.string().optional(),
     apiUser: z.string().optional(),
-    apiPassword: z.string().optional(),
+    apiPassword: buildSecretInputSchema().optional(),
     apiPasswordFile: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     webhookPort: z.number().int().positive().optional(),
@@ -47,26 +49,25 @@ export const NextcloudTalkAccountSchemaBase = z
 
 export const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine(
   (value, ctx) => {
-    requireOpenAllowFrom({
+    requireChannelOpenAllowFrom({
+      channel: "nextcloud-talk",
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
+      requireOpenAllowFrom,
     });
   },
 );
 
 export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
   accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "nextcloud-talk",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
+    requireOpenAllowFrom,
   });
 });

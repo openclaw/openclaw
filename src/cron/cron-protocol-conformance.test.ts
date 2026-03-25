@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
-import { CronDeliverySchema } from "../gateway/protocol/schema.js";
+import { CronDeliverySchema, CronJobStateSchema } from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -27,6 +27,16 @@ function extractDeliveryModes(schema: SchemaLike): string[] {
     .filter((value): value is string => typeof value === "string");
 
   return Array.from(new Set(unionModes));
+}
+
+function extractConstUnionValues(schema: SchemaLike): string[] {
+  return Array.from(
+    new Set(
+      (schema.anyOf ?? [])
+        .map((entry) => entry?.const)
+        .filter((value): value is string => typeof value === "string"),
+    ),
+  );
 }
 
 const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
@@ -87,5 +97,20 @@ describe("cron protocol conformance", () => {
     const swift = await fs.readFile(swiftPath, "utf-8");
     expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
     expect(swift.includes("let jobs:")).toBe(true);
+  });
+
+  it("cron job state schema keeps the full failover reason set", () => {
+    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
+    expect(lastErrorReason).toBeDefined();
+    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual([
+      "auth",
+      "format",
+      "rate_limit",
+      "billing",
+      "timeout",
+      "model_not_found",
+      "unknown",
+    ]);
   });
 });

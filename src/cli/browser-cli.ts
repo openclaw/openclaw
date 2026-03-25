@@ -7,7 +7,6 @@ import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.
 import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
 import { registerBrowserDebugCommands } from "./browser-cli-debug.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
-import { registerBrowserExtensionCommands } from "./browser-cli-extension.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
@@ -46,7 +45,6 @@ export function registerBrowserCli(program: Command) {
   const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
 
   registerBrowserManageCommands(browser, parentOpts);
-  registerBrowserExtensionCommands(browser, parentOpts);
   registerBrowserInspectCommands(browser, parentOpts);
   registerBrowserActionInputCommands(browser, parentOpts);
   registerBrowserActionObserveCommands(browser, parentOpts);

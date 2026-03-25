@@ -24,7 +24,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
-openclaw config unset tools.web.search.apiKey
+openclaw config unset plugins.entries.brave.config.webSearch.apiKey
 ```
 
 ## 路径

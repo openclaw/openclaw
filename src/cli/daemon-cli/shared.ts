@@ -1,18 +1,41 @@
+import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
-import { pickPrimaryLanIPv4 } from "../../gateway/net.js";
+import {
+  buildPlatformRuntimeLogHints,
+  buildPlatformServiceStartHints,
+} from "../../daemon/runtime-hints.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import { parsePort } from "../shared/parse-port.js";
+import { createDaemonActionContext } from "./response.js";
 
 export { formatRuntimeStatus };
 export { parsePort };
+
+export function createDaemonInstallActionContext(jsonFlag: unknown) {
+  const json = Boolean(jsonFlag);
+  return {
+    json,
+    ...createDaemonActionContext({ action: "install", json }),
+  };
+}
+
+export function failIfNixDaemonInstallMode(
+  fail: (message: string, hints?: string[]) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!resolveIsNixMode(env)) {
+    return false;
+  }
+  fail("Nix mode detected; service install is disabled.");
+  return true;
+}
 
 export function createCliStatusTextStyles() {
   const rich = isRich();
@@ -73,7 +96,10 @@ export function pickProbeHostForBind(
     return tailnetIPv4 ?? "127.0.0.1";
   }
   if (bindMode === "lan") {
-    return pickPrimaryLanIPv4() ?? "127.0.0.1";
+    // Same as call.ts: self-connections should always target loopback.
+    // bind=lan controls which interfaces the server listens on (0.0.0.0),
+    // but co-located CLI probes should connect via 127.0.0.1.
+    return "127.0.0.1";
   }
   return "127.0.0.1";
 }
@@ -142,41 +168,43 @@ export function renderRuntimeHints(
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
-    if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(env);
-      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
-      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
-    } else if (process.platform === "win32") {
-      const task = resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
-      hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
-    }
+    hints.push(
+      ...buildPlatformRuntimeLogHints({
+        env,
+        systemdServiceName: resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE),
+        windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
+      }),
+    );
   }
   return hints;
 }
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const base = [
-    formatCliCommand("openclaw gateway install", env),
-    formatCliCommand("openclaw gateway", env),
-  ];
   const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
-    }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [...base, `systemctl --user start ${unit}.service`];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [...base, `schtasks /Run /TN "${task}"`];
-    }
-    default:
-      return base;
+  const container = env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim();
+  const hints = buildPlatformServiceStartHints({
+    installCommand: formatCliCommand("openclaw gateway install", env),
+    startCommand: formatCliCommand("openclaw gateway", env),
+    launchAgentPlistPath: `~/Library/LaunchAgents/${resolveGatewayLaunchAgentLabel(profile)}.plist`,
+    systemdServiceName: resolveGatewaySystemdServiceName(profile),
+    windowsTaskName: resolveGatewayWindowsTaskName(profile),
+  });
+  if (!container) {
+    return hints;
   }
+  return [`Restart the container or the service that manages it for ${container}.`];
+}
+
+export function filterContainerGenericHints(
+  hints: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (!(env.OPENCLAW_CONTAINER_HINT?.trim() || env.OPENCLAW_CONTAINER?.trim())) {
+    return hints;
+  }
+  return hints.filter(
+    (hint) =>
+      !hint.includes("If you're in a container, run the gateway in the foreground instead of") &&
+      !hint.includes("systemd user services are unavailable; install/enable systemd"),
+  );
 }

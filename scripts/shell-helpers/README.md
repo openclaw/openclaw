@@ -209,7 +209,7 @@ docker ps
 
 - Docker and Docker Compose installed
 - Bash or Zsh shell
-- OpenClaw project (from `docker-setup.sh`)
+- OpenClaw project (run `scripts/docker/setup.sh`)
 
 ## Development
 

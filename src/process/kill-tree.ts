@@ -83,6 +83,7 @@ function runTaskkill(args: string[]): void {
     spawn("taskkill", args, {
       stdio: "ignore",
       detached: true,
+      windowsHide: true,
     });
   } catch {
     // Ignore taskkill spawn failures

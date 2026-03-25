@@ -161,6 +161,7 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
     func webView(_: WKWebView, didFinish _: WKNavigation?) {
         self.controller?.errorText = nil
         self.controller?.applyDebugStatusIfNeeded()
+        self.controller?.applyHomeCanvasStateIfNeeded()
     }
 
     func webView(_: WKWebView, didFail _: WKNavigation?, withError error: any Error) {

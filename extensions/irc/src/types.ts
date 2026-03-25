@@ -1,4 +1,3 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -8,7 +7,8 @@ import type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk";
+  BaseProbeResult,
+} from "./runtime-api.js";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;
@@ -68,6 +68,7 @@ export type IrcAccountConfig = {
 
 export type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
+  defaultAccount?: string;
 };
 
 export type CoreConfig = OpenClawConfig & {

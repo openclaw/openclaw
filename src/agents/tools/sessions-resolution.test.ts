@@ -1,15 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  isResolvedSessionVisibleToRequester,
-  looksLikeSessionId,
-  looksLikeSessionKey,
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  shouldVerifyRequesterSpawnedSessionVisibility,
-  shouldResolveSessionIdInput,
-} from "./sessions-resolution.js";
+const callGatewayMock = vi.fn();
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
+let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
+let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
+let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
+let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
+let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
+let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
+let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
+let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
+
+async function loadFreshSessionsResolutionModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  ({
+    isResolvedSessionVisibleToRequester,
+    looksLikeSessionId,
+    looksLikeSessionKey,
+    resolveDisplaySessionKey,
+    resolveInternalSessionKey,
+    resolveMainSessionAlias,
+    resolveSessionReference,
+    shouldVerifyRequesterSpawnedSessionVisibility,
+    shouldResolveSessionIdInput,
+  } = await import("./sessions-resolution.js"));
+}
+
+beforeEach(async () => {
+  callGatewayMock.mockReset();
+  await loadFreshSessionsResolutionModuleForTest();
+});
 
 describe("resolveMainSessionAlias", () => {
   it("uses normalized main key and global alias for global scope", () => {
@@ -28,6 +54,19 @@ describe("resolveMainSessionAlias", () => {
     expect(resolveMainSessionAlias({} as OpenClawConfig)).toEqual({
       mainKey: "main",
       alias: "main",
+      scope: "per-sender",
+    });
+  });
+
+  it("uses session.mainKey over any legacy routing sessions key", () => {
+    const cfg = {
+      session: { mainKey: "  work ", scope: "per-sender" },
+      routing: { sessions: { mainKey: "legacy-main" } },
+    } as OpenClawConfig;
+
+    expect(resolveMainSessionAlias(cfg)).toEqual({
+      mainKey: "work",
+      alias: "work",
       scope: "per-sender",
     });
   });
@@ -54,6 +93,23 @@ describe("session key display/internal mapping", () => {
       resolveInternalSessionKey({ key: "agent:ops:main", alias: "global", mainKey: "main" }),
     ).toBe("agent:ops:main");
   });
+
+  it("maps current to requester session key", () => {
+    expect(
+      resolveInternalSessionKey({
+        key: "current",
+        alias: "global",
+        mainKey: "main",
+        requesterInternalKey: "agent:support:main",
+      }),
+    ).toBe("agent:support:main");
+  });
+
+  it("preserves literal current when no requester key is provided", () => {
+    expect(resolveInternalSessionKey({ key: "current", alias: "global", mainKey: "main" })).toBe(
+      "current",
+    );
+  });
 });
 
 describe("session reference shape detection", () => {
@@ -64,6 +120,7 @@ describe("session reference shape detection", () => {
 
   it("detects canonical session key families", () => {
     expect(looksLikeSessionKey("main")).toBe(true);
+    expect(looksLikeSessionKey("current")).toBe(true);
     expect(looksLikeSessionKey("agent:main:main")).toBe(true);
     expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
     expect(looksLikeSessionKey("node:macbook")).toBe(true);
@@ -73,6 +130,7 @@ describe("session reference shape detection", () => {
 
   it("treats non-keys as session-id candidates", () => {
     expect(shouldResolveSessionIdInput("agent:main:main")).toBe(false);
+    expect(shouldResolveSessionIdInput("current")).toBe(false);
     expect(shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
     expect(shouldResolveSessionIdInput("random-slug")).toBe(true);
   });
@@ -131,5 +189,123 @@ describe("resolved session visibility checks", () => {
         resolvedViaSessionId: false,
       }),
     ).resolves.toBe(true);
+  });
+
+  it("does not hide an exact spawned target behind the sessions.list visibility cap", async () => {
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: Array.from({ length: 500 }, (_, index) => ({
+              key: `agent:main:subagent:worker-${index}`,
+            })),
+          };
+        }
+        return {};
+      },
+    );
+
+    await expect(
+      isResolvedSessionVisibleToRequester({
+        requesterSessionKey: "agent:main:main",
+        targetSessionKey: "agent:main:subagent:worker-999",
+        restrictToSpawned: true,
+        resolvedViaSessionId: false,
+      }),
+    ).resolves.toBe(true);
+  });
+});
+
+describe("resolveSessionReference", () => {
+  it("prefers a literal current session key before alias fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({ key: "current" });
+
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "current",
+      displayKey: "current",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.resolve",
+      params: {
+        key: "current",
+        spawnedBy: undefined,
+      },
+    });
+  });
+
+  it("prefers a literal current sessionId before alias fallback", async () => {
+    callGatewayMock.mockResolvedValueOnce({});
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ops:main" });
+
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:ops:main",
+      displayKey: "agent:ops:main",
+      resolvedViaSessionId: true,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.resolve",
+      params: {
+        key: "current",
+        spawnedBy: undefined,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "current",
+        spawnedBy: undefined,
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
+  });
+
+  it("skips literal current key lookup when spawned visibility is restricted", async () => {
+    await expect(
+      resolveSessionReference({
+        sessionKey: "current",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:subagent:child",
+        restrictToSpawned: true,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:subagent:child",
+      displayKey: "agent:main:subagent:child",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "current",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -11,7 +11,7 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 export function registerConfigureCommand(program: Command) {
   program
     .command("configure")
-    .description("Interactive setup wizard for credentials, channels, gateway, and agent defaults")
+    .description("Interactive configuration for credentials, channels, gateway, and agent defaults")
     .addHelpText(
       "after",
       () =>

@@ -1,8 +1,8 @@
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import { normalizeAtHashSlug } from "../../shared/string-normalization.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 export type ExplicitElevatedAllowField = "id" | "from" | "e164" | "name" | "username" | "tag";
+const INTERNAL_ALLOWLIST_CHANNEL = "webchat";
 
 const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
   "id",
@@ -15,7 +15,7 @@ const EXPLICIT_ELEVATED_ALLOW_FIELDS = new Set<ExplicitElevatedAllowField>([
 
 const SENDER_PREFIXES = [
   ...CHAT_CHANNEL_ORDER,
-  INTERNAL_MESSAGE_CHANNEL,
+  INTERNAL_ALLOWLIST_CHANNEL,
   "user",
   "group",
   "channel",

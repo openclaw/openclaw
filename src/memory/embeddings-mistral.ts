@@ -1,4 +1,5 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 import {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
@@ -16,14 +17,11 @@ export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
 const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
 export function normalizeMistralModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_MISTRAL_EMBEDDING_MODEL;
-  }
-  if (trimmed.startsWith("mistral/")) {
-    return trimmed.slice("mistral/".length);
-  }
-  return trimmed;
+  return normalizeEmbeddingModelWithPrefixes({
+    model,
+    defaultModel: DEFAULT_MISTRAL_EMBEDDING_MODEL,
+    prefixes: ["mistral/"],
+  });
 }
 
 export async function createMistralEmbeddingProvider(

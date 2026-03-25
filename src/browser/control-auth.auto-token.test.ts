@@ -16,7 +16,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { ensureBrowserControlAuth } from "./control-auth.js";
+let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
@@ -47,7 +47,9 @@ describe("ensureBrowserControlAuth", () => {
     });
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
     mocks.writeConfigFile.mockClear();
@@ -130,6 +132,31 @@ describe("ensureBrowserControlAuth", () => {
     const result = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
 
     expect(result).toEqual({ auth: { token: "latest-token" } });
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("fails when gateway.auth.token SecretRef is unresolved", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GW_TOKEN" },
+        },
+      },
+      browser: {
+        enabled: true,
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+
+    await expect(ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv })).rejects.toThrow(
+      /MISSING_GW_TOKEN/i,
+    );
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 });

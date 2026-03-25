@@ -21,6 +21,7 @@ type CachedValue<T> = {
   value: T | null;
   readAt: number;
   cacheKey: string;
+  sourceFingerprint?: number | string | null;
 };
 
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
@@ -148,9 +149,72 @@ function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
   return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
+function readFileMtimeMs(filePath: string): number | null {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function readCachedCliCredential<T>(options: {
+  ttlMs: number;
+  cache: CachedValue<T> | null;
+  cacheKey: string;
+  read: () => T | null;
+  setCache: (next: CachedValue<T> | null) => void;
+  readSourceFingerprint?: () => number | string | null;
+}): T | null {
+  const { ttlMs, cache, cacheKey, read, setCache, readSourceFingerprint } = options;
+  if (ttlMs <= 0) {
+    return read();
+  }
+
+  const now = Date.now();
+  const sourceFingerprint = readSourceFingerprint?.();
+  if (
+    cache &&
+    cache.cacheKey === cacheKey &&
+    cache.sourceFingerprint === sourceFingerprint &&
+    now - cache.readAt < ttlMs
+  ) {
+    return cache.value;
+  }
+
+  const value = read();
+  const cachedSourceFingerprint = readSourceFingerprint?.();
+  if (!readSourceFingerprint || cachedSourceFingerprint === sourceFingerprint) {
+    setCache({
+      value,
+      readAt: now,
+      cacheKey,
+      sourceFingerprint: cachedSourceFingerprint,
+    });
+  } else {
+    setCache(null);
+  }
+  return value;
+}
+
 function computeCodexKeychainAccount(codexHome: string) {
   const hash = createHash("sha256").update(codexHome).digest("hex");
   return `cli|${hash.slice(0, 16)}`;
+}
+
+function decodeJwtExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length < 2) {
+    return null;
+  }
+  try {
+    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(payloadRaw) as { exp?: unknown };
+    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
+      ? payload.exp * 1000
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function readCodexKeychainCredentials(options?: {
@@ -193,9 +257,10 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const expires = Number.isFinite(lastRefresh)
+    const fallbackExpiry = Number.isFinite(lastRefresh)
       ? lastRefresh + 60 * 60 * 1000
       : Date.now() + 60 * 60 * 1000;
+    const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
     log.info("read codex credentials from keychain", {
@@ -308,27 +373,21 @@ export function readClaudeCliCredentialsCached(options?: {
   homeDir?: string;
   execSync?: ExecSyncFn;
 }): ClaudeCliCredential | null {
-  const ttlMs = options?.ttlMs ?? 0;
-  const now = Date.now();
-  const cacheKey = resolveClaudeCliCredentialsPath(options?.homeDir);
-  if (
-    ttlMs > 0 &&
-    claudeCliCache &&
-    claudeCliCache.cacheKey === cacheKey &&
-    now - claudeCliCache.readAt < ttlMs
-  ) {
-    return claudeCliCache.value;
-  }
-  const value = readClaudeCliCredentials({
-    allowKeychainPrompt: options?.allowKeychainPrompt,
-    platform: options?.platform,
-    homeDir: options?.homeDir,
-    execSync: options?.execSync,
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: claudeCliCache,
+    cacheKey: resolveClaudeCliCredentialsPath(options?.homeDir),
+    read: () =>
+      readClaudeCliCredentials({
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        platform: options?.platform,
+        homeDir: options?.homeDir,
+        execSync: options?.execSync,
+      }),
+    setCache: (next) => {
+      claudeCliCache = next;
+    },
   });
-  if (ttlMs > 0) {
-    claudeCliCache = { value, readAt: now, cacheKey };
-  }
-  return value;
 }
 
 export function writeClaudeCliKeychainCredentials(
@@ -483,13 +542,14 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let expires: number;
+  let fallbackExpiry: number;
   try {
     const stat = fs.statSync(authPath);
-    expires = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
   } catch {
-    expires = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = Date.now() + 60 * 60 * 1000;
   }
+  const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
 
   return {
     type: "oauth",
@@ -506,67 +566,53 @@ export function readCodexCliCredentialsCached(options?: {
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const ttlMs = options?.ttlMs ?? 0;
-  const now = Date.now();
-  const cacheKey = `${options?.platform ?? process.platform}|${resolveCodexCliAuthPath()}`;
-  if (
-    ttlMs > 0 &&
-    codexCliCache &&
-    codexCliCache.cacheKey === cacheKey &&
-    now - codexCliCache.readAt < ttlMs
-  ) {
-    return codexCliCache.value;
-  }
-  const value = readCodexCliCredentials({
-    platform: options?.platform,
-    execSync: options?.execSync,
+  const authPath = resolveCodexCliAuthPath();
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: codexCliCache,
+    cacheKey: `${options?.platform ?? process.platform}|${authPath}`,
+    read: () =>
+      readCodexCliCredentials({
+        platform: options?.platform,
+        execSync: options?.execSync,
+      }),
+    setCache: (next) => {
+      codexCliCache = next;
+    },
+    readSourceFingerprint: () => readFileMtimeMs(authPath),
   });
-  if (ttlMs > 0) {
-    codexCliCache = { value, readAt: now, cacheKey };
-  }
-  return value;
 }
 
 export function readQwenCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
 }): QwenCliCredential | null {
-  const ttlMs = options?.ttlMs ?? 0;
-  const now = Date.now();
-  const cacheKey = resolveQwenCliCredentialsPath(options?.homeDir);
-  if (
-    ttlMs > 0 &&
-    qwenCliCache &&
-    qwenCliCache.cacheKey === cacheKey &&
-    now - qwenCliCache.readAt < ttlMs
-  ) {
-    return qwenCliCache.value;
-  }
-  const value = readQwenCliCredentials({ homeDir: options?.homeDir });
-  if (ttlMs > 0) {
-    qwenCliCache = { value, readAt: now, cacheKey };
-  }
-  return value;
+  const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: qwenCliCache,
+    cacheKey: credPath,
+    read: () => readQwenCliCredentials({ homeDir: options?.homeDir }),
+    setCache: (next) => {
+      qwenCliCache = next;
+    },
+    readSourceFingerprint: () => readFileMtimeMs(credPath),
+  });
 }
 
 export function readMiniMaxCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
 }): MiniMaxCliCredential | null {
-  const ttlMs = options?.ttlMs ?? 0;
-  const now = Date.now();
-  const cacheKey = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  if (
-    ttlMs > 0 &&
-    minimaxCliCache &&
-    minimaxCliCache.cacheKey === cacheKey &&
-    now - minimaxCliCache.readAt < ttlMs
-  ) {
-    return minimaxCliCache.value;
-  }
-  const value = readMiniMaxCliCredentials({ homeDir: options?.homeDir });
-  if (ttlMs > 0) {
-    minimaxCliCache = { value, readAt: now, cacheKey };
-  }
-  return value;
+  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
+  return readCachedCliCredential({
+    ttlMs: options?.ttlMs ?? 0,
+    cache: minimaxCliCache,
+    cacheKey: credPath,
+    read: () => readMiniMaxCliCredentials({ homeDir: options?.homeDir }),
+    setCache: (next) => {
+      minimaxCliCache = next;
+    },
+    readSourceFingerprint: () => readFileMtimeMs(credPath),
+  });
 }

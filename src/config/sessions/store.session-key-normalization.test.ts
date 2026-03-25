@@ -108,4 +108,41 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.sessionId).toBe("legacy-session");
     expect(store[MIXED_CASE_KEY]).toBeUndefined();
   });
+
+  it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "existing-session",
+            updatedAt: 1111,
+            chatType: "direct",
+            channel: "webchat",
+            origin: {
+              provider: "webchat",
+              chatType: "direct",
+              from: "WebChat:User-1",
+              to: "webchat:user-1",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      ctx: createInboundContext(),
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
+    expect(store[CANONICAL_KEY]?.updatedAt).toBe(1111);
+    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
 });

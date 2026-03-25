@@ -100,7 +100,7 @@ describe("models list auth-profile sync", () => {
 
       const openrouter = await runModelsListAndGetProvider("openrouter/");
       expect(openrouter?.available).toBe(true);
-      expect(await pathExists(authPath)).toBe(true);
+      expect(await pathExists(authPath)).toBe(false);
     });
   });
 

@@ -1,5 +1,5 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { MatrixClient } from "../sdk.js";
 import { listMatrixPins, pinMatrixMessage, unpinMatrixMessage } from "./pins.js";
 
 function createPinsClient(seedPinned: string[], knownBodies: Record<string, string> = {}) {

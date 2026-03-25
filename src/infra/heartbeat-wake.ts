@@ -15,6 +15,16 @@ export type HeartbeatWakeHandler = (opts: {
   sessionKey?: string;
 }) => Promise<HeartbeatRunResult>;
 
+let heartbeatsEnabled = true;
+
+export function setHeartbeatsEnabled(enabled: boolean) {
+  heartbeatsEnabled = enabled;
+}
+
+export function areHeartbeatsEnabled(): boolean {
+  return heartbeatsEnabled;
+}
+
 type WakeTimerKind = "normal" | "retry";
 type PendingWakeReason = {
   reason: string;

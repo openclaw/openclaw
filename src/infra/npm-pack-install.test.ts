@@ -91,6 +91,24 @@ describe("installFromNpmSpecArchive", () => {
     expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
   });
 
+  it("rejects unsupported npm specs before packing", async () => {
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await installFromNpmSpecArchive({
+      tempDirPrefix: "openclaw-test-",
+      spec: "file:/tmp/openclaw.tgz",
+      timeoutMs: 1000,
+      installFromArchive,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "unsupported npm spec",
+    });
+    expect(packNpmSpecToArchive).not.toHaveBeenCalled();
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
   it("returns resolution metadata and installer result on success", async () => {
     mockPackedSuccess({ name: "@openclaw/test", version: "1.0.0" });
     const installFromArchive = vi.fn(async () => ({ ok: true as const, target: "done" }));
@@ -175,6 +193,56 @@ describe("installFromNpmSpecArchive", () => {
 
     const okResult = expectWrappedOkResult(result, { ok: false, error: "install failed" });
     expect(okResult.integrityDrift).toBeUndefined();
+  });
+
+  it("rejects prerelease resolutions unless explicitly requested", async () => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({
+      ok: true,
+      archivePath: baseArchivePath,
+      metadata: {
+        resolvedSpec: "@openclaw/test@latest",
+        integrity: "sha512-same",
+        version: "1.1.0-beta.1",
+      },
+    });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await installFromNpmSpecArchive({
+      tempDirPrefix: "openclaw-test-",
+      spec: "@openclaw/test@latest",
+      timeoutMs: 1000,
+      installFromArchive,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected prerelease rejection");
+    }
+    expect(result.error).toContain("prerelease version 1.1.0-beta.1");
+    expect(installFromArchive).not.toHaveBeenCalled();
+  });
+
+  it("allows prerelease resolutions when explicitly requested by tag", async () => {
+    vi.mocked(packNpmSpecToArchive).mockResolvedValue({
+      ok: true,
+      archivePath: baseArchivePath,
+      metadata: {
+        resolvedSpec: "@openclaw/test@beta",
+        integrity: "sha512-same",
+        version: "1.1.0-beta.1",
+      },
+    });
+    const installFromArchive = vi.fn(async () => ({ ok: true as const, pluginId: "beta-plugin" }));
+
+    const result = await installFromNpmSpecArchive({
+      tempDirPrefix: "openclaw-test-",
+      spec: "@openclaw/test@beta",
+      timeoutMs: 1000,
+      installFromArchive,
+    });
+
+    const okResult = expectWrappedOkResult(result, { ok: true, pluginId: "beta-plugin" });
+    expect(okResult.npmResolution.version).toBe("1.1.0-beta.1");
   });
 });
 

@@ -86,18 +86,35 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   describe("non-fatal errors", () => {
     it("does not exit on known transient network errors", () => {
-      const transientCases = [
+      const transientCases: unknown[] = [
         Object.assign(new TypeError("fetch failed"), {
           cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
         }),
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+        Object.assign(
+          new Error(
+            "A request error occurred: Client network socket disconnected before secure TLS connection was established",
+          ),
+          { code: "slack_webapi_request_error" },
+        ),
         Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
           code: "slack_webapi_request_error",
           original: { code: "EAI_AGAIN", syscall: "getaddrinfo", hostname: "slack.com" },
         }),
+        Object.assign(new Error("A request error occurred: unknown"), {
+          code: "slack_webapi_request_error",
+          original: Object.assign(new Error("connect timeout"), {
+            code: "UND_ERR_CONNECT_TIMEOUT",
+          }),
+        }),
       ];
+
+      // Wrapped fetch-failed (e.g. Discord: "Failed to get gateway information from Discord: fetch failed")
+      transientCases.push(
+        new Error("Failed to get gateway information from Discord: fetch failed"),
+      );
 
       for (const transientErr of transientCases) {
         expectExitCodeFromUnhandled(transientErr, []);
@@ -117,6 +134,17 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
       );
+    });
+
+    it("exits on non-transient Slack request errors", () => {
+      const slackErr = Object.assign(
+        new Error("A request error occurred: invalid request payload"),
+        {
+          code: "slack_webapi_request_error",
+        },
+      );
+
+      expectExitCodeFromUnhandled(slackErr, [1]);
     });
 
     it("does not exit on AbortError and logs suppression warning", () => {

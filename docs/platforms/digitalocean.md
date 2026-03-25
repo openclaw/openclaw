@@ -3,7 +3,7 @@ summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
   - Setting up OpenClaw on DigitalOcean
   - Looking for cheap VPS hosting for OpenClaw
-title: "DigitalOcean"
+title: "DigitalOcean (Platform)"
 ---
 
 # OpenClaw on DigitalOcean
@@ -66,8 +66,8 @@ ssh root@YOUR_DROPLET_IP
 # Update system
 apt update && apt upgrade -y
 
-# Install Node.js 22
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+# Install Node.js 24
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
 apt install -y nodejs
 
 # Install OpenClaw
@@ -231,7 +231,7 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 
 ## Troubleshooting
 
-### Gateway won't start
+### Gateway will not start
 
 ```bash
 openclaw gateway status

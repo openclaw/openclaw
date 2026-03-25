@@ -66,6 +66,9 @@ describe("resolveAccount", () => {
     expect(account.accountId).toBe("default");
     expect(account.enabled).toBe(true);
     expect(account.webhookPath).toBe("/webhook/synology");
+    expect(account.webhookPathSource).toBe("default");
+    expect(account.dangerouslyAllowNameMatching).toBe(false);
+    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
     expect(account.dmPolicy).toBe("allowlist");
     expect(account.rateLimitPerMinute).toBe(30);
     expect(account.botName).toBe("OpenClaw");
@@ -100,8 +103,13 @@ describe("resolveAccount", () => {
         "synology-chat": {
           token: "base-tok",
           botName: "BaseName",
+          dangerouslyAllowNameMatching: false,
           accounts: {
-            work: { token: "work-tok", botName: "WorkBot" },
+            work: {
+              token: "work-tok",
+              botName: "WorkBot",
+              dangerouslyAllowNameMatching: true,
+            },
           },
         },
       },
@@ -109,6 +117,79 @@ describe("resolveAccount", () => {
     const account = resolveAccount(cfg, "work");
     expect(account.token).toBe("work-tok");
     expect(account.botName).toBe("WorkBot");
+    expect(account.dangerouslyAllowNameMatching).toBe(true);
+  });
+
+  it("inherits dangerous name matching from base config when not overridden", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          dangerouslyAllowNameMatching: true,
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+
+    const account = resolveAccount(cfg, "work");
+    expect(account.dangerouslyAllowNameMatching).toBe(true);
+  });
+
+  it("allows a named account to disable inherited dangerous name matching", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          dangerouslyAllowNameMatching: true,
+          accounts: {
+            work: {
+              token: "work-tok",
+              dangerouslyAllowNameMatching: false,
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveAccount(cfg, "work");
+    expect(account.dangerouslyAllowNameMatching).toBe(false);
+  });
+
+  it("marks named multi-account webhookPath inheritance as dangerous-off by default", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "base-tok",
+          webhookPath: "/webhook/shared",
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+    const account = resolveAccount(cfg, "work");
+    expect(account.webhookPath).toBe("/webhook/shared");
+    expect(account.webhookPathSource).toBe("inherited-base");
+    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(false);
+  });
+
+  it("allows named accounts to opt into inherited webhookPath resolution", () => {
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          token: "base-tok",
+          webhookPath: "/webhook/shared",
+          dangerouslyAllowInheritedWebhookPath: true,
+          accounts: {
+            work: { token: "work-tok" },
+          },
+        },
+      },
+    };
+    const account = resolveAccount(cfg, "work");
+    expect(account.webhookPath).toBe("/webhook/shared");
+    expect(account.webhookPathSource).toBe("inherited-base");
+    expect(account.dangerouslyAllowInheritedWebhookPath).toBe(true);
   });
 
   it("parses comma-separated allowedUserIds string", () => {
@@ -129,5 +210,19 @@ describe("resolveAccount", () => {
     };
     const account = resolveAccount(cfg);
     expect(account.allowedUserIds).toEqual(["u1", "u2"]);
+  });
+
+  it("respects SYNOLOGY_RATE_LIMIT=0 instead of defaulting to 30", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "0";
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.rateLimitPerMinute).toBe(0);
+  });
+
+  it("falls back to 30 for malformed SYNOLOGY_RATE_LIMIT values", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "0abc";
+    const cfg = { channels: { "synology-chat": {} } };
+    const account = resolveAccount(cfg);
+    expect(account.rateLimitPerMinute).toBe(30);
   });
 });

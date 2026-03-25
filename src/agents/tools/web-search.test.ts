@@ -1,35 +1,46 @@
 import { describe, expect, it } from "vitest";
+import { __testing as braveTesting } from "../../../extensions/brave/src/brave-web-search-provider.js";
+import { __testing as moonshotTesting } from "../../../extensions/moonshot/src/kimi-web-search-provider.js";
+import { __testing as perplexityTesting } from "../../../extensions/perplexity/web-search-provider.js";
+import { __testing as xaiTesting } from "../../../extensions/xai/src/grok-web-search-provider.js";
+import {
+  buildUnsupportedSearchFilterResponse,
+  mergeScopedSearchConfig,
+} from "../../plugin-sdk/provider-web-search.js";
 import { withEnv } from "../../test-utils/env.js";
-import { __testing } from "./web-search.js";
-
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  resolvePerplexityModel,
+  resolvePerplexityTransport,
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
+  resolvePerplexityApiKey,
+  normalizeToIsoDate,
+  isoToPerplexityDate,
+} = perplexityTesting;
+const {
   normalizeBraveLanguageParams,
   normalizeFreshness,
-  freshnessToPerplexityRecency,
-  resolveGrokApiKey,
-  resolveGrokModel,
-  resolveGrokInlineCitations,
-  extractGrokContent,
-  resolveKimiApiKey,
-  resolveKimiModel,
-  resolveKimiBaseUrl,
-  extractKimiCitations,
-} = __testing;
+  resolveBraveMode,
+  mapBraveLlmContextResults,
+} = braveTesting;
+const { resolveGrokApiKey, resolveGrokModel, resolveGrokInlineCitations, extractGrokContent } =
+  xaiTesting;
+const { resolveKimiApiKey, resolveKimiModel, resolveKimiBaseUrl, extractKimiCitations } =
+  moonshotTesting;
 
-describe("web_search perplexity baseUrl defaults", () => {
-  it("detects a Perplexity key prefix", () => {
+const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
+const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
+const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
+const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
+const directPerplexityApiKey = ["pplx", "test"].join("-");
+const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
+
+describe("web_search perplexity compatibility routing", () => {
+  it("detects API key prefixes", () => {
     expect(inferPerplexityBaseUrlFromApiKey("pplx-123")).toBe("direct");
-  });
-
-  it("detects an OpenRouter key prefix", () => {
     expect(inferPerplexityBaseUrlFromApiKey("sk-or-v1-123")).toBe("openrouter");
-  });
-
-  it("returns undefined for unknown key formats", () => {
     expect(inferPerplexityBaseUrlFromApiKey("unknown-key")).toBeUndefined();
   });
 
@@ -39,58 +50,72 @@ describe("web_search perplexity baseUrl defaults", () => {
     );
   });
 
-  it("defaults to direct when using PERPLEXITY_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe("https://api.perplexity.ai");
-  });
-
-  it("defaults to OpenRouter when using OPENROUTER_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "openrouter_env")).toBe(
-      "https://openrouter.ai/api/v1",
+  it("resolves OpenRouter env auth and transport", () => {
+    withEnv(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      () => {
+        expect(resolvePerplexityApiKey(undefined)).toEqual({
+          apiKey: openRouterPerplexityApiKey,
+          source: "openrouter_env",
+        });
+        expect(resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
+          transport: "chat_completions",
+        });
+      },
     );
   });
 
-  it("defaults to direct when config key looks like Perplexity", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "pplx-123")).toBe(
-      "https://api.perplexity.ai",
+  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
+    withEnv(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      () => {
+        expect(resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro",
+          transport: "search_api",
+        });
+      },
     );
   });
 
-  it("defaults to OpenRouter when config key looks like OpenRouter", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "sk-or-v1-123")).toBe(
-      "https://openrouter.ai/api/v1",
+  it("switches direct Perplexity to chat completions when model override is configured", () => {
+    expect(resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
+      "perplexity/sonar-reasoning-pro",
     );
+    expect(
+      resolvePerplexityTransport({
+        apiKey: directPerplexityApiKey,
+        model: "perplexity/sonar-reasoning-pro",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      model: "perplexity/sonar-reasoning-pro",
+      transport: "chat_completions",
+    });
   });
 
-  it("defaults to OpenRouter for unknown config key formats", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toBe(
-      "https://openrouter.ai/api/v1",
-    );
+  it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    expect(
+      resolvePerplexityTransport({
+        apiKey: enterprisePerplexityApiKey,
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      transport: "search_api",
+    });
   });
-});
 
-describe("web_search perplexity model normalization", () => {
-  it("detects direct Perplexity host", () => {
+  it("normalizes direct Perplexity models for chat completions", () => {
     expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
-    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai/")).toBe(true);
     expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
-  });
-
-  it("strips provider prefix for direct Perplexity", () => {
     expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
       "sonar-pro",
     );
-  });
-
-  it("keeps prefixed model for OpenRouter", () => {
     expect(
       resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
     ).toBe("perplexity/sonar-pro");
-  });
-
-  it("keeps model unchanged when URL is invalid", () => {
-    expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
-      "perplexity/sonar-pro",
-    );
   });
 });
 
@@ -117,156 +142,121 @@ describe("web_search brave language param normalization", () => {
 });
 
 describe("web_search freshness normalization", () => {
-  it("accepts Brave shortcut values", () => {
-    expect(normalizeFreshness("pd")).toBe("pd");
-    expect(normalizeFreshness("PW")).toBe("pw");
+  it("accepts Brave shortcut values and maps for Perplexity", () => {
+    expect(normalizeFreshness("pd", "brave")).toBe("pd");
+    expect(normalizeFreshness("PW", "brave")).toBe("pw");
+    expect(normalizeFreshness("pd", "perplexity")).toBe("day");
+    expect(normalizeFreshness("pw", "perplexity")).toBe("week");
   });
 
-  it("accepts valid date ranges", () => {
-    expect(normalizeFreshness("2024-01-01to2024-01-31")).toBe("2024-01-01to2024-01-31");
+  it("accepts Perplexity values and maps for Brave", () => {
+    expect(normalizeFreshness("day", "perplexity")).toBe("day");
+    expect(normalizeFreshness("week", "perplexity")).toBe("week");
+    expect(normalizeFreshness("day", "brave")).toBe("pd");
+    expect(normalizeFreshness("week", "brave")).toBe("pw");
   });
 
-  it("rejects invalid date ranges", () => {
-    expect(normalizeFreshness("2024-13-01to2024-01-31")).toBeUndefined();
-    expect(normalizeFreshness("2024-02-30to2024-03-01")).toBeUndefined();
-    expect(normalizeFreshness("2024-03-10to2024-03-01")).toBeUndefined();
-  });
-});
-
-describe("freshnessToPerplexityRecency", () => {
-  it("maps Brave shortcuts to Perplexity recency values", () => {
-    expect(freshnessToPerplexityRecency("pd")).toBe("day");
-    expect(freshnessToPerplexityRecency("pw")).toBe("week");
-    expect(freshnessToPerplexityRecency("pm")).toBe("month");
-    expect(freshnessToPerplexityRecency("py")).toBe("year");
+  it("accepts valid date ranges for Brave", () => {
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "brave")).toBe("2024-01-01to2024-01-31");
   });
 
-  it("returns undefined for date ranges (not supported by Perplexity)", () => {
-    expect(freshnessToPerplexityRecency("2024-01-01to2024-01-31")).toBeUndefined();
+  it("rejects invalid values", () => {
+    expect(normalizeFreshness("yesterday", "brave")).toBeUndefined();
+    expect(normalizeFreshness("yesterday", "perplexity")).toBeUndefined();
+    expect(normalizeFreshness("2024-01-01to2024-01-31", "perplexity")).toBeUndefined();
   });
 
-  it("returns undefined for undefined/empty input", () => {
-    expect(freshnessToPerplexityRecency(undefined)).toBeUndefined();
-    expect(freshnessToPerplexityRecency("")).toBeUndefined();
+  it("rejects invalid date ranges for Brave", () => {
+    expect(normalizeFreshness("2024-13-01to2024-01-31", "brave")).toBeUndefined();
+    expect(normalizeFreshness("2024-02-30to2024-03-01", "brave")).toBeUndefined();
+    expect(normalizeFreshness("2024-03-10to2024-03-01", "brave")).toBeUndefined();
   });
 });
 
-describe("web_search grok config resolution", () => {
-  it("uses config apiKey when provided", () => {
-    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+describe("web_search date normalization", () => {
+  it("accepts ISO format", () => {
+    expect(normalizeToIsoDate("2024-01-15")).toBe("2024-01-15");
+    expect(normalizeToIsoDate("2025-12-31")).toBe("2025-12-31");
   });
 
-  it("returns undefined when no apiKey is available", () => {
-    withEnv({ XAI_API_KEY: undefined }, () => {
-      expect(resolveGrokApiKey({})).toBeUndefined();
-      expect(resolveGrokApiKey(undefined)).toBeUndefined();
-    });
+  it("accepts Perplexity format and converts to ISO", () => {
+    expect(normalizeToIsoDate("1/15/2024")).toBe("2024-01-15");
+    expect(normalizeToIsoDate("12/31/2025")).toBe("2025-12-31");
   });
 
-  it("uses default model when not specified", () => {
-    expect(resolveGrokModel({})).toBe("grok-4-1-fast");
-    expect(resolveGrokModel(undefined)).toBe("grok-4-1-fast");
+  it("rejects invalid formats", () => {
+    expect(normalizeToIsoDate("01-15-2024")).toBeUndefined();
+    expect(normalizeToIsoDate("2024/01/15")).toBeUndefined();
+    expect(normalizeToIsoDate("invalid")).toBeUndefined();
   });
 
-  it("uses config model when provided", () => {
-    expect(resolveGrokModel({ model: "grok-3" })).toBe("grok-3");
+  it("converts ISO to Perplexity format", () => {
+    expect(isoToPerplexityDate("2024-01-15")).toBe("1/15/2024");
+    expect(isoToPerplexityDate("2025-12-31")).toBe("12/31/2025");
+    expect(isoToPerplexityDate("2024-03-05")).toBe("3/5/2024");
   });
 
-  it("defaults inlineCitations to false", () => {
-    expect(resolveGrokInlineCitations({})).toBe(false);
-    expect(resolveGrokInlineCitations(undefined)).toBe(false);
-  });
-
-  it("respects inlineCitations config", () => {
-    expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
-    expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+  it("rejects invalid ISO dates", () => {
+    expect(isoToPerplexityDate("1/15/2024")).toBeUndefined();
+    expect(isoToPerplexityDate("invalid")).toBeUndefined();
   });
 });
 
-describe("web_search grok response parsing", () => {
-  it("extracts content from Responses API message blocks", () => {
-    const result = extractGrokContent({
-      output: [
-        {
-          type: "message",
-          content: [{ type: "output_text", text: "hello from output" }],
-        },
-      ],
+describe("web_search unsupported filter response", () => {
+  it("returns undefined when no unsupported filter is set", () => {
+    expect(buildUnsupportedSearchFilterResponse({ query: "openclaw" }, "gemini")).toBeUndefined();
+  });
+
+  it("maps non-date filters to provider-specific unsupported errors", () => {
+    expect(buildUnsupportedSearchFilterResponse({ country: "us" }, "grok")).toEqual({
+      error: "unsupported_country",
+      message:
+        "country filtering is not supported by the grok provider. Only Brave and Perplexity support country filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
-    expect(result.text).toBe("hello from output");
-    expect(result.annotationCitations).toEqual([]);
   });
 
-  it("extracts url_citation annotations from content blocks", () => {
-    const result = extractGrokContent({
-      output: [
-        {
-          type: "message",
-          content: [
-            {
-              type: "output_text",
-              text: "hello with citations",
-              annotations: [
-                {
-                  type: "url_citation",
-                  url: "https://example.com/a",
-                  start_index: 0,
-                  end_index: 5,
-                },
-                {
-                  type: "url_citation",
-                  url: "https://example.com/b",
-                  start_index: 6,
-                  end_index: 10,
-                },
-                {
-                  type: "url_citation",
-                  url: "https://example.com/a",
-                  start_index: 11,
-                  end_index: 15,
-                }, // duplicate
-              ],
-            },
-          ],
-        },
-      ],
+  it("collapses date filters to unsupported_date_filter", () => {
+    expect(buildUnsupportedSearchFilterResponse({ date_before: "2026-03-19" }, "kimi")).toEqual({
+      error: "unsupported_date_filter",
+      message:
+        "date_after/date_before filtering is not supported by the kimi provider. Only Brave and Perplexity support date filtering.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
-    expect(result.text).toBe("hello with citations");
-    expect(result.annotationCitations).toEqual(["https://example.com/a", "https://example.com/b"]);
+  });
+});
+
+describe("web_search scoped config merge", () => {
+  it("returns the original config when no plugin config exists", () => {
+    const searchConfig = { provider: "grok", grok: { model: "grok-4-1-fast" } };
+    expect(mergeScopedSearchConfig(searchConfig, "grok", undefined)).toBe(searchConfig);
   });
 
-  it("falls back to deprecated output_text", () => {
-    const result = extractGrokContent({ output_text: "hello from output_text" });
-    expect(result.text).toBe("hello from output_text");
-    expect(result.annotationCitations).toEqual([]);
+  it("merges plugin config into the scoped provider object", () => {
+    expect(
+      mergeScopedSearchConfig({ provider: "grok", grok: { model: "old-model" } }, "grok", {
+        model: "new-model",
+        apiKey: "xai-test-key",
+      }),
+    ).toEqual({
+      provider: "grok",
+      grok: { model: "new-model", apiKey: "xai-test-key" },
+    });
   });
 
-  it("returns undefined text when no content found", () => {
-    const result = extractGrokContent({});
-    expect(result.text).toBeUndefined();
-    expect(result.annotationCitations).toEqual([]);
-  });
-
-  it("extracts output_text blocks directly in output array (no message wrapper)", () => {
-    const result = extractGrokContent({
-      output: [
-        { type: "web_search_call" },
-        {
-          type: "output_text",
-          text: "direct output text",
-          annotations: [
-            {
-              type: "url_citation",
-              url: "https://example.com/direct",
-              start_index: 0,
-              end_index: 5,
-            },
-          ],
-        },
-      ],
-    } as Parameters<typeof extractGrokContent>[0]);
-    expect(result.text).toBe("direct output text");
-    expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  it("can mirror the plugin apiKey to the top level config", () => {
+    expect(
+      mergeScopedSearchConfig(
+        { provider: "brave", brave: { count: 5 } },
+        "brave",
+        { apiKey: "brave-test-key" },
+        { mirrorApiKeyToTopLevel: true },
+      ),
+    ).toEqual({
+      provider: "brave",
+      apiKey: "brave-test-key",
+      brave: { count: 5, apiKey: "brave-test-key" },
+    });
   });
 });
 
@@ -275,50 +265,120 @@ describe("web_search kimi config resolution", () => {
     expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
   });
 
-  it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
-    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("kimi-env");
-    });
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
-      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+  it("falls back to env apiKey", () => {
+    withEnv({ [kimiApiKeyEnv]: "kimi-env-key" }, () => {
+      expect(resolveKimiApiKey({})).toBe("kimi-env-key");
     });
   });
 
-  it("returns undefined when no Kimi key is configured", () => {
-    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () => {
-      expect(resolveKimiApiKey({})).toBeUndefined();
-      expect(resolveKimiApiKey(undefined)).toBeUndefined();
-    });
+  it("uses config model when provided", () => {
+    expect(resolveKimiModel({ model: "moonshot-v1-32k" })).toBe("moonshot-v1-32k");
   });
 
-  it("resolves default model and baseUrl", () => {
+  it("falls back to default model", () => {
     expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveKimiBaseUrl({ baseUrl: "https://kimi.example/v1" })).toBe(
+      "https://kimi.example/v1",
+    );
+  });
+
+  it("falls back to default baseUrl", () => {
     expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+
+  it("extracts citations from search_results", () => {
+    expect(
+      extractKimiCitations({
+        search_results: [{ url: "https://example.com/one" }, { url: "https://example.com/two" }],
+      }),
+    ).toEqual(["https://example.com/one", "https://example.com/two"]);
   });
 });
 
-describe("extractKimiCitations", () => {
-  it("collects unique URLs from search_results and tool arguments", () => {
+describe("web_search brave mode resolution", () => {
+  it("defaults to web mode", () => {
+    expect(resolveBraveMode({})).toBe("web");
+  });
+
+  it("honors explicit llm-context mode", () => {
+    expect(resolveBraveMode({ mode: "llm-context" })).toBe("llm-context");
+  });
+
+  it("maps llm context results", () => {
     expect(
-      extractKimiCitations({
-        search_results: [{ url: "https://example.com/a" }, { url: "https://example.com/a" }],
-        choices: [
+      mapBraveLlmContextResults({
+        grounding: {
+          generic: [{ url: "https://example.com", title: "Example", snippets: ["A", "B"] }],
+        },
+        sources: [{ url: "https://example.com", hostname: "example.com", date: "2024-01-01" }],
+      }),
+    ).toEqual([
+      {
+        title: "Example",
+        url: "https://example.com",
+        siteName: "example.com",
+        snippets: ["A", "B"],
+      },
+    ]);
+  });
+});
+
+describe("web_search grok config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveGrokApiKey({ apiKey: "xai-test-key" })).toBe("xai-test-key");
+  });
+
+  it("falls back to env apiKey", () => {
+    withEnv({ XAI_API_KEY: "xai-env-key" }, () => {
+      expect(resolveGrokApiKey({})).toBe("xai-env-key");
+    });
+  });
+
+  it("uses config model when provided", () => {
+    expect(resolveGrokModel({ model: "grok-4-fast" })).toBe("grok-4-fast");
+  });
+
+  it("normalizes deprecated grok 4.20 beta ids to GA ids", () => {
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-reasoning" })).toBe(
+      "grok-4.20-beta-latest-reasoning",
+    );
+    expect(resolveGrokModel({ model: "grok-4.20-experimental-beta-0304-non-reasoning" })).toBe(
+      "grok-4.20-beta-latest-non-reasoning",
+    );
+  });
+
+  it("falls back to default model", () => {
+    expect(resolveGrokModel({})).toBe("grok-4-1-fast");
+  });
+
+  it("resolves inline citations flag", () => {
+    expect(resolveGrokInlineCitations({ inlineCitations: true })).toBe(true);
+    expect(resolveGrokInlineCitations({ inlineCitations: false })).toBe(false);
+    expect(resolveGrokInlineCitations({})).toBe(false);
+  });
+
+  it("extracts content and annotation citations", () => {
+    expect(
+      extractGrokContent({
+        output: [
           {
-            message: {
-              tool_calls: [
-                {
-                  function: {
-                    arguments: JSON.stringify({
-                      search_results: [{ url: "https://example.com/b" }],
-                      url: "https://example.com/c",
-                    }),
-                  },
-                },
-              ],
-            },
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: "Result",
+                annotations: [{ type: "url_citation", url: "https://example.com" }],
+              },
+            ],
           },
         ],
-      }).toSorted(),
-    ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+      }),
+    ).toEqual({
+      text: "Result",
+      annotationCitations: ["https://example.com"],
+    });
   });
 });

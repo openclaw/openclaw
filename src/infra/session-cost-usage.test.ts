@@ -32,7 +32,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 20,
@@ -49,7 +49,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 10,
@@ -65,7 +65,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 5,
             output: 5,
@@ -88,7 +88,7 @@ describe("session cost usage", () => {
           openai: {
             models: [
               {
-                id: "gpt-5.2",
+                id: "gpt-5.4",
                 cost: {
                   input: 1,
                   output: 2,
@@ -123,7 +123,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 10,
             output: 20,
@@ -164,7 +164,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           stopReason: "error",
           content: [
             { type: "text", text: "Checking" },
@@ -200,7 +200,7 @@ describe("session cost usage", () => {
     expect(summary?.toolUsage?.uniqueTools).toBe(1);
     expect(summary?.toolUsage?.tools[0]?.name).toBe("weather");
     expect(summary?.modelUsage?.[0]?.provider).toBe("openai");
-    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.2");
+    expect(summary?.modelUsage?.[0]?.model).toBe("gpt-5.4");
     expect(summary?.durationMs).toBe(5 * 60 * 1000);
     expect(summary?.latency?.count).toBe(1);
     expect(summary?.latency?.avgMs).toBe(5 * 60 * 1000);
@@ -208,7 +208,7 @@ describe("session cost usage", () => {
     expect(summary?.dailyLatency?.[0]?.date).toBe("2026-02-01");
     expect(summary?.dailyLatency?.[0]?.count).toBe(1);
     expect(summary?.dailyModelUsage?.[0]?.date).toBe("2026-02-01");
-    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.2");
+    expect(summary?.dailyModelUsage?.[0]?.model).toBe("gpt-5.4");
   });
 
   it("does not exclude sessions with mtime after endMs during discovery", async () => {
@@ -231,6 +231,304 @@ describe("session cost usage", () => {
     });
   });
 
+  it("counts reset and deleted transcripts in global usage summary, but excludes bak archives", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const timestamp = "2026-02-12T10:00:00.000Z";
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-active.jsonl"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 1, output: 2, totalTokens: 3, cost: { total: 0.003 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 10, output: 20, totalTokens: 30, cost: { total: 0.03 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-deleted.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 4, output: 5, totalTokens: 9, cost: { total: 0.009 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-bak.jsonl.bak.2026-02-12T13-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: 100, output: 200, totalTokens: 300, cost: { total: 0.3 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 12),
+        endMs: Date.UTC(2026, 1, 12, 23, 59, 59, 999),
+      });
+      expect(summary.totals.totalTokens).toBe(42);
+      expect(summary.totals.totalCost).toBeCloseTo(0.042, 8);
+    });
+  });
+
+  it("discovers reset and deleted transcripts as usage sessions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "reset transcript" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-deleted.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "deleted transcript" },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions.map((session) => session.sessionId)).toEqual(["sess-deleted", "sess-reset"]);
+      expect(
+        sessions
+          .map((session) => session.firstUserMessage)
+          .toSorted((a, b) => String(a).localeCompare(String(b))),
+      ).toEqual(["deleted transcript", "reset transcript"]);
+    });
+  });
+
+  it("deduplicates discovered sessions by sessionId and keeps the newest archive", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-dedupe-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const resetPath = path.join(sessionsDir, "sess-shared.jsonl.reset.2026-02-12T11-00-00.000Z");
+    const deletedPath = path.join(
+      sessionsDir,
+      "sess-shared.jsonl.deleted.2026-02-12T12-00-00.000Z",
+    );
+
+    await fs.writeFile(
+      resetPath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "older archive" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      deletedPath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:05:00.000Z",
+        message: { role: "user", content: "newer archive" },
+      }),
+      "utf-8",
+    );
+
+    const older = Date.UTC(2026, 1, 12, 11, 0, 0) / 1000;
+    const newer = Date.UTC(2026, 1, 12, 12, 0, 0) / 1000;
+    await fs.utimes(resetPath, older, older);
+    await fs.utimes(deletedPath, newer, newer);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("sess-shared");
+      expect(sessions[0]?.sessionFile).toContain(".jsonl.deleted.");
+      expect(sessions[0]?.firstUserMessage).toBe("newer archive");
+    });
+  });
+
+  it("prefers the active transcript over archives during discovery dedupe", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-active-preferred-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const activePath = path.join(sessionsDir, "sess-live.jsonl");
+    const archivePath = path.join(sessionsDir, "sess-live.jsonl.deleted.2026-02-12T12-00-00.000Z");
+
+    await fs.writeFile(
+      activePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: { role: "user", content: "active transcript" },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:05:00.000Z",
+        message: { role: "user", content: "archive transcript" },
+      }),
+      "utf-8",
+    );
+
+    const older = Date.UTC(2026, 1, 12, 10, 0, 0) / 1000;
+    const newer = Date.UTC(2026, 1, 12, 12, 0, 0) / 1000;
+    await fs.utimes(activePath, older, older);
+    await fs.utimes(archivePath, newer, newer);
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.sessionId).toBe("sess-live");
+      expect(sessions[0]?.sessionFile).toBe(activePath);
+      expect(sessions[0]?.firstUserMessage).toBe("active transcript");
+    });
+  });
+
+  it("falls back to archived reset transcripts for per-session detail queries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-fallback-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T10:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "archived answer",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-reset" });
+      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-reset" });
+      const logs = await loadSessionLogs({ sessionId: "sess-reset" });
+
+      expect(summary?.totalTokens).toBe(10);
+      expect(summary?.sessionFile).toContain(".jsonl.reset.");
+      expect(timeseries?.points[0]?.totalTokens).toBe(10);
+      expect(logs).toHaveLength(1);
+      expect(logs?.[0]?.content).toContain("archived answer");
+    });
+  });
+
+  it("uses the candidate session directory for archived fallback lookups", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-custom-archive-"));
+    const customSessionsDir = path.join(root, "custom-store", "sessions");
+    await fs.mkdir(customSessionsDir, { recursive: true });
+
+    const activePath = path.join(customSessionsDir, "sess-custom.jsonl");
+    const archivePath = path.join(
+      customSessionsDir,
+      "sess-custom.jsonl.deleted.2026-02-12T12-00-00.000Z",
+    );
+
+    await fs.writeFile(
+      archivePath,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "custom archived answer",
+          usage: { input: 9, output: 3, totalTokens: 12, cost: { total: 0.012 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    const summary = await loadSessionCostSummary({
+      sessionId: "sess-custom",
+      sessionFile: activePath,
+    });
+    const logs = await loadSessionLogs({
+      sessionId: "sess-custom",
+      sessionFile: activePath,
+    });
+
+    expect(summary?.totalTokens).toBe(12);
+    expect(summary?.sessionFile).toBe(archivePath);
+    expect(logs?.[0]?.content).toContain("custom archived answer");
+  });
+
+  it("picks the newest archive by timestamp when reset and deleted archives coexist", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-archive-order-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-mixed.jsonl.reset.2026-02-12T11-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T11:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "older reset archive",
+          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-mixed.jsonl.deleted.2026-02-12T12-00-00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-12T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          content: "newer deleted archive",
+          usage: { input: 12, output: 8, totalTokens: 20, cost: { total: 0.02 } },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-mixed" });
+      const logs = await loadSessionLogs({ sessionId: "sess-mixed" });
+
+      expect(summary?.totalTokens).toBe(20);
+      expect(summary?.sessionFile).toContain(".jsonl.deleted.");
+      expect(logs?.[0]?.content).toContain("newer deleted archive");
+    });
+  });
+
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
     const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
@@ -246,7 +544,7 @@ describe("session cost usage", () => {
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: 7,
             output: 11,
@@ -288,7 +586,7 @@ describe("session cost usage", () => {
           message: {
             role: "assistant",
             provider: "openai",
-            model: "gpt-5.2",
+            model: "gpt-5.4",
             usage: { input: 5, output: 3, totalTokens: 8, cost: { total: 0.001 } },
           },
         }),
@@ -404,7 +702,7 @@ example
         message: {
           role: "assistant",
           provider: "openai",
-          model: "gpt-5.2",
+          model: "gpt-5.4",
           usage: {
             input: idx,
             output: idx * 2,

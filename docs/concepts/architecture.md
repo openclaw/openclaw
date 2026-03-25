@@ -7,8 +7,6 @@ title: "Gateway Architecture"
 
 # Gateway architecture
 
-Last updated: 2026-01-22
-
 ## Overview
 
 - A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via
@@ -98,6 +96,9 @@ sequenceDiagram
 - **Local** connects (loopback or the gateway host’s own tailnet address) can be
   auto‑approved to keep same‑host UX smooth.
 - All connects must sign the `connect.challenge` nonce.
+- Signature payload `v3` also binds `platform` + `deviceFamily`; the gateway
+  pins paired metadata on reconnect and requires repair pairing for metadata
+  changes.
 - **Non‑local** connects still require explicit approval.
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.

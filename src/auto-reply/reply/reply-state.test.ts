@@ -15,7 +15,9 @@ import {
   recordPendingHistoryEntryIfEnabled,
 } from "./history.js";
 import {
+  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+  hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
@@ -50,6 +52,35 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
   await seedSessionStore({ storePath, sessionKey, entry });
   return { storePath, sessionKey, sessionStore };
+}
+
+async function rotateCompactionSessionFile(params: {
+  tempPrefix: string;
+  sessionFile: (tmp: string) => string;
+  newSessionId: string;
+}) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+  tempDirs.push(tmp);
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionKey = "main";
+  const entry = {
+    sessionId: "s1",
+    sessionFile: params.sessionFile(tmp),
+    updatedAt: Date.now(),
+    compactionCount: 0,
+  } as SessionEntry;
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+  await seedSessionStore({ storePath, sessionKey, entry });
+  await incrementCompactionCount({
+    sessionEntry: entry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    newSessionId: params.newSessionId,
+  });
+  const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+  const expectedDir = await fs.realpath(tmp);
+  return { stored, sessionKey, expectedDir };
 }
 
 describe("history helpers", () => {
@@ -198,8 +229,13 @@ describe("memory flush settings", () => {
     const settings = resolveMemoryFlushSettings();
     expect(settings).not.toBeNull();
     expect(settings?.enabled).toBe(true);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.prompt.length).toBeGreaterThan(0);
     expect(settings?.systemPrompt.length).toBeGreaterThan(0);
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("respects disable flag", () => {
@@ -227,6 +263,10 @@ describe("memory flush settings", () => {
     });
     expect(settings?.prompt).toContain("NO_REPLY");
     expect(settings?.systemPrompt).toContain("NO_REPLY");
+    expect(settings?.prompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.prompt).toContain("MEMORY.md");
+    expect(settings?.systemPrompt).toContain("memory/YYYY-MM-DD.md");
+    expect(settings?.systemPrompt).toContain("MEMORY.md");
   });
 
   it("falls back to defaults when numeric values are invalid", () => {
@@ -244,7 +284,24 @@ describe("memory flush settings", () => {
     });
 
     expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(settings?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+
+  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
+    const settings = resolveMemoryFlushSettings({
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {
+              forceFlushTranscriptBytes: "3mb",
+            },
+          },
+        },
+      },
+    });
+
+    expect(settings?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
   });
 });
 
@@ -331,6 +388,42 @@ describe("shouldRunMemoryFlush", () => {
   });
 });
 
+describe("hasAlreadyFlushedForCurrentCompaction", () => {
+  it("returns true when memoryFlushCompactionCount matches compactionCount", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when memoryFlushCompactionCount differs", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 3,
+        memoryFlushCompactionCount: 2,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when memoryFlushCompactionCount is undefined", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats missing compactionCount as 0", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
     expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
@@ -379,6 +472,104 @@ describe("incrementCompactionCount", () => {
     // input/output cleared since we only have the total estimate
     expect(stored[sessionKey].inputTokens).toBeUndefined();
     expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
+  it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-rotate-",
+      sessionFile: (tmp) => path.join(tmp, "s1-topic-456.jsonl"),
+      newSessionId: "s2",
+    });
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2-topic-456.jsonl"));
+  });
+
+  it("preserves fork transcript filenames when compaction rotates transcripts", async () => {
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-fork-",
+      sessionFile: (tmp) => path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
+      newSessionId: "s2",
+    });
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(
+      path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
+    );
+  });
+
+  it("falls back to the derived transcript path when rewritten absolute sessionFile is unsafe", async () => {
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-unsafe-",
+      sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
+      newSessionId: "s2",
+    });
+    expect(stored[sessionKey].sessionId).toBe("s2");
+    expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2.jsonl"));
+  });
+
+  it("increments compaction count by an explicit amount", async () => {
+    const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    const count = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      amount: 2,
+    });
+    expect(count).toBe(4);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(4);
+  });
+
+  it("updates sessionId and sessionFile when newSessionId is provided", async () => {
+    const entry = {
+      sessionId: "old-session-id",
+      sessionFile: "old-session-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 1,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "new-session-id",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    const expectedSessionDir = await fs.realpath(path.dirname(storePath));
+    expect(stored[sessionKey].sessionId).toBe("new-session-id");
+    expect(stored[sessionKey].sessionFile).toBe(
+      path.join(expectedSessionDir, "new-session-id.jsonl"),
+    );
+    expect(stored[sessionKey].compactionCount).toBe(2);
+  });
+
+  it("does not update sessionFile when newSessionId matches current sessionId", async () => {
+    const entry = {
+      sessionId: "same-id",
+      sessionFile: "same-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "same-id",
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("same-id");
+    expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
+    expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
   it("does not update totalTokens when tokensAfter is not provided", async () => {

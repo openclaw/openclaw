@@ -41,15 +41,17 @@ private struct AutoDetectStep: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Connection status") {
-                ConnectionStatusBox(
-                    statusLines: self.connectionStatusLines(),
-                    secondaryLine: self.connectStatusText)
-            }
+            gatewayConnectionStatusSection(
+                appModel: self.appModel,
+                gatewayController: self.gatewayController,
+                secondaryLine: self.connectStatusText)
 
             Section {
                 Button("Retry") {
-                    self.resetConnectionState()
+                    resetGatewayConnectionState(
+                        appModel: self.appModel,
+                        connectStatusText: &self.connectStatusText,
+                        connectingGatewayID: &self.connectingGatewayID)
                     self.triggerAutoConnect()
                 }
                 .disabled(self.connectingGatewayID != nil)
@@ -94,15 +96,6 @@ private struct AutoDetectStep: View {
         return nil
     }
 
-    private func connectionStatusLines() -> [String] {
-        ConnectionStatusBox.defaultLines(appModel: self.appModel, gatewayController: self.gatewayController)
-    }
-
-    private func resetConnectionState() {
-        self.appModel.disconnectGateway()
-        self.connectStatusText = nil
-        self.connectingGatewayID = nil
-    }
 }
 
 private struct ManualEntryStep: View {
@@ -162,11 +155,10 @@ private struct ManualEntryStep: View {
                     .autocorrectionDisabled()
             }
 
-            Section("Connection status") {
-                ConnectionStatusBox(
-                    statusLines: self.connectionStatusLines(),
-                    secondaryLine: self.connectStatusText)
-            }
+            gatewayConnectionStatusSection(
+                appModel: self.appModel,
+                gatewayController: self.gatewayController,
+                secondaryLine: self.connectStatusText)
 
             Section {
                 Button {
@@ -185,7 +177,10 @@ private struct ManualEntryStep: View {
                 .disabled(self.connectingGatewayID != nil)
 
                 Button("Retry") {
-                    self.resetConnectionState()
+                    resetGatewayConnectionState(
+                        appModel: self.appModel,
+                        connectStatusText: &self.connectStatusText,
+                        connectingGatewayID: &self.connectingGatewayID)
                     self.resetManualForm()
                 }
                 .disabled(self.connectingGatewayID != nil)
@@ -237,16 +232,6 @@ private struct ManualEntryStep: View {
         return Int(trimmed.filter { $0.isNumber })
     }
 
-    private func connectionStatusLines() -> [String] {
-        ConnectionStatusBox.defaultLines(appModel: self.appModel, gatewayController: self.gatewayController)
-    }
-
-    private func resetConnectionState() {
-        self.appModel.disconnectGateway()
-        self.connectStatusText = nil
-        self.connectingGatewayID = nil
-    }
-
     private func resetManualForm() {
         self.setupCode = ""
         self.setupStatusText = nil
@@ -290,9 +275,21 @@ private struct ManualEntryStep: View {
 
         if let token = payload.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualToken = ""
         }
         if let password = payload.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.manualPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            self.manualPassword = ""
+        }
+
+        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedInstanceId.isEmpty {
+            let trimmedBootstrapToken =
+                payload.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
         }
 
         self.setupStatusText = "Setup code applied."
@@ -315,6 +312,41 @@ private struct ManualEntryStep: View {
     }
 
     // (GatewaySetupCode) decode raw setup codes.
+}
+
+@MainActor
+private func gatewayConnectionStatusLines(
+    appModel: NodeAppModel,
+    gatewayController: GatewayConnectionController) -> [String]
+{
+    ConnectionStatusBox.defaultLines(appModel: appModel, gatewayController: gatewayController)
+}
+
+@MainActor
+private func resetGatewayConnectionState(
+    appModel: NodeAppModel,
+    connectStatusText: inout String?,
+    connectingGatewayID: inout String?)
+{
+    appModel.disconnectGateway()
+    connectStatusText = nil
+    connectingGatewayID = nil
+}
+
+@MainActor
+@ViewBuilder
+private func gatewayConnectionStatusSection(
+    appModel: NodeAppModel,
+    gatewayController: GatewayConnectionController,
+    secondaryLine: String?) -> some View
+{
+    Section("Connection status") {
+        ConnectionStatusBox(
+            statusLines: gatewayConnectionStatusLines(
+                appModel: appModel,
+                gatewayController: gatewayController),
+            secondaryLine: secondaryLine)
+    }
 }
 
 private struct ConnectionStatusBox: View {

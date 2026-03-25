@@ -43,6 +43,7 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
+  enableSlackInteractiveReplies?: boolean;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
@@ -69,6 +70,8 @@ type ReplyDispatcherWithTypingResult = {
   dispatcher: ReplyDispatcher;
   replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController" | "onTypingCleanup">;
   markDispatchIdle: () => void;
+  /** Signal that the model run is complete so the typing controller can stop. */
+  markRunComplete: () => void;
 };
 
 export type ReplyDispatcher = {
@@ -82,7 +85,11 @@ export type ReplyDispatcher = {
 
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
-  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+  | "responsePrefix"
+  | "enableSlackInteractiveReplies"
+  | "responsePrefixContext"
+  | "responsePrefixContextProvider"
+  | "onHeartbeatStrip"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -96,6 +103,7 @@ function normalizeReplyPayloadInternal(
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
+    enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     onSkip: opts.onSkip,
@@ -127,6 +135,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
+      enableSlackInteractiveReplies: options.enableSlackInteractiveReplies,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       onHeartbeatStrip: options.onHeartbeatStrip,
@@ -236,6 +245,9 @@ export function createReplyDispatcherWithTyping(
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();
       resolvedOnIdle?.();
+    },
+    markRunComplete: () => {
+      typingController?.markRunComplete();
     },
   };
 }

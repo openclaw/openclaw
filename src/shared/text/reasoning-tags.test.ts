@@ -146,6 +146,10 @@ describe("stripReasoningTagsFromText", () => {
           input: "`<final>` in code, <final>visible</final> outside",
           expected: "`<final>` in code, visible outside",
         },
+        {
+          input: "A <FINAL data-x='1'>visible</Final> B",
+          expected: "A visible B",
+        },
       ] as const;
       for (const { input, expected } of cases) {
         expect(stripReasoningTagsFromText(input)).toBe(expected);
@@ -195,6 +199,12 @@ describe("stripReasoningTagsFromText", () => {
         expect(stripReasoningTagsFromText(input, { mode })).toBe(expected);
       }
     });
+
+    it("still strips fully closed reasoning blocks in preserve mode", () => {
+      expect(stripReasoningTagsFromText("A <think>hidden</think> B", { mode: "preserve" })).toBe(
+        "A  B",
+      );
+    });
   });
 
   describe("trim options", () => {
@@ -220,5 +230,11 @@ describe("stripReasoningTagsFromText", () => {
         expect(stripReasoningTagsFromText(testCase.input, testCase.opts)).toBe(testCase.expected);
       }
     });
+  });
+
+  it("does not leak regex state across repeated calls", () => {
+    expect(stripReasoningTagsFromText("A <final>1</final> B")).toBe("A 1 B");
+    expect(stripReasoningTagsFromText("C <final>2</final> D")).toBe("C 2 D");
+    expect(stripReasoningTagsFromText("E <think>x</think> F")).toBe("E  F");
   });
 });

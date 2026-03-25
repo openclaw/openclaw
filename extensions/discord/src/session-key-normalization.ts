@@ -1,0 +1,45 @@
+type DiscordSessionKeyContext = {
+  ChatType?: string;
+  From?: string;
+  SenderId?: string;
+};
+
+function normalizeDiscordChatType(raw?: string): "direct" | "group" | "channel" | undefined {
+  const normalized = (raw ?? "").trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "dm") {
+    return "direct";
+  }
+  if (normalized === "group" || normalized === "channel" || normalized === "direct") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function normalizeExplicitDiscordSessionKey(
+  sessionKey: string,
+  ctx: DiscordSessionKeyContext,
+): string {
+  let normalized = sessionKey.trim().toLowerCase();
+  if (normalizeDiscordChatType(ctx.ChatType) !== "direct") {
+    return normalized;
+  }
+
+  normalized = normalized.replace(/^(discord:)dm:/, "$1direct:");
+  normalized = normalized.replace(/^(agent:[^:]+:discord:)dm:/, "$1direct:");
+  const match = normalized.match(/^((?:agent:[^:]+:)?)discord:channel:([^:]+)$/);
+  if (!match) {
+    return normalized;
+  }
+
+  const from = (ctx.From ?? "").trim().toLowerCase();
+  const senderId = (ctx.SenderId ?? "").trim().toLowerCase();
+  const fromDiscordId =
+    from.startsWith("discord:") && !from.includes(":channel:") && !from.includes(":group:")
+      ? from.slice("discord:".length)
+      : "";
+  const directId = senderId || fromDiscordId;
+  return directId && directId === match[2] ? `${match[1]}discord:direct:${match[2]}` : normalized;
+}

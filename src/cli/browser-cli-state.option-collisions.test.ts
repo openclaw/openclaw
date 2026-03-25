@@ -1,16 +1,24 @@
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { createBrowserProgram as createBrowserProgramShared } from "./browser-cli-test-helpers.js";
+import type { CliRuntimeCapture } from "./test-runtime-capture.js";
+
+const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
+
+function getRuntimeCapture(): CliRuntimeCapture {
+  if (!runtimeState.capture) {
+    throw new Error("runtime capture not initialized");
+  }
+  return runtimeState.capture;
+}
+
+function getRuntime() {
+  return getRuntimeCapture().defaultRuntime;
+}
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
 }));
 
 vi.mock("./browser-cli-shared.js", () => ({
@@ -21,21 +29,15 @@ vi.mock("./browser-cli-resize.js", () => ({
   runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
-}));
+vi.mock("../runtime.js", async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  runtimeState.capture ??= createCliRuntimeCapture();
+  return { defaultRuntime: runtimeState.capture.defaultRuntime };
+});
 
 describe("browser state option collisions", () => {
-  const createBrowserProgram = ({ withGatewayUrl = false } = {}) => {
-    const program = new Command();
-    const browser = program
-      .command("browser")
-      .option("--browser-profile <name>", "Browser profile")
-      .option("--json", "Output JSON", false);
-    if (withGatewayUrl) {
-      browser.option("--url <url>", "Gateway WebSocket URL");
-    }
-    const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const createStateProgram = ({ withGatewayUrl = false } = {}) => {
+    const { program, browser, parentOpts } = createBrowserProgramShared({ withGatewayUrl });
     registerBrowserStateCommands(browser, parentOpts);
     return program;
   };
@@ -50,7 +52,7 @@ describe("browser state option collisions", () => {
   };
 
   const runBrowserCommand = async (argv: string[]) => {
-    const program = createBrowserProgram();
+    const program = createStateProgram();
     await program.parseAsync(["browser", ...argv], { from: "user" });
   };
 
@@ -62,9 +64,8 @@ describe("browser state option collisions", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.exit.mockClear();
+    getRuntimeCapture().resetRuntimeCapture();
+    getRuntime().exit.mockImplementation(() => {});
   });
 
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
@@ -83,7 +84,7 @@ describe("browser state option collisions", () => {
   });
 
   it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
-    const program = createBrowserProgram({ withGatewayUrl: true });
+    const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
       [
         "browser",
@@ -105,7 +106,7 @@ describe("browser state option collisions", () => {
   });
 
   it("inherits --url from parent when subcommand does not provide it", async () => {
-    const program = createBrowserProgram({ withGatewayUrl: true });
+    const program = createStateProgram({ withGatewayUrl: true });
     await program.parseAsync(
       ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
       { from: "user" },
@@ -144,37 +145,37 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Expected dark|light|none"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is missing", async () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Missing headers JSON"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is not an object", async () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Headers JSON must be a JSON object"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getRuntime().exit).toHaveBeenCalledWith(1);
   });
 });

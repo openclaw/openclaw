@@ -36,4 +36,39 @@ describe("fetchGeminiUsage", () => {
     expect(result.windows[1]?.label).toBe("Flash");
     expect(result.windows[1]?.usedPercent).toBeCloseTo(30, 6);
   });
+
+  it("returns no windows when the response has no recognized model families", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        buckets: [{ modelId: "gemini-unknown", remainingFraction: 0.5 }],
+      }),
+    );
+
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+
+    expect(result).toEqual({
+      provider: "google-gemini-cli",
+      displayName: "Gemini",
+      windows: [],
+    });
+  });
+
+  it("defaults missing fractions to fully available and clamps invalid fractions", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        buckets: [
+          { modelId: "gemini-pro" },
+          { modelId: "gemini-pro-latest", remainingFraction: -0.5 },
+          { modelId: "gemini-flash", remainingFraction: 1.2 },
+        ],
+      }),
+    );
+
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, "google-gemini-cli");
+
+    expect(result.windows).toEqual([
+      { label: "Pro", usedPercent: 100 },
+      { label: "Flash", usedPercent: 0 },
+    ]);
+  });
 });

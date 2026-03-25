@@ -7,6 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeAgentStartResult, PluginHookRegistration } from "./types.js";
 
@@ -16,21 +17,16 @@ function addBeforeAgentStartHook(
   handler: () => PluginHookBeforeAgentStartResult | Promise<PluginHookBeforeAgentStartResult>,
   priority?: number,
 ) {
-  registry.typedHooks.push({
+  addTestHook({
+    registry,
     pluginId,
     hookName: "before_agent_start",
-    handler,
+    handler: handler as PluginHookRegistration["handler"],
     priority,
-    source: "test",
-  } as PluginHookRegistration);
+  });
 }
 
-const stubCtx = {
-  agentId: "test-agent",
-  sessionKey: "sk",
-  sessionId: "sid",
-  workspaceDir: "/tmp",
-};
+const stubCtx = TEST_PLUGIN_AGENT_CTX;
 
 describe("before_agent_start hook merger", () => {
   let registry: PluginRegistry;
@@ -76,7 +72,7 @@ describe("before_agent_start hook merger", () => {
   });
 
   it("higher-priority plugin wins for modelOverride", async () => {
-    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-4o" }), 1);
+    addBeforeAgentStartHook(registry, "low-priority", () => ({ modelOverride: "gpt-5.4" }), 1);
     addBeforeAgentStartHook(
       registry,
       "high-priority",

@@ -31,7 +31,7 @@ describe("exec approvals wrapper resolution parity fixture", () => {
   for (const fixture of fixtures) {
     it(`matches wrapper fixture: ${fixture.id}`, () => {
       const resolution = resolveCommandResolutionFromArgv(fixture.argv);
-      expect(resolution?.rawExecutable ?? null).toBe(fixture.expectedRawExecutable);
+      expect(resolution?.execution.rawExecutable ?? null).toBe(fixture.expectedRawExecutable);
     });
   }
 });

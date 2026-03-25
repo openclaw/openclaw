@@ -18,64 +18,27 @@ This endpoint is **disabled by default**. Enable it in config first.
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
 `openclaw agent`), so routing/permissions/config match your Gateway.
 
-## Authentication
+## Authentication, security, and routing
 
-Uses the Gateway auth configuration. Send a bearer token:
+Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api):
 
-- `Authorization: Bearer <token>`
+- use `Authorization: Bearer <token>` with the normal Gateway auth config
+- treat the endpoint as full operator access for the gateway instance
+- select agents with `model: "openclaw"`, `model: "openclaw/default"`, `model: "openclaw/<agentId>"`, or `x-openclaw-agent-id`
+- use `x-openclaw-model` when you want to override the selected agent's backend model
+- use `x-openclaw-session-key` for explicit session routing
+- use `x-openclaw-message-channel` when you want a non-default synthetic ingress channel context
 
-Notes:
+Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
-- If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
+The same compatibility surface also includes:
 
-## Choosing an agent
+- `GET /v1/models`
+- `GET /v1/models/{id}`
+- `POST /v1/embeddings`
+- `POST /v1/chat/completions`
 
-No custom headers required: encode the agent id in the OpenResponses `model` field:
-
-- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
-- `model: "agent:<agentId>"` (alias)
-
-Or target a specific OpenClaw agent by header:
-
-- `x-openclaw-agent-id: <agentId>` (default: `main`)
-
-Advanced:
-
-- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
-
-## Enabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `true`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: true },
-      },
-    },
-  },
-}
-```
-
-## Disabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `false`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: false },
-      },
-    },
-  },
-}
-```
+For the canonical explanation of how agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides fit together, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract) and [Model list and agent routing](/gateway/openai-http-api#model-list-and-agent-routing).
 
 ## Session behavior
 
@@ -102,8 +65,11 @@ Accepted but **currently ignored**:
 - `reasoning`
 - `metadata`
 - `store`
-- `previous_response_id`
 - `truncation`
+
+Supported:
+
+- `previous_response_id`: OpenClaw reuses the earlier response session when the request stays within the same agent/user/requested-session scope.
 
 ## Items (input)
 
@@ -149,7 +115,7 @@ Supports base64 or URL sources:
 }
 ```
 
-Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`.
 Max size (current): 10MB.
 
 ## Files (`input_file`)
@@ -192,6 +158,8 @@ URL fetch defaults:
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
   - Exact host: `"cdn.example.com"`
   - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
+  - Empty or omitted allowlists mean no hostname allowlist restriction.
+- To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
 ## File + image limits (config)
 
@@ -230,7 +198,14 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
           images: {
             allowUrl: true,
             urlAllowlist: ["images.example.com"],
-            allowedMimes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            allowedMimes: [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+            ],
             maxBytes: 10485760,
             maxRedirects: 3,
             timeoutMs: 10000,
@@ -256,6 +231,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
 
 Security note:
 

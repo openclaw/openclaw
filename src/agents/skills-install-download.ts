@@ -1,23 +1,19 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
-import {
-  isWindowsDrivePath,
-  resolveArchiveOutputPath,
-  stripArchivePath,
-  validateArchiveEntryPath,
-} from "../infra/archive-path.js";
-import { extractArchive as extractArchiveSafe } from "../infra/archive.js";
+import { isWindowsDrivePath } from "../infra/archive-path.js";
+import { writeFileFromPathWithinRoot } from "../infra/fs-safe.js";
+import { assertCanonicalPathWithinBase } from "../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isWithinDir } from "../infra/path-safety.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
+import { extractArchive } from "./skills-install-extract.js";
 import { formatInstallFailureMessage } from "./skills-install-output.js";
 import type { SkillInstallResult } from "./skills-install.js";
 import type { SkillEntry, SkillInstallSpec } from "./skills.js";
-import { hasBinary } from "./skills.js";
 import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
@@ -63,138 +59,45 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
-async function downloadFile(
-  url: string,
-  destPath: string,
-  timeoutMs: number,
-): Promise<{ bytes: number }> {
+async function downloadFile(params: {
+  url: string;
+  rootDir: string;
+  relativePath: string;
+  timeoutMs: number;
+}): Promise<{ bytes: number }> {
+  const destPath = path.resolve(params.rootDir, params.relativePath);
+  const stagingDir = path.join(params.rootDir, ".openclaw-download-staging");
+  await ensureDir(stagingDir);
+  await assertCanonicalPathWithinBase({
+    baseDir: params.rootDir,
+    candidatePath: stagingDir,
+    boundaryLabel: "skill tools directory",
+  });
+  const tempPath = path.join(stagingDir, `${randomUUID()}.tmp`);
   const { response, release } = await fetchWithSsrFGuard({
-    url,
-    timeoutMs: Math.max(1_000, timeoutMs),
+    url: params.url,
+    timeoutMs: Math.max(1_000, params.timeoutMs),
   });
   try {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
-    await ensureDir(path.dirname(destPath));
-    const file = fs.createWriteStream(destPath);
+    const file = fs.createWriteStream(tempPath);
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
     await pipeline(readable, file);
+    await writeFileFromPathWithinRoot({
+      rootDir: params.rootDir,
+      relativePath: params.relativePath,
+      sourcePath: tempPath,
+    });
     const stat = await fs.promises.stat(destPath);
     return { bytes: stat.size };
   } finally {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
     await release();
-  }
-}
-
-async function extractArchive(params: {
-  archivePath: string;
-  archiveType: string;
-  targetDir: string;
-  stripComponents?: number;
-  timeoutMs: number;
-}): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
-  const strip =
-    typeof stripComponents === "number" && Number.isFinite(stripComponents)
-      ? Math.max(0, Math.floor(stripComponents))
-      : 0;
-
-  try {
-    if (archiveType === "zip") {
-      await extractArchiveSafe({
-        archivePath,
-        destDir: targetDir,
-        timeoutMs,
-        kind: "zip",
-        stripComponents: strip,
-      });
-      return { stdout: "", stderr: "", code: 0 };
-    }
-
-    if (archiveType === "tar.gz") {
-      await extractArchiveSafe({
-        archivePath,
-        destDir: targetDir,
-        timeoutMs,
-        kind: "tar",
-        stripComponents: strip,
-        tarGzip: true,
-      });
-      return { stdout: "", stderr: "", code: 0 };
-    }
-
-    if (archiveType === "tar.bz2") {
-      if (!hasBinary("tar")) {
-        return { stdout: "", stderr: "tar not found on PATH", code: null };
-      }
-
-      // Preflight list to prevent zip-slip style traversal before extraction.
-      const listResult = await runCommandWithTimeout(["tar", "tf", archivePath], { timeoutMs });
-      if (listResult.code !== 0) {
-        return {
-          stdout: listResult.stdout,
-          stderr: listResult.stderr || "tar list failed",
-          code: listResult.code,
-        };
-      }
-      const entries = listResult.stdout
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      const verboseResult = await runCommandWithTimeout(["tar", "tvf", archivePath], { timeoutMs });
-      if (verboseResult.code !== 0) {
-        return {
-          stdout: verboseResult.stdout,
-          stderr: verboseResult.stderr || "tar verbose list failed",
-          code: verboseResult.code,
-        };
-      }
-      for (const line of verboseResult.stdout.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        const typeChar = trimmed[0];
-        if (typeChar === "l" || typeChar === "h" || trimmed.includes(" -> ")) {
-          return {
-            stdout: verboseResult.stdout,
-            stderr: "tar archive contains link entries; refusing to extract for safety",
-            code: 1,
-          };
-        }
-      }
-
-      for (const entry of entries) {
-        validateArchiveEntryPath(entry, { escapeLabel: "targetDir" });
-        const relPath = stripArchivePath(entry, strip);
-        if (!relPath) {
-          continue;
-        }
-        validateArchiveEntryPath(relPath, { escapeLabel: "targetDir" });
-        resolveArchiveOutputPath({
-          rootDir: targetDir,
-          relPath,
-          originalPath: entry,
-          escapeLabel: "targetDir",
-        });
-      }
-
-      const argv = ["tar", "xf", archivePath, "-C", targetDir];
-      if (strip > 0) {
-        argv.push("--strip-components", String(strip));
-      }
-      return await runCommandWithTimeout(argv, { timeoutMs });
-    }
-
-    return { stdout: "", stderr: `unsupported archive type: ${archiveType}`, code: null };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { stdout: "", stderr: message, code: 1 };
   }
 }
 
@@ -204,6 +107,7 @@ export async function installDownloadSpec(params: {
   timeoutMs: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
+  const safeRoot = resolveSkillToolsRootDir(entry);
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -226,26 +130,55 @@ export async function installDownloadSpec(params: {
     filename = "download";
   }
 
+  let canonicalSafeRoot = "";
   let targetDir = "";
   try {
-    targetDir = resolveDownloadTargetDir(entry, spec);
-    await ensureDir(targetDir);
-    const stat = await fs.promises.lstat(targetDir);
-    if (stat.isSymbolicLink()) {
-      throw new Error(`targetDir is a symlink: ${targetDir}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`targetDir is not a directory: ${targetDir}`);
-    }
+    await ensureDir(safeRoot);
+    await assertCanonicalPathWithinBase({
+      baseDir: safeRoot,
+      candidatePath: safeRoot,
+      boundaryLabel: "skill tools directory",
+    });
+    canonicalSafeRoot = await fs.promises.realpath(safeRoot);
+
+    const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
+    await ensureDir(requestedTargetDir);
+    await assertCanonicalPathWithinBase({
+      baseDir: safeRoot,
+      candidatePath: requestedTargetDir,
+      boundaryLabel: "skill tools directory",
+    });
+    const targetRelativePath = path.relative(safeRoot, requestedTargetDir);
+    targetDir = path.join(canonicalSafeRoot, targetRelativePath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const archivePath = path.join(targetDir, filename);
+  const archiveRelativePath = path.relative(canonicalSafeRoot, archivePath);
+  if (
+    !archiveRelativePath ||
+    archiveRelativePath === ".." ||
+    archiveRelativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(archiveRelativePath)
+  ) {
+    return {
+      ok: false,
+      message: "invalid download archive path",
+      stdout: "",
+      stderr: "invalid download archive path",
+      code: null,
+    };
+  }
   let downloaded = 0;
   try {
-    const result = await downloadFile(url, archivePath, timeoutMs);
+    const result = await downloadFile({
+      url,
+      rootDir: canonicalSafeRoot,
+      relativePath: archiveRelativePath,
+      timeoutMs,
+    });
     downloaded = result.bytes;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -272,6 +205,17 @@ export async function installDownloadSpec(params: {
       stderr: "",
       code: null,
     };
+  }
+
+  try {
+    await assertCanonicalPathWithinBase({
+      baseDir: canonicalSafeRoot,
+      candidatePath: targetDir,
+      boundaryLabel: "skill tools directory",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, message, stdout: "", stderr: message, code: null };
   }
 
   const extractResult = await extractArchive({

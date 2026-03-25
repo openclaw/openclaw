@@ -12,6 +12,7 @@ vi.mock("node:fs/promises", () => ({
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
+  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 
@@ -19,9 +20,9 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-function mockNodePathPresent(nodePath: string) {
+function mockNodePathPresent(...nodePaths: string[]) {
   fsMocks.access.mockImplementation(async (target: string) => {
-    if (target === nodePath) {
+    if (nodePaths.includes(target)) {
       return;
     }
     throw new Error("missing");
@@ -55,7 +56,7 @@ describe("resolvePreferredNodePath", () => {
     const execFile = vi
       .fn()
       .mockResolvedValueOnce({ stdout: "18.0.0\n", stderr: "" }) // execPath too old
-      .mockResolvedValueOnce({ stdout: "22.12.0\n", stderr: "" }); // system node ok
+      .mockResolvedValueOnce({ stdout: "22.16.0\n", stderr: "" }); // system node ok
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -72,7 +73,7 @@ describe("resolvePreferredNodePath", () => {
   it("ignores execPath when it is not node", async () => {
     mockNodePathPresent(darwinNode);
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -92,8 +93,8 @@ describe("resolvePreferredNodePath", () => {
   it("uses system node when it meets the minimum version", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    // Node 22.16.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -110,8 +111,8 @@ describe("resolvePreferredNodePath", () => {
   it("skips system node when it is too old", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.11.x is below minimum 22.12.0
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
+    // Node 22.15.x is below minimum 22.16.0
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.15.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -142,14 +143,83 @@ describe("resolvePreferredNodePath", () => {
   });
 });
 
+describe("resolveStableNodePath", () => {
+  it("resolves Homebrew Cellar path to opt symlink", async () => {
+    mockNodePathPresent("/opt/homebrew/opt/node/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/opt/homebrew/opt/node/bin/node");
+  });
+
+  it("falls back to bin symlink for default node formula", async () => {
+    mockNodePathPresent("/opt/homebrew/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+
+  it("resolves Intel Mac Cellar path to opt symlink", async () => {
+    mockNodePathPresent("/usr/local/opt/node/bin/node");
+
+    const result = await resolveStableNodePath("/usr/local/Cellar/node/25.7.0/bin/node");
+    expect(result).toBe("/usr/local/opt/node/bin/node");
+  });
+
+  it("resolves versioned node@22 formula to opt symlink", async () => {
+    mockNodePathPresent("/opt/homebrew/opt/node@22/bin/node");
+
+    const result = await resolveStableNodePath("/opt/homebrew/Cellar/node@22/22.16.0/bin/node");
+    expect(result).toBe("/opt/homebrew/opt/node@22/bin/node");
+  });
+
+  it("returns original path when no stable symlink exists", async () => {
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+
+    const cellarPath = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const result = await resolveStableNodePath(cellarPath);
+    expect(result).toBe(cellarPath);
+  });
+
+  it("returns non-Cellar paths unchanged", async () => {
+    const fnmPath = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
+    const result = await resolveStableNodePath(fnmPath);
+    expect(result).toBe(fnmPath);
+  });
+
+  it("returns system paths unchanged", async () => {
+    const result = await resolveStableNodePath("/opt/homebrew/bin/node");
+    expect(result).toBe("/opt/homebrew/bin/node");
+  });
+});
+
+describe("resolvePreferredNodePath — Homebrew Cellar", () => {
+  it("resolves Cellar execPath to stable Homebrew symlink", async () => {
+    const cellarNode = "/opt/homebrew/Cellar/node/25.7.0/bin/node";
+    const stableNode = "/opt/homebrew/opt/node/bin/node";
+    mockNodePathPresent(stableNode);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "25.7.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: cellarNode,
+    });
+
+    expect(result).toBe(stableNode);
+  });
+});
+
 describe("resolveSystemNodeInfo", () => {
   const darwinNode = "/opt/homebrew/bin/node";
 
   it("returns supported info when version is new enough", async () => {
     mockNodePathPresent(darwinNode);
 
-    // Node 22.12.0+ is the minimum required version
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
+    // Node 22.16.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.16.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -159,7 +229,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
-      version: "22.12.0",
+      version: "22.16.0",
       supported: true,
     });
   });
@@ -181,7 +251,7 @@ describe("resolveSystemNodeInfo", () => {
       "/Users/me/.fnm/node-22/bin/node",
     );
 
-    expect(warning).toContain("below the required Node 22+");
+    expect(warning).toContain("below the required Node 22.16+");
     expect(warning).toContain(darwinNode);
   });
 });

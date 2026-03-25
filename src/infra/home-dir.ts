@@ -3,7 +3,13 @@ import path from "node:path";
 
 function normalize(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function resolveEffectiveHomeDir(
@@ -14,12 +20,19 @@ export function resolveEffectiveHomeDir(
   return raw ? path.resolve(raw) : undefined;
 }
 
+export function resolveOsHomeDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string | undefined {
+  const raw = resolveRawOsHomeDir(env, homedir);
+  return raw ? path.resolve(raw) : undefined;
+}
+
 function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
-      const fallbackHome =
-        normalize(env.HOME) ?? normalize(env.USERPROFILE) ?? normalizeSafe(homedir);
+      const fallbackHome = resolveRawOsHomeDir(env, homedir);
       if (fallbackHome) {
         return explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome);
       }
@@ -28,16 +41,18 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
     return explicitHome;
   }
 
+  return resolveRawOsHomeDir(env, homedir);
+}
+
+function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
   const envHome = normalize(env.HOME);
   if (envHome) {
     return envHome;
   }
-
   const userProfile = normalize(env.USERPROFILE);
   if (userProfile) {
     return userProfile;
   }
-
   return normalizeSafe(homedir);
 }
 
@@ -54,6 +69,13 @@ export function resolveRequiredHomeDir(
   homedir: () => string = os.homedir,
 ): string {
   return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+}
+
+export function resolveRequiredOsHomeDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
 }
 
 export function expandHomePrefix(
@@ -74,4 +96,48 @@ export function expandHomePrefix(
     return input;
   }
   return input.replace(/^~(?=$|[\\/])/, home);
+}
+
+export function resolveHomeRelativePath(
+  input: string,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  },
+): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    const expanded = expandHomePrefix(trimmed, {
+      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      env: opts?.env,
+      homedir: opts?.homedir,
+    });
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
+}
+
+export function resolveOsHomeRelativePath(
+  input: string,
+  opts?: {
+    env?: NodeJS.ProcessEnv;
+    homedir?: () => string;
+  },
+): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    const expanded = expandHomePrefix(trimmed, {
+      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      env: opts?.env,
+      homedir: opts?.homedir,
+    });
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
 }

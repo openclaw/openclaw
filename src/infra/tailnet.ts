@@ -1,5 +1,5 @@
-import os from "node:os";
 import { isIpInCidr } from "../shared/net/ip.js";
+import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 
 export type TailnetAddresses = {
   ipv4: string[];
@@ -25,25 +25,12 @@ export function listTailnetAddresses(): TailnetAddresses {
   const ipv4: string[] = [];
   const ipv6: string[] = [];
 
-  const ifaces = os.networkInterfaces();
-  for (const entries of Object.values(ifaces)) {
-    if (!entries) {
-      continue;
+  for (const { address, family } of listExternalInterfaceAddresses(readNetworkInterfaces())) {
+    if (family === "IPv4" && isTailnetIPv4(address)) {
+      ipv4.push(address);
     }
-    for (const e of entries) {
-      if (!e || e.internal) {
-        continue;
-      }
-      const address = e.address?.trim();
-      if (!address) {
-        continue;
-      }
-      if (isTailnetIPv4(address)) {
-        ipv4.push(address);
-      }
-      if (isTailnetIPv6(address)) {
-        ipv6.push(address);
-      }
+    if (family === "IPv6" && isTailnetIPv6(address)) {
+      ipv6.push(address);
     }
   }
 

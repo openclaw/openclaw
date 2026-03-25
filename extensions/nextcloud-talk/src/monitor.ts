@@ -1,12 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
+import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import {
-  createLoggerBackedRuntime,
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
@@ -25,6 +25,8 @@ const DEFAULT_WEBHOOK_HOST = "0.0.0.0";
 const DEFAULT_WEBHOOK_PATH = "/nextcloud-talk-webhook";
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
@@ -171,8 +173,10 @@ export function readNextcloudTalkWebhookBody(
   maxBodyBytes: number,
 ): Promise<string> {
   return readRequestBodyWithLimit(req, {
-    maxBytes: maxBodyBytes,
-    timeoutMs: DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
+    // This read happens before signature verification, so keep the unauthenticated
+    // body budget bounded even if the operator-configured post-parse limit is larger.
+    maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
+    timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
   });
 }
 
@@ -276,12 +280,25 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     });
   };
 
+  let stopped = false;
   const stop = () => {
-    server.close();
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    try {
+      server.close();
+    } catch {
+      // ignore close races while shutting down
+    }
   };
 
   if (abortSignal) {
-    abortSignal.addEventListener("abort", stop, { once: true });
+    if (abortSignal.aborted) {
+      stop();
+    } else {
+      abortSignal.addEventListener("abort", stop, { once: true });
+    }
   }
 
   return { server, start, stop };
@@ -305,12 +322,10 @@ export async function monitorNextcloudTalkProvider(
     cfg,
     accountId: opts.accountId,
   });
-  const runtime: RuntimeEnv =
-    opts.runtime ??
-    createLoggerBackedRuntime({
-      logger: core.logging.getChildLogger(),
-      exitError: () => new Error("Runtime exit not available"),
-    });
+  const runtime: RuntimeEnv = resolveLoggerBackedRuntime(
+    opts.runtime,
+    core.logging.getChildLogger(),
+  );
 
   if (!account.secret) {
     throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);
@@ -384,7 +399,14 @@ export async function monitorNextcloudTalkProvider(
     abortSignal: opts.abortSignal,
   });
 
+  if (opts.abortSignal?.aborted) {
+    return { stop };
+  }
   await start();
+  if (opts.abortSignal?.aborted) {
+    stop();
+    return { stop };
+  }
 
   const publicUrl =
     account.config.webhookPublicUrl ??

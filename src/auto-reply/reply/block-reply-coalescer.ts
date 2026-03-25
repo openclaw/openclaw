@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
@@ -75,9 +76,10 @@ export function createBlockReplyCoalescer(params: {
     if (shouldAbort()) {
       return;
     }
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const text = payload.text ?? "";
-    const hasText = text.trim().length > 0;
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const hasMedia = reply.hasMedia;
+    const text = reply.text;
+    const hasText = reply.hasText;
     if (hasMedia) {
       void flush({ force: true });
       void onFlush(payload);
@@ -87,8 +89,8 @@ export function createBlockReplyCoalescer(params: {
       return;
     }
 
-    // When flushOnEnqueue is set (chunkMode="newline"), each enqueued payload is treated
-    // as a separate paragraph and flushed immediately so delivery matches streaming boundaries.
+    // When flushOnEnqueue is set, treat each enqueued payload as its own outbound block
+    // and flush immediately instead of waiting for coalescing thresholds.
     if (flushOnEnqueue) {
       if (bufferText) {
         void flush({ force: true });

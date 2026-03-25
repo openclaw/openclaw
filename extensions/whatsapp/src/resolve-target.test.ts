@@ -1,82 +1,58 @@
-import { describe, expect, it, vi } from "vitest";
-import { installCommonResolveTargetErrorCases } from "../../shared/resolve-target-test-helpers.js";
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
-  normalizeWhatsAppTarget: (value: string) => {
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
+  const normalizeWhatsAppTarget = (value: string) => {
     if (value === "invalid-target") return null;
-    // Simulate E.164 normalization: strip leading + and whatsapp: prefix
+    // Simulate E.164 normalization: strip leading + and whatsapp: prefix.
     const stripped = value.replace(/^whatsapp:/i, "").replace(/^\+/, "");
     return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
-  },
-  isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
-  resolveWhatsAppOutboundTarget: ({
-    to,
-    allowFrom,
-    mode,
-  }: {
-    to?: string;
-    allowFrom: string[];
-    mode: "explicit" | "implicit";
-  }) => {
-    const raw = typeof to === "string" ? to.trim() : "";
-    if (!raw) {
-      return { ok: false, error: new Error("missing target") };
-    }
-    const normalizeWhatsAppTarget = (value: string) => {
-      if (value === "invalid-target") return null;
-      const stripped = value.replace(/^whatsapp:/i, "").replace(/^\+/, "");
-      return stripped.includes("@g.us") ? stripped : `${stripped}@s.whatsapp.net`;
-    };
-    const normalized = normalizeWhatsAppTarget(raw);
-    if (!normalized) {
-      return { ok: false, error: new Error("invalid target") };
-    }
+  };
 
-    if (mode === "implicit" && !normalized.endsWith("@g.us")) {
-      const allowAll = allowFrom.includes("*");
-      const allowExact = allowFrom.some((entry) => {
-        if (!entry) {
-          return false;
-        }
-        const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
-        return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
-      });
-      if (!allowAll && !allowExact) {
-        return { ok: false, error: new Error("target not allowlisted") };
+  return {
+    ...actual,
+    getChatChannelMeta: () => ({ id: "whatsapp", label: "WhatsApp" }),
+    normalizeWhatsAppTarget,
+    isWhatsAppGroupJid: (value: string) => value.endsWith("@g.us"),
+    resolveWhatsAppOutboundTarget: ({
+      to,
+      allowFrom,
+      mode,
+    }: {
+      to?: string;
+      allowFrom: string[];
+      mode: "explicit" | "implicit";
+    }) => {
+      const raw = typeof to === "string" ? to.trim() : "";
+      if (!raw) {
+        return { ok: false, error: new Error("missing target") };
       }
-    }
+      const normalized = normalizeWhatsAppTarget(raw);
+      if (!normalized) {
+        return { ok: false, error: new Error("invalid target") };
+      }
 
-    return { ok: true, to: normalized };
-  },
-  missingTargetError: (provider: string, hint: string) =>
-    new Error(`Delivering to ${provider} requires target ${hint}`),
-  WhatsAppConfigSchema: {},
-  whatsappOnboardingAdapter: {},
-  resolveWhatsAppHeartbeatRecipients: vi.fn(),
-  buildChannelConfigSchema: vi.fn(),
-  collectWhatsAppStatusIssues: vi.fn(),
-  createActionGate: vi.fn(),
-  DEFAULT_ACCOUNT_ID: "default",
-  escapeRegExp: vi.fn(),
-  formatPairingApproveHint: vi.fn(),
-  listWhatsAppAccountIds: vi.fn(),
-  listWhatsAppDirectoryGroupsFromConfig: vi.fn(),
-  listWhatsAppDirectoryPeersFromConfig: vi.fn(),
-  looksLikeWhatsAppTargetId: vi.fn(),
-  migrateBaseNameToDefaultAccount: vi.fn(),
-  normalizeAccountId: vi.fn(),
-  normalizeE164: vi.fn(),
-  normalizeWhatsAppMessagingTarget: vi.fn(),
-  readStringParam: vi.fn(),
-  resolveDefaultWhatsAppAccountId: vi.fn(),
-  resolveWhatsAppAccount: vi.fn(),
-  resolveWhatsAppGroupIntroHint: vi.fn(),
-  resolveWhatsAppGroupRequireMention: vi.fn(),
-  resolveWhatsAppGroupToolPolicy: vi.fn(),
-  resolveWhatsAppMentionStripPatterns: vi.fn(() => []),
-  applyAccountNameToChannelSection: vi.fn(),
-}));
+      if (mode === "implicit" && !normalized.endsWith("@g.us")) {
+        const allowAll = allowFrom.includes("*");
+        const allowExact = allowFrom.some((entry) => {
+          if (!entry) {
+            return false;
+          }
+          const normalizedEntry = normalizeWhatsAppTarget(entry.trim());
+          return normalizedEntry?.toLowerCase() === normalized.toLowerCase();
+        });
+        if (!allowAll && !allowExact) {
+          return { ok: false, error: new Error("target not allowlisted") };
+        }
+      }
+
+      return { ok: true, to: normalized };
+    },
+    missingTargetError: (provider: string, hint: string) =>
+      new Error(`Delivering to ${provider} requires target ${hint}`),
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getWhatsAppRuntime: vi.fn(() => ({
@@ -90,11 +66,24 @@ vi.mock("./runtime.js", () => ({
   })),
 }));
 
-import { whatsappPlugin } from "./channel.js";
-
-const resolveTarget = whatsappPlugin.outbound!.resolveTarget!;
+let resolveTarget: NonNullable<
+  NonNullable<NonNullable<typeof import("./channel.js").whatsappPlugin.outbound>["resolveTarget"]>
+>;
 
 describe("whatsapp resolveTarget", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    const outbound = (await import("./channel.js")).whatsappPlugin.outbound;
+    if (!outbound?.resolveTarget) {
+      throw new Error("expected whatsapp outbound resolveTarget");
+    }
+    resolveTarget = outbound.resolveTarget;
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("should resolve valid target in explicit mode", () => {
     const result = resolveTarget({
       to: "5511999999999",
@@ -165,8 +154,10 @@ describe("whatsapp resolveTarget", () => {
     expect(result.error).toBeDefined();
   });
 
-  installCommonResolveTargetErrorCases({
-    resolveTarget,
-    implicitAllowFrom: ["5511999999999"],
+  describe("common error cases", () => {
+    installCommonResolveTargetErrorCases({
+      resolveTarget: (...args) => resolveTarget(...args),
+      implicitAllowFrom: ["5511999999999"],
+    });
   });
 });

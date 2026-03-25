@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 import { createMetrics, type MetricName } from "./metrics.js";
 import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-bus.js";
 import { createSeenTracker } from "./seen-tracker.js";
+import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
+
+function createTracker(maxEntries = 100) {
+  return createSeenTracker({ maxEntries });
+}
+
+function createPlainMetrics() {
+  return createMetrics();
+}
+
+function createCollectingMetrics() {
+  const events: unknown[] = [];
+  return {
+    events,
+    metrics: createMetrics((event) => events.push(event)),
+  };
+}
 
 // ============================================================================
 // Fuzz Tests for validatePrivateKey
@@ -47,7 +64,7 @@ describe("validatePrivateKey fuzz", () => {
     });
 
     it("rejects RTL override", () => {
-      const withRtl = "\u202E0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+      const withRtl = `\u202E${TEST_HEX_PRIVATE_KEY}`;
       expect(() => validatePrivateKey(withRtl)).toThrow();
     });
 
@@ -191,14 +208,12 @@ describe("normalizePubkey fuzz", () => {
   describe("case sensitivity", () => {
     it("normalizes uppercase to lowercase", () => {
       const upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
-      const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(normalizePubkey(upper)).toBe(lower);
+      expect(normalizePubkey(upper)).toBe(TEST_HEX_PRIVATE_KEY);
     });
 
     it("normalizes mixed case to lowercase", () => {
       const mixed = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
-      const lower = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-      expect(normalizePubkey(mixed)).toBe(lower);
+      expect(normalizePubkey(mixed)).toBe(TEST_HEX_PRIVATE_KEY);
     });
   });
 });
@@ -210,14 +225,14 @@ describe("normalizePubkey fuzz", () => {
 describe("SeenTracker fuzz", () => {
   describe("malformed IDs", () => {
     it("handles empty string IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       expect(() => tracker.add("")).not.toThrow();
       expect(tracker.peek("")).toBe(true);
       tracker.stop();
     });
 
     it("handles very long IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       const longId = "a".repeat(100000);
       expect(() => tracker.add(longId)).not.toThrow();
       expect(tracker.peek(longId)).toBe(true);
@@ -225,7 +240,7 @@ describe("SeenTracker fuzz", () => {
     });
 
     it("handles unicode IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       const unicodeId = "事件ID_🎉_тест";
       expect(() => tracker.add(unicodeId)).not.toThrow();
       expect(tracker.peek(unicodeId)).toBe(true);
@@ -233,7 +248,7 @@ describe("SeenTracker fuzz", () => {
     });
 
     it("handles IDs with null bytes", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       const idWithNull = "event\x00id";
       expect(() => tracker.add(idWithNull)).not.toThrow();
       expect(tracker.peek(idWithNull)).toBe(true);
@@ -241,7 +256,7 @@ describe("SeenTracker fuzz", () => {
     });
 
     it("handles prototype property names as IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
 
       // These should not affect the tracker's internal operation
       expect(() => tracker.add("__proto__")).not.toThrow();
@@ -260,7 +275,7 @@ describe("SeenTracker fuzz", () => {
 
   describe("rapid operations", () => {
     it("handles rapid add/check cycles", () => {
-      const tracker = createSeenTracker({ maxEntries: 1000 });
+      const tracker = createTracker(1000);
 
       for (let i = 0; i < 10000; i++) {
         const id = `event-${i}`;
@@ -277,7 +292,7 @@ describe("SeenTracker fuzz", () => {
     });
 
     it("handles concurrent-style operations", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
 
       // Simulate interleaved operations
       for (let i = 0; i < 100; i++) {
@@ -296,21 +311,21 @@ describe("SeenTracker fuzz", () => {
 
   describe("seed edge cases", () => {
     it("handles empty seed array", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       expect(() => tracker.seed([])).not.toThrow();
       expect(tracker.size()).toBe(0);
       tracker.stop();
     });
 
     it("handles seed with duplicate IDs", () => {
-      const tracker = createSeenTracker({ maxEntries: 100 });
+      const tracker = createTracker();
       tracker.seed(["id1", "id1", "id1", "id2", "id2"]);
       expect(tracker.size()).toBe(2);
       tracker.stop();
     });
 
     it("handles seed larger than maxEntries", () => {
-      const tracker = createSeenTracker({ maxEntries: 5 });
+      const tracker = createTracker(5);
       const ids = Array.from({ length: 100 }, (_, i) => `id-${i}`);
       tracker.seed(ids);
       expect(tracker.size()).toBeLessThanOrEqual(5);
@@ -326,7 +341,7 @@ describe("SeenTracker fuzz", () => {
 describe("Metrics fuzz", () => {
   describe("invalid metric names", () => {
     it("handles unknown metric names gracefully", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       // Cast to bypass type checking - testing runtime behavior
       expect(() => {
@@ -337,21 +352,21 @@ describe("Metrics fuzz", () => {
 
   describe("invalid label values", () => {
     it("handles null relay label", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       expect(() => {
         metrics.emit("relay.connect", 1, { relay: null as unknown as string });
       }).not.toThrow();
     });
 
     it("handles undefined relay label", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       expect(() => {
         metrics.emit("relay.connect", 1, { relay: undefined as unknown as string });
       }).not.toThrow();
     });
 
     it("handles very long relay URL", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       const longUrl = "wss://" + "a".repeat(10000) + ".com";
       expect(() => {
         metrics.emit("relay.connect", 1, { relay: longUrl });
@@ -364,7 +379,7 @@ describe("Metrics fuzz", () => {
 
   describe("extreme values", () => {
     it("handles NaN value", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       expect(() => metrics.emit("event.received", NaN)).not.toThrow();
 
       const snapshot = metrics.getSnapshot();
@@ -372,7 +387,7 @@ describe("Metrics fuzz", () => {
     });
 
     it("handles Infinity value", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       expect(() => metrics.emit("event.received", Infinity)).not.toThrow();
 
       const snapshot = metrics.getSnapshot();
@@ -380,7 +395,7 @@ describe("Metrics fuzz", () => {
     });
 
     it("handles negative value", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       metrics.emit("event.received", -1);
 
       const snapshot = metrics.getSnapshot();
@@ -388,7 +403,7 @@ describe("Metrics fuzz", () => {
     });
 
     it("handles very large value", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
       metrics.emit("event.received", Number.MAX_SAFE_INTEGER);
 
       const snapshot = metrics.getSnapshot();
@@ -398,8 +413,7 @@ describe("Metrics fuzz", () => {
 
   describe("rapid emissions", () => {
     it("handles many rapid emissions", () => {
-      const events: unknown[] = [];
-      const metrics = createMetrics((e) => events.push(e));
+      const { events, metrics } = createCollectingMetrics();
 
       for (let i = 0; i < 10000; i++) {
         metrics.emit("event.received");
@@ -413,7 +427,7 @@ describe("Metrics fuzz", () => {
 
   describe("reset during operation", () => {
     it("handles reset mid-operation safely", () => {
-      const metrics = createMetrics();
+      const metrics = createPlainMetrics();
 
       metrics.emit("event.received");
       metrics.emit("event.received");

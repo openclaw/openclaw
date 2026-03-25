@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { resolveFeishuAccount } from "./accounts.js";
+import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
 export type FeishuReaction = {
@@ -8,6 +8,20 @@ export type FeishuReaction = {
   operatorType: "app" | "user";
   operatorId: string;
 };
+
+function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
+  const account = resolveFeishuRuntimeAccount(params);
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+  return createFeishuClient(account);
+}
+
+function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string }, action: string) {
+  if (response.code !== 0) {
+    throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
+  }
+}
 
 /**
  * Add a reaction (emoji) to a message.
@@ -21,12 +35,7 @@ export async function addReactionFeishu(params: {
   accountId?: string;
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.create({
     path: { message_id: messageId },
@@ -41,9 +50,7 @@ export async function addReactionFeishu(params: {
     data?: { reaction_id?: string };
   };
 
-  if (response.code !== 0) {
-    throw new Error(`Feishu add reaction failed: ${response.msg || `code ${response.code}`}`);
-  }
+  assertFeishuReactionApiSuccess(response, "add reaction");
 
   const reactionId = response.data?.reaction_id;
   if (!reactionId) {
@@ -63,12 +70,7 @@ export async function removeReactionFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, reactionId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.delete({
     path: {
@@ -77,9 +79,7 @@ export async function removeReactionFeishu(params: {
     },
   })) as { code?: number; msg?: string };
 
-  if (response.code !== 0) {
-    throw new Error(`Feishu remove reaction failed: ${response.msg || `code ${response.code}`}`);
-  }
+  assertFeishuReactionApiSuccess(response, "remove reaction");
 }
 
 /**
@@ -92,12 +92,7 @@ export async function listReactionsFeishu(params: {
   accountId?: string;
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
+  const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.list({
     path: { message_id: messageId },
@@ -115,9 +110,7 @@ export async function listReactionsFeishu(params: {
     };
   };
 
-  if (response.code !== 0) {
-    throw new Error(`Feishu list reactions failed: ${response.msg || `code ${response.code}`}`);
-  }
+  assertFeishuReactionApiSuccess(response, "list reactions");
 
   const items = response.data?.items ?? [];
   return items.map((item) => ({

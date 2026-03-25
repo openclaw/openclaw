@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  clearSkillScanCacheForTest,
   isScannable,
   scanDirectory,
   scanDirectoryWithSummary,
@@ -27,6 +28,7 @@ afterEach(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
   tmpDirs.length = 0;
+  clearSkillScanCacheForTest();
 });
 
 // ---------------------------------------------------------------------------
@@ -341,5 +343,38 @@ describe("scanDirectoryWithSummary", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("reuses cached findings for unchanged files and invalidates on file updates", async () => {
+    const root = makeTmpDir();
+    const filePath = path.join(root, "cached.js");
+    fsSync.writeFileSync(filePath, `const x = eval("1+1");`);
+
+    const readSpy = vi.spyOn(fs, "readFile");
+    const first = await scanDirectoryWithSummary(root);
+    const second = await scanDirectoryWithSummary(root);
+
+    expect(first.critical).toBeGreaterThan(0);
+    expect(second.critical).toBe(first.critical);
+    expect(readSpy).toHaveBeenCalledTimes(1);
+
+    await fs.writeFile(filePath, `const x = eval("2+2");\n// cache bust`, "utf-8");
+    const third = await scanDirectoryWithSummary(root);
+
+    expect(third.critical).toBeGreaterThan(0);
+    expect(readSpy).toHaveBeenCalledTimes(2);
+    readSpy.mockRestore();
+  });
+
+  it("reuses cached directory listings for unchanged trees", async () => {
+    const root = makeTmpDir();
+    fsSync.writeFileSync(path.join(root, "cached.js"), `export const ok = true;`);
+
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    await scanDirectoryWithSummary(root);
+    await scanDirectoryWithSummary(root);
+
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+    readdirSpy.mockRestore();
   });
 });

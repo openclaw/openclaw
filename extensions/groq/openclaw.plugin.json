@@ -1,0 +1,8 @@
+{
+  "id": "groq",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

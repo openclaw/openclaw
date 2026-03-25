@@ -44,16 +44,8 @@ struct SessionsSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            if self.loading {
-                ProgressView()
-            } else {
-                Button {
-                    Task { await self.refresh() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .help("Refresh")
+            SettingsRefreshButton(isLoading: self.loading) {
+                Task { await self.refresh() }
             }
         }
     }

@@ -274,6 +274,15 @@ describe("legacy config detection", () => {
       },
     );
   });
+  it("flags top-level heartbeat as legacy in snapshot", async () => {
+    await withSnapshotForConfig(
+      { heartbeat: { model: "anthropic/claude-3-5-haiku-20241022", every: "30m" } },
+      async (ctx) => {
+        expect(ctx.snapshot.valid).toBe(false);
+        expect(ctx.snapshot.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      },
+    );
+  });
   it("flags legacy provider sections in snapshot", async () => {
     await withSnapshotForConfig({ whatsapp: { allowFrom: ["+1555"] } }, async (ctx) => {
       expect(ctx.snapshot.valid).toBe(false);

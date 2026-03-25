@@ -25,7 +25,7 @@ Note, selecting 'chromium-browser' instead of 'chromium'
 chromium-browser is already the newest version (2:1snap1-0ubuntu2).
 ```
 
-This is NOT a real browser — it's just a wrapper.
+This is NOT a real browser - it's just a wrapper.
 
 ### Solution 1: Install Google Chrome (Recommended)
 
@@ -121,19 +121,18 @@ curl -s http://127.0.0.1:18791/tabs
 | `browser.attachOnly`     | Don't launch browser, only attach to existing                        | `false`                                                     |
 | `browser.cdpPort`        | Chrome DevTools Protocol port                                        | `18800`                                                     |
 
-### Problem: "Chrome extension relay is running, but no tab is connected"
+### Problem: "No Chrome tabs found for profile=\"user\""
 
-You’re using the `chrome` profile (extension relay). It expects the OpenClaw
-browser extension to be attached to a live tab.
+You're using an `existing-session` / Chrome MCP profile. OpenClaw can see local Chrome,
+but there are no open tabs available to attach to.
 
 Fix options:
 
 1. **Use the managed browser:** `openclaw browser start --browser-profile openclaw`
    (or set `browser.defaultProfile: "openclaw"`).
-2. **Use the extension relay:** install the extension, open a tab, and click the
-   OpenClaw extension icon to attach it.
+2. **Use Chrome MCP:** make sure local Chrome is running with at least one open tab, then retry with `--browser-profile user`.
 
 Notes:
 
-- The `chrome` profile uses your **system default Chromium browser** when possible.
+- `user` is host-only. For Linux servers, containers, or remote hosts, prefer CDP profiles.
 - Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; only set those for remote CDP.

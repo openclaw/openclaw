@@ -54,14 +54,8 @@ final class NodesStore {
     func start() {
         self.startCount += 1
         guard self.startCount == 1 else { return }
-        guard self.task == nil else { return }
-        self.task = Task.detached { [weak self] in
-            guard let self else { return }
-            await self.refresh()
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
-                await self.refresh()
-            }
+        SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
+            await self?.refresh()
         }
     }
 

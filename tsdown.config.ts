@@ -1,59 +1,165 @@
-import { defineConfig } from "tsdown";
+import fs from "node:fs";
+import path from "node:path";
+import { defineConfig, type UserConfig } from "tsdown";
+import { listBundledPluginBuildEntries } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+
+type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
+type InputOptionsArg = InputOptionsFactory extends (
+  options: infer Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer _Return
+  ? Options
+  : never;
+type InputOptionsReturn = InputOptionsFactory extends (
+  options: infer _Options,
+  format: infer _Format,
+  context: infer _Context,
+) => infer Return
+  ? Return
+  : never;
+type OnLogFunction = InputOptionsArg extends { onLog?: infer OnLog } ? NonNullable<OnLog> : never;
 
 const env = {
   NODE_ENV: "production",
 };
 
-export default defineConfig([
-  {
-    entry: "src/index.ts",
+const SUPPRESSED_EVAL_WARNING_PATHS = [
+  "@protobufjs/inquire/index.js",
+  "bottleneck/lib/IORedisConnection.js",
+  "bottleneck/lib/RedisConnection.js",
+] as const;
+
+function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
+  if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
+    return undefined;
+  }
+
+  const previousOnLog = typeof options.onLog === "function" ? options.onLog : undefined;
+
+  function isSuppressedLog(log: {
+    code?: string;
+    message?: string;
+    id?: string;
+    importer?: string;
+  }) {
+    if (log.code === "PLUGIN_TIMINGS") {
+      return true;
+    }
+    if (log.code !== "EVAL") {
+      return false;
+    }
+    const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
+  }
+
+  return {
+    ...options,
+    onLog(...args: Parameters<OnLogFunction>) {
+      const [level, log, defaultHandler] = args;
+      if (isSuppressedLog(log)) {
+        return;
+      }
+      if (typeof previousOnLog === "function") {
+        previousOnLog(level, log, defaultHandler);
+        return;
+      }
+      defaultHandler(level, log);
+    },
+  };
+}
+
+function nodeBuildConfig(config: UserConfig): UserConfig {
+  return {
+    ...config,
     env,
     fixedExtension: false,
     platform: "node",
-  },
-  {
+    inputOptions: buildInputOptions,
+  };
+}
+
+const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+
+function buildBundledHookEntries(): Record<string, string> {
+  const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
+  const entries: Record<string, string> = {};
+
+  if (!fs.existsSync(hooksRoot)) {
+    return entries;
+  }
+
+  for (const dirent of fs.readdirSync(hooksRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+
+    const hookName = dirent.name;
+    const handlerPath = path.join(hooksRoot, hookName, "handler.ts");
+    if (!fs.existsSync(handlerPath)) {
+      continue;
+    }
+
+    entries[`bundled/${hookName}/handler`] = handlerPath;
+  }
+
+  return entries;
+}
+
+const bundledHookEntries = buildBundledHookEntries();
+
+function buildCoreDistEntries(): Record<string, string> {
+  return {
+    index: "src/index.ts",
     entry: "src/entry.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
-    entry: "src/cli/daemon-cli.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
-    entry: "src/infra/warning-filter.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
-    entry: "src/plugin-sdk/index.ts",
-    outDir: "dist/plugin-sdk",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
-    entry: "src/plugin-sdk/account-id.ts",
-    outDir: "dist/plugin-sdk",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
-    entry: "src/extensionAPI.ts",
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
-  {
-    entry: ["src/hooks/bundled/*/handler.ts", "src/hooks/llm-slug-generator.ts"],
-    env,
-    fixedExtension: false,
-    platform: "node",
-  },
+    "cli/daemon-cli": "src/cli/daemon-cli.ts",
+    // Ensure memory-cli is a stable entry so the runtime tools plugin can import
+    // it by a deterministic path instead of a content-hashed chunk name.
+    // See https://github.com/openclaw/openclaw/issues/51676
+    "cli/memory-cli": "src/cli/memory-cli.ts",
+    // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
+    // dist/ trees do not strand already-running gateways on stale hashed chunks.
+    "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
+    "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    extensionAPI: "src/extensionAPI.ts",
+    "infra/warning-filter": "src/infra/warning-filter.ts",
+    "telegram/audit": "extensions/telegram/src/audit.ts",
+    "telegram/token": "extensions/telegram/src/token.ts",
+    "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
+    "plugins/runtime/index": "src/plugins/runtime/index.ts",
+    "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+  };
+}
+
+const coreDistEntries = buildCoreDistEntries();
+
+function buildUnifiedDistEntries(): Record<string, string> {
+  return {
+    ...coreDistEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
+    ...Object.fromEntries(
+      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
+        `plugin-sdk/${entry}`,
+        source,
+      ]),
+    ),
+    ...bundledPluginBuildEntries,
+    ...bundledHookEntries,
+  };
+}
+
+export default defineConfig([
+  nodeBuildConfig({
+    // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
+    // and bundled hooks in one graph so runtime singletons are emitted once.
+    entry: buildUnifiedDistEntries(),
+    deps: {
+      neverBundle: ["@lancedb/lancedb"],
+    },
+  }),
 ]);

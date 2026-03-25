@@ -1,24 +1,24 @@
-import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  normalizeProviderId,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
   calculateTotalPages,
   getModelsPageSize,
   type ProviderInfo,
-} from "../../telegram/model-buttons.js";
+} from "../../../extensions/telegram/api.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  normalizeProviderId,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyPayload } from "../types.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -34,11 +34,13 @@ export type ModelsProviderData = {
  * Build provider/model data from config and catalog.
  * Exported for reuse by callback handlers.
  */
-export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<ModelsProviderData> {
-  const resolvedDefault = resolveConfiguredModelRef({
+export async function buildModelsProviderData(
+  cfg: OpenClawConfig,
+  agentId?: string,
+): Promise<ModelsProviderData> {
+  const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    agentId,
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
@@ -47,6 +49,7 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
+    agentId,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -219,6 +222,7 @@ export async function resolveModelsCommandReply(params: {
   commandBodyNormalized: string;
   surface?: string;
   currentModel?: string;
+  agentId?: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
 }): Promise<ReplyPayload | null> {
@@ -230,7 +234,7 @@ export async function resolveModelsCommandReply(params: {
   const argText = body.replace(/^\/models\b/i, "").trim();
   const { provider, page, pageSize, all } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg);
+  const { byProvider, providers } = await buildModelsProviderData(params.cfg, params.agentId);
   const isTelegram = params.surface === "telegram";
 
   // Provider list (no provider specified)
@@ -363,6 +367,14 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   if (!allowTextCommands) {
     return null;
   }
+  const commandBodyNormalized = params.command.commandBodyNormalized.trim();
+  if (!commandBodyNormalized.startsWith("/models")) {
+    return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/models");
+  if (unauthorized) {
+    return unauthorized;
+  }
 
   const modelsAgentId =
     params.agentId ??
@@ -374,9 +386,10 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
 
   const reply = await resolveModelsCommandReply({
     cfg: params.cfg,
-    commandBodyNormalized: params.command.commandBodyNormalized,
+    commandBodyNormalized,
     surface: params.ctx.Surface,
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
+    agentId: modelsAgentId,
     agentDir: modelsAgentDir,
     sessionEntry: params.sessionEntry,
   });

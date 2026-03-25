@@ -1,19 +1,19 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 
 const agentCliCommandMock = vi.fn();
 const agentsAddCommandMock = vi.fn();
+const agentsBindingsCommandMock = vi.fn();
+const agentsBindCommandMock = vi.fn();
 const agentsDeleteCommandMock = vi.fn();
 const agentsListCommandMock = vi.fn();
 const agentsSetIdentityCommandMock = vi.fn();
+const agentsUnbindCommandMock = vi.fn();
 const setVerboseMock = vi.fn();
 const createDefaultDepsMock = vi.fn(() => ({ deps: true }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: agentCliCommandMock,
@@ -21,9 +21,12 @@ vi.mock("../../commands/agent-via-gateway.js", () => ({
 
 vi.mock("../../commands/agents.js", () => ({
   agentsAddCommand: agentsAddCommandMock,
+  agentsBindingsCommand: agentsBindingsCommandMock,
+  agentsBindCommand: agentsBindCommandMock,
   agentsDeleteCommand: agentsDeleteCommandMock,
   agentsListCommand: agentsListCommandMock,
   agentsSetIdentityCommand: agentsSetIdentityCommandMock,
+  agentsUnbindCommand: agentsUnbindCommandMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -38,10 +41,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/agent-via-gateway.js",
+  "../../commands/agents.js",
+  "../../globals.js",
+  "../deps.js",
+  "../../runtime.js",
+];
+
 let registerAgentCommands: typeof import("./register.agent.js").registerAgentCommands;
 
 beforeAll(async () => {
   ({ registerAgentCommands } = await import("./register.agent.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerAgentCommands", () => {
@@ -53,11 +71,16 @@ describe("registerAgentCommands", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    runtime.exit.mockImplementation(() => {});
     agentCliCommandMock.mockResolvedValue(undefined);
     agentsAddCommandMock.mockResolvedValue(undefined);
+    agentsBindingsCommandMock.mockResolvedValue(undefined);
+    agentsBindCommandMock.mockResolvedValue(undefined);
     agentsDeleteCommandMock.mockResolvedValue(undefined);
     agentsListCommandMock.mockResolvedValue(undefined);
     agentsSetIdentityCommandMock.mockResolvedValue(undefined);
+    agentsUnbindCommandMock.mockResolvedValue(undefined);
     createDefaultDepsMock.mockReturnValue({ deps: true });
   });
 
@@ -142,6 +165,61 @@ describe("registerAgentCommands", () => {
       {
         json: true,
         bindings: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents bindings options", async () => {
+    await runCli(["agents", "bindings", "--agent", "ops", "--json"]);
+    expect(agentsBindingsCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        json: true,
+      },
+      runtime,
+    );
+  });
+
+  it("forwards agents bind options", async () => {
+    await runCli([
+      "agents",
+      "bind",
+      "--agent",
+      "ops",
+      "--bind",
+      "matrix:ops",
+      "--bind",
+      "telegram",
+      "--json",
+    ]);
+    expect(agentsBindCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        bind: ["matrix:ops", "telegram"],
+        json: true,
+      },
+      runtime,
+    );
+  });
+
+  it("documents bind accountId resolution behavior in help text", () => {
+    const program = new Command();
+    registerAgentCommands(program, { agentChannelOptions: "last|telegram|discord" });
+    const agents = program.commands.find((command) => command.name() === "agents");
+    const bind = agents?.commands.find((command) => command.name() === "bind");
+    const help = bind?.helpInformation() ?? "";
+    expect(help).toContain("accountId is resolved by channel defaults/hooks");
+  });
+
+  it("forwards agents unbind options", async () => {
+    await runCli(["agents", "unbind", "--agent", "ops", "--all", "--json"]);
+    expect(agentsUnbindCommandMock).toHaveBeenCalledWith(
+      {
+        agent: "ops",
+        bind: [],
+        all: true,
+        json: true,
       },
       runtime,
     );

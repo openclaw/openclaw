@@ -1,19 +1,17 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
+import { writeJsonAtomic } from "../../infra/json-files.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
-import {
-  SANDBOX_BROWSER_REGISTRY_PATH,
-  SANDBOX_REGISTRY_PATH,
-  SANDBOX_STATE_DIR,
-} from "./constants.js";
+import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
+  backendId?: string;
+  runtimeLabel?: string;
   sessionKey: string;
   createdAtMs: number;
   lastUsedAtMs: number;
   image: string;
+  configLabelKind?: string;
   configHash?: string;
 };
 
@@ -47,8 +45,11 @@ type RegistryFile<T extends RegistryEntry> = {
 };
 
 type UpsertEntry = RegistryEntry & {
+  backendId?: string;
+  runtimeLabel?: string;
   createdAtMs: number;
   image: string;
+  configLabelKind?: string;
   configHash?: string;
 };
 
@@ -58,6 +59,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isRegistryEntry(value: unknown): value is RegistryEntry {
   return isRecord(value) && typeof value.containerName === "string";
+}
+
+function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
+  return {
+    ...entry,
+    backendId: entry.backendId?.trim() || "docker",
+    runtimeLabel: entry.runtimeLabel?.trim() || entry.containerName,
+    configLabelKind: entry.configLabelKind?.trim() || "Image",
+  };
 }
 
 function isRegistryFile<T extends RegistryEntry>(value: unknown): value is RegistryFile<T> {
@@ -111,24 +121,17 @@ async function writeRegistryFile<T extends RegistryEntry>(
   registryPath: string,
   registry: RegistryFile<T>,
 ): Promise<void> {
-  await fs.mkdir(SANDBOX_STATE_DIR, { recursive: true });
-  const payload = `${JSON.stringify(registry, null, 2)}\n`;
-  const registryDir = path.dirname(registryPath);
-  const tempPath = path.join(
-    registryDir,
-    `${path.basename(registryPath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  try {
-    await fs.rename(tempPath, registryPath);
-  } catch (error) {
-    await fs.rm(tempPath, { force: true });
-    throw error;
-  }
+  await writeJsonAtomic(registryPath, registry, { trailingNewline: true });
 }
 
 export async function readRegistry(): Promise<SandboxRegistry> {
-  return await readRegistryFromFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "fallback");
+  const registry = await readRegistryFromFile<SandboxRegistryEntry>(
+    SANDBOX_REGISTRY_PATH,
+    "fallback",
+  );
+  return {
+    entries: registry.entries.map((entry) => normalizeSandboxRegistryEntry(entry)),
+  };
 }
 
 function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
@@ -136,8 +139,11 @@ function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
   const next = entries.filter((item) => item.containerName !== entry.containerName);
   next.push({
     ...entry,
+    backendId: entry.backendId ?? existing?.backendId,
+    runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
+    configLabelKind: entry.configLabelKind ?? existing?.configLabelKind,
     configHash: entry.configHash ?? existing?.configHash,
   });
   return next;

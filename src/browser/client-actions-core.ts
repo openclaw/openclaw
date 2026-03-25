@@ -15,16 +15,19 @@ export type BrowserFormField = {
 export type BrowserActRequest =
   | {
       kind: "click";
-      ref: string;
+      ref?: string;
+      selector?: string;
       targetId?: string;
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
+      delayMs?: number;
       timeoutMs?: number;
     }
   | {
       kind: "type";
-      ref: string;
+      ref?: string;
+      selector?: string;
       text: string;
       targetId?: string;
       submit?: boolean;
@@ -32,23 +35,33 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | { kind: "press"; key: string; targetId?: string; delayMs?: number }
-  | { kind: "hover"; ref: string; targetId?: string; timeoutMs?: number }
+  | {
+      kind: "hover";
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      timeoutMs?: number;
+    }
   | {
       kind: "scrollIntoView";
-      ref: string;
+      ref?: string;
+      selector?: string;
       targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "drag";
-      startRef: string;
-      endRef: string;
+      startRef?: string;
+      startSelector?: string;
+      endRef?: string;
+      endSelector?: string;
       targetId?: string;
       timeoutMs?: number;
     }
   | {
       kind: "select";
-      ref: string;
+      ref?: string;
+      selector?: string;
       values: string[];
       targetId?: string;
       timeoutMs?: number;
@@ -73,13 +86,20 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
-  | { kind: "close"; targetId?: string };
+  | { kind: "close"; targetId?: string }
+  | {
+      kind: "batch";
+      actions: BrowserActRequest[];
+      targetId?: string;
+      stopOnError?: boolean;
+    };
 
 export type BrowserActResponse = {
   ok: true;
   targetId: string;
   url?: string;
   result?: unknown;
+  results?: Array<{ ok: boolean; error?: string }>;
 };
 
 export type BrowserDownloadPayload = {

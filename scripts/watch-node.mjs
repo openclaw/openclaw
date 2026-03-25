@@ -1,17 +1,31 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { runNodeWatchedPaths } from "./run-node.mjs";
+import chokidar from "chokidar";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
+const WATCH_RESTART_SIGNAL = "SIGTERM";
 
-const buildWatchArgs = (args) => [
-  ...runNodeWatchedPaths.flatMap((watchPath) => ["--watch-path", watchPath]),
-  "--watch-preserve-output",
-  WATCH_NODE_RUNNER,
-  ...args,
-];
+const buildRunnerArgs = (args) => [WATCH_NODE_RUNNER, ...args];
+
+const normalizePath = (filePath) =>
+  String(filePath ?? "")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/, "");
+
+const resolveRepoPath = (filePath, cwd) => {
+  const rawPath = String(filePath ?? "");
+  if (path.isAbsolute(rawPath)) {
+    return normalizePath(path.relative(cwd, rawPath));
+  }
+  return normalizePath(rawPath);
+};
+
+const isIgnoredWatchPath = (filePath, cwd) =>
+  !isRestartRelevantRunNodePath(resolveRepoPath(filePath, cwd));
 
 export async function runWatchMain(params = {}) {
   const deps = {
@@ -21,6 +35,9 @@ export async function runWatchMain(params = {}) {
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
     now: params.now ?? Date.now,
+    createWatcher:
+      params.createWatcher ?? ((watchPaths, options) => chokidar.watch(watchPaths, options)),
+    watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   };
 
   const childEnv = { ...deps.env };
@@ -31,54 +48,96 @@ export async function runWatchMain(params = {}) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
 
-  const watchProcess = deps.spawn(deps.process.execPath, buildWatchArgs(deps.args), {
-    cwd: deps.cwd,
-    env: childEnv,
-    stdio: "inherit",
-  });
-
-  let settled = false;
-  let onSigInt;
-  let onSigTerm;
-
-  const settle = (resolve, code) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    if (onSigInt) {
-      deps.process.off("SIGINT", onSigInt);
-    }
-    if (onSigTerm) {
-      deps.process.off("SIGTERM", onSigTerm);
-    }
-    resolve(code);
-  };
-
   return await new Promise((resolve) => {
-    onSigInt = () => {
-      if (typeof watchProcess.kill === "function") {
-        watchProcess.kill("SIGTERM");
+    let settled = false;
+    let shuttingDown = false;
+    let restartRequested = false;
+    let watchProcess = null;
+    let onSigInt;
+    let onSigTerm;
+
+    const watcher = deps.createWatcher(deps.watchPaths, {
+      ignoreInitial: true,
+      ignored: (watchPath) => isIgnoredWatchPath(watchPath, deps.cwd),
+    });
+
+    const settle = (code) => {
+      if (settled) {
+        return;
       }
-      settle(resolve, 130);
+      settled = true;
+      if (onSigInt) {
+        deps.process.off("SIGINT", onSigInt);
+      }
+      if (onSigTerm) {
+        deps.process.off("SIGTERM", onSigTerm);
+      }
+      watcher.close?.().catch?.(() => {});
+      resolve(code);
+    };
+
+    const startRunner = () => {
+      watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
+        cwd: deps.cwd,
+        env: childEnv,
+        stdio: "inherit",
+      });
+      watchProcess.on("exit", () => {
+        watchProcess = null;
+        if (shuttingDown) {
+          return;
+        }
+        if (restartRequested) {
+          restartRequested = false;
+          startRunner();
+        }
+      });
+    };
+
+    const requestRestart = (changedPath) => {
+      if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd)) {
+        return;
+      }
+      if (!watchProcess) {
+        startRunner();
+        return;
+      }
+      restartRequested = true;
+      if (typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+    };
+
+    watcher.on("add", requestRestart);
+    watcher.on("change", requestRestart);
+    watcher.on("unlink", requestRestart);
+    watcher.on("error", () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(1);
+    });
+
+    startRunner();
+
+    onSigInt = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(130);
     };
     onSigTerm = () => {
-      if (typeof watchProcess.kill === "function") {
-        watchProcess.kill("SIGTERM");
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
       }
-      settle(resolve, 143);
+      settle(143);
     };
 
     deps.process.on("SIGINT", onSigInt);
     deps.process.on("SIGTERM", onSigTerm);
-
-    watchProcess.on("exit", (code, signal) => {
-      if (signal) {
-        settle(resolve, 1);
-        return;
-      }
-      settle(resolve, code ?? 1);
-    });
   });
 }
 

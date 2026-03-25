@@ -1,27 +1,25 @@
+import SHARED_TOOL_DISPLAY_JSON from "../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
+  formatToolDetailText,
   normalizeToolName,
-  normalizeVerb,
-  resolveActionSpec,
-  resolveDetailFromKeys,
-  resolveExecDetail,
-  resolveReadDetail,
-  resolveWebFetchDetail,
-  resolveWebSearchDetail,
-  resolveWriteDetail,
+  resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
-import rawConfig from "./tool-display.json" with { type: "json" };
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
 };
 
-type ToolDisplayConfig = {
+type SharedToolDisplaySpec = ToolDisplaySpecBase & {
+  emoji?: string;
+};
+
+type SharedToolDisplayConfig = {
   version?: number;
-  fallback?: ToolDisplaySpec;
-  tools?: Record<string, ToolDisplaySpec>;
+  fallback?: SharedToolDisplaySpec;
+  tools?: Record<string, SharedToolDisplaySpec>;
 };
 
 export type ToolDisplay = {
@@ -33,9 +31,67 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const EMOJI_ICON_MAP: Record<string, IconName> = {
+  "🧩": "puzzle",
+  "🛠️": "wrench",
+  "🧰": "wrench",
+  "📖": "fileText",
+  "✍️": "edit",
+  "📝": "penLine",
+  "📎": "paperclip",
+  "🌐": "globe",
+  "📺": "monitor",
+  "🧾": "fileText",
+  "🔐": "settings",
+  "💻": "monitor",
+  "🔌": "plug",
+  "💬": "messageSquare",
+};
+
+const SLACK_SPEC: ToolDisplaySpec = {
+  icon: "messageSquare",
+  title: "Slack",
+  actions: {
+    react: { label: "react", detailKeys: ["channelId", "messageId", "emoji"] },
+    reactions: { label: "reactions", detailKeys: ["channelId", "messageId"] },
+    sendMessage: { label: "send", detailKeys: ["to", "content"] },
+    editMessage: { label: "edit", detailKeys: ["channelId", "messageId"] },
+    deleteMessage: { label: "delete", detailKeys: ["channelId", "messageId"] },
+    readMessages: { label: "read messages", detailKeys: ["channelId", "limit"] },
+    pinMessage: { label: "pin", detailKeys: ["channelId", "messageId"] },
+    unpinMessage: { label: "unpin", detailKeys: ["channelId", "messageId"] },
+    listPins: { label: "list pins", detailKeys: ["channelId"] },
+    memberInfo: { label: "member", detailKeys: ["userId"] },
+    emojiList: { label: "emoji list" },
+  },
+};
+
+function iconForEmoji(emoji?: string): IconName {
+  if (!emoji) {
+    return "puzzle";
+  }
+  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
+}
+
+function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
+  return {
+    icon: iconForEmoji(spec?.emoji),
+    title: spec?.title,
+    label: spec?.label,
+    detailKeys: spec?.detailKeys,
+    actions: spec?.actions,
+  };
+}
+
+const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
+const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
+const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
+  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
+    key,
+    convertSpec(spec),
+  ]),
+);
+TOOL_MAP.slack = SLACK_SPEC;
 
 function shortenHomeInString(input: string): string {
   if (!input) {
@@ -69,50 +125,15 @@ export function resolveToolDisplay(params: {
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const actionRaw =
-    params.args && typeof params.args === "object"
-      ? ((params.args as Record<string, unknown>).action as string | undefined)
-      : undefined;
-  const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
-  const actionSpec = resolveActionSpec(spec, action);
-  const fallbackVerb =
-    key === "web_search"
-      ? "search"
-      : key === "web_fetch"
-        ? "fetch"
-        : key.replace(/_/g, " ").replace(/\./g, " ");
-  const verb = normalizeVerb(actionSpec?.label ?? action ?? fallbackVerb);
-
-  let detail: string | undefined;
-  if (key === "exec") {
-    detail = resolveExecDetail(params.args);
-  }
-  if (!detail && key === "read") {
-    detail = resolveReadDetail(params.args);
-  }
-  if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(key, params.args);
-  }
-
-  if (!detail && key === "web_search") {
-    detail = resolveWebSearchDetail(params.args);
-  }
-
-  if (!detail && key === "web_fetch") {
-    detail = resolveWebFetchDetail(params.args);
-  }
-
-  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
-  if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(params.args, detailKeys, {
-      mode: "first",
-      coerce: { includeFalse: true, includeZero: true },
-    });
-  }
-
-  if (!detail && params.meta) {
-    detail = params.meta;
-  }
+  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+    toolKey: key,
+    args: params.args,
+    meta: params.meta,
+    spec,
+    fallbackDetailKeys: FALLBACK.detailKeys,
+    detailMode: "first",
+    detailCoerce: { includeFalse: true, includeZero: true },
+  });
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -129,18 +150,7 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  if (!display.detail) {
-    return undefined;
-  }
-  if (display.detail.includes(" · ")) {
-    const compact = display.detail
-      .split(" · ")
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .join(", ");
-    return compact ? `with ${compact}` : undefined;
-  }
-  return display.detail;
+  return formatToolDetailText(display.detail, { prefixWithWith: true });
 }
 
 export function formatToolSummary(display: ToolDisplay): string {

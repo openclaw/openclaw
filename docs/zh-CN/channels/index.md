@@ -20,26 +20,26 @@ OpenClaw 可以在你已经使用的任何聊天应用上与你交流。每个�
 
 ## 支持的渠道
 
-- [WhatsApp](/channels/whatsapp) — 最受欢迎；使用 Baileys，需要二维码配对。
-- [Telegram](/channels/telegram) — 通过 grammY 使用 Bot API；支持群组。
+- [BlueBubbles](/channels/bluebubbles) — **推荐用于 iMessage**；使用 BlueBubbles macOS 服务器 REST API，功能完整（编辑、撤回、特效、回应、群组管理——编辑功能在 macOS 26 Tahoe 上目前不可用）。
 - [Discord](/channels/discord) — Discord Bot API + Gateway；支持服务器、频道和私信。
-- [Slack](/channels/slack) — Bolt SDK；工作区应用。
 - [飞书](/channels/feishu) — 飞书（Lark）机器人（插件，需单独安装）。
 - [Google Chat](/channels/googlechat) — 通过 HTTP webhook 的 Google Chat API 应用。
-- [Mattermost](/channels/mattermost) — Bot API + WebSocket；频道、群组、私信（插件，需单独安装）。
-- [Signal](/channels/signal) — signal-cli；注重隐私。
-- [BlueBubbles](/channels/bluebubbles) — **推荐用于 iMessage**；使用 BlueBubbles macOS 服务器 REST API，功能完整（编辑、撤回、特效、回应、群组管理——编辑功能在 macOS 26 Tahoe 上目前不可用）。
 - [iMessage（旧版）](/channels/imessage) — 通过 imsg CLI 的旧版 macOS 集成（已弃用，新设置请使用 BlueBubbles）。
-- [Microsoft Teams](/channels/msteams) — Bot Framework；企业支持（插件，需单独安装）。
 - [LINE](/channels/line) — LINE Messaging API 机器人（插件，需单独安装）。
-- [Nextcloud Talk](/channels/nextcloud-talk) — 通过 Nextcloud Talk 的自托管聊天（插件，需单独安装）。
 - [Matrix](/channels/matrix) — Matrix 协议（插件，需单独安装）。
+- [Mattermost](/channels/mattermost) — Bot API + WebSocket；频道、群组、私信（插件，需单独安装）。
+- [Microsoft Teams](/channels/msteams) — Bot Framework；企业支持（插件，需单独安装）。
+- [Nextcloud Talk](/channels/nextcloud-talk) — 通过 Nextcloud Talk 的自托管聊天（插件，需单独安装）。
 - [Nostr](/channels/nostr) — 通过 NIP-04 的去中心化私信（插件，需单独安装）。
+- [Signal](/channels/signal) — signal-cli；注重隐私。
+- [Slack](/channels/slack) — Bolt SDK；工作区应用。
+- [Telegram](/channels/telegram) — 通过 grammY 使用 Bot API；支持群组。
 - [Tlon](/channels/tlon) — 基于 Urbit 的消息应用（插件，需单独安装）。
 - [Twitch](/channels/twitch) — 通过 IRC 连接的 Twitch 聊天（插件，需单独安装）。
+- [WebChat](/web/webchat) — 基于 WebSocket 的 Gateway 网关 WebChat 界面。
+- [WhatsApp](/channels/whatsapp) — 最受欢迎；使用 Baileys，需要二维码配对。
 - [Zalo](/channels/zalo) — Zalo Bot API；越南流行的消息应用（插件，需单独安装）。
 - [Zalo Personal](/channels/zalouser) — 通过二维码登录的 Zalo 个人账号（插件，需单独安装）。
-- [WebChat](/web/webchat) — 基于 WebSocket 的 Gateway 网关 WebChat 界面。
 
 ## 注意事项
 

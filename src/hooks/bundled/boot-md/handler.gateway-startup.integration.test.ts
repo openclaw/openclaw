@@ -5,12 +5,17 @@ import type { OpenClawConfig } from "../../../config/config.js";
 
 const runBootOnce = vi.fn();
 
-vi.mock("../../../gateway/boot.js", () => ({ runBootOnce }));
-vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
+function createMockLogger() {
+  return {
     warn: vi.fn(),
     debug: vi.fn(),
-  }),
+    child: vi.fn(() => createMockLogger()),
+  };
+}
+
+vi.mock("../../../gateway/boot.js", () => ({ runBootOnce }));
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => createMockLogger(),
 }));
 
 const { default: runBootChecklist } = await import("./handler.js");

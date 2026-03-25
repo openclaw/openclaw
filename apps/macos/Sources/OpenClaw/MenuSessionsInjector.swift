@@ -1099,36 +1099,31 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        // Insert right before the separator above "Send Heartbeats".
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
-        }
-
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
-        }
-
-        if menu.items.count >= 1 { return 1 }
-        return menu.items.count
+        self.findDynamicSectionInsertIndex(in: menu)
     }
 
     private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
+        self.findDynamicSectionInsertIndex(in: menu)
+    }
+
+    private func findDynamicSectionInsertIndex(in menu: NSMenu) -> Int? {
+        // Keep controls and action buttons visible by inserting dynamic rows at the
+        // built-in footer boundary, not by matching localized menu item titles.
+        if let footerSeparatorIndex = menu.items.lastIndex(where: { item in
+            item.isSeparatorItem && !self.isInjectedItem(item)
+        }) {
+            return footerSeparatorIndex
         }
 
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
+        if let firstBaseItemIndex = menu.items.firstIndex(where: { !self.isInjectedItem($0) }) {
+            return min(firstBaseItemIndex + 1, menu.items.count)
         }
 
-        if menu.items.count >= 1 { return 1 }
         return menu.items.count
+    }
+
+    private func isInjectedItem(_ item: NSMenuItem) -> Bool {
+        item.tag == self.tag || item.tag == self.nodesTag
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
@@ -1235,6 +1230,14 @@ extension MenuSessionsInjector {
 
     func injectForTesting(into menu: NSMenu) {
         self.inject(into: menu)
+    }
+
+    func testingFindInsertIndex(in menu: NSMenu) -> Int? {
+        self.findInsertIndex(in: menu)
+    }
+
+    func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
+        self.findNodesInsertIndex(in: menu)
     }
 }
 #endif

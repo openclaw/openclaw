@@ -19,6 +19,7 @@ const MODEL_PICK_PROVIDER_PREFERENCE = [
   "zai",
   "openrouter",
   "opencode",
+  "opencode-go",
   "github-copilot",
   "groq",
   "cerebras",

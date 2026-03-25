@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -131,6 +132,20 @@ describe("extractAssistantText", () => {
     expect(result).toBe(
       "Firebase downgraded Chore Champ to the Spark plan; confirm whether billing should be re-enabled.",
     );
+  });
+
+  it("preserves response when errorMessage set from background failure (#13935)", () => {
+    const responseText = "Handle payment required errors in your API.";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      errorMessage: "insufficient credits for embedding model",
+      stopReason: "stop",
+      content: [{ type: "text", text: responseText }],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(responseText);
   });
 
   it("strips Minimax tool invocations with extra attributes", () => {
@@ -546,6 +561,39 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("promoteThinkingTagsToBlocks", () => {
+  it("does not crash on malformed null content entries", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
+      timestamp: Date.now(),
+    });
+    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    const types = msg.content.map((b: { type?: string }) => b?.type);
+    expect(types).toContain("thinking");
+    expect(types).toContain("text");
+  });
+
+  it("does not crash on undefined content entries", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [undefined as never, { type: "text", text: "no tags here" }],
+      timestamp: Date.now(),
+    });
+    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+  });
+
+  it("passes through well-formed content unchanged when no thinking tags", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "hello world" }],
+      timestamp: Date.now(),
+    });
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "hello world" }]);
   });
 });
 

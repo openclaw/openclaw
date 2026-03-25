@@ -16,7 +16,7 @@ struct CronJobEditor: View {
             + "Use an isolated session for agent turns so your main chat stays clean."
     static let sessionTargetNote =
         "Main jobs post a system event into the current main session. "
-            + "Isolated jobs run OpenClaw in a dedicated session and can announce results to a channel."
+            + "Current and isolated-style jobs run agent turns and can announce results to a channel."
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
@@ -29,6 +29,7 @@ struct CronJobEditor: View {
     @State var agentId: String = ""
     @State var enabled: Bool = true
     @State var sessionTarget: CronSessionTarget = .main
+    @State var preservedSessionTargetRaw: String?
     @State var wakeMode: CronWakeMode = .now
     @State var deleteAfterRun: Bool = false
 
@@ -117,6 +118,7 @@ struct CronJobEditor: View {
                                 Picker("", selection: self.$sessionTarget) {
                                     Text("main").tag(CronSessionTarget.main)
                                     Text("isolated").tag(CronSessionTarget.isolated)
+                                    Text("current").tag(CronSessionTarget.current)
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.segmented)
@@ -209,7 +211,7 @@ struct CronJobEditor: View {
 
                     GroupBox("Payload") {
                         VStack(alignment: .leading, spacing: 10) {
-                            if self.sessionTarget == .isolated {
+                            if self.isIsolatedLikeSessionTarget {
                                 Text(Self.isolatedPayloadNote)
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
@@ -289,8 +291,11 @@ struct CronJobEditor: View {
                 self.sessionTarget = .isolated
             }
         }
-        .onChange(of: self.sessionTarget) { _, newValue in
-            if newValue == .isolated {
+        .onChange(of: self.sessionTarget) { oldValue, newValue in
+            if oldValue != newValue {
+                self.preservedSessionTargetRaw = nil
+            }
+            if newValue != .main {
                 self.payloadKind = .agentTurn
             } else if newValue == .main, self.payloadKind == .agentTurn {
                 self.payloadKind = .systemEvent

@@ -67,7 +67,7 @@ openclaw agents add <name>
 </Note>
 
 <Tip>
-推奨：エージェントが `web_search` を使用できるように、Brave Search APIキーを設定してください（`web_fetch` はキーなしで動作します）。最も簡単な方法：`openclaw configure --section web` を実行すると `tools.web.search.apiKey` が保存されます。ドキュメント：[Webツール](/tools/web)。
+推奨：エージェントが `web_search` を使用できるように、Brave Search APIキーを設定してください（`web_fetch` はキーなしで動作します）。最も簡単な方法：`openclaw configure --section web` を実行すると `plugins.entries.brave.config.webSearch.apiKey` に保存されます。旧 `tools.web.search.apiKey` パスは互換用に引き続き読み込まれますが、新しい設定では使用しないでください。ドキュメント：[Webツール](/tools/web)。
 </Tip>
 
 ## 関連ドキュメント

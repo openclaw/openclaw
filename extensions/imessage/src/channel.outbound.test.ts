@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { imessagePlugin } from "./channel.js";
 
+function requireIMessageSendText() {
+  const sendText = imessagePlugin.outbound?.sendText;
+  if (!sendText) {
+    throw new Error("imessage outbound.sendText unavailable");
+  }
+  return sendText;
+}
+
+function requireIMessageSendMedia() {
+  const sendMedia = imessagePlugin.outbound?.sendMedia;
+  if (!sendMedia) {
+    throw new Error("imessage outbound.sendMedia unavailable");
+  }
+  return sendMedia;
+}
+
 describe("imessagePlugin outbound", () => {
   const cfg = {
     channels: {
@@ -12,10 +28,9 @@ describe("imessagePlugin outbound", () => {
 
   it("forwards replyToId on direct sendText adapter path", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "m-text" });
-    const sendText = imessagePlugin.outbound?.sendText;
-    expect(sendText).toBeDefined();
+    const sendText = requireIMessageSendText();
 
-    const result = await sendText!({
+    const result = await sendText({
       cfg,
       to: "chat_id:12",
       text: "hello",
@@ -38,10 +53,9 @@ describe("imessagePlugin outbound", () => {
 
   it("forwards replyToId on direct sendMedia adapter path", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "m-media" });
-    const sendMedia = imessagePlugin.outbound?.sendMedia;
-    expect(sendMedia).toBeDefined();
+    const sendMedia = requireIMessageSendMedia();
 
-    const result = await sendMedia!({
+    const result = await sendMedia({
       cfg,
       to: "chat_id:77",
       text: "caption",
@@ -62,5 +76,33 @@ describe("imessagePlugin outbound", () => {
       }),
     );
     expect(result).toEqual({ channel: "imessage", messageId: "m-media" });
+  });
+
+  it("forwards mediaLocalRoots on direct sendMedia adapter path", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
+    const sendMedia = requireIMessageSendMedia();
+    const mediaLocalRoots = ["/tmp/workspace"];
+
+    const result = await sendMedia({
+      cfg,
+      to: "chat_id:88",
+      text: "caption",
+      mediaUrl: "/tmp/workspace/pic.png",
+      mediaLocalRoots,
+      accountId: "acct-1",
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "chat_id:88",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "/tmp/workspace/pic.png",
+        mediaLocalRoots,
+        accountId: "acct-1",
+        maxBytes: 3 * 1024 * 1024,
+      }),
+    );
+    expect(result).toEqual({ channel: "imessage", messageId: "m-media-local" });
   });
 });

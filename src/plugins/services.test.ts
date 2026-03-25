@@ -7,6 +7,7 @@ const mockedLogger = vi.hoisted(() => ({
   warn: vi.fn<(msg: string) => void>(),
   error: vi.fn<(msg: string) => void>(),
   debug: vi.fn<(msg: string) => void>(),
+  child: vi.fn(() => mockedLogger),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -19,7 +20,12 @@ import { startPluginServices } from "./services.js";
 function createRegistry(services: OpenClawPluginService[]) {
   const registry = createEmptyPluginRegistry();
   for (const service of services) {
-    registry.services.push({ pluginId: "plugin:test", service, source: "test" });
+    registry.services.push({
+      pluginId: "plugin:test",
+      service,
+      source: "test",
+      rootDir: "/plugins/test-plugin",
+    });
   }
   return registry;
 }
@@ -116,7 +122,9 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expect(mockedLogger.error).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service failed (service-start-fail):"),
+      expect.stringContaining(
+        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin):",
+      ),
     );
     expect(mockedLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining("plugin service stop failed (service-stop-fail):"),

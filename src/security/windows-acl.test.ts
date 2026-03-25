@@ -1,22 +1,45 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
 const MOCK_USERNAME = "MockUser";
 
-vi.mock("node:os", () => ({
-  default: { userInfo: () => ({ username: MOCK_USERNAME }) },
-  userInfo: () => ({ username: MOCK_USERNAME }),
-}));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const base = ("default" in actual ? actual.default : actual) as Record<string, unknown>;
+  return {
+    ...actual,
+    default: {
+      ...base,
+      userInfo: () => ({ username: MOCK_USERNAME }),
+    },
+    userInfo: () => ({ username: MOCK_USERNAME }),
+  };
+});
 
-const {
-  createIcaclsResetCommand,
-  formatIcaclsResetCommand,
-  formatWindowsAclSummary,
-  inspectWindowsAcl,
-  parseIcaclsOutput,
-  resolveWindowsUserPrincipal,
-  summarizeWindowsAcl,
-} = await import("./windows-acl.js");
+let createIcaclsResetCommand: typeof import("./windows-acl.js").createIcaclsResetCommand;
+let formatIcaclsResetCommand: typeof import("./windows-acl.js").formatIcaclsResetCommand;
+let formatWindowsAclSummary: typeof import("./windows-acl.js").formatWindowsAclSummary;
+let inspectWindowsAcl: typeof import("./windows-acl.js").inspectWindowsAcl;
+let parseIcaclsOutput: typeof import("./windows-acl.js").parseIcaclsOutput;
+let resolveWindowsUserPrincipal: typeof import("./windows-acl.js").resolveWindowsUserPrincipal;
+let summarizeWindowsAcl: typeof import("./windows-acl.js").summarizeWindowsAcl;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({
+    createIcaclsResetCommand,
+    formatIcaclsResetCommand,
+    formatWindowsAclSummary,
+    inspectWindowsAcl,
+    parseIcaclsOutput,
+    resolveWindowsUserPrincipal,
+    summarizeWindowsAcl,
+  } = await import("./windows-acl.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function aclEntry(params: {
   principal: string;
@@ -32,6 +55,29 @@ function aclEntry(params: {
     canRead: params.canRead ?? true,
     canWrite: params.canWrite ?? true,
   };
+}
+
+function expectSinglePrincipal(entries: WindowsAclEntry[], principal: string): void {
+  expect(entries).toHaveLength(1);
+  expect(entries[0].principal).toBe(principal);
+}
+
+function expectTrustedOnly(
+  entries: WindowsAclEntry[],
+  options?: { env?: NodeJS.ProcessEnv; expectedTrusted?: number },
+): void {
+  const summary = summarizeWindowsAcl(entries, options?.env);
+  expect(summary.trusted).toHaveLength(options?.expectedTrusted ?? 1);
+  expect(summary.untrustedWorld).toHaveLength(0);
+  expect(summary.untrustedGroup).toHaveLength(0);
+}
+
+function expectInspectSuccess(
+  result: Awaited<ReturnType<typeof inspectWindowsAcl>>,
+  expectedEntries: number,
+): void {
+  expect(result.ok).toBe(true);
+  expect(result.entries).toHaveLength(expectedEntries);
 }
 
 describe("windows-acl", () => {
@@ -91,8 +137,7 @@ Successfully processed 1 files`;
       const output = `C:\\test\\file.txt BUILTIN\\Users:(DENY)(W)
                      BUILTIN\\Administrators:(F)`;
       const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
-      expect(entries).toHaveLength(1);
-      expect(entries[0].principal).toBe("BUILTIN\\Administrators");
+      expectSinglePrincipal(entries, "BUILTIN\\Administrators");
     });
 
     it("skips status messages", () => {
@@ -128,8 +173,7 @@ Successfully processed 1 files`;
       const output = `C:\\test\\file.txt random:message
                      C:\\test\\file.txt BUILTIN\\Administrators:(F)`;
       const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
-      expect(entries).toHaveLength(1);
-      expect(entries[0].principal).toBe("BUILTIN\\Administrators");
+      expectSinglePrincipal(entries, "BUILTIN\\Administrators");
     });
 
     it("handles quoted target paths", () => {
@@ -176,8 +220,18 @@ Successfully processed 1 files`;
 
     it("classifies world principals", () => {
       const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "Everyone", rights: ["R"], rawRights: "(R)", canWrite: false }),
-        aclEntry({ principal: "BUILTIN\\Users", rights: ["R"], rawRights: "(R)", canWrite: false }),
+        aclEntry({
+          principal: "Everyone",
+          rights: ["R"],
+          rawRights: "(R)",
+          canWrite: false,
+        }),
+        aclEntry({
+          principal: "BUILTIN\\Users",
+          rights: ["R"],
+          rawRights: "(R)",
+          canWrite: false,
+        }),
       ];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(0);
@@ -210,10 +264,20 @@ Successfully processed 1 files`;
 
   describe("summarizeWindowsAcl — SID-based classification", () => {
     it("classifies SYSTEM SID (S-1-5-18) as trusted", () => {
-      const entries: WindowsAclEntry[] = [aclEntry({ principal: "S-1-5-18" })];
+      expectTrustedOnly([aclEntry({ principal: "S-1-5-18" })]);
+    });
+
+    it("classifies *S-1-5-18 (icacls /sid prefix form of SYSTEM) as trusted (refs #35834)", () => {
+      // icacls /sid output prefixes SIDs with *, e.g. *S-1-5-18 instead of
+      // S-1-5-18.  Without this fix the asterisk caused SID_RE to not match
+      // and the SYSTEM entry was misclassified as "group" (untrusted).
+      expectTrustedOnly([aclEntry({ principal: "*S-1-5-18" })]);
+    });
+
+    it("classifies *S-1-5-32-544 (icacls /sid Administrators) as trusted", () => {
+      const entries: WindowsAclEntry[] = [aclEntry({ principal: "*S-1-5-32-544" })];
       const summary = summarizeWindowsAcl(entries);
       expect(summary.trusted).toHaveLength(1);
-      expect(summary.untrustedWorld).toHaveLength(0);
       expect(summary.untrustedGroup).toHaveLength(0);
     });
 
@@ -226,21 +290,31 @@ Successfully processed 1 files`;
 
     it("classifies caller SID from USERSID env var as trusted", () => {
       const callerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
-      const entries: WindowsAclEntry[] = [aclEntry({ principal: callerSid })];
-      const env = { USERSID: callerSid };
-      const summary = summarizeWindowsAcl(entries, env);
-      expect(summary.trusted).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
+      expectTrustedOnly([aclEntry({ principal: callerSid })], {
+        env: { USERSID: callerSid },
+      });
     });
 
     it("matches SIDs case-insensitively and trims USERSID", () => {
+      expectTrustedOnly(
+        [aclEntry({ principal: "s-1-5-21-1824257776-4070701511-781240313-1001" })],
+        { env: { USERSID: "  S-1-5-21-1824257776-4070701511-781240313-1001  " } },
+      );
+    });
+
+    it("does not trust *-prefixed Everyone via USERSID", () => {
       const entries: WindowsAclEntry[] = [
-        aclEntry({ principal: "s-1-5-21-1824257776-4070701511-781240313-1001" }),
+        {
+          principal: "*S-1-1-0",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
       ];
-      const env = { USERSID: "  S-1-5-21-1824257776-4070701511-781240313-1001  " };
-      const summary = summarizeWindowsAcl(entries, env);
-      expect(summary.trusted).toHaveLength(1);
-      expect(summary.untrustedGroup).toHaveLength(0);
+      const summary = summarizeWindowsAcl(entries, { USERSID: "*S-1-1-0" });
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.trusted).toHaveLength(0);
     });
 
     it("classifies unknown SID as group (not world)", () => {
@@ -257,6 +331,53 @@ Successfully processed 1 files`;
       expect(summary.untrustedGroup).toHaveLength(1);
       expect(summary.untrustedWorld).toHaveLength(0);
       expect(summary.trusted).toHaveLength(0);
+    });
+
+    it("classifies Everyone SID (S-1-1-0) as world, not group", () => {
+      // When icacls is run with /sid, "Everyone" becomes *S-1-1-0.
+      // It must be classified as "world" to preserve security-audit severity.
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-1-0",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies Authenticated Users SID (S-1-5-11) as world, not group", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-11",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies BUILTIN\\Users SID (S-1-5-32-545) as world, not group", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "*S-1-5-32-545",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedWorld).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
     });
 
     it("full scenario: SYSTEM SID + owner SID only → no findings", () => {
@@ -293,16 +414,67 @@ Successfully processed 1 files`;
         stderr: "",
       });
 
-      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
-      expect(result.ok).toBe(true);
-      expect(result.entries).toHaveLength(2);
-      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt"]);
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+      });
+      expectInspectSuccess(result, 2);
+      // /sid is passed so that account names are printed as SIDs, making the
+      // audit locale-independent (fixes #35834).
+      expect(mockExec).toHaveBeenCalledWith("icacls", ["C:\\test\\file.txt", "/sid"]);
+    });
+
+    it("classifies *S-1-5-18 (SID form of SYSTEM from /sid) as trusted", async () => {
+      // When icacls is called with /sid it outputs *S-X-X-X instead of
+      // locale-dependent names like "NT AUTHORITY\\SYSTEM" or the Russian
+      // garbled equivalent.
+      const mockExec = vi.fn().mockResolvedValue({
+        stdout:
+          "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)\n                *S-1-5-18:(F)\n                *S-1-5-32-544:(F)",
+        stderr: "",
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { USERSID: "S-1-5-21-111-222-333-1001" },
+      });
+      expectInspectSuccess(result, 3);
+      // All three entries (current user, SYSTEM, Administrators) must be trusted.
+      expect(result.trusted).toHaveLength(3);
+      expect(result.untrustedGroup).toHaveLength(0);
+      expect(result.untrustedWorld).toHaveLength(0);
+    });
+
+    it("resolves current user SID via whoami when USERSID is missing", async () => {
+      const mockExec = vi
+        .fn()
+        .mockResolvedValueOnce({
+          stdout:
+            "C:\\test\\file.txt *S-1-5-21-111-222-333-1001:(F)\n                *S-1-5-18:(F)",
+          stderr: "",
+        })
+        .mockResolvedValueOnce({
+          stdout: '"mock-host\\\\MockUser","S-1-5-21-111-222-333-1001"\r\n',
+          stderr: "",
+        });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { USERNAME: "MockUser", USERDOMAIN: "mock-host" },
+      });
+
+      expectInspectSuccess(result, 2);
+      expect(result.trusted).toHaveLength(2);
+      expect(result.untrustedGroup).toHaveLength(0);
+      expect(mockExec).toHaveBeenNthCalledWith(1, "icacls", ["C:\\test\\file.txt", "/sid"]);
+      expect(mockExec).toHaveBeenNthCalledWith(2, "whoami", ["/user", "/fo", "csv", "/nh"]);
     });
 
     it("returns error state on exec failure", async () => {
       const mockExec = vi.fn().mockRejectedValue(new Error("icacls not found"));
 
-      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+      });
       expect(result.ok).toBe(false);
       expect(result.error).toContain("icacls not found");
       expect(result.entries).toHaveLength(0);
@@ -314,9 +486,10 @@ Successfully processed 1 files`;
         stderr: "C:\\test\\file.txt NT AUTHORITY\\SYSTEM:(F)",
       });
 
-      const result = await inspectWindowsAcl("C:\\test\\file.txt", { exec: mockExec });
-      expect(result.ok).toBe(true);
-      expect(result.entries).toHaveLength(2);
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+      });
+      expectInspectSuccess(result, 2);
     });
   });
 
@@ -384,21 +557,30 @@ Successfully processed 1 files`;
   describe("formatIcaclsResetCommand", () => {
     it("generates command for files", () => {
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
-      const result = formatIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env });
+      const result = formatIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env,
+      });
       expect(result).toBe(
-        'icacls "C:\\test\\file.txt" /inheritance:r /grant:r "WORKGROUP\\TestUser:F" /grant:r "SYSTEM:F"',
+        'icacls "C:\\test\\file.txt" /inheritance:r /grant:r "WORKGROUP\\TestUser:F" /grant:r "*S-1-5-18:F"',
       );
     });
 
     it("generates command for directories with inheritance flags", () => {
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
-      const result = formatIcaclsResetCommand("C:\\test\\dir", { isDir: true, env });
+      const result = formatIcaclsResetCommand("C:\\test\\dir", {
+        isDir: true,
+        env,
+      });
       expect(result).toContain("(OI)(CI)F");
     });
 
     it("uses system username when env is empty (falls back to os.userInfo)", () => {
       // When env is empty, resolveWindowsUserPrincipal falls back to os.userInfo().username
-      const result = formatIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env: {} });
+      const result = formatIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env: {},
+      });
       // Should contain the actual system username from os.userInfo
       expect(result).toContain(`"${MOCK_USERNAME}:F"`);
       expect(result).not.toContain("%USERNAME%");
@@ -408,7 +590,10 @@ Successfully processed 1 files`;
   describe("createIcaclsResetCommand", () => {
     it("returns structured command object", () => {
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
-      const result = createIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env });
+      const result = createIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env,
+      });
       expect(result).not.toBeNull();
       expect(result?.command).toBe("icacls");
       expect(result?.args).toContain("C:\\test\\file.txt");
@@ -417,7 +602,10 @@ Successfully processed 1 files`;
 
     it("returns command with system username when env is empty (falls back to os.userInfo)", () => {
       // When env is empty, resolveWindowsUserPrincipal falls back to os.userInfo().username
-      const result = createIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env: {} });
+      const result = createIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env: {},
+      });
       // Should return a valid command using the system username
       expect(result).not.toBeNull();
       expect(result?.command).toBe("icacls");
@@ -426,9 +614,52 @@ Successfully processed 1 files`;
 
     it("includes display string matching formatIcaclsResetCommand", () => {
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
-      const result = createIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env });
-      const expected = formatIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env });
+      const result = createIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env,
+      });
+      const expected = formatIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env,
+      });
       expect(result?.display).toBe(expected);
+    });
+  });
+
+  describe("summarizeWindowsAcl — localized SYSTEM account names", () => {
+    it("classifies French SYSTEM (AUTORITE NT\\Système) as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "AUTORITE NT\\Système" })]);
+    });
+
+    it("classifies German SYSTEM (NT-AUTORITÄT\\SYSTEM) as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "NT-AUTORITÄT\\SYSTEM" })]);
+    });
+
+    it("classifies Spanish SYSTEM (AUTORIDAD NT\\SYSTEM) as trusted", () => {
+      expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
+    });
+
+    it("French Windows full scenario: user + Système only → no untrusted", () => {
+      const entries: WindowsAclEntry[] = [
+        aclEntry({ principal: "MYPC\\Pierre" }),
+        aclEntry({ principal: "AUTORITE NT\\Système" }),
+      ];
+      const env = { USERNAME: "Pierre", USERDOMAIN: "MYPC" };
+      const { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, env);
+      expect(trusted).toHaveLength(2);
+      expect(untrustedWorld).toHaveLength(0);
+      expect(untrustedGroup).toHaveLength(0);
+    });
+  });
+
+  describe("formatIcaclsResetCommand — uses SID for SYSTEM", () => {
+    it("uses *S-1-5-18 instead of SYSTEM in reset command", () => {
+      const cmd = formatIcaclsResetCommand("C:\\test.json", {
+        isDir: false,
+        env: { USERNAME: "TestUser", USERDOMAIN: "PC" },
+      });
+      expect(cmd).toContain("*S-1-5-18:F");
+      expect(cmd).not.toContain("SYSTEM:F");
     });
   });
 });

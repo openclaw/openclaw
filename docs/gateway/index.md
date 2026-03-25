@@ -16,6 +16,12 @@ Use this page for day-1 startup and day-2 operations of the Gateway service.
   <Card title="Configuration" icon="sliders" href="/gateway/configuration">
     Task-oriented setup guide + full configuration reference.
   </Card>
+  <Card title="Secrets management" icon="key-round" href="/gateway/secrets">
+    SecretRef contract, runtime snapshot behavior, and migrate/reload operations.
+  </Card>
+  <Card title="Secrets plan contract" icon="shield-check" href="/gateway/secrets-plan-contract">
+    Exact `secrets apply` target/path rules and ref-only auth-profile behavior.
+  </Card>
 </CardGroup>
 
 ## 5-minute local startup
@@ -64,10 +70,34 @@ Default mode is `gateway.reload.mode="hybrid"`.
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs (OpenAI-compatible, Responses, tools invoke)
+  - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
   - Control UI and hooks
 - Default bind mode: `loopback`.
 - Auth is required by default (`gateway.auth.token` / `gateway.auth.password`, or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
+
+## OpenAI-compatible endpoints
+
+OpenClaw’s highest-leverage compatibility surface is now:
+
+- `GET /v1/models`
+- `GET /v1/models/{id}`
+- `POST /v1/embeddings`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+
+Why this set matters:
+
+- Most Open WebUI, LobeChat, and LibreChat integrations probe `/v1/models` first.
+- Many RAG and memory pipelines expect `/v1/embeddings`.
+- Agent-native clients increasingly prefer `/v1/responses`.
+
+Planning note:
+
+- `/v1/models` is agent-first: it returns `openclaw`, `openclaw/default`, and `openclaw/<agentId>`.
+- `openclaw/default` is the stable alias that always maps to the configured default agent.
+- Use `x-openclaw-model` when you want a backend provider/model override; otherwise the selected agent's normal model and embedding setup stays in control.
+
+All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
 
 ### Port and bind precedence
 
@@ -94,6 +124,7 @@ openclaw gateway status --json
 openclaw gateway install
 openclaw gateway restart
 openclaw gateway stop
+openclaw secrets reload
 openclaw logs --follow
 openclaw doctor
 ```

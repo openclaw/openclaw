@@ -5,8 +5,11 @@ import type { RuntimeEnv } from "../runtime.js";
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   resolveSessionStoreTargets: vi.fn(),
+  resolveSessionStoreTargetsOrExit: vi.fn(),
   resolveMaintenanceConfig: vi.fn(),
   loadSessionStore: vi.fn(),
+  resolveSessionFilePath: vi.fn(),
+  resolveSessionFilePathOptions: vi.fn(),
   pruneStaleEntries: vi.fn(),
   capEntryCount: vi.fn(),
   updateSessionStore: vi.fn(),
@@ -19,11 +22,14 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./session-store-targets.js", () => ({
   resolveSessionStoreTargets: mocks.resolveSessionStoreTargets,
+  resolveSessionStoreTargetsOrExit: mocks.resolveSessionStoreTargetsOrExit,
 }));
 
 vi.mock("../config/sessions.js", () => ({
   resolveMaintenanceConfig: mocks.resolveMaintenanceConfig,
   loadSessionStore: mocks.loadSessionStore,
+  resolveSessionFilePath: mocks.resolveSessionFilePath,
+  resolveSessionFilePathOptions: mocks.resolveSessionFilePathOptions,
   pruneStaleEntries: mocks.pruneStaleEntries,
   capEntryCount: mocks.capEntryCount,
   updateSessionStore: mocks.updateSessionStore,
@@ -51,6 +57,17 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
+    mocks.resolveSessionStoreTargetsOrExit.mockImplementation(
+      (params: { cfg: unknown; opts: unknown; runtime: RuntimeEnv }) => {
+        try {
+          return mocks.resolveSessionStoreTargets(params.cfg, params.opts);
+        } catch (error) {
+          params.runtime.error(error instanceof Error ? error.message : String(error));
+          params.runtime.exit(1);
+          return null;
+        }
+      },
+    );
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
@@ -74,8 +91,12 @@ describe("sessionsCleanupCommand", () => {
         return 0;
       },
     );
+    mocks.resolveSessionFilePathOptions.mockReturnValue({});
+    mocks.resolveSessionFilePath.mockImplementation(
+      (sessionId: string) => `/missing/${sessionId}.jsonl`,
+    );
     mocks.capEntryCount.mockImplementation(() => 0);
-    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.updateSessionStore.mockResolvedValue(0);
     mocks.enforceSessionDiskBudget.mockResolvedValue({
       totalBytesBefore: 1000,
       totalBytesAfter: 700,
@@ -130,6 +151,7 @@ describe("sessionsCleanupCommand", () => {
             overBudget: true,
           },
         });
+        return 0;
       },
     );
 
@@ -194,6 +216,29 @@ describe("sessionsCleanupCommand", () => {
         removedEntries: 1,
       }),
     );
+  });
+
+  it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      missing: { sessionId: "missing-transcript", updatedAt: 1 },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+        fixMissing: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.beforeCount).toBe(1);
+    expect(payload.afterCount).toBe(0);
+    expect(payload.missing).toBe(1);
   });
 
   it("renders a dry-run action table with keep/prune actions", async () => {

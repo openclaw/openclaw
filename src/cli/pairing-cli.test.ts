@@ -48,6 +48,7 @@ describe("pairing cli", () => {
   let registerPairingCli: typeof import("./pairing-cli.js").registerPairingCli;
 
   beforeAll(async () => {
+    vi.resetModules();
     ({ registerPairingCli } = await import("./pairing-cli.js"));
   });
 

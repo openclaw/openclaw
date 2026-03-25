@@ -20,6 +20,43 @@ export type GatewayBonjourBeacon = {
   txt?: Record<string, string>;
 };
 
+export type GatewayDiscoveryResolvedEndpoint = {
+  host: string;
+  port: number;
+  gatewayTls: boolean;
+  gatewayTlsFingerprintSha256?: string;
+  scheme: "ws" | "wss";
+  wsUrl: string;
+};
+
+export function resolveGatewayDiscoveryEndpoint(
+  beacon: GatewayBonjourBeacon,
+): GatewayDiscoveryResolvedEndpoint | null {
+  const host = beacon.host?.trim();
+  const port = beacon.port;
+  if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+    return null;
+  }
+  const gatewayTls = beacon.gatewayTls === true;
+  const scheme = gatewayTls ? "wss" : "ws";
+  return {
+    host,
+    port,
+    gatewayTls,
+    gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
+    scheme,
+    wsUrl: `${scheme}://${host}:${port}`,
+  };
+}
+
+export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
+  return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
+}
+
+export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
+  return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
+}
+
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];

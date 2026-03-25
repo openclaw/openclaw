@@ -2,11 +2,11 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 
-export async function runNonInteractiveOnboardingRemote(params: {
+export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
@@ -42,7 +42,7 @@ export async function runNonInteractiveOnboardingRemote(params: {
     auth: opts.remoteToken ? "token" : "none",
   };
   if (opts.json) {
-    runtime.log(JSON.stringify(payload, null, 2));
+    writeRuntimeJson(runtime, payload);
   } else {
     runtime.log(`Remote gateway: ${remoteUrl}`);
     runtime.log(`Auth: ${payload.auth}`);

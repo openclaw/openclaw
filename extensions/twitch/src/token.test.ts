@@ -8,8 +8,8 @@
  * - Account ID normalization
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../api.js";
 import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
 
 describe("token", () => {

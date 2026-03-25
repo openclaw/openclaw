@@ -4,32 +4,35 @@ import Testing
 
 @Suite(.serialized)
 struct ExecApprovalsStoreRefactorTests {
-    @Test
-    func ensureFileSkipsRewriteWhenUnchanged() async throws {
+    private func withTempStateDir(
+        _ body: @escaping @Sendable (URL) async throws -> Void) async throws
+    {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
 
         try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
-            _ = ExecApprovalsStore.ensureFile()
-            let url = ExecApprovalsStore.fileURL()
-            let firstWriteDate = try Self.modificationDate(at: url)
-
-            try await Task.sleep(nanoseconds: 1_100_000_000)
-            _ = ExecApprovalsStore.ensureFile()
-            let secondWriteDate = try Self.modificationDate(at: url)
-
-            #expect(firstWriteDate == secondWriteDate)
+            try await body(stateDir)
         }
     }
 
     @Test
-    func updateAllowlistReportsRejectedBasenamePattern() async throws {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
+    func `ensure file skips rewrite when unchanged`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = ExecApprovalsStore.ensureFile()
+            let url = ExecApprovalsStore.fileURL()
+            let firstIdentity = try Self.fileIdentity(at: url)
 
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+            _ = ExecApprovalsStore.ensureFile()
+            let secondIdentity = try Self.fileIdentity(at: url)
+
+            #expect(firstIdentity == secondIdentity)
+        }
+    }
+
+    @Test
+    func `update allowlist reports rejected basename pattern`() async throws {
+        try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [
@@ -46,16 +49,16 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func updateAllowlistMigratesLegacyPatternFromResolvedPath() async throws {
-        let stateDir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager().removeItem(at: stateDir) }
-
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+    func `update allowlist migrates legacy pattern from resolved path`() async throws {
+        try await self.withTempStateDir { _ in
             let rejected = ExecApprovalsStore.updateAllowlist(
                 agentId: "main",
                 allowlist: [
-                    ExecAllowlistEntry(pattern: "echo", lastUsedAt: nil, lastUsedCommand: nil, lastResolvedPath: " /usr/bin/echo "),
+                    ExecAllowlistEntry(
+                        pattern: "echo",
+                        lastUsedAt: nil,
+                        lastUsedCommand: nil,
+                        lastResolvedPath: " /usr/bin/echo "),
                 ])
             #expect(rejected.isEmpty)
 
@@ -64,12 +67,25 @@ struct ExecApprovalsStoreRefactorTests {
         }
     }
 
-    private static func modificationDate(at url: URL) throws -> Date {
-        let attributes = try FileManager().attributesOfItem(atPath: url.path)
-        guard let date = attributes[.modificationDate] as? Date else {
-            struct MissingDateError: Error {}
-            throw MissingDateError()
+    @Test
+    func `ensure file hardens state directory permissions`() async throws {
+        try await self.withTempStateDir { stateDir in
+            try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+            try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: stateDir.path)
+
+            _ = ExecApprovalsStore.ensureFile()
+            let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
+            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+            #expect(permissions & 0o777 == 0o700)
         }
-        return date
+    }
+
+    private static func fileIdentity(at url: URL) throws -> Int {
+        let attributes = try FileManager().attributesOfItem(atPath: url.path)
+        guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
+            struct MissingIdentifierError: Error {}
+            throw MissingIdentifierError()
+        }
+        return identifier
     }
 }

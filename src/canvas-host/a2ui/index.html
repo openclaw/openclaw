@@ -226,11 +226,11 @@
   </head>
   <body>
     <canvas id="openclaw-canvas"></canvas>
-    <div id="openclaw-status">
-      <div class="card">
+    <div id="openclaw-status" role="status" aria-live="polite">
+      <section class="card">
         <div class="title" id="openclaw-status-title">Ready</div>
         <div class="subtitle" id="openclaw-status-subtitle">Waiting for agent</div>
-      </div>
+      </section>
     </div>
     <openclaw-a2ui-host></openclaw-a2ui-host>
     <script src="a2ui.bundle.js"></script>

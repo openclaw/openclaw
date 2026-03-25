@@ -26,7 +26,8 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description: "List agent ids you can target with sessions_spawn (based on allowlists).",
+    description:
+      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = loadConfig();

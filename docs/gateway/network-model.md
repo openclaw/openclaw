@@ -5,6 +5,8 @@ read_when:
 title: "Network model"
 ---
 
+# Network Model
+
 Most operations flow through the Gateway (`openclaw gateway`), a single long-running
 process that owns channel connections and the WebSocket control plane.
 

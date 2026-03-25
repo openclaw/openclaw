@@ -18,7 +18,7 @@ extension CronSettings {
                 }
             }
             HStack(spacing: 6) {
-                StatusPill(text: job.sessionTarget.rawValue, tint: .secondary)
+                StatusPill(text: job.sessionTargetDisplayValue, tint: .secondary)
                 StatusPill(text: job.wakeMode.rawValue, tint: .secondary)
                 if let agentId = job.agentId, !agentId.isEmpty {
                     StatusPill(text: "agent \(agentId)", tint: .secondary)
@@ -34,9 +34,9 @@ extension CronSettings {
     @ViewBuilder
     func jobContextMenu(_ job: CronJob) -> some View {
         Button("Run now") { Task { await self.store.runJob(id: job.id, force: true) } }
-        if job.sessionTarget == .isolated {
+        if let transcriptSessionKey = job.transcriptSessionKey {
             Button("Open transcript") {
-                WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
+                WebChatManager.shared.show(sessionKey: transcriptSessionKey)
             }
         }
         Divider()
@@ -75,9 +75,9 @@ extension CronSettings {
                     .labelsHidden()
                 Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }
                     .buttonStyle(.borderedProminent)
-                if job.sessionTarget == .isolated {
+                if let transcriptSessionKey = job.transcriptSessionKey {
                     Button("Transcript") {
-                        WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
+                        WebChatManager.shared.show(sessionKey: transcriptSessionKey)
                     }
                     .buttonStyle(.bordered)
                 }
@@ -103,7 +103,7 @@ extension CronSettings {
             if let agentId = job.agentId, !agentId.isEmpty {
                 LabeledContent("Agent") { Text(agentId) }
             }
-            LabeledContent("Session") { Text(job.sessionTarget.rawValue) }
+            LabeledContent("Session") { Text(job.sessionTargetDisplayValue) }
             LabeledContent("Wake") { Text(job.wakeMode.rawValue) }
             LabeledContent("Next run") {
                 if let date = job.nextRunDate {
@@ -224,7 +224,7 @@ extension CronSettings {
                     HStack(spacing: 8) {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
-                        if job.sessionTarget == .isolated {
+                        if job.supportsAnnounceDelivery {
                             let delivery = job.delivery
                             if let delivery {
                                 if delivery.mode == .announce {

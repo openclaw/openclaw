@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const note = vi.fn();
@@ -11,9 +12,18 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
+vi.mock("../agents/sandbox.js", () => ({
+  DEFAULT_SANDBOX_BROWSER_IMAGE: "browser-image",
+  DEFAULT_SANDBOX_COMMON_IMAGE: "common-image",
+  DEFAULT_SANDBOX_IMAGE: "default-image",
+  resolveSandboxScope: vi.fn(() => "shared"),
+}));
+
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
+
+const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -23,29 +33,46 @@ describe("maybeRepairSandboxImages", () => {
   };
 
   const mockPrompter: DoctorPrompter = {
-    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(false),
+    confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+    repairMode: {
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    } satisfies DoctorRepairMode,
   } as unknown as DoctorPrompter;
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("warns when sandbox mode is enabled but Docker is not available", async () => {
-    // Simulate Docker not available (command fails)
-    runExec.mockRejectedValue(new Error("Docker not installed"));
-
-    const config: OpenClawConfig = {
+  function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
+    return {
       agents: {
         defaults: {
           sandbox: {
-            mode: "non-main",
+            mode,
           },
         },
       },
     };
+  }
 
-    const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
-    await maybeRepairSandboxImages(config, mockRuntime, mockPrompter);
+  async function runSandboxRepair(params: {
+    mode: "off" | "all" | "non-main";
+    dockerAvailable: boolean;
+  }) {
+    if (params.dockerAvailable) {
+      runExec.mockResolvedValue({ stdout: "24.0.0", stderr: "" });
+    } else {
+      runExec.mockRejectedValue(new Error("Docker not installed"));
+    }
+    await maybeRepairSandboxImages(createSandboxConfig(params.mode), mockRuntime, mockPrompter);
+  }
+
+  it("warns when sandbox mode is enabled but Docker is not available", async () => {
+    await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
 
     // The warning should clearly indicate sandbox is enabled but won't work
     expect(note).toHaveBeenCalled();
@@ -59,20 +86,7 @@ describe("maybeRepairSandboxImages", () => {
   });
 
   it("warns when sandbox mode is 'all' but Docker is not available", async () => {
-    runExec.mockRejectedValue(new Error("Docker not installed"));
-
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-          },
-        },
-      },
-    };
-
-    const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
-    await maybeRepairSandboxImages(config, mockRuntime, mockPrompter);
+    await runSandboxRepair({ mode: "all", dockerAvailable: false });
 
     expect(note).toHaveBeenCalled();
     const noteCall = note.mock.calls[0];
@@ -83,41 +97,14 @@ describe("maybeRepairSandboxImages", () => {
   });
 
   it("does not warn when sandbox mode is off", async () => {
-    runExec.mockRejectedValue(new Error("Docker not installed"));
-
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-          },
-        },
-      },
-    };
-
-    const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
-    await maybeRepairSandboxImages(config, mockRuntime, mockPrompter);
+    await runSandboxRepair({ mode: "off", dockerAvailable: false });
 
     // No warning needed when sandbox is off
     expect(note).not.toHaveBeenCalled();
   });
 
   it("does not warn when Docker is available", async () => {
-    // Simulate Docker available
-    runExec.mockResolvedValue({ stdout: "24.0.0", stderr: "" });
-
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "non-main",
-          },
-        },
-      },
-    };
-
-    const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
-    await maybeRepairSandboxImages(config, mockRuntime, mockPrompter);
+    await runSandboxRepair({ mode: "non-main", dockerAvailable: true });
 
     // May have other notes about images, but not the Docker unavailable warning
     const dockerUnavailableWarning = note.mock.calls.find(

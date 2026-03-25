@@ -59,36 +59,40 @@ export function formatZonedTimestamp(
   date: Date,
   options?: FormatZonedTimestampOptions,
 ): string | undefined {
-  const intlOptions: Intl.DateTimeFormatOptions = {
-    timeZone: options?.timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZoneName: "short",
-  };
-  if (options?.displaySeconds) {
-    intlOptions.second = "2-digit";
-  }
-  const parts = new Intl.DateTimeFormat("en-US", intlOptions).formatToParts(date);
-  const pick = (type: string) => parts.find((part) => part.type === type)?.value;
-  const yyyy = pick("year");
-  const mm = pick("month");
-  const dd = pick("day");
-  const hh = pick("hour");
-  const min = pick("minute");
-  const sec = options?.displaySeconds ? pick("second") : undefined;
-  const tz = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-  if (!yyyy || !mm || !dd || !hh || !min) {
+  try {
+    const intlOptions: Intl.DateTimeFormatOptions = {
+      timeZone: options?.timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "short",
+    };
+    if (options?.displaySeconds) {
+      intlOptions.second = "2-digit";
+    }
+    const parts = new Intl.DateTimeFormat("en-US", intlOptions).formatToParts(date);
+    const pick = (type: string) => parts.find((part) => part.type === type)?.value;
+    const yyyy = pick("year");
+    const mm = pick("month");
+    const dd = pick("day");
+    const hh = pick("hour");
+    const min = pick("minute");
+    const sec = options?.displaySeconds ? pick("second") : undefined;
+    const tz = [...parts]
+      .toReversed()
+      .find((part) => part.type === "timeZoneName")
+      ?.value?.trim();
+    if (!yyyy || !mm || !dd || !hh || !min) {
+      return undefined;
+    }
+    if (options?.displaySeconds && sec) {
+      return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
+    }
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
+  } catch {
     return undefined;
   }
-  if (options?.displaySeconds && sec) {
-    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
-  }
-  return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
 }

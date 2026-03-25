@@ -49,6 +49,75 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   return normalized;
 }
 
+export function formatConversationTarget(params: {
+  channel?: string;
+  conversationId?: string | number;
+  parentConversationId?: string | number;
+}): string | undefined {
+  const channel =
+    typeof params.channel === "string"
+      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      : undefined;
+  const conversationId =
+    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
+      ? String(Math.trunc(params.conversationId))
+      : typeof params.conversationId === "string"
+        ? params.conversationId.trim()
+        : undefined;
+  if (!channel || !conversationId) {
+    return undefined;
+  }
+  if (channel === "matrix") {
+    const parentConversationId =
+      typeof params.parentConversationId === "number" &&
+      Number.isFinite(params.parentConversationId)
+        ? String(Math.trunc(params.parentConversationId))
+        : typeof params.parentConversationId === "string"
+          ? params.parentConversationId.trim()
+          : undefined;
+    const roomId =
+      parentConversationId && parentConversationId !== conversationId
+        ? parentConversationId
+        : conversationId;
+    return `room:${roomId}`;
+  }
+  return `channel:${conversationId}`;
+}
+
+export function resolveConversationDeliveryTarget(params: {
+  channel?: string;
+  conversationId?: string | number;
+  parentConversationId?: string | number;
+}): { to?: string; threadId?: string } {
+  const to = formatConversationTarget(params);
+  const channel =
+    typeof params.channel === "string"
+      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
+      : undefined;
+  const conversationId =
+    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
+      ? String(Math.trunc(params.conversationId))
+      : typeof params.conversationId === "string"
+        ? params.conversationId.trim()
+        : undefined;
+  const parentConversationId =
+    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
+      ? String(Math.trunc(params.parentConversationId))
+      : typeof params.parentConversationId === "string"
+        ? params.parentConversationId.trim()
+        : undefined;
+  if (
+    channel === "matrix" &&
+    to &&
+    conversationId &&
+    parentConversationId &&
+    parentConversationId !== conversationId
+  ) {
+    return { to, threadId: conversationId };
+  }
+  return { to };
+}
+
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   deliveryContext?: DeliveryContext;
   lastChannel?: string;
@@ -121,11 +190,23 @@ export function mergeDeliveryContext(
   if (!normalizedPrimary && !normalizedFallback) {
     return undefined;
   }
+  const channelsConflict =
+    normalizedPrimary?.channel &&
+    normalizedFallback?.channel &&
+    normalizedPrimary.channel !== normalizedFallback.channel;
   return normalizeDeliveryContext({
     channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    to: normalizedPrimary?.to ?? normalizedFallback?.to,
-    accountId: normalizedPrimary?.accountId ?? normalizedFallback?.accountId,
-    threadId: normalizedPrimary?.threadId ?? normalizedFallback?.threadId,
+    // Keep route fields paired to their channel; avoid crossing fields between
+    // unrelated channels during session context merges.
+    to: channelsConflict
+      ? normalizedPrimary?.to
+      : (normalizedPrimary?.to ?? normalizedFallback?.to),
+    accountId: channelsConflict
+      ? normalizedPrimary?.accountId
+      : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    threadId: channelsConflict
+      ? normalizedPrimary?.threadId
+      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
   });
 }
 

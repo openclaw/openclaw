@@ -174,6 +174,21 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
   };
 }
 
+/**
+ * Detect whether an error is caused by a revoked Proxy.
+ *
+ * The Bot Framework SDK wraps TurnContext in a Proxy that is revoked once the
+ * turn handler returns.  Any later access (e.g. from a debounced callback)
+ * throws a TypeError whose message contains the distinctive "proxy that has
+ * been revoked" string.
+ */
+export function isRevokedProxyError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) {
+    return false;
+  }
+  return /proxy that has been revoked/i.test(err.message);
+}
+
 export function formatMSTeamsSendErrorHint(
   classification: MSTeamsSendErrorClassification,
 ): string | undefined {

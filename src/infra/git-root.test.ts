@@ -9,6 +9,15 @@ async function makeTempDir(label: string): Promise<string> {
 }
 
 describe("git-root", () => {
+  it("finds git root when starting at the repo root itself", async () => {
+    const temp = await makeTempDir("git-root-self");
+    const repoRoot = path.join(temp, "repo");
+    await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+
+    expect(findGitRoot(repoRoot)).toBe(repoRoot);
+    expect(resolveGitHeadPath(repoRoot)).toBe(path.join(repoRoot, ".git", "HEAD"));
+  });
+
   it("finds git root and HEAD path when .git is a directory", async () => {
     const temp = await makeTempDir("git-root-dir");
     const repoRoot = path.join(temp, "repo");
@@ -55,5 +64,16 @@ describe("git-root", () => {
 
     expect(findGitRoot(nested, { maxDepth: 2 })).toBeNull();
     expect(resolveGitHeadPath(nested, { maxDepth: 2 })).toBeNull();
+  });
+
+  it("returns null for HEAD lookup when only an invalid .git file exists", async () => {
+    const temp = await makeTempDir("git-root-invalid-only");
+    const repoRoot = path.join(temp, "repo");
+    const nested = path.join(repoRoot, "nested");
+    await fs.mkdir(nested, { recursive: true });
+    await fs.writeFile(path.join(repoRoot, ".git"), "not-a-gitdir-pointer\n", "utf-8");
+
+    expect(findGitRoot(nested)).toBe(repoRoot);
+    expect(resolveGitHeadPath(nested)).toBeNull();
   });
 });

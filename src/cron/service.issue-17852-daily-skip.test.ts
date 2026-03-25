@@ -36,7 +36,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     };
   }
 
-  it("recomputeNextRunsForMaintenance should NOT advance past-due nextRunAtMs", () => {
+  it("recomputeNextRunsForMaintenance should NOT advance past-due nextRunAtMs by default", () => {
     // Simulate: job scheduled for 3:00 AM, timer processing happens at 3:00:01
     // The job was NOT executed in this tick (e.g., it became due between
     // findDueJobs and the post-execution block).
@@ -51,6 +51,20 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     // Maintenance should NOT touch existing past-due nextRunAtMs.
     // The job should still be eligible for execution on the next timer tick.
     expect(job.state.nextRunAtMs).toBe(threeAM);
+  });
+
+  it("recomputeNextRunsForMaintenance can advance expired nextRunAtMs on recovery path when slot already executed", () => {
+    const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
+    const now = threeAM + 1_000; // 3:00:01
+
+    const job = createDailyThreeAmJob(threeAM);
+    job.state.lastRunAtMs = threeAM + 1;
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+
+    const tomorrowThreeAM = threeAM + DAY_MS;
+    expect(job.state.nextRunAtMs).toBe(tomorrowThreeAM);
   });
 
   it("full recomputeNextRuns WOULD silently advance past-due nextRunAtMs (the bug)", () => {

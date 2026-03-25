@@ -1,47 +1,31 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig } from "../../types.js";
-import { getActiveMatrixClient } from "../active-client.js";
-import { createPreparedMatrixClient } from "../client-bootstrap.js";
-import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
+import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
+import { resolveMatrixRoomId } from "../send.js";
 import type { MatrixActionClient, MatrixActionClientOpts } from "./types.js";
 
-export function ensureNodeRuntime() {
-  if (isBunRuntime()) {
-    throw new Error("Matrix support requires Node (bun runtime not supported)");
-  }
+type MatrixActionClientStopMode = "stop" | "persist";
+
+export async function withResolvedActionClient<T>(
+  opts: MatrixActionClientOpts,
+  run: (client: MatrixActionClient["client"]) => Promise<T>,
+  mode: MatrixActionClientStopMode = "stop",
+): Promise<T> {
+  return await withResolvedRuntimeMatrixClient(opts, run, mode);
 }
 
-export async function resolveActionClient(
-  opts: MatrixActionClientOpts = {},
-): Promise<MatrixActionClient> {
-  ensureNodeRuntime();
-  if (opts.client) {
-    return { client: opts.client, stopOnDone: false };
-  }
-  // Normalize accountId early to ensure consistent keying across all lookups
-  const accountId = normalizeAccountId(opts.accountId);
-  const active = getActiveMatrixClient(accountId);
-  if (active) {
-    return { client: active, stopOnDone: false };
-  }
-  const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
-  if (shouldShareClient) {
-    const client = await resolveSharedMatrixClient({
-      cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
-      timeoutMs: opts.timeoutMs,
-      accountId,
-    });
-    return { client, stopOnDone: false };
-  }
-  const auth = await resolveMatrixAuth({
-    cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
-    accountId,
+export async function withStartedActionClient<T>(
+  opts: MatrixActionClientOpts,
+  run: (client: MatrixActionClient["client"]) => Promise<T>,
+): Promise<T> {
+  return await withResolvedActionClient({ ...opts, readiness: "started" }, run, "persist");
+}
+
+export async function withResolvedRoomAction<T>(
+  roomId: string,
+  opts: MatrixActionClientOpts,
+  run: (client: MatrixActionClient["client"], resolvedRoom: string) => Promise<T>,
+): Promise<T> {
+  return await withResolvedActionClient(opts, async (client) => {
+    const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+    return await run(client, resolvedRoom);
   });
-  const client = await createPreparedMatrixClient({
-    auth,
-    timeoutMs: opts.timeoutMs,
-    accountId,
-  });
-  return { client, stopOnDone: true };
 }

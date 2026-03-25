@@ -1,5 +1,5 @@
 ---
-summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/system"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/device/notifications/system"
 read_when:
   - Pairing iOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
@@ -9,7 +9,7 @@ title: "Nodes"
 
 # Nodes
 
-A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
+A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
 
@@ -36,6 +36,10 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
+If a node retries with changed auth details (role/scopes/public key), the prior
+pending request is superseded and a new `requestId` is created. Re-run
+`openclaw devices list` before approving.
+
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
@@ -53,6 +57,15 @@ forwards `exec` calls to the **node host** when `host=node` is selected.
 - **Gateway host**: receives messages, runs the model, routes tool calls.
 - **Node host**: executes `system.run`/`system.which` on the node machine.
 - **Approvals**: enforced on the node host via `~/.openclaw/exec-approvals.json`.
+
+Approval note:
+
+- Approval-backed node runs bind exact request context.
+- For direct shell/runtime file executions, OpenClaw also best-effort binds one concrete local
+  file operand and denies the run if that file changes before execution.
+- If OpenClaw cannot identify exactly one concrete local file for an interpreter/runtime command,
+  approval-backed execution is denied instead of pretending full runtime coverage. Use sandboxing,
+  separate hosts, or an explicit trusted allowlist/full workflow for broader interpreter semantics.
 
 ### Start a node host (foreground)
 
@@ -81,8 +94,13 @@ openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
 
 Notes:
 
-- The token is `gateway.auth.token` from the gateway config (`~/.openclaw/openclaw.json` on the gateway host).
-- `openclaw node run` reads `OPENCLAW_GATEWAY_TOKEN` for auth.
+- `openclaw node run` supports token or password auth.
+- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
+- Config fallback is `gateway.auth.token` / `gateway.auth.password`.
+- In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
+- In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
+- If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
+- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ### Start a node host (service)
 
@@ -96,10 +114,13 @@ openclaw node restart
 On the gateway host:
 
 ```bash
-openclaw nodes pending
-openclaw nodes approve <requestId>
-openclaw nodes list
+openclaw devices list
+openclaw devices approve <requestId>
+openclaw nodes status
 ```
+
+If the node retries with changed auth details, re-run `openclaw devices list`
+and approve the current `requestId`.
 
 Naming options:
 
@@ -214,7 +235,7 @@ Notes:
 
 ## Screen recordings (nodes)
 
-Nodes expose `screen.record` (mp4). Example:
+Supported nodes expose `screen.record` (mp4). Example:
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -223,10 +244,9 @@ openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-
 
 Notes:
 
-- `screen.record` requires the node app to be foregrounded.
-- Android will show the system screen-capture prompt before recording.
+- `screen.record` availability depends on node platform.
 - Screen recordings are clamped to `<= 60s`.
-- `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
+- `--no-audio` disables microphone capture on supported platforms.
 - Use `--screen <index>` to select a display when multiple screens are available.
 
 ## Location (nodes)
@@ -261,6 +281,33 @@ Notes:
 - The permission prompt must be accepted on the Android device before the capability is advertised.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
 
+## Android device + personal data commands
+
+Android nodes can advertise additional command families when the corresponding capabilities are enabled.
+
+Available families:
+
+- `device.status`, `device.info`, `device.permissions`, `device.health`
+- `notifications.list`, `notifications.actions`
+- `photos.latest`
+- `contacts.search`, `contacts.add`
+- `calendar.events`, `calendar.add`
+- `callLog.search`
+- `sms.search`
+- `motion.activity`, `motion.pedometer`
+
+Example invokes:
+
+```bash
+openclaw nodes invoke --node <idOrNameOrIp> --command device.status --params '{}'
+openclaw nodes invoke --node <idOrNameOrIp> --command notifications.list --params '{}'
+openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"limit":1}'
+```
+
+Notes:
+
+- Motion commands are capability-gated by available sensors.
+
 ## System commands (node host / mac node)
 
 The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`.
@@ -277,6 +324,7 @@ Notes:
 
 - `system.run` returns stdout/stderr/exit code in the payload.
 - `system.notify` respects notification permission state on the macOS app.
+- Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped `--env` values are reduced to an explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
@@ -330,7 +378,7 @@ openclaw node run --host <gateway-host> --port 18789
 
 Notes:
 
-- Pairing is still required (the Gateway will show a node approval prompt).
+- Pairing is still required (the Gateway will show a device pairing prompt).
 - The node host stores its node id, token, display name, and gateway connection info in `~/.openclaw/node.json`.
 - Exec approvals are enforced locally via `~/.openclaw/exec-approvals.json`
   (see [Exec approvals](/tools/exec-approvals)).

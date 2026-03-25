@@ -6,15 +6,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import {
-  Container,
-  Key,
-  matchesKey,
-  type SelectItem,
-  SelectList,
-  Text,
-} from "@mariozechner/pi-tui";
+import { showPagedSelectList } from "./ui/paged-select";
 
 interface FileInfo {
   status: string;
@@ -108,87 +100,17 @@ export default function (pi: ExtensionAPI) {
         }
       };
 
-      // Show file picker with SelectList
-      await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-        const container = new Container();
-
-        // Top border
-        container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-        // Title
-        container.addChild(new Text(theme.fg("accent", theme.bold(" Select file to diff")), 0, 0));
-
-        // Build select items with colored status
-        const items: SelectItem[] = files.map((f) => {
-          let statusColor: string;
-          switch (f.status) {
-            case "M":
-              statusColor = theme.fg("warning", f.status);
-              break;
-            case "A":
-              statusColor = theme.fg("success", f.status);
-              break;
-            case "D":
-              statusColor = theme.fg("error", f.status);
-              break;
-            case "?":
-              statusColor = theme.fg("muted", f.status);
-              break;
-            default:
-              statusColor = theme.fg("dim", f.status);
-          }
-          return {
-            value: f,
-            label: `${statusColor} ${f.file}`,
-          };
-        });
-
-        const visibleRows = Math.min(files.length, 15);
-        let currentIndex = 0;
-
-        const selectList = new SelectList(items, visibleRows, {
-          selectedPrefix: (t) => theme.fg("accent", t),
-          selectedText: (t) => t, // Keep existing colors
-          description: (t) => theme.fg("muted", t),
-          scrollInfo: (t) => theme.fg("dim", t),
-          noMatch: (t) => theme.fg("warning", t),
-        });
-        selectList.onSelect = (item) => {
+      const items = files.map((file) => ({
+        value: file,
+        label: `${file.status} ${file.file}`,
+      }));
+      await showPagedSelectList({
+        ctx,
+        title: " Select file to diff",
+        items,
+        onSelect: (item) => {
           void openSelected(item.value as FileInfo);
-        };
-        selectList.onCancel = () => done();
-        selectList.onSelectionChange = (item) => {
-          currentIndex = items.indexOf(item);
-        };
-        container.addChild(selectList);
-
-        // Help text
-        container.addChild(
-          new Text(theme.fg("dim", " ↑↓ navigate • ←→ page • enter open • esc close"), 0, 0),
-        );
-
-        // Bottom border
-        container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-
-        return {
-          render: (w) => container.render(w),
-          invalidate: () => container.invalidate(),
-          handleInput: (data) => {
-            // Add paging with left/right
-            if (matchesKey(data, Key.left)) {
-              // Page up - clamp to 0
-              currentIndex = Math.max(0, currentIndex - visibleRows);
-              selectList.setSelectedIndex(currentIndex);
-            } else if (matchesKey(data, Key.right)) {
-              // Page down - clamp to last
-              currentIndex = Math.min(items.length - 1, currentIndex + visibleRows);
-              selectList.setSelectedIndex(currentIndex);
-            } else {
-              selectList.handleInput(data);
-            }
-            tui.requestRender();
-          },
-        };
+        },
       });
     },
   });

@@ -6,9 +6,19 @@ metadata:
   {
     "openclaw":
       {
-        "emoji": "☁️",
+        "emoji": "🌐",
         "requires": { "bins": ["curl"], "env": ["OPENAI_API_KEY"] },
         "primaryEnv": "OPENAI_API_KEY",
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "curl",
+              "bins": ["curl"],
+              "label": "Install curl (brew)",
+            },
+          ],
       },
   }
 ---

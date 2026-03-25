@@ -8,7 +8,7 @@ private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
 @Suite(.serialized)
 @MainActor
 struct OnboardingWizardStepViewTests {
-    @Test func noteStepBuilds() {
+    @Test func `note step builds`() {
         let step = WizardStep(
             id: "step-1",
             type: ProtoAnyCodable("note"),
@@ -23,7 +23,7 @@ struct OnboardingWizardStepViewTests {
         _ = view.body
     }
 
-    @Test func selectStepBuilds() {
+    @Test func `select step builds`() {
         let options: [[String: ProtoAnyCodable]] = [
             ["value": ProtoAnyCodable("local"), "label": ProtoAnyCodable("Local"), "hint": ProtoAnyCodable("This Mac")],
             ["value": ProtoAnyCodable("remote"), "label": ProtoAnyCodable("Remote")],

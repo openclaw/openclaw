@@ -99,6 +99,15 @@ describe("ssrf pinning", () => {
     expect(result.address).toBe("1.2.3.4");
   });
 
+  it("fails loud when a pinned lookup is created without any addresses", () => {
+    expect(() =>
+      createPinnedLookup({
+        hostname: "example.com",
+        addresses: [],
+      }),
+    ).toThrow("Pinned lookup requires at least one address for example.com");
+  });
+
   it("enforces hostname allowlist when configured", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

@@ -6,7 +6,6 @@
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
 "channel: irc":
@@ -28,7 +27,6 @@
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/imessage/**"
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
 "channel: line":
@@ -64,19 +62,16 @@
 "channel: signal":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/signal/**"
           - "extensions/signal/**"
           - "docs/channels/signal.md"
 "channel: slack":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/slack/**"
           - "extensions/slack/**"
           - "docs/channels/slack.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/telegram/**"
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
 "channel: tlon":
@@ -96,7 +91,6 @@
 "channel: whatsapp-web":
   - changed-files:
       - any-glob-to-any-file:
-          - "src/web/**"
           - "extensions/whatsapp/**"
           - "docs/channels/whatsapp.md"
 "channel: zalo":
@@ -171,7 +165,10 @@
           - "Dockerfile.*"
           - "docker-compose.yml"
           - "docker-setup.sh"
+          - "setup-podman.sh"
           - ".dockerignore"
+          - "scripts/docker/setup.sh"
+          - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
           - "scripts/sandbox-*.sh"
@@ -204,14 +201,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
-"extensions: google-antigravity-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-antigravity-auth/**"
-"extensions: google-gemini-cli-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/google-gemini-cli-auth/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
@@ -240,15 +229,107 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/device-pair/**"
+"extensions: duckduckgo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/duckduckgo/**"
+"extensions: acpx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/acpx/**"
+"extensions: byteplus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/byteplus/**"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
+"extensions: anthropic":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/anthropic/**"
+"extensions: cloudflare-ai-gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cloudflare-ai-gateway/**"
 "extensions: minimax-portal-auth":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/minimax-portal-auth/**"
+"extensions: huggingface":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/huggingface/**"
+"extensions: kilocode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kilocode/**"
+"extensions: openai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openai/**"
+"extensions: kimi-coding":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/kimi-coding/**"
+"extensions: minimax":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/minimax/**"
+"extensions: modelstudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/modelstudio/**"
+"extensions: moonshot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/moonshot/**"
+"extensions: nvidia":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nvidia/**"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/phone-control/**"
+"extensions: qianfan":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/qianfan/**"
+"extensions: synthetic":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synthetic/**"
+"extensions: tavily":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tavily/**"
 "extensions: talk-voice":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: together":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/together/**"
+"extensions: venice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/venice/**"
+"extensions: vercel-ai-gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vercel-ai-gateway/**"
+"extensions: volcengine":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/volcengine/**"
+"extensions: xiaomi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/xiaomi/**"
+"extensions: fal":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fal/**"

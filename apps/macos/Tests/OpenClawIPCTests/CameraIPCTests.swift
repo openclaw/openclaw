@@ -1,9 +1,9 @@
-import OpenClawIPC
 import Foundation
+import OpenClawIPC
 import Testing
 
-@Suite struct CameraIPCTests {
-    @Test func cameraSnapCodableRoundtrip() throws {
+struct CameraIPCTests {
+    @Test func `camera snap codable roundtrip`() throws {
         let req: Request = .cameraSnap(
             facing: .front,
             maxWidth: 640,
@@ -24,7 +24,7 @@ import Testing
         }
     }
 
-    @Test func cameraClipCodableRoundtrip() throws {
+    @Test func `camera clip codable roundtrip`() throws {
         let req: Request = .cameraClip(
             facing: .back,
             durationMs: 3000,
@@ -45,7 +45,7 @@ import Testing
         }
     }
 
-    @Test func cameraClipDefaultsIncludeAudioToTrueWhenMissing() throws {
+    @Test func `camera clip defaults include audio to true when missing`() throws {
         let json = """
         {"type":"cameraClip","durationMs":1234}
         """

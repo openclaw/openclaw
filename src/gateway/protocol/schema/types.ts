@@ -1,259 +1,142 @@
 import type { Static } from "@sinclair/typebox";
-import type {
-  AgentEventSchema,
-  AgentIdentityParamsSchema,
-  AgentIdentityResultSchema,
-  AgentWaitParamsSchema,
-  PollParamsSchema,
-  WakeParamsSchema,
-} from "./agent.js";
-import type {
-  AgentSummarySchema,
-  AgentsFileEntrySchema,
-  AgentsCreateParamsSchema,
-  AgentsCreateResultSchema,
-  AgentsDeleteParamsSchema,
-  AgentsDeleteResultSchema,
-  AgentsFilesGetParamsSchema,
-  AgentsFilesGetResultSchema,
-  AgentsFilesListParamsSchema,
-  AgentsFilesListResultSchema,
-  AgentsFilesSetParamsSchema,
-  AgentsFilesSetResultSchema,
-  AgentsListParamsSchema,
-  AgentsListResultSchema,
-  AgentsUpdateParamsSchema,
-  AgentsUpdateResultSchema,
-  ModelChoiceSchema,
-  ModelsListParamsSchema,
-  ModelsListResultSchema,
-  SkillsBinsParamsSchema,
-  SkillsBinsResultSchema,
-  SkillsInstallParamsSchema,
-  SkillsStatusParamsSchema,
-  SkillsUpdateParamsSchema,
-  ToolCatalogEntrySchema,
-  ToolCatalogGroupSchema,
-  ToolCatalogProfileSchema,
-  ToolsCatalogParamsSchema,
-  ToolsCatalogResultSchema,
-} from "./agents-models-skills.js";
-import type {
-  ChannelsLogoutParamsSchema,
-  TalkConfigParamsSchema,
-  TalkConfigResultSchema,
-  ChannelsStatusParamsSchema,
-  ChannelsStatusResultSchema,
-  TalkModeParamsSchema,
-  WebLoginStartParamsSchema,
-  WebLoginWaitParamsSchema,
-} from "./channels.js";
-import type {
-  ConfigApplyParamsSchema,
-  ConfigGetParamsSchema,
-  ConfigPatchParamsSchema,
-  ConfigSchemaParamsSchema,
-  ConfigSchemaResponseSchema,
-  ConfigSetParamsSchema,
-  UpdateRunParamsSchema,
-} from "./config.js";
-import type {
-  CronAddParamsSchema,
-  CronJobSchema,
-  CronListParamsSchema,
-  CronRemoveParamsSchema,
-  CronRunLogEntrySchema,
-  CronRunParamsSchema,
-  CronRunsParamsSchema,
-  CronStatusParamsSchema,
-  CronUpdateParamsSchema,
-} from "./cron.js";
-import type {
-  DevicePairApproveParamsSchema,
-  DevicePairListParamsSchema,
-  DevicePairRemoveParamsSchema,
-  DevicePairRejectParamsSchema,
-  DeviceTokenRevokeParamsSchema,
-  DeviceTokenRotateParamsSchema,
-} from "./devices.js";
-import type {
-  ExecApprovalsGetParamsSchema,
-  ExecApprovalsNodeGetParamsSchema,
-  ExecApprovalsNodeSetParamsSchema,
-  ExecApprovalsSetParamsSchema,
-  ExecApprovalsSnapshotSchema,
-  ExecApprovalRequestParamsSchema,
-  ExecApprovalResolveParamsSchema,
-} from "./exec-approvals.js";
-import type {
-  ConnectParamsSchema,
-  ErrorShapeSchema,
-  EventFrameSchema,
-  GatewayFrameSchema,
-  HelloOkSchema,
-  RequestFrameSchema,
-  ResponseFrameSchema,
-  ShutdownEventSchema,
-  TickEventSchema,
-} from "./frames.js";
-import type {
-  ChatAbortParamsSchema,
-  ChatEventSchema,
-  ChatInjectParamsSchema,
-  LogsTailParamsSchema,
-  LogsTailResultSchema,
-} from "./logs-chat.js";
-import type {
-  NodeDescribeParamsSchema,
-  NodeEventParamsSchema,
-  NodeInvokeParamsSchema,
-  NodeInvokeResultParamsSchema,
-  NodeListParamsSchema,
-  NodePairApproveParamsSchema,
-  NodePairListParamsSchema,
-  NodePairRejectParamsSchema,
-  NodePairRequestParamsSchema,
-  NodePairVerifyParamsSchema,
-  NodeRenameParamsSchema,
-} from "./nodes.js";
-import type { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
-import type {
-  SessionsCompactParamsSchema,
-  SessionsDeleteParamsSchema,
-  SessionsListParamsSchema,
-  SessionsPatchParamsSchema,
-  SessionsPreviewParamsSchema,
-  SessionsResetParamsSchema,
-  SessionsResolveParamsSchema,
-  SessionsUsageParamsSchema,
-} from "./sessions.js";
-import type { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
-import type {
-  WizardCancelParamsSchema,
-  WizardNextParamsSchema,
-  WizardNextResultSchema,
-  WizardStartParamsSchema,
-  WizardStartResultSchema,
-  WizardStatusParamsSchema,
-  WizardStatusResultSchema,
-  WizardStepSchema,
-} from "./wizard.js";
+import { ProtocolSchemas } from "./protocol-schemas.js";
 
-export type ConnectParams = Static<typeof ConnectParamsSchema>;
-export type HelloOk = Static<typeof HelloOkSchema>;
-export type RequestFrame = Static<typeof RequestFrameSchema>;
-export type ResponseFrame = Static<typeof ResponseFrameSchema>;
-export type EventFrame = Static<typeof EventFrameSchema>;
-export type GatewayFrame = Static<typeof GatewayFrameSchema>;
-export type Snapshot = Static<typeof SnapshotSchema>;
-export type PresenceEntry = Static<typeof PresenceEntrySchema>;
-export type ErrorShape = Static<typeof ErrorShapeSchema>;
-export type StateVersion = Static<typeof StateVersionSchema>;
-export type AgentEvent = Static<typeof AgentEventSchema>;
-export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
-export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
-export type PollParams = Static<typeof PollParamsSchema>;
-export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
-export type WakeParams = Static<typeof WakeParamsSchema>;
-export type NodePairRequestParams = Static<typeof NodePairRequestParamsSchema>;
-export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
-export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
-export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
-export type NodePairVerifyParams = Static<typeof NodePairVerifyParamsSchema>;
-export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
-export type NodeListParams = Static<typeof NodeListParamsSchema>;
-export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
-export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
-export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
-export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
-export type PushTestParams = Static<typeof PushTestParamsSchema>;
-export type PushTestResult = Static<typeof PushTestResultSchema>;
-export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
-export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
-export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
-export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
-export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
-export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
-export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
-export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
-export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
-export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;
-export type ConfigApplyParams = Static<typeof ConfigApplyParamsSchema>;
-export type ConfigPatchParams = Static<typeof ConfigPatchParamsSchema>;
-export type ConfigSchemaParams = Static<typeof ConfigSchemaParamsSchema>;
-export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
-export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
-export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
-export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;
-export type WizardStatusParams = Static<typeof WizardStatusParamsSchema>;
-export type WizardStep = Static<typeof WizardStepSchema>;
-export type WizardNextResult = Static<typeof WizardNextResultSchema>;
-export type WizardStartResult = Static<typeof WizardStartResultSchema>;
-export type WizardStatusResult = Static<typeof WizardStatusResultSchema>;
-export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
-export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
-export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
-export type ChannelsStatusParams = Static<typeof ChannelsStatusParamsSchema>;
-export type ChannelsStatusResult = Static<typeof ChannelsStatusResultSchema>;
-export type ChannelsLogoutParams = Static<typeof ChannelsLogoutParamsSchema>;
-export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
-export type WebLoginWaitParams = Static<typeof WebLoginWaitParamsSchema>;
-export type AgentSummary = Static<typeof AgentSummarySchema>;
-export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;
-export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
-export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
-export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
-export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
-export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
-export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
-export type AgentsFilesListParams = Static<typeof AgentsFilesListParamsSchema>;
-export type AgentsFilesListResult = Static<typeof AgentsFilesListResultSchema>;
-export type AgentsFilesGetParams = Static<typeof AgentsFilesGetParamsSchema>;
-export type AgentsFilesGetResult = Static<typeof AgentsFilesGetResultSchema>;
-export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
-export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
-export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
-export type AgentsListResult = Static<typeof AgentsListResultSchema>;
-export type ModelChoice = Static<typeof ModelChoiceSchema>;
-export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
-export type ModelsListResult = Static<typeof ModelsListResultSchema>;
-export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
-export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
-export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
-export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
-export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
-export type ToolsCatalogResult = Static<typeof ToolsCatalogResultSchema>;
-export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
-export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
-export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
-export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
-export type CronJob = Static<typeof CronJobSchema>;
-export type CronListParams = Static<typeof CronListParamsSchema>;
-export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
-export type CronAddParams = Static<typeof CronAddParamsSchema>;
-export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
-export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
-export type CronRunParams = Static<typeof CronRunParamsSchema>;
-export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
-export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
-export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
-export type LogsTailResult = Static<typeof LogsTailResultSchema>;
-export type ExecApprovalsGetParams = Static<typeof ExecApprovalsGetParamsSchema>;
-export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>;
-export type ExecApprovalsNodeGetParams = Static<typeof ExecApprovalsNodeGetParamsSchema>;
-export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParamsSchema>;
-export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
-export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
-export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
-export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
-export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
-export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
-export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
-export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
-export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
-export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
-export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
-export type ChatEvent = Static<typeof ChatEventSchema>;
-export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
-export type TickEvent = Static<typeof TickEventSchema>;
-export type ShutdownEvent = Static<typeof ShutdownEventSchema>;
+type ProtocolSchemaName = keyof typeof ProtocolSchemas;
+type SchemaType<TName extends ProtocolSchemaName> = Static<(typeof ProtocolSchemas)[TName]>;
+
+export type ConnectParams = SchemaType<"ConnectParams">;
+export type HelloOk = SchemaType<"HelloOk">;
+export type RequestFrame = SchemaType<"RequestFrame">;
+export type ResponseFrame = SchemaType<"ResponseFrame">;
+export type EventFrame = SchemaType<"EventFrame">;
+export type GatewayFrame = SchemaType<"GatewayFrame">;
+export type Snapshot = SchemaType<"Snapshot">;
+export type PresenceEntry = SchemaType<"PresenceEntry">;
+export type ErrorShape = SchemaType<"ErrorShape">;
+export type StateVersion = SchemaType<"StateVersion">;
+export type AgentEvent = SchemaType<"AgentEvent">;
+export type AgentIdentityParams = SchemaType<"AgentIdentityParams">;
+export type AgentIdentityResult = SchemaType<"AgentIdentityResult">;
+export type PollParams = SchemaType<"PollParams">;
+export type AgentWaitParams = SchemaType<"AgentWaitParams">;
+export type WakeParams = SchemaType<"WakeParams">;
+export type NodePairRequestParams = SchemaType<"NodePairRequestParams">;
+export type NodePairListParams = SchemaType<"NodePairListParams">;
+export type NodePairApproveParams = SchemaType<"NodePairApproveParams">;
+export type NodePairRejectParams = SchemaType<"NodePairRejectParams">;
+export type NodePairVerifyParams = SchemaType<"NodePairVerifyParams">;
+export type NodeRenameParams = SchemaType<"NodeRenameParams">;
+export type NodeListParams = SchemaType<"NodeListParams">;
+export type NodePendingAckParams = SchemaType<"NodePendingAckParams">;
+export type NodeDescribeParams = SchemaType<"NodeDescribeParams">;
+export type NodeInvokeParams = SchemaType<"NodeInvokeParams">;
+export type NodeInvokeResultParams = SchemaType<"NodeInvokeResultParams">;
+export type NodeEventParams = SchemaType<"NodeEventParams">;
+export type NodePendingDrainParams = SchemaType<"NodePendingDrainParams">;
+export type NodePendingDrainResult = SchemaType<"NodePendingDrainResult">;
+export type NodePendingEnqueueParams = SchemaType<"NodePendingEnqueueParams">;
+export type NodePendingEnqueueResult = SchemaType<"NodePendingEnqueueResult">;
+export type PushTestParams = SchemaType<"PushTestParams">;
+export type PushTestResult = SchemaType<"PushTestResult">;
+export type SessionsListParams = SchemaType<"SessionsListParams">;
+export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
+export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;
+export type SessionsCreateParams = SchemaType<"SessionsCreateParams">;
+export type SessionsSendParams = SchemaType<"SessionsSendParams">;
+export type SessionsMessagesSubscribeParams = SchemaType<"SessionsMessagesSubscribeParams">;
+export type SessionsMessagesUnsubscribeParams = SchemaType<"SessionsMessagesUnsubscribeParams">;
+export type SessionsAbortParams = SchemaType<"SessionsAbortParams">;
+export type SessionsPatchParams = SchemaType<"SessionsPatchParams">;
+export type SessionsResetParams = SchemaType<"SessionsResetParams">;
+export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
+export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
+export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
+export type ConfigGetParams = SchemaType<"ConfigGetParams">;
+export type ConfigSetParams = SchemaType<"ConfigSetParams">;
+export type ConfigApplyParams = SchemaType<"ConfigApplyParams">;
+export type ConfigPatchParams = SchemaType<"ConfigPatchParams">;
+export type ConfigSchemaParams = SchemaType<"ConfigSchemaParams">;
+export type ConfigSchemaLookupParams = SchemaType<"ConfigSchemaLookupParams">;
+export type ConfigSchemaResponse = SchemaType<"ConfigSchemaResponse">;
+export type ConfigSchemaLookupResult = SchemaType<"ConfigSchemaLookupResult">;
+export type WizardStartParams = SchemaType<"WizardStartParams">;
+export type WizardNextParams = SchemaType<"WizardNextParams">;
+export type WizardCancelParams = SchemaType<"WizardCancelParams">;
+export type WizardStatusParams = SchemaType<"WizardStatusParams">;
+export type WizardStep = SchemaType<"WizardStep">;
+export type WizardNextResult = SchemaType<"WizardNextResult">;
+export type WizardStartResult = SchemaType<"WizardStartResult">;
+export type WizardStatusResult = SchemaType<"WizardStatusResult">;
+export type TalkModeParams = SchemaType<"TalkModeParams">;
+export type TalkConfigParams = SchemaType<"TalkConfigParams">;
+export type TalkConfigResult = SchemaType<"TalkConfigResult">;
+export type TalkSpeakParams = SchemaType<"TalkSpeakParams">;
+export type TalkSpeakResult = SchemaType<"TalkSpeakResult">;
+export type ChannelsStatusParams = SchemaType<"ChannelsStatusParams">;
+export type ChannelsStatusResult = SchemaType<"ChannelsStatusResult">;
+export type ChannelsLogoutParams = SchemaType<"ChannelsLogoutParams">;
+export type WebLoginStartParams = SchemaType<"WebLoginStartParams">;
+export type WebLoginWaitParams = SchemaType<"WebLoginWaitParams">;
+export type AgentSummary = SchemaType<"AgentSummary">;
+export type AgentsFileEntry = SchemaType<"AgentsFileEntry">;
+export type AgentsCreateParams = SchemaType<"AgentsCreateParams">;
+export type AgentsCreateResult = SchemaType<"AgentsCreateResult">;
+export type AgentsUpdateParams = SchemaType<"AgentsUpdateParams">;
+export type AgentsUpdateResult = SchemaType<"AgentsUpdateResult">;
+export type AgentsDeleteParams = SchemaType<"AgentsDeleteParams">;
+export type AgentsDeleteResult = SchemaType<"AgentsDeleteResult">;
+export type AgentsFilesListParams = SchemaType<"AgentsFilesListParams">;
+export type AgentsFilesListResult = SchemaType<"AgentsFilesListResult">;
+export type AgentsFilesGetParams = SchemaType<"AgentsFilesGetParams">;
+export type AgentsFilesGetResult = SchemaType<"AgentsFilesGetResult">;
+export type AgentsFilesSetParams = SchemaType<"AgentsFilesSetParams">;
+export type AgentsFilesSetResult = SchemaType<"AgentsFilesSetResult">;
+export type AgentsListParams = SchemaType<"AgentsListParams">;
+export type AgentsListResult = SchemaType<"AgentsListResult">;
+export type ModelChoice = SchemaType<"ModelChoice">;
+export type ModelsListParams = SchemaType<"ModelsListParams">;
+export type ModelsListResult = SchemaType<"ModelsListResult">;
+export type SkillsStatusParams = SchemaType<"SkillsStatusParams">;
+export type ToolsCatalogParams = SchemaType<"ToolsCatalogParams">;
+export type ToolCatalogProfile = SchemaType<"ToolCatalogProfile">;
+export type ToolCatalogEntry = SchemaType<"ToolCatalogEntry">;
+export type ToolCatalogGroup = SchemaType<"ToolCatalogGroup">;
+export type ToolsCatalogResult = SchemaType<"ToolsCatalogResult">;
+export type ToolsEffectiveParams = SchemaType<"ToolsEffectiveParams">;
+export type ToolsEffectiveEntry = SchemaType<"ToolsEffectiveEntry">;
+export type ToolsEffectiveGroup = SchemaType<"ToolsEffectiveGroup">;
+export type ToolsEffectiveResult = SchemaType<"ToolsEffectiveResult">;
+export type SkillsBinsParams = SchemaType<"SkillsBinsParams">;
+export type SkillsBinsResult = SchemaType<"SkillsBinsResult">;
+export type SkillsInstallParams = SchemaType<"SkillsInstallParams">;
+export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
+export type CronJob = SchemaType<"CronJob">;
+export type CronListParams = SchemaType<"CronListParams">;
+export type CronStatusParams = SchemaType<"CronStatusParams">;
+export type CronAddParams = SchemaType<"CronAddParams">;
+export type CronUpdateParams = SchemaType<"CronUpdateParams">;
+export type CronRemoveParams = SchemaType<"CronRemoveParams">;
+export type CronRunParams = SchemaType<"CronRunParams">;
+export type CronRunsParams = SchemaType<"CronRunsParams">;
+export type CronRunLogEntry = SchemaType<"CronRunLogEntry">;
+export type LogsTailParams = SchemaType<"LogsTailParams">;
+export type LogsTailResult = SchemaType<"LogsTailResult">;
+export type ExecApprovalsGetParams = SchemaType<"ExecApprovalsGetParams">;
+export type ExecApprovalsSetParams = SchemaType<"ExecApprovalsSetParams">;
+export type ExecApprovalsNodeGetParams = SchemaType<"ExecApprovalsNodeGetParams">;
+export type ExecApprovalsNodeSetParams = SchemaType<"ExecApprovalsNodeSetParams">;
+export type ExecApprovalsSnapshot = SchemaType<"ExecApprovalsSnapshot">;
+export type ExecApprovalRequestParams = SchemaType<"ExecApprovalRequestParams">;
+export type ExecApprovalResolveParams = SchemaType<"ExecApprovalResolveParams">;
+export type DevicePairListParams = SchemaType<"DevicePairListParams">;
+export type DevicePairApproveParams = SchemaType<"DevicePairApproveParams">;
+export type DevicePairRejectParams = SchemaType<"DevicePairRejectParams">;
+export type DevicePairRemoveParams = SchemaType<"DevicePairRemoveParams">;
+export type DeviceTokenRotateParams = SchemaType<"DeviceTokenRotateParams">;
+export type DeviceTokenRevokeParams = SchemaType<"DeviceTokenRevokeParams">;
+export type ChatAbortParams = SchemaType<"ChatAbortParams">;
+export type ChatInjectParams = SchemaType<"ChatInjectParams">;
+export type ChatEvent = SchemaType<"ChatEvent">;
+export type UpdateRunParams = SchemaType<"UpdateRunParams">;
+export type TickEvent = SchemaType<"TickEvent">;
+export type ShutdownEvent = SchemaType<"ShutdownEvent">;

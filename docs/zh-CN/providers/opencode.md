@@ -1,28 +1,43 @@
 ---
 read_when:
-  - 你想通过 OpenCode Zen 访问模型
-  - 你想要一个适合编程的精选模型列表
-summary: 在 OpenClaw 中使用 OpenCode Zen（精选模型）
-title: OpenCode Zen
+  - 你想使用 OpenCode 托管的模型访问
+  - 你想在 Zen 和 Go 目录之间进行选择
+summary: 在 OpenClaw 中使用 OpenCode Zen 和 Go 目录
+title: OpenCode
 x-i18n:
-  generated_at: "2026-02-01T21:35:16Z"
-  model: claude-opus-4-5
-  provider: pi
-  source_hash: 1390f9803a3cac48cb40694dd69267e3ddccd203a4ce8babda3198b926b5f6a3
+  generated_at: "2026-03-16T06:26:52Z"
+  model: gpt-5.4
+  provider: openai
+  source_hash: 9ffe65d152d1835163f9f5ae4cc966e29bd01a9dbb88187c24d149c960c8225d
   source_path: providers/opencode.md
   workflow: 15
 ---
 
-# OpenCode Zen
+# OpenCode
 
-OpenCode Zen 是由 OpenCode 团队推荐的一组**精选模型列表**，适用于编程智能体。它是一个可选的托管模型访问路径，使用 API 密钥和 `opencode` 提供商。Zen 目前处于测试阶段。
+OpenCode 在 OpenClaw 中提供两个托管目录：
+
+- `opencode/...` 用于 **Zen** 目录
+- `opencode-go/...` 用于 **Go** 目录
+
+两个目录都使用相同的 OpenCode API 密钥。OpenClaw 会将运行时提供商 ID
+保持拆分，以便上游按模型路由保持正确，但新手引导和文档将它们视为
+同一个 OpenCode 设置。
 
 ## CLI 设置
 
+### Zen 目录
+
 ```bash
 openclaw onboard --auth-choice opencode-zen
-# 或非交互式
 openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+```
+
+### Go 目录
+
+```bash
+openclaw onboard --auth-choice opencode-go
+openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ```
 
 ## 配置片段
@@ -30,12 +45,27 @@ openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```json5
 {
   env: { OPENCODE_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
 }
 ```
 
-## 注意事项
+## 目录
+
+### Zen
+
+- 运行时提供商：`opencode`
+- 示例模型：`opencode/claude-opus-4-6`、`opencode/gpt-5.2`、`opencode/gemini-3-pro`
+- 适合你想使用精选的 OpenCode 多模型代理时
+
+### Go
+
+- 运行时提供商：`opencode-go`
+- 示例模型：`opencode-go/kimi-k2.5`、`opencode-go/glm-5`、`opencode-go/minimax-m2.5`
+- 适合你想使用 OpenCode 托管的 Kimi/GLM/MiniMax 产品线时
+
+## 说明
 
 - 也支持 `OPENCODE_ZEN_API_KEY`。
-- 你需要登录 Zen，添加账单信息，然后复制你的 API 密钥。
-- OpenCode Zen 按请求计费；详情请查看 OpenCode 控制台。
+- 在设置期间输入一个 OpenCode 密钥，会为两个运行时提供商都存储凭证。
+- 你需要登录 OpenCode、添加计费信息，然后复制你的 API 密钥。
+- 计费和目录可用性由 OpenCode 仪表板管理。

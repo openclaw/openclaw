@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -150,8 +151,9 @@ export function renderSystemNodeWarning(
   }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
+  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.16+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
+export { resolveStableNodePath };
 
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
@@ -172,7 +174,7 @@ export async function resolvePreferredNodePath(params: {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      return currentExecPath;
+      return resolveStableNodePath(currentExecPath);
     }
   }
 

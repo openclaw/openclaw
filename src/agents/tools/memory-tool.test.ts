@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, it } from "vitest";
 import {
   resetMemoryToolMockState,
   setMemorySearchImpl,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
-import { createMemorySearchTool } from "./memory-tool.js";
+import {
+  createMemorySearchToolOrThrow,
+  expectUnavailableMemorySearchDetails,
+} from "./memory-tool.test-helpers.js";
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
@@ -15,18 +18,9 @@ describe("memory_search unavailable payloads", () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
     });
 
-    const tool = createMemorySearchTool({
-      config: { agents: { list: [{ id: "main", default: true }] } },
-    });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
-
+    const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("quota", { query: "hello" });
-    expect(result.details).toEqual({
-      results: [],
-      disabled: true,
-      unavailable: true,
+    expectUnavailableMemorySearchDetails(result.details, {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
@@ -38,18 +32,9 @@ describe("memory_search unavailable payloads", () => {
       throw new Error("embedding provider timeout");
     });
 
-    const tool = createMemorySearchTool({
-      config: { agents: { list: [{ id: "main", default: true }] } },
-    });
-    if (!tool) {
-      throw new Error("tool missing");
-    }
-
+    const tool = createMemorySearchToolOrThrow();
     const result = await tool.execute("generic", { query: "hello" });
-    expect(result.details).toEqual({
-      results: [],
-      disabled: true,
-      unavailable: true,
+    expectUnavailableMemorySearchDetails(result.details, {
       error: "embedding provider timeout",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",

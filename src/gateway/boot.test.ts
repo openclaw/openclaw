@@ -6,7 +6,10 @@ import type { SessionScope } from "../config/sessions/types.js";
 
 const agentCommand = vi.fn();
 
-vi.mock("../commands/agent.js", () => ({ agentCommand }));
+vi.mock("../commands/agent.js", () => ({
+  agentCommand,
+  agentCommandFromIngress: agentCommand,
+}));
 
 const { runBootOnce } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =

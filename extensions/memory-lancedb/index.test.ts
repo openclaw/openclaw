@@ -11,19 +11,31 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
 const liveEnabled = HAS_OPENAI_KEY && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-describe("memory plugin e2e", () => {
-  let tmpDir: string;
-  let dbPath: string;
+type MemoryPluginTestConfig = {
+  embedding?: {
+    apiKey?: string;
+    model?: string;
+    dimensions?: number;
+  };
+  dbPath?: string;
+  captureMaxChars?: number;
+  autoCapture?: boolean;
+  autoRecall?: boolean;
+};
+
+function installTmpDirHarness(params: { prefix: string }) {
+  let tmpDir = "";
+  let dbPath = "";
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
     dbPath = path.join(tmpDir, "lancedb");
   });
 
@@ -33,34 +45,43 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("memory plugin registers and initializes correctly", async () => {
-    // Dynamic import to avoid loading LanceDB when not testing
+  return {
+    getTmpDir: () => tmpDir,
+    getDbPath: () => dbPath,
+  };
+}
+
+describe("memory plugin e2e", () => {
+  const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-test-" });
+
+  async function parseConfig(overrides: Record<string, unknown> = {}) {
+    const { default: memoryPlugin } = await import("./index.js");
+    return memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "text-embedding-3-small",
+      },
+      dbPath: getDbPath(),
+      ...overrides,
+    }) as MemoryPluginTestConfig | undefined;
+  }
+
+  test("memory plugin exports stable metadata", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     expect(memoryPlugin.id).toBe("memory-lancedb");
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
-    expect(memoryPlugin.configSchema).toBeDefined();
-    // oxlint-disable-next-line typescript/unbound-method
-    expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
   test("config schema parses valid config", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
-
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath,
+    const config = await parseConfig({
       autoCapture: true,
       autoRecall: true,
     });
 
-    expect(config).toBeDefined();
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
-    expect(config?.dbPath).toBe(dbPath);
+    expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
   });
 
@@ -74,8 +95,8 @@ describe("memory plugin e2e", () => {
       embedding: {
         apiKey: "${TEST_MEMORY_API_KEY}",
       },
-      dbPath,
-    });
+      dbPath: getDbPath(),
+    }) as MemoryPluginTestConfig | undefined;
 
     expect(config?.embedding?.apiKey).toBe("test-key-123");
 
@@ -88,7 +109,7 @@ describe("memory plugin e2e", () => {
     expect(() => {
       memoryPlugin.configSchema?.parse?.({
         embedding: {},
-        dbPath,
+        dbPath: getDbPath(),
       });
     }).toThrow("embedding.apiKey is required");
   });
@@ -99,21 +120,14 @@ describe("memory plugin e2e", () => {
     expect(() => {
       memoryPlugin.configSchema?.parse?.({
         embedding: { apiKey: OPENAI_API_KEY },
-        dbPath,
+        dbPath: getDbPath(),
         captureMaxChars: 99,
       });
     }).toThrow("captureMaxChars must be between 100 and 10000");
   });
 
   test("config schema accepts captureMaxChars override", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
-
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath,
+    const config = await parseConfig({
       captureMaxChars: 1800,
     });
 
@@ -121,18 +135,99 @@ describe("memory plugin e2e", () => {
   });
 
   test("config schema keeps autoCapture disabled by default", async () => {
-    const { default: memoryPlugin } = await import("./index.js");
-
-    const config = memoryPlugin.configSchema?.parse?.({
-      embedding: {
-        apiKey: OPENAI_API_KEY,
-        model: "text-embedding-3-small",
-      },
-      dbPath,
-    });
+    const config = await parseConfig();
 
     expect(config?.autoCapture).toBe(false);
     expect(config?.autoRecall).toBe(true);
+  });
+
+  test("passes configured dimensions to OpenAI embeddings API", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const toArray = vi.fn(async () => []);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => ({ limit }));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    vi.resetModules();
+    vi.doMock("openai", () => ({
+      default: class MockOpenAI {
+        embeddings = { create: embeddingsCreate };
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule,
+    }));
+
+    try {
+      const { default: memoryPlugin } = await import("./index.js");
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const registeredTools: any[] = [];
+      const mockApi = {
+        id: "memory-lancedb",
+        name: "Memory (LanceDB)",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          embedding: {
+            apiKey: OPENAI_API_KEY,
+            model: "text-embedding-3-small",
+            dimensions: 1024,
+          },
+          dbPath: getDbPath(),
+          autoCapture: false,
+          autoRecall: false,
+        },
+        runtime: {},
+        logger: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerTool: (tool: any, opts: any) => {
+          registeredTools.push({ tool, opts });
+        },
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerCli: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        registerService: vi.fn(),
+        // oxlint-disable-next-line typescript/no-explicit-any
+        on: vi.fn(),
+        resolvePath: (p: string) => p,
+      };
+
+      // oxlint-disable-next-line typescript/no-explicit-any
+      memoryPlugin.register(mockApi as any);
+      const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+      if (!recallTool) {
+        throw new Error("memory_recall tool was not registered");
+      }
+      await recallTool.execute("test-call-dims", { query: "hello dimensions" });
+
+      expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
+      expect(embeddingsCreate).toHaveBeenCalledWith({
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+        dimensions: 1024,
+      });
+    } finally {
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
   });
 
   test("shouldCapture applies real capture rules", async () => {
@@ -196,19 +291,7 @@ describe("memory plugin e2e", () => {
 
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
-  let tmpDir: string;
-  let dbPath: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-live-"));
-    dbPath = path.join(tmpDir, "lancedb");
-  });
-
-  afterEach(async () => {
-    if (tmpDir) {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
+  const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-live-" });
 
   test("memory tools work end-to-end", async () => {
     const { default: memoryPlugin } = await import("./index.js");
@@ -235,7 +318,7 @@ describeLive("memory plugin live tests", () => {
           apiKey: liveApiKey,
           model: "text-embedding-3-small",
         },
-        dbPath,
+        dbPath: getDbPath(),
         autoCapture: false,
         autoRecall: false,
       },
@@ -293,8 +376,8 @@ describeLive("memory plugin live tests", () => {
     });
 
     expect(storeResult.details?.action).toBe("created");
-    expect(storeResult.details?.id).toBeDefined();
     const storedId = storeResult.details?.id;
+    expect(storedId).toMatch(/.+/);
 
     // Test recall
     const recallResult = await recallTool.execute("test-call-2", {

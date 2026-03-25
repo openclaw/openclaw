@@ -182,6 +182,12 @@ type LoadedState = {
 };
 
 type LabelTarget = "issue" | "pr";
+type LabelItemBatch = {
+  batchIndex: number;
+  items: LabelItem[];
+  totalCount: number;
+  fetchedCount: number;
+};
 
 function parseArgs(argv: string[]): ScriptOptions {
   let limit = Number.POSITIVE_INFINITY;
@@ -408,9 +414,22 @@ function fetchPullRequestPage(repo: RepoInfo, after: string | null): PullRequest
   return pullRequests;
 }
 
-function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
+function mapNodeToLabelItem(node: IssuePage["nodes"][number]): LabelItem {
+  return {
+    number: node.number,
+    title: node.title,
+    body: node.body ?? "",
+    labels: node.labels?.nodes ?? [],
+  };
+}
+
+function* fetchOpenLabelItemBatches(params: {
+  limit: number;
+  kindPlural: "issues" | "pull requests";
+  fetchPage: (repo: RepoInfo, after: string | null) => IssuePage | PullRequestPage;
+}): Generator<LabelItemBatch> {
   const repo = resolveRepo();
-  const results: Issue[] = [];
+  const results: LabelItem[] = [];
   let page = 1;
   let after: string | null = null;
   let totalCount = 0;
@@ -419,33 +438,28 @@ function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
 
   logStep(`Repository: ${repo.owner}/${repo.name}`);
 
-  while (fetchedCount < limit) {
-    const pageData = fetchIssuePage(repo, after);
+  while (fetchedCount < params.limit) {
+    const pageData = params.fetchPage(repo, after);
     const nodes = pageData.nodes ?? [];
     totalCount = pageData.totalCount ?? totalCount;
 
     if (page === 1) {
-      logSuccess(`Found ${totalCount} open issues.`);
+      logSuccess(`Found ${totalCount} open ${params.kindPlural}.`);
     }
 
-    logInfo(`Fetched page ${page} (${nodes.length} issues).`);
+    logInfo(`Fetched page ${page} (${nodes.length} ${params.kindPlural}).`);
 
     for (const node of nodes) {
-      if (fetchedCount >= limit) {
+      if (fetchedCount >= params.limit) {
         break;
       }
-      results.push({
-        number: node.number,
-        title: node.title,
-        body: node.body ?? "",
-        labels: node.labels?.nodes ?? [],
-      });
+      results.push(mapNodeToLabelItem(node));
       fetchedCount += 1;
 
       if (results.length >= WORK_BATCH_SIZE) {
         yield {
           batchIndex,
-          issues: results.splice(0, results.length),
+          items: results.splice(0, results.length),
           totalCount,
           fetchedCount,
         };
@@ -464,72 +478,39 @@ function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
   if (results.length) {
     yield {
       batchIndex,
-      issues: results,
+      items: results,
       totalCount,
       fetchedCount,
     };
   }
 }
 
-function* fetchOpenPullRequestBatches(limit: number): Generator<PullRequestBatch> {
-  const repo = resolveRepo();
-  const results: PullRequest[] = [];
-  let page = 1;
-  let after: string | null = null;
-  let totalCount = 0;
-  let fetchedCount = 0;
-  let batchIndex = 1;
-
-  logStep(`Repository: ${repo.owner}/${repo.name}`);
-
-  while (fetchedCount < limit) {
-    const pageData = fetchPullRequestPage(repo, after);
-    const nodes = pageData.nodes ?? [];
-    totalCount = pageData.totalCount ?? totalCount;
-
-    if (page === 1) {
-      logSuccess(`Found ${totalCount} open pull requests.`);
-    }
-
-    logInfo(`Fetched page ${page} (${nodes.length} pull requests).`);
-
-    for (const node of nodes) {
-      if (fetchedCount >= limit) {
-        break;
-      }
-      results.push({
-        number: node.number,
-        title: node.title,
-        body: node.body ?? "",
-        labels: node.labels?.nodes ?? [],
-      });
-      fetchedCount += 1;
-
-      if (results.length >= WORK_BATCH_SIZE) {
-        yield {
-          batchIndex,
-          pullRequests: results.splice(0, results.length),
-          totalCount,
-          fetchedCount,
-        };
-        batchIndex += 1;
-      }
-    }
-
-    if (!pageData.pageInfo.hasNextPage) {
-      break;
-    }
-
-    after = pageData.pageInfo.endCursor ?? null;
-    page += 1;
-  }
-
-  if (results.length) {
+function* fetchOpenIssueBatches(limit: number): Generator<IssueBatch> {
+  for (const batch of fetchOpenLabelItemBatches({
+    limit,
+    kindPlural: "issues",
+    fetchPage: fetchIssuePage,
+  })) {
     yield {
-      batchIndex,
-      pullRequests: results,
-      totalCount,
-      fetchedCount,
+      batchIndex: batch.batchIndex,
+      issues: batch.items,
+      totalCount: batch.totalCount,
+      fetchedCount: batch.fetchedCount,
+    };
+  }
+}
+
+function* fetchOpenPullRequestBatches(limit: number): Generator<PullRequestBatch> {
+  for (const batch of fetchOpenLabelItemBatches({
+    limit,
+    kindPlural: "pull requests",
+    fetchPage: fetchPullRequestPage,
+  })) {
+    yield {
+      batchIndex: batch.batchIndex,
+      pullRequests: batch.items,
+      totalCount: batch.totalCount,
+      fetchedCount: batch.fetchedCount,
     };
   }
 }

@@ -9,6 +9,7 @@ describe("mapFailoverReasonToProbeStatus", () => {
   it("keeps existing failover reason mappings", () => {
     expect(mapFailoverReasonToProbeStatus("auth")).toBe("auth");
     expect(mapFailoverReasonToProbeStatus("rate_limit")).toBe("rate_limit");
+    expect(mapFailoverReasonToProbeStatus("overloaded")).toBe("rate_limit");
     expect(mapFailoverReasonToProbeStatus("billing")).toBe("billing");
     expect(mapFailoverReasonToProbeStatus("timeout")).toBe("timeout");
     expect(mapFailoverReasonToProbeStatus("format")).toBe("format");

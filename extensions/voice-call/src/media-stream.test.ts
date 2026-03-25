@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import http from "node:http";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler } from "./media-stream.js";
+import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -163,6 +163,82 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
+  it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
+    const handler = new MediaStreamHandler({
+      sttProvider: createStubSttProvider(),
+    });
+    const ws = {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 2 * 1024 * 1024,
+      send: vi.fn(),
+      close: vi.fn(),
+    } as unknown as WebSocket;
+    (
+      handler as unknown as {
+        sessions: Map<
+          string,
+          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+        >;
+      }
+    ).sessions.set("MZ-backpressure", {
+      callId: "CA-backpressure",
+      streamSid: "MZ-backpressure",
+      ws,
+      sttSession: createStubSession(),
+    });
+
+    const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));
+
+    expect(result.sent).toBe(false);
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+  });
+
+  it("fails sends when buffered bytes exceed cap after enqueueing a frame", () => {
+    const handler = new MediaStreamHandler({
+      sttProvider: createStubSttProvider(),
+    });
+    const ws = {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      send: vi.fn(() => {
+        (
+          ws as unknown as {
+            bufferedAmount: number;
+          }
+        ).bufferedAmount = 2 * 1024 * 1024;
+      }),
+      close: vi.fn(),
+    } as unknown as WebSocket;
+    (
+      handler as unknown as {
+        sessions: Map<
+          string,
+          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+        >;
+      }
+    ).sessions.set("MZ-overflow", {
+      callId: "CA-overflow",
+      streamSid: "MZ-overflow",
+      ws,
+      sttSession: createStubSession(),
+    });
+
+    const result = handler.sendMark("MZ-overflow", "mark-1");
+
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(result.sent).toBe(false);
+    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+  });
+
+  it("sanitizes websocket close reason before logging", () => {
+    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
+    expect(reason).not.toContain("\n");
+    expect(reason).not.toContain("\r");
+    expect(reason).not.toContain("\t");
+    expect(reason).toContain("forged line entry");
+  });
+
   it("closes idle pre-start connections after timeout", async () => {
     const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
       [];

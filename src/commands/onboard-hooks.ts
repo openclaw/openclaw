@@ -24,8 +24,8 @@ export async function setupInternalHooks(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
-  // Show every eligible hook so users can opt in during onboarding.
-  const eligibleHooks = report.hooks.filter((h) => h.eligible);
+  // Show every eligible hook so users can opt in during setup.
+  const eligibleHooks = report.hooks.filter((h) => h.loadable);
 
   if (eligibleHooks.length === 0) {
     await prompter.note(

@@ -3,7 +3,7 @@ import OpenClawIPC
 import OSLog
 
 /// Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
-struct Semver: Comparable, CustomStringConvertible, Sendable {
+struct Semver: Comparable, CustomStringConvertible {
     let major: Int
     let minor: Int
     let patch: Int

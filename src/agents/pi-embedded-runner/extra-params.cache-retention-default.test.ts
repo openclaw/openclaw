@@ -2,6 +2,25 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent } from "../pi-embedded-runner.js";
 
+function applyAndExpectWrapped(params: {
+  cfg?: Parameters<typeof applyExtraParamsToAgent>[1];
+  extraParamsOverride?: Parameters<typeof applyExtraParamsToAgent>[4];
+  modelId: string;
+  provider: string;
+}) {
+  const agent: { streamFn?: StreamFn } = {};
+
+  applyExtraParamsToAgent(
+    agent,
+    params.cfg,
+    params.provider,
+    params.modelId,
+    params.extraParamsOverride,
+  );
+
+  expect(agent.streamFn).toBeDefined();
+}
+
 // Mock the logger to avoid noise in tests
 vi.mock("./logger.js", () => ({
   log: {
@@ -12,15 +31,10 @@ vi.mock("./logger.js", () => ({
 
 describe("cacheRetention default behavior", () => {
   it("returns 'short' for Anthropic when not configured", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = undefined;
-    const provider = "anthropic";
-    const modelId = "claude-3-sonnet";
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
-
-    // Verify streamFn was set (indicating cache retention was applied)
-    expect(agent.streamFn).toBeDefined();
+    applyAndExpectWrapped({
+      modelId: "claude-3-sonnet",
+      provider: "anthropic",
+    });
 
     // The fact that agent.streamFn was modified indicates that cacheRetention
     // default "short" was applied. We don't need to call the actual function
@@ -28,75 +42,63 @@ describe("cacheRetention default behavior", () => {
   });
 
   it("respects explicit 'none' config", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-3-sonnet": {
-              params: {
-                cacheRetention: "none" as const,
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-sonnet": {
+                params: {
+                  cacheRetention: "none" as const,
+                },
               },
             },
           },
         },
       },
-    };
-    const provider = "anthropic";
-    const modelId = "claude-3-sonnet";
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
-
-    // Verify streamFn was set (config was applied)
-    expect(agent.streamFn).toBeDefined();
+      modelId: "claude-3-sonnet",
+      provider: "anthropic",
+    });
   });
 
   it("respects explicit 'long' config", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-3-opus": {
-              params: {
-                cacheRetention: "long" as const,
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-opus": {
+                params: {
+                  cacheRetention: "long" as const,
+                },
               },
             },
           },
         },
       },
-    };
-    const provider = "anthropic";
-    const modelId = "claude-3-opus";
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
-
-    // Verify streamFn was set (config was applied)
-    expect(agent.streamFn).toBeDefined();
+      modelId: "claude-3-opus",
+      provider: "anthropic",
+    });
   });
 
   it("respects legacy cacheControlTtl config", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-3-haiku": {
-              params: {
-                cacheControlTtl: "1h",
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-haiku": {
+                params: {
+                  cacheControlTtl: "1h",
+                },
               },
             },
           },
         },
       },
-    };
-    const provider = "anthropic";
-    const modelId = "claude-3-haiku";
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
-
-    // Verify streamFn was set (legacy config was applied)
-    expect(agent.streamFn).toBeDefined();
+      modelId: "claude-3-haiku",
+      provider: "anthropic",
+    });
   });
 
   it("returns undefined for non-Anthropic providers", () => {
@@ -113,42 +115,33 @@ describe("cacheRetention default behavior", () => {
   });
 
   it("prefers explicit cacheRetention over default", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-3-sonnet": {
-              params: {
-                cacheRetention: "long" as const,
-                temperature: 0.7,
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-3-sonnet": {
+                params: {
+                  cacheRetention: "long" as const,
+                  temperature: 0.7,
+                },
               },
             },
           },
         },
       },
-    };
-    const provider = "anthropic";
-    const modelId = "claude-3-sonnet";
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId);
-
-    // Verify streamFn was set with explicit config
-    expect(agent.streamFn).toBeDefined();
+      modelId: "claude-3-sonnet",
+      provider: "anthropic",
+    });
   });
 
   it("works with extraParamsOverride", () => {
-    const agent: { streamFn?: StreamFn } = {};
-    const cfg = undefined;
-    const provider = "anthropic";
-    const modelId = "claude-3-sonnet";
-    const extraParamsOverride = {
-      cacheRetention: "none" as const,
-    };
-
-    applyExtraParamsToAgent(agent, cfg, provider, modelId, extraParamsOverride);
-
-    // Verify streamFn was set (override was applied)
-    expect(agent.streamFn).toBeDefined();
+    applyAndExpectWrapped({
+      extraParamsOverride: {
+        cacheRetention: "none" as const,
+      },
+      modelId: "claude-3-sonnet",
+      provider: "anthropic",
+    });
   });
 });

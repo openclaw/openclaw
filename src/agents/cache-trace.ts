@@ -6,7 +6,9 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import { buildAgentTraceBase } from "./trace-base.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -102,7 +104,7 @@ function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
   if (value === null || value === undefined) {
     return String(value);
   }
@@ -115,30 +117,40 @@ function stableStringify(value: unknown): string {
   if (typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
   }
+  if (seen.has(value)) {
+    return JSON.stringify("[Circular]");
+  }
+  seen.add(value);
   if (value instanceof Error) {
-    return stableStringify({
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-    });
+    return stableStringify(
+      {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      },
+      seen,
+    );
   }
   if (value instanceof Uint8Array) {
-    return stableStringify({
-      type: "Uint8Array",
-      data: Buffer.from(value).toString("base64"),
-    });
+    return stableStringify(
+      {
+        type: "Uint8Array",
+        data: Buffer.from(value).toString("base64"),
+      },
+      seen,
+    );
   }
   if (Array.isArray(value)) {
     const serializedEntries: string[] = [];
     for (const entry of value) {
-      serializedEntries.push(stableStringify(entry));
+      serializedEntries.push(stableStringify(entry, seen));
     }
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
   const serializedFields: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key])}`);
+    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
   }
   return `{${serializedFields.join(",")}}`;
 }
@@ -172,15 +184,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
-  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    workspaceDir: params.workspaceDir,
-  };
+  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
   const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
     const event: CacheTraceEvent = {
@@ -194,14 +198,14 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.prompt = payload.prompt;
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = payload.system;
+      event.system = sanitizeDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = payload.options;
+      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
     }
     if (payload.model) {
-      event.model = payload.model;
+      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
     }
 
     const messages = payload.messages;
@@ -212,7 +216,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = messages;
+        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
       }
     }
 

@@ -1,5 +1,5 @@
 export type TlonTarget =
-  | { kind: "direct"; ship: string }
+  | { kind: "dm"; ship: string }
   | { kind: "group"; nest: string; hostShip: string; channelName: string };
 
 const SHIP_RE = /^~?[a-z-]+$/i;
@@ -32,7 +32,7 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
 
   const dmPrefix = withoutPrefix.match(/^dm[/:](.+)$/i);
   if (dmPrefix) {
-    return { kind: "direct", ship: normalizeShip(dmPrefix[1]) };
+    return { kind: "dm", ship: normalizeShip(dmPrefix[1]) };
   }
 
   const groupPrefix = withoutPrefix.match(/^(group|room)[/:](.+)$/i);
@@ -78,10 +78,24 @@ export function parseTlonTarget(raw?: string | null): TlonTarget | null {
   }
 
   if (SHIP_RE.test(withoutPrefix)) {
-    return { kind: "direct", ship: normalizeShip(withoutPrefix) };
+    return { kind: "dm", ship: normalizeShip(withoutPrefix) };
   }
 
   return null;
+}
+
+export function resolveTlonOutboundTarget(to?: string | null) {
+  const parsed = parseTlonTarget(to ?? "");
+  if (!parsed) {
+    return {
+      ok: false as const,
+      error: new Error(`Invalid Tlon target. Use ${formatTargetHint()}`),
+    };
+  }
+  if (parsed.kind === "dm") {
+    return { ok: true as const, to: parsed.ship };
+  }
+  return { ok: true as const, to: parsed.nest };
 }
 
 export function formatTargetHint(): string {

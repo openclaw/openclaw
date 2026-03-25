@@ -1,6 +1,22 @@
 import type { SessionId } from "@agentclientprotocol/sdk";
 import { VERSION } from "../version.js";
 
+export const ACP_PROVENANCE_MODE_VALUES = ["off", "meta", "meta+receipt"] as const;
+
+export type AcpProvenanceMode = (typeof ACP_PROVENANCE_MODE_VALUES)[number];
+
+export function normalizeAcpProvenanceMode(
+  value: string | undefined,
+): AcpProvenanceMode | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return (ACP_PROVENANCE_MODE_VALUES as readonly string[]).includes(normalized)
+    ? (normalized as AcpProvenanceMode)
+    : undefined;
+}
+
 export type AcpSession = {
   sessionId: SessionId;
   sessionKey: string;
@@ -20,6 +36,7 @@ export type AcpServerOptions = {
   requireExistingSession?: boolean;
   resetSession?: boolean;
   prefixCwd?: boolean;
+  provenanceMode?: AcpProvenanceMode;
   sessionCreateRateLimit?: {
     maxRequests?: number;
     windowMs?: number;

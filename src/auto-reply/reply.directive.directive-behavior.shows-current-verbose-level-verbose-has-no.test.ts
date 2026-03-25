@@ -1,5 +1,5 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -10,11 +10,12 @@ import {
   makeRestrictedElevatedDisabledConfig,
   makeWhatsAppDirectiveConfig,
   replyText,
-  runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
-import { getReplyFromConfig } from "./reply.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 
 const COMMAND_MESSAGE_BASE = {
   From: "+1222",
@@ -124,8 +125,25 @@ function makeCommandMessage(body: string, from = "+1222") {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
+
   it("reports current directive defaults when no arguments are provided", async () => {
     await withTempHome(async (home) => {
+      const fastText = await runCommand(home, "/fast", {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-5": {
+              params: { fastMode: true },
+            },
+          },
+        },
+      });
+      expect(fastText).toContain("Current fast mode: on (config)");
+      expect(fastText).toContain("Options: on, off.");
+
       const verboseText = await runCommand(home, "/verbose", {
         defaults: { verboseDefault: "on" },
       });
@@ -158,7 +176,28 @@ describe("directive behavior", () => {
       expect(execText).toContain(
         "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+  it("persists fast toggles across /status and /fast", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      const onText = await runCommand(home, "/fast on");
+      expect(onText).toContain("Fast mode enabled");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.fastMode).toBe(true);
+
+      const statusText = await runCommand(home, "/status");
+      const optionsLine = statusText?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+      expect(optionsLine).toContain("Fast: on");
+
+      const offText = await runCommand(home, "/fast off");
+      expect(offText).toContain("Fast mode disabled");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.fastMode).toBe(false);
+
+      const fastText = await runCommand(home, "/fast");
+      expect(fastText).toContain("Current fast mode: off");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("persists elevated toggles across /status and /elevated", async () => {
@@ -181,7 +220,7 @@ describe("directive behavior", () => {
 
       const store = loadSessionStore(storePath);
       expect(store["agent:main:main"]?.elevatedLevel).toBe("on");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {
@@ -217,7 +256,7 @@ describe("directive behavior", () => {
       );
       const statusText = replyText(statusRes);
       expect(statusText).not.toContain("elevated");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
@@ -245,7 +284,7 @@ describe("directive behavior", () => {
 
       const allowedText = replyText(allowedRes);
       expect(allowedText).toContain("Elevated mode set to ask");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("handles runtime warning, invalid level, and multi-directive elevated inputs", async () => {
@@ -280,7 +319,7 @@ describe("directive behavior", () => {
           expect(text).toContain(snippet);
         }
       }
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("persists queue overrides and reset behavior", async () => {
@@ -317,12 +356,12 @@ describe("directive behavior", () => {
       expect(entry?.queueDebounceMs).toBeUndefined();
       expect(entry?.queueCap).toBeUndefined();
       expect(entry?.queueDrop).toBeUndefined();
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("strips inline elevated directives from the user text (does not persist session override)", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      runEmbeddedPiAgentMock.mockResolvedValue({
         payloads: [{ text: "ok" }],
         meta: {
           durationMs: 1,
@@ -346,7 +385,7 @@ describe("directive behavior", () => {
       const store = loadSessionStore(storePath);
       expect(store["agent:main:main"]?.elevatedLevel).toBeUndefined();
 
-      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const calls = runEmbeddedPiAgentMock.mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const call = calls[0]?.[0];
       expect(call?.prompt).toContain("hello there");

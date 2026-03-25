@@ -1,5 +1,5 @@
 ---
-summary: "ClawHub guide: public skills registry + CLI workflows"
+summary: "ClawHub guide: public registry, native OpenClaw install flows, and ClawHub CLI workflows"
 read_when:
   - Introducing ClawHub to new users
   - Installing, searching, or publishing skills
@@ -9,9 +9,40 @@ title: "ClawHub"
 
 # ClawHub
 
-ClawHub is the **public skill registry for OpenClaw**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
+ClawHub is the public registry for **OpenClaw skills and plugins**.
+
+- Use native `openclaw` commands to search/install/update skills and install
+  plugins from ClawHub.
+- Use the separate `clawhub` CLI when you need registry auth, publish, delete,
+  undelete, or sync workflows.
 
 Site: [clawhub.ai](https://clawhub.ai)
+
+## Native OpenClaw flows
+
+Skills:
+
+```bash
+openclaw skills search "calendar"
+openclaw skills install <skill-slug>
+openclaw skills update --all
+```
+
+Plugins:
+
+```bash
+openclaw plugins install clawhub:<package>
+openclaw plugins update --all
+```
+
+Bare npm-safe plugin specs are also tried against ClawHub before npm:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
+Native `openclaw` commands install into your active workspace and persist source
+metadata so later `update` calls can stay on ClawHub.
 
 ## What ClawHub is
 
@@ -45,16 +76,17 @@ If you want to add new capabilities to your OpenClaw agent, ClawHub is the easie
 
 ## Quick start (non-technical)
 
-1. Install the CLI (see next section).
-2. Search for something you need:
-   - `clawhub search "calendar"`
-3. Install a skill:
-   - `clawhub install <skill-slug>`
-4. Start a new OpenClaw session so it picks up the new skill.
+1. Search for something you need:
+   - `openclaw skills search "calendar"`
+2. Install a skill:
+   - `openclaw skills install <skill-slug>`
+3. Start a new OpenClaw session so it picks up the new skill.
+4. If you want to publish or manage registry auth, install the separate
+   `clawhub` CLI too.
 
-## Install the CLI
+## Install the ClawHub CLI
 
-Pick one:
+You only need this for registry-authenticated workflows such as publish/sync:
 
 ```bash
 npm i -g clawhub
@@ -66,7 +98,16 @@ pnpm add -g clawhub
 
 ## How it fits into OpenClaw
 
-By default, the CLI installs skills into `./skills` under your current working directory. If a OpenClaw workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.openclaw/skills` or bundled skills, workspace skills take precedence.
+Native `openclaw skills install` installs into the active workspace `skills/`
+directory. `openclaw plugins install clawhub:...` records a normal managed
+plugin install plus ClawHub source metadata for updates.
+
+The separate `clawhub` CLI also installs skills into `./skills` under your
+current working directory. If an OpenClaw workspace is configured, `clawhub`
+falls back to that workspace unless you override `--workdir` (or
+`CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills`
+and will pick them up in the **next** session. If you already use
+`~/.openclaw/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).

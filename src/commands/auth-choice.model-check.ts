@@ -1,10 +1,10 @@
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
+import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
@@ -34,20 +34,17 @@ export async function warnIfModelConfigLooksOff(
   const store = ensureAuthProfileStore(options?.agentDir);
   const hasProfile = listProfilesForProvider(store, ref.provider).length > 0;
   const envKey = resolveEnvApiKey(ref.provider);
-  const customKey = getCustomProviderApiKey(config, ref.provider);
-  if (!hasProfile && !envKey && !customKey) {
+  const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
+  if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
+        {
+          provider: ref.provider,
+          config,
+          includeEnvVar: true,
+        },
+      )}`,
     );
-  }
-
-  if (ref.provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
-      );
-    }
   }
 
   if (warnings.length > 0) {

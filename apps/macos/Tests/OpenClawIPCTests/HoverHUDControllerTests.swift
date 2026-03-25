@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct HoverHUDControllerTests {
-    @Test func hoverHUDControllerPresentsAndDismisses() async {
+    @Test func `hover HUD controller presents and dismisses`() async {
         let controller = HoverHUDController()
         controller.setSuppressed(false)
 

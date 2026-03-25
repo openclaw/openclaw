@@ -2,9 +2,8 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, test, vi } from "vitest";
+import { beforeEach, describe, expect, it, test, vi } from "vitest";
 import { defaultVoiceWakeTriggers } from "../infra/voicewake.js";
-import { GatewayClient } from "./client.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -45,6 +44,29 @@ vi.mock("ws", () => ({
   },
 }));
 
+let GatewayClient: typeof import("./client.js").GatewayClient;
+
+async function loadFreshGatewayClientModuleForTest() {
+  vi.resetModules();
+  vi.doMock("ws", () => ({
+    WebSocket: class MockWebSocket {
+      on = vi.fn();
+      close = vi.fn();
+      send = vi.fn();
+
+      constructor(url: unknown, opts: unknown) {
+        wsMockState.last = { url, opts };
+      }
+    },
+  }));
+  ({ GatewayClient } = await import("./client.js"));
+}
+
+beforeEach(async () => {
+  wsMockState.last = null;
+  await loadFreshGatewayClientModuleForTest();
+});
+
 describe("GatewayClient", () => {
   async function withControlUiRoot(
     params: { faviconSvg?: string; indexHtml?: string },
@@ -63,7 +85,6 @@ describe("GatewayClient", () => {
   }
 
   test("uses a large maxPayload for node snapshots", () => {
-    wsMockState.last = null;
     const client = new GatewayClient({ url: "ws://127.0.0.1:1" });
     client.start();
     const last = wsMockState.last as { url: unknown; opts: unknown } | null;
@@ -334,6 +355,24 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   });
 
+  it("includes Android notifications and device diagnostics commands by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "android 16",
+        deviceFamily: "Android",
+      },
+    );
+
+    expect(allow.has("notifications.list")).toBe(true);
+    expect(allow.has("notifications.actions")).toBe(true);
+    expect(allow.has("device.permissions")).toBe(true);
+    expect(allow.has("device.health")).toBe(true);
+    expect(allow.has("callLog.search")).toBe(true);
+    expect(allow.has("sms.search")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {
@@ -348,6 +387,34 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("camera.snap")).toBe(true);
     expect(allow.has("screen.record")).toBe(true);
     expect(allow.has("camera.clip")).toBe(false);
+  });
+
+  it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "iPhοne",
+        deviceFamily: "iPhοne",
+      },
+    );
+
+    expect(allow.has("system.run")).toBe(false);
+    expect(allow.has("system.which")).toBe(false);
+    expect(allow.has("system.notify")).toBe(true);
+  });
+
+  it("normalizes dotted-I platform values to iOS classification", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "İOS",
+        deviceFamily: "iPhone",
+      },
+    );
+
+    expect(allow.has("system.run")).toBe(false);
+    expect(allow.has("system.which")).toBe(false);
+    expect(allow.has("device.info")).toBe(true);
   });
 });
 

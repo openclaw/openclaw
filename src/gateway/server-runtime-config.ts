@@ -23,6 +23,7 @@ export type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;
+  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
@@ -73,10 +74,9 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
+  const openAiChatCompletionsConfig = params.cfg.gateway?.http?.endpoints?.chatCompletions;
   const openAiChatCompletionsEnabled =
-    params.openAiChatCompletionsEnabled ??
-    params.cfg.gateway?.http?.endpoints?.chatCompletions?.enabled ??
-    false;
+    params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
@@ -121,7 +121,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
-  assertGatewayAuthConfigured(resolvedAuth);
+  assertGatewayAuthConfigured(resolvedAuth, params.cfg.gateway?.auth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
@@ -168,6 +168,9 @@ export async function resolveGatewayRuntimeConfig(params: {
     bindHost,
     controlUiEnabled,
     openAiChatCompletionsEnabled,
+    openAiChatCompletionsConfig: openAiChatCompletionsConfig
+      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
+      : undefined,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }

@@ -4,6 +4,10 @@ import {
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  isPersistentBrowserProfileMutation,
+  resolveRequestedBrowserProfile,
+} from "../../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -148,6 +152,17 @@ export const browserHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot create or delete persistent browser profiles",
+        ),
+      );
+      return;
+    }
 
     const cfg = loadConfig();
     let nodeTarget: NodeSession | null = null;
@@ -187,7 +202,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         query,
         body,
         timeoutMs,
-        profile: typeof query?.profile === "string" ? query.profile : undefined,
+        profile: resolveRequestedBrowserProfile({ query, body }),
       };
       const res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,

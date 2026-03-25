@@ -143,6 +143,25 @@ Safety:
 3. Ensure **Local** mode is active and the Gateway is running.
 4. Install the CLI if you want terminal access.
 
+## State dir placement (macOS)
+
+Avoid putting your OpenClaw state dir in iCloud or other cloud-synced folders.
+Sync-backed paths can add latency and occasionally cause file-lock/sync races for
+sessions and credentials.
+
+Prefer a local non-synced state path such as:
+
+```bash
+OPENCLAW_STATE_DIR=~/.openclaw
+```
+
+If `openclaw doctor` detects state under:
+
+- `~/Library/Mobile Documents/com~apple~CloudDocs/...`
+- `~/Library/CloudStorage/...`
+
+it will warn and recommend moving back to a local path.
+
 ## Build & dev workflow (native)
 
 - `cd apps/macos && swift build`

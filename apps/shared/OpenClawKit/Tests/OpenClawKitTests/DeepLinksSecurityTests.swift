@@ -20,11 +20,17 @@ import Testing
             string: "openclaw://gateway?host=127.0.0.1&port=18789&tls=0&token=abc")!
         #expect(
             DeepLinkParser.parse(url) == .gateway(
-                .init(host: "127.0.0.1", port: 18789, tls: false, token: "abc", password: nil)))
+                .init(
+                    host: "127.0.0.1",
+                    port: 18789,
+                    tls: false,
+                    bootstrapToken: nil,
+                    token: "abc",
+                    password: nil)))
     }
 
     @Test func setupCodeRejectsInsecureNonLoopbackWs() {
-        let payload = #"{"url":"ws://attacker.example:18789","token":"tok"}"#
+        let payload = #"{"url":"ws://attacker.example:18789","bootstrapToken":"tok"}"#
         let encoded = Data(payload.utf8)
             .base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -34,7 +40,7 @@ import Testing
     }
 
     @Test func setupCodeRejectsInsecurePrefixBypassHost() {
-        let payload = #"{"url":"ws://127.attacker.example:18789","token":"tok"}"#
+        let payload = #"{"url":"ws://127.attacker.example:18789","bootstrapToken":"tok"}"#
         let encoded = Data(payload.utf8)
             .base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -44,7 +50,7 @@ import Testing
     }
 
     @Test func setupCodeAllowsLoopbackWs() {
-        let payload = #"{"url":"ws://127.0.0.1:18789","token":"tok"}"#
+        let payload = #"{"url":"ws://127.0.0.1:18789","bootstrapToken":"tok"}"#
         let encoded = Data(payload.utf8)
             .base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -55,7 +61,8 @@ import Testing
                 host: "127.0.0.1",
                 port: 18789,
                 tls: false,
-                token: "tok",
+                bootstrapToken: "tok",
+                token: nil,
                 password: nil))
     }
 }

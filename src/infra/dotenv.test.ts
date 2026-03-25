@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -11,11 +11,10 @@ async function writeEnvFile(filePath: string, contents: string) {
 
 async function withIsolatedEnvAndCwd(run: () => Promise<void>) {
   const prevEnv = { ...process.env };
-  const prevCwd = process.cwd();
   try {
     await run();
   } finally {
-    process.chdir(prevCwd);
+    vi.restoreAllMocks();
     for (const key of Object.keys(process.env)) {
       if (!(key in prevEnv)) {
         delete process.env[key];
@@ -54,7 +53,7 @@ describe("loadDotEnv", () => {
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\nBAR=1\n");
         await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
 
-        process.chdir(cwdDir);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
         delete process.env.BAR;
 
@@ -74,7 +73,7 @@ describe("loadDotEnv", () => {
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
         await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
 
-        process.chdir(cwdDir);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
         loadDotEnv({ quiet: true });
 
@@ -87,7 +86,7 @@ describe("loadDotEnv", () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
-        process.chdir(cwdDir);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
 
         loadDotEnv({ quiet: true });

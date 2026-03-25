@@ -16,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { sanitizeRenderableText } from "./tui-formatters.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -42,9 +43,15 @@ type CommandHandlerContext = {
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
+  noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
 };
+
+function isBtwCommand(text: string): boolean {
+  return /^\/btw(?::|\s|$)/i.test(text.trim());
+}
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -65,7 +72,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     formatSessionKey,
     applySessionInfoFromPatch,
     noteLocalRunId,
+    noteLocalBtwRunId,
     forgetLocalRunId,
+    forgetLocalBtwRunId,
     requestExit,
   } = context;
 
@@ -344,6 +353,27 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
         break;
+      case "fast":
+        if (!args || args === "status") {
+          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
+          break;
+        }
+        if (args !== "on" && args !== "off") {
+          chatLog.addSystem("usage: /fast <status|on|off>");
+          break;
+        }
+        try {
+          const result = await client.patchSession({
+            key: state.currentSessionKey,
+            fastMode: args === "on",
+          });
+          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
+          applySessionInfoFromPatch(result);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`fast failed: ${String(err)}`);
+        }
+        break;
       case "reasoning":
         if (!args) {
           chatLog.addSystem("usage: /reasoning <on|off>");
@@ -423,6 +453,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "new":
+        try {
+          // Clear token counts immediately to avoid stale display (#1523)
+          state.sessionInfo.inputTokens = null;
+          state.sessionInfo.outputTokens = null;
+          state.sessionInfo.totalTokens = null;
+          tui.requestRender();
+
+          // Generate unique session key to isolate this TUI client (#39217)
+          // This ensures /new creates a fresh session that doesn't broadcast
+          // to other connected TUI clients sharing the original session key.
+          const uniqueKey = `tui-${randomUUID()}`;
+          await setSession(uniqueKey);
+          chatLog.addSystem(`new session: ${uniqueKey}`);
+        } catch (err) {
+          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
+        }
+        break;
       case "reset":
         try {
           // Clear token counts immediately to avoid stale display (#1523)
@@ -435,7 +482,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`session ${state.currentSessionKey} reset`);
           await loadHistory();
         } catch (err) {
-          chatLog.addSystem(`reset failed: ${String(err)}`);
+          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
         }
         break;
       case "abort":
@@ -462,13 +509,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
+    const isBtw = isBtwCommand(text);
+    const runId = randomUUID();
     try {
-      chatLog.addUser(text);
-      tui.requestRender();
-      const runId = randomUUID();
-      noteLocalRunId(runId);
-      state.activeChatRunId = runId;
-      setActivityStatus("sending");
+      if (!isBtw) {
+        chatLog.addUser(text);
+        noteLocalRunId(runId);
+        state.activeChatRunId = runId;
+        setActivityStatus("sending");
+      } else {
+        noteLocalBtwRunId?.(runId);
+      }
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
@@ -478,15 +529,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         timeoutMs: opts.timeoutMs,
         runId,
       });
-      setActivityStatus("waiting");
-      tui.requestRender();
+      if (!isBtw) {
+        setActivityStatus("waiting");
+        tui.requestRender();
+      }
     } catch (err) {
-      if (state.activeChatRunId) {
+      if (isBtw) {
+        forgetLocalBtwRunId?.(runId);
+      }
+      if (!isBtw && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
-      state.activeChatRunId = null;
-      chatLog.addSystem(`send failed: ${String(err)}`);
-      setActivityStatus("error");
+      if (!isBtw) {
+        state.activeChatRunId = null;
+      }
+      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
+      if (!isBtw) {
+        setActivityStatus("error");
+      }
       tui.requestRender();
     }
   };

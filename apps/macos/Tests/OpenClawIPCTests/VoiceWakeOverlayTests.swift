@@ -2,19 +2,19 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct VoiceWakeOverlayTests {
-    @Test func guardTokenDropsWhenNoActive() {
+struct VoiceWakeOverlayTests {
+    @Test func `guard token drops when no active`() {
         let outcome = VoiceWakeOverlayController.evaluateToken(active: nil, incoming: UUID())
         #expect(outcome == .dropNoActive)
     }
 
-    @Test func guardTokenAcceptsMatching() {
+    @Test func `guard token accepts matching`() {
         let token = UUID()
         let outcome = VoiceWakeOverlayController.evaluateToken(active: token, incoming: token)
         #expect(outcome == .accept)
     }
 
-    @Test func guardTokenDropsMismatchWithoutDismissing() {
+    @Test func `guard token drops mismatch without dismissing`() {
         let outcome = VoiceWakeOverlayController.evaluateToken(active: UUID(), incoming: UUID())
         #expect(outcome == .dropMismatch)
     }

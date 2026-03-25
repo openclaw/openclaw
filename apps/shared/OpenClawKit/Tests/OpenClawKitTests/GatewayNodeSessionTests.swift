@@ -3,27 +3,6 @@ import Testing
 @testable import OpenClawKit
 import OpenClawProtocol
 
-private struct TimeoutError: Error, CustomStringConvertible {
-    let label: String
-    var description: String { "Timeout waiting for: \(self.label)" }
-}
-
-private func waitUntil(
-    _ label: String,
-    timeoutSeconds: Double = 3.0,
-    pollMs: UInt64 = 10,
-    _ condition: @escaping @Sendable () async -> Bool) async throws
-{
-    let deadline = Date().addingTimeInterval(timeoutSeconds)
-    while Date() < deadline {
-        if await condition() {
-            return
-        }
-        try await Task.sleep(nanoseconds: pollMs * 1_000_000)
-    }
-    throw TimeoutError(label: label)
-}
-
 private extension NSLock {
     func withLock<T>(_ body: () -> T) -> T {
         self.lock()
@@ -36,6 +15,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private let lock = NSLock()
     private var _state: URLSessionTask.State = .suspended
     private var connectRequestId: String?
+    private var connectAuth: [String: Any]?
     private var receivePhase = 0
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
@@ -71,8 +51,16 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
            obj["method"] as? String == "connect",
            let id = obj["id"] as? String
         {
-            self.lock.withLock { self.connectRequestId = id }
+            let auth = ((obj["params"] as? [String: Any])?["auth"] as? [String: Any]) ?? [:]
+            self.lock.withLock {
+                self.connectRequestId = id
+                self.connectAuth = auth
+            }
         }
+    }
+
+    func latestConnectAuth() -> [String: Any]? {
+        self.lock.withLock { self.connectAuth }
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
@@ -114,38 +102,48 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
-        let json = """
-        {
-          "type": "event",
-          "event": "connect.challenge",
-          "payload": { "nonce": "\(nonce)" }
-        }
-        """
-        return Data(json.utf8)
+        let frame: [String: Any] = [
+            "type": "event",
+            "event": "connect.challenge",
+            "payload": ["nonce": nonce],
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
     private static func connectOkData(id: String) -> Data {
-        let json = """
-        {
-          "type": "res",
-          "id": "\(id)",
-          "ok": true,
-          "payload": {
+        let payload: [String: Any] = [
             "type": "hello-ok",
             "protocol": 2,
-            "server": { "version": "test", "connId": "test" },
-            "features": { "methods": [], "events": [] },
-            "snapshot": {
-              "presence": [ { "ts": 1 } ],
-              "health": {},
-              "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
-            },
-            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
-          }
-        }
-        """
-        return Data(json.utf8)
+            "server": [
+                "version": "test",
+                "connId": "test",
+            ],
+            "features": [
+                "methods": [],
+                "events": [],
+            ],
+            "snapshot": [
+                "presence": [["ts": 1]],
+                "health": [:],
+                "stateVersion": [
+                    "presence": 0,
+                    "health": 0,
+                ],
+                "uptimeMs": 0,
+            ],
+            "policy": [
+                "maxPayload": 1,
+                "maxBufferedBytes": 1,
+                "tickIntervalMs": 30_000,
+            ],
+        ]
+        let frame: [String: Any] = [
+            "type": "res",
+            "id": id,
+            "ok": true,
+            "payload": payload,
+        ]
+        return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 }
 
@@ -180,6 +178,80 @@ private actor SeqGapProbe {
 }
 
 struct GatewayNodeSessionTests {
+    @Test
+    func scannedSetupCodePrefersBootstrapAuthOverStoredDeviceToken() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let identity = DeviceIdentityStore.loadOrCreate()
+        _ = DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "stored-device-token")
+
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: true)
+
+        try await gateway.connect(
+            url: URL(string: "ws://example.invalid")!,
+            token: nil,
+            bootstrapToken: "fresh-bootstrap-token",
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let auth = try #require(session.latestTask()?.latestConnectAuth())
+        #expect(auth["bootstrapToken"] as? String == "fresh-bootstrap-token")
+        #expect(auth["token"] == nil)
+        #expect(auth["deviceToken"] == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func normalizeCanvasHostUrlPreservesExplicitSecureCanvasPort() {
+        let normalized = canonicalizeCanvasHostUrl(
+            raw: "https://canvas.example.com:9443/__openclaw__/cap/token",
+            activeURL: URL(string: "wss://gateway.example.com")!)
+
+        #expect(normalized == "https://canvas.example.com:9443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func normalizeCanvasHostUrlBackfillsGatewayHostForLoopbackCanvas() {
+        let normalized = canonicalizeCanvasHostUrl(
+            raw: "http://127.0.0.1:18789/__openclaw__/cap/token",
+            activeURL: URL(string: "wss://gateway.example.com:7443")!)
+
+        #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
     @Test
     func invokeWithTimeoutReturnsUnderlyingResponseBeforeTimeout() async {
         let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
@@ -259,6 +331,7 @@ struct GatewayNodeSessionTests {
         try await gateway.connect(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
+            bootstrapToken: nil,
             password: nil,
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),

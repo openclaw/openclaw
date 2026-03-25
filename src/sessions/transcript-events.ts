@@ -1,5 +1,8 @@
-type SessionTranscriptUpdate = {
+export type SessionTranscriptUpdate = {
   sessionFile: string;
+  sessionKey?: string;
+  message?: unknown;
+  messageId?: string;
 };
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
@@ -13,13 +16,35 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
-export function emitSessionTranscriptUpdate(sessionFile: string): void {
-  const trimmed = sessionFile.trim();
+export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
+  const normalized =
+    typeof update === "string"
+      ? { sessionFile: update }
+      : {
+          sessionFile: update.sessionFile,
+          sessionKey: update.sessionKey,
+          message: update.message,
+          messageId: update.messageId,
+        };
+  const trimmed = normalized.sessionFile.trim();
   if (!trimmed) {
     return;
   }
-  const update = { sessionFile: trimmed };
+  const nextUpdate: SessionTranscriptUpdate = {
+    sessionFile: trimmed,
+    ...(typeof normalized.sessionKey === "string" && normalized.sessionKey.trim()
+      ? { sessionKey: normalized.sessionKey.trim() }
+      : {}),
+    ...(normalized.message !== undefined ? { message: normalized.message } : {}),
+    ...(typeof normalized.messageId === "string" && normalized.messageId.trim()
+      ? { messageId: normalized.messageId.trim() }
+      : {}),
+  };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
-    listener(update);
+    try {
+      listener(nextUpdate);
+    } catch {
+      /* ignore */
+    }
   }
 }

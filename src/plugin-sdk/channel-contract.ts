@@ -1,0 +1,17 @@
+// Pure channel contract types used by plugin implementations and tests.
+export type {
+  BaseProbeResult,
+  BaseTokenResolution,
+  ChannelAgentTool,
+  ChannelAccountSnapshot,
+  ChannelGroupContext,
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+  ChannelMessageActionDiscoveryContext,
+  ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
+  ChannelStatusIssue,
+  ChannelThreadingContext,
+  ChannelThreadingToolContext,
+} from "../channels/plugins/types.js";

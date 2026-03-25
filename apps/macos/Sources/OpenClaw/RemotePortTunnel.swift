@@ -152,8 +152,8 @@ final class RemotePortTunnel {
         else {
             return nil
         }
-        let sshKey = Self.hostKey(sshHost)
-        let urlKey = Self.hostKey(host)
+        let sshKey = OpenClawConfigFile.hostKey(sshHost)
+        let urlKey = OpenClawConfigFile.hostKey(host)
         guard !sshKey.isEmpty, !urlKey.isEmpty else { return nil }
         guard sshKey == urlKey else {
             Self.logger.debug(
@@ -161,17 +161,6 @@ final class RemotePortTunnel {
             return nil
         }
         return port
-    }
-
-    private static func hostKey(_ host: String) -> String {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmed.isEmpty else { return "" }
-        if trimmed.contains(":") { return trimmed }
-        let digits = CharacterSet(charactersIn: "0123456789.")
-        if trimmed.rangeOfCharacter(from: digits.inverted) == nil {
-            return trimmed
-        }
-        return trimmed.split(separator: ".").first.map(String.init) ?? trimmed
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {

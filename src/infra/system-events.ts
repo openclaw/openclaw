@@ -2,6 +2,8 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
 
 const MAX_EVENTS = 20;
@@ -12,7 +14,9 @@ type SessionQueue = {
   lastContextKey: string | null;
 };
 
-const queues = new Map<string, SessionQueue>();
+const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
+
+const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY);
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -38,37 +42,45 @@ function normalizeContextKey(key?: string | null): string | null {
   return trimmed.toLowerCase();
 }
 
+function getSessionQueue(sessionKey: string): SessionQueue | undefined {
+  return queues.get(requireSessionKey(sessionKey));
+}
+
+function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
+  const key = requireSessionKey(sessionKey);
+  const existing = queues.get(key);
+  if (existing) {
+    return existing;
+  }
+  const created: SessionQueue = {
+    queue: [],
+    lastText: null,
+    lastContextKey: null,
+  };
+  queues.set(key, created);
+  return created;
+}
+
 export function isSystemEventContextChanged(
   sessionKey: string,
   contextKey?: string | null,
 ): boolean {
-  const key = requireSessionKey(sessionKey);
-  const existing = queues.get(key);
+  const existing = getSessionQueue(sessionKey);
   const normalized = normalizeContextKey(contextKey);
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options?.sessionKey);
-  const entry =
-    queues.get(key) ??
-    (() => {
-      const created: SessionQueue = {
-        queue: [],
-        lastText: null,
-        lastContextKey: null,
-      };
-      queues.set(key, created);
-      return created;
-    })();
+  const entry = getOrCreateSessionQueue(key);
   const cleaned = text.trim();
   if (!cleaned) {
-    return;
+    return false;
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
   entry.lastContextKey = normalizedContextKey;
   if (entry.lastText === cleaned) {
-    return;
+    return false;
   } // skip consecutive duplicates
   entry.lastText = cleaned;
   entry.queue.push({
@@ -79,11 +91,12 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
+  return true;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
-  const entry = queues.get(key);
+  const entry = getSessionQueue(key);
   if (!entry || entry.queue.length === 0) {
     return [];
   }
@@ -100,8 +113,7 @@ export function drainSystemEvents(sessionKey: string): string[] {
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
-  const key = requireSessionKey(sessionKey);
-  return queues.get(key)?.queue.map((event) => ({ ...event })) ?? [];
+  return getSessionQueue(sessionKey)?.queue.map((event) => ({ ...event })) ?? [];
 }
 
 export function peekSystemEvents(sessionKey: string): string[] {
@@ -109,8 +121,7 @@ export function peekSystemEvents(sessionKey: string): string[] {
 }
 
 export function hasSystemEvents(sessionKey: string) {
-  const key = requireSessionKey(sessionKey);
-  return (queues.get(key)?.queue.length ?? 0) > 0;
+  return (getSessionQueue(sessionKey)?.queue.length ?? 0) > 0;
 }
 
 export function resetSystemEventsForTest() {

@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 public enum DeepLinkRoute: Sendable, Equatable {
     case agent(AgentDeepLink)
@@ -10,49 +9,17 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     public let host: String
     public let port: Int
     public let tls: Bool
+    public let bootstrapToken: String?
     public let token: String?
     public let password: String?
 
-    public init(host: String, port: Int, tls: Bool, token: String?, password: String?) {
+    public init(host: String, port: Int, tls: Bool, bootstrapToken: String?, token: String?, password: String?) {
         self.host = host
         self.port = port
         self.tls = tls
+        self.bootstrapToken = bootstrapToken
         self.token = token
         self.password = password
-    }
-
-    fileprivate static func isLoopbackHost(_ raw: String) -> Bool {
-        var host = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
-        if host.isEmpty {
-            return false
-        }
-        if host == "localhost" || host == "0.0.0.0" || host == "::" {
-            return true
-        }
-
-        if let ipv4 = IPv4Address(host) {
-            return ipv4.rawValue.first == 127
-        }
-        if let ipv6 = IPv6Address(host) {
-            let bytes = Array(ipv6.rawValue)
-            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
-            if isV6Loopback {
-                return true
-            }
-            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
-            return isMappedV4 && bytes[12] == 127
-        }
-
-        return false
     }
 
     public var websocketURL: URL? {
@@ -60,7 +27,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         return URL(string: "\(scheme)://\(self.host):\(self.port)")
     }
 
-    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, token?, password?}`).
+    /// Parse a device-pair setup code (base64url-encoded JSON: `{url, bootstrapToken?, token?, password?}`).
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
         guard let data = Self.decodeBase64Url(code) else { return nil }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -72,13 +39,20 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         let scheme = (parsed.scheme ?? "ws").lowercased()
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let tls = scheme == "wss"
-        if !tls, !Self.isLoopbackHost(hostname) {
+        if !tls, !LoopbackHost.isLoopbackHost(hostname) {
             return nil
         }
         let port = parsed.port ?? (tls ? 443 : 18789)
+        let bootstrapToken = json["bootstrapToken"] as? String
         let token = json["token"] as? String
         let password = json["password"] as? String
-        return GatewayConnectDeepLink(host: hostname, port: port, tls: tls, token: token, password: password)
+        return GatewayConnectDeepLink(
+            host: hostname,
+            port: port,
+            tls: tls,
+            bootstrapToken: bootstrapToken,
+            token: token,
+            password: password)
     }
 
     private static func decodeBase64Url(_ input: String) -> Data? {
@@ -167,7 +141,7 @@ public enum DeepLinkParser {
             }
             let port = query["port"].flatMap { Int($0) } ?? 18789
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
-            if !tls, !GatewayConnectDeepLink.isLoopbackHost(hostParam) {
+            if !tls, !LoopbackHost.isLoopbackHost(hostParam) {
                 return nil
             }
             return .gateway(
@@ -175,6 +149,7 @@ public enum DeepLinkParser {
                     host: hostParam,
                     port: port,
                     tls: tls,
+                    bootstrapToken: nil,
                     token: query["token"],
                     password: query["password"]))
 

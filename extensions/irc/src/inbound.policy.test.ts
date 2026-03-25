@@ -7,6 +7,7 @@ describe("irc inbound policy", () => {
       configAllowFrom: ["owner"],
       configGroupAllowFrom: [],
       storeAllowList: ["paired-user"],
+      dmPolicy: "pairing",
     });
 
     expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
@@ -17,6 +18,7 @@ describe("irc inbound policy", () => {
       configAllowFrom: ["owner"],
       configGroupAllowFrom: ["group-owner"],
       storeAllowList: ["paired-user"],
+      dmPolicy: "pairing",
     });
 
     expect(resolved.effectiveGroupAllowFrom).toEqual(["group-owner"]);
@@ -27,6 +29,7 @@ describe("irc inbound policy", () => {
       configAllowFrom: ["owner"],
       configGroupAllowFrom: [],
       storeAllowList: ["paired-user"],
+      dmPolicy: "pairing",
     });
 
     expect(resolved.effectiveGroupAllowFrom).toEqual([]);

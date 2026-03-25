@@ -12,7 +12,7 @@ struct AssistantTextSegment: Identifiable {
 }
 
 enum AssistantTextParser {
-    static func segments(from raw: String) -> [AssistantTextSegment] {
+    static func segments(from raw: String, includeThinking: Bool = true) -> [AssistantTextSegment] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard raw.contains("<") else {
@@ -54,11 +54,23 @@ enum AssistantTextParser {
             return [AssistantTextSegment(kind: .response, text: trimmed)]
         }
 
-        return segments
+        if includeThinking {
+            return segments
+        }
+
+        return segments.filter { $0.kind == .response }
+    }
+
+    static func visibleSegments(from raw: String) -> [AssistantTextSegment] {
+        self.segments(from: raw, includeThinking: false)
+    }
+
+    static func hasVisibleContent(in raw: String, includeThinking: Bool) -> Bool {
+        !self.segments(from: raw, includeThinking: includeThinking).isEmpty
     }
 
     static func hasVisibleContent(in raw: String) -> Bool {
-        !self.segments(from: raw).isEmpty
+        self.hasVisibleContent(in: raw, includeThinking: false)
     }
 
     private enum TagKind {

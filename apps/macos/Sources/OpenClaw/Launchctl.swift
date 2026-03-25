@@ -1,7 +1,7 @@
 import Foundation
 
 enum Launchctl {
-    struct Result: Sendable {
+    struct Result {
         let status: Int32
         let output: String
     }
@@ -26,7 +26,7 @@ enum Launchctl {
     }
 }
 
-struct LaunchAgentPlistSnapshot: Equatable, Sendable {
+struct LaunchAgentPlistSnapshot: Equatable {
     let programArguments: [String]
     let environment: [String: String]
     let stdoutPath: String?

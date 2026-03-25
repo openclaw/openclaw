@@ -6,7 +6,55 @@ type HighlightTheme = Record<string, (text: string) => string>;
  * Syntax highlighting theme for code blocks.
  * Uses chalk functions to style different token types.
  */
-export function createSyntaxTheme(fallback: (text: string) => string): HighlightTheme {
+export function createSyntaxTheme(
+  fallback: (text: string) => string,
+  light = false,
+): HighlightTheme {
+  if (light) {
+    return {
+      keyword: chalk.hex("#AF00DB"),
+      built_in: chalk.hex("#267F99"),
+      type: chalk.hex("#267F99"),
+      literal: chalk.hex("#0000FF"),
+      number: chalk.hex("#098658"),
+      string: chalk.hex("#A31515"),
+      regexp: chalk.hex("#811F3F"),
+      symbol: chalk.hex("#098658"),
+      class: chalk.hex("#267F99"),
+      function: chalk.hex("#795E26"),
+      title: chalk.hex("#795E26"),
+      params: chalk.hex("#001080"),
+      comment: chalk.hex("#008000"),
+      doctag: chalk.hex("#008000"),
+      meta: chalk.hex("#001080"),
+      "meta-keyword": chalk.hex("#AF00DB"),
+      "meta-string": chalk.hex("#A31515"),
+      section: chalk.hex("#795E26"),
+      tag: chalk.hex("#800000"),
+      name: chalk.hex("#001080"),
+      attr: chalk.hex("#C50000"),
+      attribute: chalk.hex("#C50000"),
+      variable: chalk.hex("#001080"),
+      bullet: chalk.hex("#795E26"),
+      code: chalk.hex("#A31515"),
+      emphasis: chalk.italic,
+      strong: chalk.bold,
+      formula: chalk.hex("#AF00DB"),
+      link: chalk.hex("#267F99"),
+      quote: chalk.hex("#008000"),
+      addition: chalk.hex("#098658"),
+      deletion: chalk.hex("#A31515"),
+      "selector-tag": chalk.hex("#800000"),
+      "selector-id": chalk.hex("#800000"),
+      "selector-class": chalk.hex("#800000"),
+      "selector-attr": chalk.hex("#800000"),
+      "selector-pseudo": chalk.hex("#800000"),
+      "template-tag": chalk.hex("#AF00DB"),
+      "template-variable": chalk.hex("#001080"),
+      default: fallback,
+    };
+  }
+
   return {
     keyword: chalk.hex("#C586C0"), // purple - if, const, function, etc.
     built_in: chalk.hex("#4EC9B0"), // teal - console, Math, etc.

@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { loadConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -13,14 +14,20 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
 const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
-const DEFAULT_CLAUDE_ARGS = ["-p", "--output-format", "json", "--dangerously-skip-permissions"];
+const DEFAULT_CLAUDE_ARGS = [
+  "-p",
+  "--output-format",
+  "json",
+  "--permission-mode",
+  "bypassPermissions",
+];
 const DEFAULT_CODEX_ARGS = [
   "exec",
   "--json",
@@ -121,38 +128,46 @@ async function getFreeGatewayPort(): Promise<number> {
 
 async function connectClient(params: { url: string; token: string }) {
   return await new Promise<GatewayClient>((resolve, reject) => {
-    let settled = false;
-    const stop = (err?: Error, client?: GatewayClient) => {
-      if (settled) {
+    let done = false;
+    const finish = (result: { client?: GatewayClient; error?: Error }) => {
+      if (done) {
         return;
       }
-      settled = true;
-      clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(client as GatewayClient);
+      done = true;
+      clearTimeout(connectTimeout);
+      if (result.error) {
+        reject(result.error);
+        return;
       }
+      resolve(result.client as GatewayClient);
     };
+
+    const failWithClose = (code: number, reason: string) =>
+      finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
+
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientVersion: "dev",
       mode: "test",
-      onHelloOk: () => stop(undefined, client),
-      onConnectError: (err) => stop(err),
-      onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+      onHelloOk: () => finish({ client }),
+      onConnectError: (error) => finish({ error }),
+      onClose: failWithClose,
     });
-    const timer = setTimeout(() => stop(new Error("gateway connect timeout")), 10_000);
-    timer.unref();
+
+    const connectTimeout = setTimeout(
+      () => finish({ error: new Error("gateway connect timeout") }),
+      10_000,
+    );
+    connectTimeout.unref();
     client.start();
   });
 }
 
 describeLive("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
+    clearRuntimeConfigSnapshot();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
       token: process.env.OPENCLAW_GATEWAY_TOKEN,
@@ -371,6 +386,7 @@ describeLive("gateway live (cli backend)", () => {
         }
       }
     } finally {
+      clearRuntimeConfigSnapshot();
       client.stop();
       await server.close();
       await fs.rm(tempDir, { recursive: true, force: true });

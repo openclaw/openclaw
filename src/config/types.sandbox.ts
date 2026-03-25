@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type SandboxDockerSettings = {
   /** Docker image to use for sandbox containers. */
   image?: string;
@@ -17,7 +19,7 @@ export type SandboxDockerSettings = {
   capDrop?: string[];
   /** Extra environment variables for sandbox exec. */
   env?: Record<string, string>;
-  /** Optional setup command run once after container creation. */
+  /** Optional setup command run once after container creation (array entries are joined by newline). */
   setupCommand?: string;
   /** Limit container PIDs (0 = Docker default). */
   pidsLimit?: number;
@@ -93,4 +95,29 @@ export type SandboxPruneSettings = {
   idleHours?: number;
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
+};
+
+export type SandboxSshSettings = {
+  /** SSH target in user@host[:port] form. */
+  target?: string;
+  /** SSH client command. Default: "ssh". */
+  command?: string;
+  /** Absolute remote root used for per-scope workspaces. */
+  workspaceRoot?: string;
+  /** Enforce host-key verification. Default: true. */
+  strictHostKeyChecking?: boolean;
+  /** Allow OpenSSH host-key updates. Default: true. */
+  updateHostKeys?: boolean;
+  /** Existing private key path on the host. */
+  identityFile?: string;
+  /** Existing SSH certificate path on the host. */
+  certificateFile?: string;
+  /** Existing known_hosts file path on the host. */
+  knownHostsFile?: string;
+  /** Inline or SecretRef-backed private key contents. */
+  identityData?: SecretInput;
+  /** Inline or SecretRef-backed SSH certificate contents. */
+  certificateData?: SecretInput;
+  /** Inline or SecretRef-backed known_hosts contents. */
+  knownHostsData?: SecretInput;
 };
