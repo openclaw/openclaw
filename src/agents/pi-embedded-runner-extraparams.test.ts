@@ -1940,20 +1940,20 @@ describe("applyExtraParamsToAgent", () => {
     expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("maps MiniMax M2.1 /fast to the matching highspeed model", () => {
+  it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {
     const resolvedModelId = runResolvedModelIdCase({
       applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.1",
+      applyModelId: "MiniMax-M2.7",
       extraParamsOverride: { fastMode: true },
       model: {
         api: "anthropic-messages",
         provider: "minimax",
-        id: "MiniMax-M2.1",
+        id: "MiniMax-M2.7",
         baseUrl: "https://api.minimax.io/anthropic",
       } as Model<"anthropic-messages">,
     });
 
-    expect(resolvedModelId).toBe("MiniMax-M2.1-highspeed");
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
   it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {
