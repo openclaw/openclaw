@@ -12,6 +12,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
 import {
+  buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
@@ -1986,5 +1987,56 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
+  });
+});
+
+describe("buildGatewaySessionRow — system event origin labels (#54661)", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as OpenClawConfig;
+
+  const makeStore = (entry: SessionEntry): Record<string, SessionEntry> => ({
+    "agent:main:main": entry,
+  });
+
+  test.each([
+    { label: "heartbeat", provider: "heartbeat" },
+    { label: "cron-event", provider: "cron-event" },
+    { label: "exec-event", provider: "exec-event" },
+  ])("does not expose $label as displayName for main session", ({ label }) => {
+    const entry: SessionEntry = {
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      origin: { label, provider: label },
+    } as unknown as SessionEntry;
+
+    const row = buildGatewaySessionRow({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(entry),
+      key: "agent:main:main",
+      entry,
+    });
+
+    expect(row.displayName).toBeUndefined();
+  });
+
+  test("preserves a real user-derived origin label as displayName fallback", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      origin: { label: "Alice" },
+    } as unknown as SessionEntry;
+
+    const row = buildGatewaySessionRow({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(entry),
+      key: "agent:main:main",
+      entry,
+    });
+
+    expect(row.displayName).toBe("Alice");
   });
 });

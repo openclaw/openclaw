@@ -41,8 +41,15 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
+// Providers used by internal scheduler/heartbeat runs — not real user conversations.
+// Origin labels derived from these should not be persisted on the session (#54661).
+const SYSTEM_EVENT_PROVIDERS = new Set(["heartbeat", "cron-event", "exec-event"]);
+
 export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
-  const label = resolveConversationLabel(ctx)?.trim();
+  const isSystemProvider = SYSTEM_EVENT_PROVIDERS.has(ctx.Provider?.trim().toLowerCase() ?? "");
+  // System events are scheduler-driven; their From/sender value is not a meaningful
+  // conversation label and must not overwrite the session's origin.label.
+  const label = isSystemProvider ? undefined : resolveConversationLabel(ctx)?.trim();
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
     ctx.Surface ||
