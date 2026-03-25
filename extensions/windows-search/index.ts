@@ -37,7 +37,13 @@ export default {
           ),
         }),
         async execute(_toolCallId, params) {
-          const { query, limit = 20, extension, scope, days_ago } = params as {
+          const {
+            query,
+            limit = 20,
+            extension,
+            scope,
+            days_ago,
+          } = params as {
             query: string;
             limit?: number;
             extension?: string;
@@ -51,7 +57,10 @@ export default {
               code: "unsupported_platform",
               message: "This tool is only available on Windows.",
             };
-            return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+            return {
+              content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+              details: payload,
+            };
           }
 
           const safeQuery = query.replace(/"/g, '""').replace(/'/g, "''");
@@ -70,7 +79,7 @@ export default {
             typeof days_ago === "number" && Number.isFinite(days_ago)
               ? Math.max(0, Math.min(3650, Math.floor(days_ago)))
               : 0;
-          
+
           const psScript = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
@@ -130,7 +139,7 @@ try {
               ["-NoProfile", "-Command", inlineScript],
               { maxBuffer: 1024 * 1024 * 10, encoding: "utf8" },
             );
-            
+
             if (stdout.includes("ERROR:WSEARCH_NOT_RUNNING")) {
               const payload = {
                 status: "error",
@@ -138,7 +147,10 @@ try {
                 message: "Windows Search service is not running (WSearch).",
                 hint: "Open services.msc → start Windows Search → try again.",
               };
-              return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+              return {
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                details: payload,
+              };
             }
 
             if (stdout.includes("ERROR:ADODB_FAILED")) {
@@ -148,7 +160,10 @@ try {
                 message: "Failed to query the Windows Search Index (Search.CollatorDSO).",
                 hint: "Open Indexing Options → check status → Advanced → Rebuild (if needed).",
               };
-              return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+              return {
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                details: payload,
+              };
             }
 
             const files = stdout
@@ -156,7 +171,7 @@ try {
               .split(/\r?\n/)
               .map((f) => f.trim())
               .filter((f) => f && !f.startsWith("ERROR:"));
-            
+
             const effective = {
               limit: safeLimit,
               extension: normalizedExtension || undefined,
@@ -172,7 +187,10 @@ try {
                 files: [] as string[],
                 effective,
               };
-              return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+              return {
+                content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+                details: payload,
+              };
             }
 
             const payload = {
@@ -182,7 +200,10 @@ try {
               files,
               effective,
             };
-            return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+            return {
+              content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+              details: payload,
+            };
           } catch (err: any) {
             api.logger.warn(`Windows search failed: ${err.message}`);
             const payload = {
@@ -190,7 +211,10 @@ try {
               code: "search_failed",
               message: String(err?.message ?? err),
             };
-            return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: payload };
+            return {
+              content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+              details: payload,
+            };
           }
         },
       },
