@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
-import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import {
-  formatEffectiveSandboxToolPolicyBlockedMessage,
-  isToolAllowedBySandboxToolPolicy,
-  resolveEffectiveSandboxToolPolicyForAgent,
-} from "./tool-policy-sandbox.js";
+  formatSandboxToolPolicyBlockedMessage,
+  resolveSandboxRuntimeStatus,
+} from "./runtime-status.js";
+import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 
-describe("tool-policy-sandbox", () => {
+describe("sandbox/tool-policy", () => {
   it("merges sandbox alsoAllow into the default sandbox allowlist", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -30,7 +29,7 @@ describe("tool-policy-sandbox", () => {
       },
     };
 
-    const resolved = resolveEffectiveSandboxToolPolicyForAgent(cfg, "tavern");
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "tavern");
     expect(resolved.allow).toContain("message");
     expect(resolved.allow).toContain("tts");
     expect(resolved.sources.allow).toEqual({
@@ -55,14 +54,17 @@ describe("tool-policy-sandbox", () => {
       },
     };
 
-    const resolved = resolveEffectiveSandboxToolPolicyForAgent(cfg, "main");
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toContain("browser");
     expect(resolved.deny).not.toContain("browser");
     expect(
-      isToolAllowedBySandboxToolPolicy("browser", {
-        allow: resolved.allow,
-        deny: resolved.deny,
-      }),
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "browser",
+      ),
     ).toBe(true);
   });
 
@@ -83,20 +85,26 @@ describe("tool-policy-sandbox", () => {
       },
     };
 
-    const resolved = resolveEffectiveSandboxToolPolicyForAgent(cfg, "main");
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toEqual([]);
     expect(resolved.deny).not.toContain("browser");
     expect(
-      isToolAllowedBySandboxToolPolicy("read", {
-        allow: resolved.allow,
-        deny: resolved.deny,
-      }),
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "read",
+      ),
     ).toBe(true);
     expect(
-      isToolAllowedBySandboxToolPolicy("browser", {
-        allow: resolved.allow,
-        deny: resolved.deny,
-      }),
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "browser",
+      ),
     ).toBe(true);
   });
 
@@ -158,20 +166,26 @@ describe("tool-policy-sandbox", () => {
       },
     };
 
-    const resolved = resolveEffectiveSandboxToolPolicyForAgent(cfg, "main");
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.deny).toContain("browser");
     expect(resolved.deny).toContain("message");
     expect(
-      isToolAllowedBySandboxToolPolicy("browser", {
-        allow: resolved.allow,
-        deny: resolved.deny,
-      }),
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "browser",
+      ),
     ).toBe(false);
     expect(
-      isToolAllowedBySandboxToolPolicy("message", {
-        allow: resolved.allow,
-        deny: resolved.deny,
-      }),
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "message",
+      ),
     ).toBe(false);
   });
 
@@ -191,7 +205,7 @@ describe("tool-policy-sandbox", () => {
       },
     };
 
-    const browserMessage = formatEffectiveSandboxToolPolicyBlockedMessage({
+    const browserMessage = formatSandboxToolPolicyBlockedMessage({
       cfg,
       sessionKey: "agent:main:main",
       toolName: "browser",
@@ -199,7 +213,7 @@ describe("tool-policy-sandbox", () => {
     expect(browserMessage).toContain('Tool "browser" blocked by sandbox tool policy');
     expect(browserMessage).toContain("tools.sandbox.tools.deny");
 
-    const messageToolMessage = formatEffectiveSandboxToolPolicyBlockedMessage({
+    const messageToolMessage = formatSandboxToolPolicyBlockedMessage({
       cfg,
       sessionKey: "agent:main:main",
       toolName: "message",
