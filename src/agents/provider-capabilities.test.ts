@@ -84,7 +84,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [""],
+      dropThinkingBlockModelHints: ["*"],
     });
     expect(resolveProviderCapabilities("anthropic-vertex")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -97,7 +97,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [""],
+      dropThinkingBlockModelHints: ["*"],
     });
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
       anthropicToolSchemaMode: "native",
@@ -110,7 +110,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [""],
+      dropThinkingBlockModelHints: ["*"],
     });
   });
 
@@ -127,7 +127,7 @@ describe("resolveProviderCapabilities", () => {
       transcriptToolCallIdMode: "default",
       transcriptToolCallIdModelHints: [],
       geminiThoughtSignatureModelHints: [],
-      dropThinkingBlockModelHints: [""],
+      dropThinkingBlockModelHints: ["*"],
     });
   });
 
@@ -197,6 +197,19 @@ describe("resolveProviderCapabilities", () => {
       shouldDropThinkingBlocksForModel({
         provider: "github-copilot",
         modelId: "claude-3.7-sonnet",
+      }),
+    ).toBe(true);
+    // Tests for bot review feedback (undefined, null, empty)
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "openai",
+        modelId: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDropThinkingBlocksForModel({
+        provider: "moonshot",
+        modelId: null,
       }),
     ).toBe(true);
     expect(

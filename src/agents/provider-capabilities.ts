@@ -33,7 +33,7 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   transcriptToolCallIdMode: "default",
   transcriptToolCallIdModelHints: [],
   geminiThoughtSignatureModelHints: [],
-  dropThinkingBlockModelHints: [""],
+  dropThinkingBlockModelHints: ["*"],
 };
 
 const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
@@ -178,6 +178,9 @@ export function sanitizesGeminiThoughtSignatures(
 }
 
 function modelIncludesAnyHint(modelId: string | null | undefined, hints: string[]): boolean {
+  if (hints.includes("*")) {
+    return true;
+  }
   const normalized = (modelId ?? "").toLowerCase();
   return Boolean(normalized) && hints.some((hint) => normalized.includes(hint));
 }
