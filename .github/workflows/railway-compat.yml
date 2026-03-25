@@ -1,0 +1,37 @@
+name: Railway Dockerfile compatibility
+
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile]
+
+jobs:
+  strip-cache-mounts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Strip BuildKit cache mounts from Dockerfile
+        run: |
+          if grep -q '\-\-mount=type=cache' Dockerfile; then
+            sed -i 's/ *--mount=type=cache[^ ]* *\\\?//g' Dockerfile
+            # Clean up any leftover empty RUN continuation lines
+            sed -i '/^RUN \\$/d' Dockerfile
+            # Clean up double backslash-newlines
+            sed -i '/^[[:space:]]*\\$/d' Dockerfile
+            echo "Stripped BuildKit cache mounts from Dockerfile"
+          else
+            echo "No cache mounts found, nothing to do"
+            exit 0
+          fi
+
+      - name: Commit and push if changed
+        run: |
+          git diff --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile
+          git commit -m "auto: strip BuildKit cache mounts for Railway compatibility"
+          git push
