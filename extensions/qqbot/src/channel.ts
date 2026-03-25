@@ -44,7 +44,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     id: "qqbot",
     label: "QQ Bot",
     selectionLabel: "QQ Bot",
-    docsPath: "/docs/channels/qqbot",
+    docsPath: "/channels/qqbot",
     blurb: "Connect to QQ via official QQ Bot API",
     order: 50,
   },
