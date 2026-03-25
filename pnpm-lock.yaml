@@ -499,8 +499,8 @@ importers:
   extensions/msteams:
     dependencies:
       '@microsoft/teams.api':
-        specifier: 2.0.5
-        version: 2.0.5(@microsoft/teams.cards@2.0.5)(@microsoft/teams.common@2.0.5)
+        specifier: 2.0.6
+        version: 2.0.6
       '@microsoft/teams.apps':
         specifier: 2.0.6
         version: 2.0.6
@@ -1922,13 +1922,6 @@ packages:
     resolution: {integrity: sha512-88+n+dvxLI1cjS10UIlKXVYK7TGWbpAnnaDC9fow7ch/hCvdu3dFhJ3tS3/13N9s9+1QFXB4FFuommj+tHJPhQ==}
     engines: {node: '>= 18'}
 
-  '@microsoft/teams.api@2.0.5':
-    resolution: {integrity: sha512-GZ70z038pLjycTDTy/r/mQUdRiuwAUGbyLHPszq+hxpo2HutzuIVfmCUOeGrSDhDPZLaw03PaML3SdqE9R1zZw==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      '@microsoft/teams.cards': 2.0.5
-      '@microsoft/teams.common': 2.0.5
-
   '@microsoft/teams.api@2.0.6':
     resolution: {integrity: sha512-akOEq/VwNL0QQe2luJcD9fMSFLRqdo69ROsIw8351wCSZWYcO5ArH+0LCsJKW5YWF4y7UM7seW0/lXeiwSPgtw==}
     engines: {node: '>=20'}
@@ -1937,16 +1930,8 @@ packages:
     resolution: {integrity: sha512-L6IQNaXfVLIKqVa+bH5pdnFWehLjCofjtChxNBYcNv3hkeKRCw8wGhpjpveKR100etmI2DwTBD3xwb7JejzIRw==}
     engines: {node: '>=20'}
 
-  '@microsoft/teams.cards@2.0.5':
-    resolution: {integrity: sha512-6BI3WKyjrDwJ1OyMo7t6mjfCIwZUeHN+B4p9Sewjk54+9FfTl3bp83OW3zT/rs1YXKhiKPEJ1WrXnNiiw7V9vA==}
-    engines: {node: '>=20'}
-
   '@microsoft/teams.cards@2.0.6':
     resolution: {integrity: sha512-bgynJiAG48EanCxMECt55ktGWQ1bKhi4HqdRyVauAI1aDbqgBozvY/3aJciDpm8Wnn70cou5US+GsNYfin1Qtg==}
-    engines: {node: '>=20'}
-
-  '@microsoft/teams.common@2.0.5':
-    resolution: {integrity: sha512-S2F27BGd2YT6CZnuN/NrtWF2CUO9FMB9Y5oe04YYJSFZNpGbv/KkvUWE5FPqi8P1ag+wj2gvQr3HLZK+ApuXtg==}
     engines: {node: '>=20'}
 
   '@microsoft/teams.common@2.0.6':
@@ -8448,13 +8433,6 @@ snapshots:
 
   '@matrix-org/matrix-sdk-crypto-wasm@18.0.0': {}
 
-  '@microsoft/teams.api@2.0.5(@microsoft/teams.cards@2.0.5)(@microsoft/teams.common@2.0.5)':
-    dependencies:
-      '@microsoft/teams.cards': 2.0.5
-      '@microsoft/teams.common': 2.0.5
-      jwt-decode: 4.0.0
-      qs: 6.14.2
-
   '@microsoft/teams.api@2.0.6':
     dependencies:
       '@microsoft/teams.cards': 2.0.6
@@ -8480,15 +8458,7 @@ snapshots:
       - debug
       - supports-color
 
-  '@microsoft/teams.cards@2.0.5': {}
-
   '@microsoft/teams.cards@2.0.6': {}
-
-  '@microsoft/teams.common@2.0.5':
-    dependencies:
-      axios: 1.13.5
-    transitivePeerDependencies:
-      - debug
 
   '@microsoft/teams.common@2.0.6':
     dependencies:
