@@ -312,6 +312,13 @@ function isBinaryMediaMime(mime?: string): boolean {
   ) {
     return true;
   }
+  // Legacy Microsoft Office binary formats (OLE/CFB container)
+  if (
+    mime === "application/msword" ||
+    mime === "application/x-cfb"
+  ) {
+    return true;
+  }
   if (mime.startsWith("application/vnd.")) {
     // Keep vendor +json/+xml payloads eligible for text extraction while
     // treating the common binary vendor family (Office, archives, etc.) as binary.
