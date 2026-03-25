@@ -3,7 +3,9 @@ import {
   buildMctlConnectStatus,
   clearMctlConnectState,
   decodeJwtSubject,
+  deleteMctlCredentials,
   deleteMctlPendingConnect,
+  type MctlConnectionRecord,
   readMctlCredentials,
   readMctlPendingConnect,
   writeMctlCredentials,
@@ -54,13 +56,103 @@ async function parseJsonResponse(res: Response): Promise<unknown> {
   }
 }
 
+function isExpired(credentials: MctlConnectionRecord | null, now = Date.now()): boolean {
+  if (!credentials?.expiresAt) {
+    return false;
+  }
+  const expiresAtMs = Date.parse(credentials.expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= now;
+}
+
+function isInvalidRefreshError(body: { error_description?: unknown; error?: unknown }): boolean {
+  const error = typeof body.error === "string" ? body.error.toLowerCase() : "";
+  const description =
+    typeof body.error_description === "string" ? body.error_description.toLowerCase() : "";
+  if (error === "invalid_grant" || error === "invalid_token") {
+    return true;
+  }
+  return (
+    description.includes("refresh token") &&
+    (description.includes("invalid") ||
+      description.includes("expired") ||
+      description.includes("revoked"))
+  );
+}
+
+async function refreshMctlCredentials(
+  credentials: MctlConnectionRecord,
+): Promise<MctlConnectionRecord | null> {
+  const refreshToken = credentials.refreshToken.trim();
+  if (!refreshToken) {
+    return credentials;
+  }
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: credentials.clientId,
+  });
+  const tokenRes = await fetch(`${credentials.apiBase}/oauth/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body,
+  });
+  const tokenBody = (await parseJsonResponse(tokenRes)) as {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    scope?: unknown;
+    expires_in?: unknown;
+    error_description?: unknown;
+    error?: unknown;
+  };
+  if (!tokenRes.ok) {
+    if (isInvalidRefreshError(tokenBody)) {
+      await deleteMctlCredentials();
+      return null;
+    }
+    return credentials;
+  }
+  const accessToken =
+    typeof tokenBody.access_token === "string" ? tokenBody.access_token.trim() : "";
+  if (!accessToken) {
+    return credentials;
+  }
+  const expiresIn =
+    typeof tokenBody.expires_in === "number" && Number.isFinite(tokenBody.expires_in)
+      ? tokenBody.expires_in
+      : null;
+  const now = Date.now();
+  const refreshed: MctlConnectionRecord = {
+    ...credentials,
+    accessToken,
+    refreshToken:
+      typeof tokenBody.refresh_token === "string" && tokenBody.refresh_token.trim()
+        ? tokenBody.refresh_token.trim()
+        : credentials.refreshToken,
+    scope:
+      typeof tokenBody.scope === "string" && tokenBody.scope.trim()
+        ? tokenBody.scope
+        : credentials.scope,
+    login: decodeJwtSubject(accessToken) ?? credentials.login,
+    updatedAt: new Date(now).toISOString(),
+    expiresAt: expiresIn ? new Date(now + expiresIn * 1000).toISOString() : credentials.expiresAt,
+  };
+  await writeMctlCredentials(refreshed);
+  return refreshed;
+}
+
 export const mctlHandlers: GatewayRequestHandlers = {
   "mctl.connect.status": async ({ respond }) => {
     const apiBase = resolveMctlApiBase();
-    const [credentials, pending] = await Promise.all([
+    let [credentials, pending] = await Promise.all([
       readMctlCredentials(),
       readMctlPendingConnect(),
     ]);
+    if (!pending && credentials && isExpired(credentials) && credentials.refreshToken.trim()) {
+      credentials = await refreshMctlCredentials(credentials);
+    }
     respond(true, buildMctlConnectStatus({ apiBase, credentials, pending }), undefined);
   },
   "mctl.connect.start": async ({ params, respond }) => {

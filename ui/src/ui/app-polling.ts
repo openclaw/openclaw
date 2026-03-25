@@ -1,13 +1,16 @@
 import type { OpenClawApp } from "./app.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import { loadMctlConnectStatus } from "./controllers/mctl-connect.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 
 type PollingHost = {
   nodesPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  mctlPollInterval: number | null;
   tab: string;
+  connected?: boolean;
 };
 
 export function startNodesPolling(host: PollingHost) {
@@ -66,4 +69,24 @@ export function stopDebugPolling(host: PollingHost) {
   }
   clearInterval(host.debugPollInterval);
   host.debugPollInterval = null;
+}
+
+export function startMctlPolling(host: PollingHost) {
+  if (host.mctlPollInterval != null) {
+    return;
+  }
+  host.mctlPollInterval = window.setInterval(() => {
+    if (host.tab !== "overview" || !host.connected) {
+      return;
+    }
+    void loadMctlConnectStatus(host as unknown as OpenClawApp);
+  }, 10_000);
+}
+
+export function stopMctlPolling(host: PollingHost) {
+  if (host.mctlPollInterval == null) {
+    return;
+  }
+  clearInterval(host.mctlPollInterval);
+  host.mctlPollInterval = null;
 }

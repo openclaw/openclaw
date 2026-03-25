@@ -62,6 +62,7 @@ type SettingsHost = {
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
+  mctlPollInterval: number | null;
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
 };
@@ -166,6 +167,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   themeMediaHandler: null,
   logsPollInterval: null,
   debugPollInterval: null,
+  mctlPollInterval: null,
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
 });
@@ -200,6 +202,16 @@ describe("setTabFromRoute", () => {
 
     setTabFromRoute(host, "chat");
     expect(host.debugPollInterval).toBeNull();
+  });
+
+  it("starts and stops mctl status polling based on the overview tab", () => {
+    const host = createHost("chat");
+
+    setTabFromRoute(host, "overview");
+    expect(host.mctlPollInterval).not.toBeNull();
+
+    setTabFromRoute(host, "chat");
+    expect(host.mctlPollInterval).toBeNull();
   });
 
   it("re-resolves the active palette when only themeMode changes", () => {

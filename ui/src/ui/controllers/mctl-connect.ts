@@ -139,6 +139,7 @@ export async function maybeCompleteMctlConnect(state: MctlConnectState) {
       },
     );
     state.mctlConnectError = null;
+    await loadMctlConnectStatus(state);
   } catch (err) {
     state.mctlConnectError = String(err);
   } finally {
