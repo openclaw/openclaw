@@ -1,13 +1,15 @@
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  collectErrorGraphCandidates,
+  createOutboundRetryRunner,
+  extractErrorCode,
   formatErrorMessage,
-  resolveRetryConfig,
-  retryAsync,
+  readErrorName,
   type RetryConfig,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 
 const log = createSubsystemLogger("gateway/channels/whatsapp").child("send-retry");
 
@@ -18,12 +20,40 @@ export const WHATSAPP_SEND_RETRY_DEFAULTS = {
   jitter: 0.1,
 } satisfies Required<RetryConfig>;
 
-// Only retry clearly transient network errors to avoid duplicate message delivery.
-// Matches both "timeout" and "timed out" (spaced form used by some network libs).
-const WHATSAPP_SEND_RETRY_RE = /timed?\s*out|connect|reset|closed|unavailable|temporarily/i;
+// Only retry clearly transient pre-connect errors to avoid duplicate delivery.
+const WHATSAPP_PRE_CONNECT_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
 
-function shouldRetryWhatsAppSend(err: unknown): boolean {
-  return WHATSAPP_SEND_RETRY_RE.test(formatErrorMessage(err));
+const WHATSAPP_PRE_CONNECT_ERROR_NAMES = new Set(["ConnectTimeoutError"]);
+
+function collectWhatsAppErrorCandidates(err: unknown) {
+  return collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [current.cause, current.reason];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  });
+}
+
+export function isRetryableWhatsAppSendError(err: unknown): boolean {
+  for (const candidate of collectWhatsAppErrorCandidates(err)) {
+    const code = extractErrorCode(candidate)?.trim().toUpperCase();
+    if (code && WHATSAPP_PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const name = readErrorName(candidate);
+    if (name && WHATSAPP_PRE_CONNECT_ERROR_NAMES.has(name)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function withWhatsAppSendRetry<T>(
@@ -31,32 +61,29 @@ export function withWhatsAppSendRetry<T>(
   label: string,
   configRetry: RetryConfig | undefined,
 ): Promise<T> {
-  const resolved = resolveRetryConfig(WHATSAPP_SEND_RETRY_DEFAULTS, configRetry);
-  return retryAsync(fn, {
-    ...resolved,
-    label,
-    shouldRetry: shouldRetryWhatsAppSend,
-    onRetry: (info) => {
+  return createOutboundRetryRunner({
+    defaults: WHATSAPP_SEND_RETRY_DEFAULTS,
+    configRetry,
+    alwaysLogRetries: true,
+    logLabel: "whatsapp",
+    shouldRetry: isRetryableWhatsAppSendError,
+    logger: log,
+    formatRetryMessage: (info) => {
       const maxRetries = Math.max(1, info.maxAttempts - 1);
-      log.warn(
-        `whatsapp send retry ${info.attempt}/${maxRetries} for ${info.label ?? label} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
-      );
+      return `whatsapp send retry ${info.attempt}/${maxRetries} for ${info.label ?? label} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`;
     },
-  });
+  })(fn, label);
 }
 
 // Account-level retry takes precedence; falls back to channel-level.
-// Uses DEFAULT_ACCOUNT_ID as the no-accountId fallback to match the actual send
-// path (resolveWebAccountId in active-listener.ts), ensuring retry config is
-// always read from the same account that will execute the send.
-// Uses case-insensitive lookup via resolveAccountEntry to match WhatsApp account
-// resolution elsewhere.
+// Uses the effective/default WhatsApp account to match the send path.
 export function resolveWhatsAppRetryConfig(
   cfg: OpenClawConfig | undefined,
   accountId?: string | null,
 ): RetryConfig | undefined {
   const root = cfg?.channels?.whatsapp;
-  const effectiveAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const effectiveAccountId =
+    accountId?.trim() || (cfg ? resolveDefaultWhatsAppAccountId(cfg) : undefined);
   if (effectiveAccountId) {
     const accountCfg = resolveAccountEntry(root?.accounts, effectiveAccountId);
     if (accountCfg?.retry !== undefined) return accountCfg.retry;

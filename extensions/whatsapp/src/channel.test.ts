@@ -180,6 +180,41 @@ describe("whatsappPlugin outbound sendMedia", () => {
     );
     expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-1" });
   });
+
+  it("retries injected sendWhatsApp deps on safe pre-connect errors", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("dns lookup failed"), { code: "ENOTFOUND" }))
+      .mockResolvedValue({
+        messageId: "msg-2",
+        toJid: "15551234567@s.whatsapp.net",
+      });
+
+    const outbound = whatsappPlugin.outbound;
+    if (!outbound?.sendMedia) {
+      throw new Error("whatsapp outbound sendMedia is unavailable");
+    }
+
+    const result = await outbound.sendMedia({
+      cfg: {
+        channels: {
+          whatsapp: {
+            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 },
+          },
+        },
+      } as never,
+      to: "whatsapp:+15551234567",
+      text: "photo",
+      mediaUrl: "/tmp/workspace/photo.png",
+      mediaLocalRoots: ["/tmp/workspace"],
+      accountId: "default",
+      deps: { sendWhatsApp },
+      gifPlayback: false,
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-2" });
+  });
 });
 
 describe("whatsappPlugin outbound sendPoll", () => {

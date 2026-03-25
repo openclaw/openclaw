@@ -18,7 +18,13 @@ vi.mock("./send.js", () => ({
 let whatsappOutbound: typeof import("./outbound-adapter.js").whatsappOutbound;
 
 describe("whatsappOutbound sendPoll", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    hoisted.sendPollWhatsApp.mockReset();
+    hoisted.sendPollWhatsApp.mockResolvedValue({
+      messageId: "poll-1",
+      toJid: "1555@s.whatsapp.net",
+    });
     ({ whatsappOutbound } = await import("./outbound-adapter.js"));
   });
 
@@ -52,5 +58,30 @@ describe("whatsappOutbound sendPoll", () => {
       messageId: "poll-1",
       toJid: "1555@s.whatsapp.net",
     });
+  });
+
+  it("does not retry poll sends on permanent errors", async () => {
+    hoisted.sendPollWhatsApp.mockRejectedValueOnce(new Error("forbidden"));
+
+    await expect(
+      whatsappOutbound.sendPoll!({
+        cfg: {
+          channels: {
+            whatsapp: {
+              retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0 },
+            },
+          },
+        } as OpenClawConfig,
+        to: "+1555",
+        poll: {
+          question: "Lunch?",
+          options: ["Pizza", "Sushi"],
+          maxSelections: 1,
+        },
+        accountId: "work",
+      }),
+    ).rejects.toThrow("forbidden");
+
+    expect(hoisted.sendPollWhatsApp).toHaveBeenCalledTimes(1);
   });
 });

@@ -126,6 +126,49 @@ describe("web outbound", () => {
     ).rejects.toThrow(/account: work/);
   });
 
+  it("uses channels.whatsapp.defaultAccount when accountId is omitted", async () => {
+    const primarySendMessage = vi.fn(async () => ({ messageId: "primary-msg" }));
+    const primarySendPoll = vi.fn(async () => ({ messageId: "primary-poll" }));
+    const primarySendReaction = vi.fn(async () => {});
+    const primarySendComposingTo = vi.fn(async () => {});
+
+    setActiveWebListener(null);
+    setActiveWebListener("primary", {
+      sendComposingTo: primarySendComposingTo,
+      sendMessage: primarySendMessage,
+      sendPoll: primarySendPoll,
+      sendReaction: primarySendReaction,
+    });
+
+    const cfg = {
+      channels: {
+        whatsapp: {
+          defaultAccount: "primary",
+          accounts: {
+            primary: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg });
+    await sendPollWhatsApp(
+      "+1555",
+      { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 1 },
+      { verbose: false, cfg },
+    );
+
+    expect(primarySendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(primarySendMessage).toHaveBeenCalled();
+    expect(primarySendPoll).toHaveBeenCalledWith("+1555", {
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      durationSeconds: undefined,
+      durationHours: undefined,
+    });
+  });
+
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({

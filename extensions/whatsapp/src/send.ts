@@ -8,7 +8,11 @@ import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
+import {
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppMediaMaxBytes,
+} from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
@@ -38,18 +42,18 @@ export async function sendMessageWhatsApp(
   }
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active, accountId: resolvedAccountId } = requireActiveWebListener(
-    options.accountId,
-  );
   const cfg = options.cfg ?? loadConfig();
+  const requestedAccountId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const { listener: active, accountId: resolvedAccountId } =
+    requireActiveWebListener(requestedAccountId);
   const account = resolveWhatsAppAccount({
     cfg,
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
   text = markdownToWhatsApp(text);
@@ -171,7 +175,9 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
-  const { listener: active } = requireActiveWebListener(options.accountId);
+  const cfg = options.cfg ?? loadConfig();
+  const requestedAccountId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  const { listener: active } = requireActiveWebListener(requestedAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
     module: "web-outbound",
