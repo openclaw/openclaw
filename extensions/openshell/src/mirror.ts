@@ -4,19 +4,27 @@ import path from "node:path";
 export async function replaceDirectoryContents(params: {
   sourceDir: string;
   targetDir: string;
+  /** Top-level directory names to exclude from sync (preserved in target, skipped from source). */
+  excludeDirs?: string[];
 }): Promise<void> {
+  const excluded = new Set(params.excludeDirs ?? []);
   await fs.mkdir(params.targetDir, { recursive: true });
   const existing = await fs.readdir(params.targetDir);
   await Promise.all(
-    existing.map((entry) =>
-      fs.rm(path.join(params.targetDir, entry), {
-        recursive: true,
-        force: true,
-      }),
-    ),
+    existing
+      .filter((entry) => !excluded.has(entry))
+      .map((entry) =>
+        fs.rm(path.join(params.targetDir, entry), {
+          recursive: true,
+          force: true,
+        }),
+      ),
   );
   const sourceEntries = await fs.readdir(params.sourceDir);
   for (const entry of sourceEntries) {
+    if (excluded.has(entry)) {
+      continue;
+    }
     await fs.cp(path.join(params.sourceDir, entry), path.join(params.targetDir, entry), {
       recursive: true,
       force: true,
