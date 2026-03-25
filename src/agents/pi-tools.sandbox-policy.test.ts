@@ -1,19 +1,29 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
+import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
-function listToolNames(cfg: OpenClawConfig): string[] {
+function listToolNames(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  sandboxAgentId?: string;
+}): string[] {
   const workspaceDir = "/tmp/openclaw-sandbox-policy";
+  const sessionKey = params.sessionKey ?? "agent:tavern:main";
+  const sandboxAgentId = params.sandboxAgentId ?? params.agentId ?? "tavern";
   const sandbox = createPiToolsSandboxContext({
     workspaceDir,
     fsBridge: createHostSandboxFsBridge(workspaceDir),
+    sessionKey,
+    tools: resolveSandboxConfigForAgent(params.cfg, sandboxAgentId).tools,
   });
   return createOpenClawCodingTools({
-    config: cfg,
-    agentId: "tavern",
-    sessionKey: "agent:tavern:main",
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey,
     sandbox,
     workspaceDir,
   })
@@ -24,24 +34,26 @@ function listToolNames(cfg: OpenClawConfig): string[] {
 describe("pi-tools sandbox policy", () => {
   it("re-exposes omitted sandbox tools via sandbox alsoAllow", () => {
     const names = listToolNames({
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        list: [
-          {
-            id: "tavern",
-            tools: {
-              sandbox: {
-                tools: {
-                  alsoAllow: ["message", "tts"],
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+          list: [
+            {
+              id: "tavern",
+              tools: {
+                sandbox: {
+                  tools: {
+                    alsoAllow: ["message", "tts"],
+                  },
                 },
               },
             },
-          },
-        ],
-      },
-    } as OpenClawConfig);
+          ],
+        },
+      } as OpenClawConfig,
+    });
 
     expect(names).toContain("message");
     expect(names).toContain("tts");
@@ -49,41 +61,78 @@ describe("pi-tools sandbox policy", () => {
 
   it("re-enables default-denied sandbox tools when explicitly allowed", () => {
     const names = listToolNames({
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+          list: [{ id: "tavern" }],
         },
-        list: [{ id: "tavern" }],
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser"],
+        tools: {
+          sandbox: {
+            tools: {
+              allow: ["browser"],
+            },
           },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+    });
 
     expect(names).toContain("browser");
   });
 
-  it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
-    const names = listToolNames({
+  it("prefers the resolved sandbox context policy for legacy main session aliases", () => {
+    const cfg = {
       agents: {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [{ id: "tavern" }],
+        list: [
+          {
+            id: "tavern",
+            default: true,
+            tools: {
+              sandbox: {
+                tools: {
+                  allow: ["browser"],
+                  alsoAllow: ["message"],
+                },
+              },
+            },
+          },
+        ],
       },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: [],
-            alsoAllow: ["browser"],
+    } as OpenClawConfig;
+
+    const names = listToolNames({
+      cfg,
+      sessionKey: "main",
+      sandboxAgentId: "tavern",
+    });
+
+    expect(names).toContain("browser");
+    expect(names).toContain("message");
+  });
+
+  it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
+    const names = listToolNames({
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+          list: [{ id: "tavern" }],
+        },
+        tools: {
+          sandbox: {
+            tools: {
+              allow: [],
+              alsoAllow: ["browser"],
+            },
           },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+    });
 
     expect(names).toContain("browser");
     expect(names).toContain("read");
@@ -91,21 +140,23 @@ describe("pi-tools sandbox policy", () => {
 
   it("keeps explicit sandbox deny precedence over explicit allow", () => {
     const names = listToolNames({
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
+      cfg: {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+          list: [{ id: "tavern" }],
         },
-        list: [{ id: "tavern" }],
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser", "message"],
-            deny: ["browser"],
+        tools: {
+          sandbox: {
+            tools: {
+              allow: ["browser", "message"],
+              deny: ["browser"],
+            },
           },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+    });
 
     expect(names).not.toContain("browser");
     expect(names).toContain("message");

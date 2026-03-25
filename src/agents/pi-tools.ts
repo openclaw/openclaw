@@ -51,7 +51,6 @@ import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "./tool-policy-pipeline.js";
-import { resolveEffectiveSandboxToolPolicyForAgent } from "./tool-policy-sandbox.js";
 import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
@@ -301,11 +300,10 @@ export function createOpenClawCodingTools(options?: {
     modelProvider: options?.modelProvider,
     modelId: options?.modelId,
   });
-  const sandboxToolPolicy = sandbox
-    ? options?.config
-      ? resolveEffectiveSandboxToolPolicyForAgent(options.config, agentId)
-      : sandbox.tools
-    : undefined;
+  // Prefer the already-resolved sandbox context policy. Recomputing from
+  // sessionKey/config can lose the real sandbox agent when callers pass a
+  // legacy alias like `main` instead of an agent session key.
+  const sandboxToolPolicy = sandbox?.tools;
   const groupPolicy = resolveGroupToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
