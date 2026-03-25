@@ -55,7 +55,10 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
-import { loadToolsEffective as loadToolsEffectiveInternal } from "./controllers/agents.ts";
+import {
+  loadToolsEffective as loadToolsEffectiveInternal,
+  refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
+} from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -486,6 +489,10 @@ export class OpenClawApp extends LitElement {
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;
+        case "refresh-tools-effective": {
+          void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
+          break;
+        }
       }
     };
     document.addEventListener("keydown", this.globalKeydownHandler);

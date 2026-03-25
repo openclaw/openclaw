@@ -22,9 +22,11 @@ import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controlle
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import {
+  buildToolsEffectiveRequestKey,
   loadAgents,
   loadToolsCatalog,
   loadToolsEffective,
+  refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
 } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
@@ -1081,7 +1083,10 @@ export function renderApp(state: AppViewState) {
                         void loadToolsCatalog(state, resolvedAgentId);
                       }
                       if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
-                        const toolsRequestKey = `${resolvedAgentId}:${state.sessionKey}`;
+                        const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
+                          agentId: resolvedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
                         if (
                           state.toolsEffectiveResultKey !== toolsRequestKey ||
                           state.toolsEffectiveError
@@ -1237,22 +1242,23 @@ export function renderApp(state: AppViewState) {
                     const basePath = ["agents", "list", index, "model"];
                     if (!modelId) {
                       removeConfigFormValue(state, basePath);
-                      return;
-                    }
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state, basePath, next);
                     } else {
-                      updateConfigFormValue(state, basePath, modelId);
+                      const entry = Array.isArray(list)
+                        ? (list[index] as { model?: unknown })
+                        : undefined;
+                      const existing = entry?.model;
+                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                        const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                        const next = {
+                          primary: modelId,
+                          ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                        };
+                        updateConfigFormValue(state, basePath, next);
+                      } else {
+                        updateConfigFormValue(state, basePath, modelId);
+                      }
                     }
+                    void refreshVisibleToolsEffectiveForCurrentSession(state);
                   },
                   onModelFallbacksChange: (agentId, fallbacks) => {
                     const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
