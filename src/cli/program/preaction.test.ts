@@ -202,6 +202,8 @@ describe("registerPreActionHooks", () => {
   }
 
   it("handles debug mode and plugin-required command preaction", async () => {
+    const processTitleSetSpy = vi.spyOn(process, "title", "set");
+
     await runPreAction({
       parseArgv: ["status"],
       processArgv: ["node", "openclaw", "status", "--debug"],
@@ -214,7 +216,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
-    expect(process.title).toBe("openclaw-status");
+    expect(processTitleSetSpy).toHaveBeenCalledWith("openclaw-status");
 
     vi.clearAllMocks();
     await runPreAction({
@@ -229,6 +231,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["message", "send"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    processTitleSetSpy.mockRestore();
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
