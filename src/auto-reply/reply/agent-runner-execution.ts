@@ -7,7 +7,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -78,6 +78,38 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+/**
+ * Build a human-friendly rate-limit message from a FallbackSummaryError.
+ * Includes a countdown when the soonest cooldown expiry is known.
+ */
+function buildRateLimitCooldownMessage(err: unknown): string {
+  if (!isFallbackSummaryError(err)) {
+    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  }
+  const expiry = err.soonestCooldownExpiry;
+  const now = Date.now();
+  if (typeof expiry === "number" && expiry > now) {
+    const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
+    if (secsLeft <= 60) {
+      return `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`;
+    }
+    const minsLeft = Math.ceil(secsLeft / 60);
+    return `⚠️ Rate-limited — ready in ~${minsLeft} min. Please try again shortly.`;
+  }
+  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+}
+
+function isPureTransientRateLimitSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => {
+      const reason = attempt.reason;
+      return reason === "rate_limit" || reason === "overloaded";
+    })
+  );
+}
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
@@ -657,17 +689,26 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      // Only classify as rate-limit when we have concrete evidence from the
+      // underlying error. FallbackSummaryError messages embed per-attempt
+      // reason labels like `(rate_limit)`, so string-matching the summary text
+      // would misclassify mixed-cause exhaustion as a pure transient cooldown.
+      const isRateLimit = isFallbackSummaryError(err)
+        ? isPureTransientRateLimitSummary(err)
+        : isRateLimitErrorMessage(message);
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isContextOverflow
-          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : isRoleOrderingError
-            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+        : isRateLimit
+          ? buildRateLimitCooldownMessage(err)
+          : isContextOverflow
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+            : isRoleOrderingError
+              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",

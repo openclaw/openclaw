@@ -661,7 +661,7 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (candidate && isProfileInCooldown(authStore, candidate, undefined, modelId)) {
             nextIndex += 1;
             continue;
           }
@@ -688,7 +688,9 @@ export async function runEmbeddedPiAgent(
         );
         const allAutoProfilesInCooldown =
           autoProfileCandidates.length > 0 &&
-          autoProfileCandidates.every((candidate) => isProfileInCooldown(authStore, candidate));
+          autoProfileCandidates.every((candidate) =>
+            isProfileInCooldown(authStore, candidate, undefined, modelId),
+          );
         const unavailableReason = allAutoProfilesInCooldown
           ? (resolveProfilesUnavailableReason({
               store: authStore,
@@ -704,7 +706,9 @@ export async function runEmbeddedPiAgent(
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
           const inCooldown =
-            candidate && candidate !== lockedProfileId && isProfileInCooldown(authStore, candidate);
+            candidate &&
+            candidate !== lockedProfileId &&
+            isProfileInCooldown(authStore, candidate, undefined, modelId);
           if (inCooldown) {
             if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
               didTransientCooldownProbe = true;
@@ -774,6 +778,7 @@ export async function runEmbeddedPiAgent(
         reason?: AuthProfileFailureReason | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+        modelId?: string;
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
@@ -786,6 +791,7 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
           runId: params.runId,
+          modelId: failure.modelId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -1336,6 +1342,7 @@ export async function runEmbeddedPiAgent(
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
+              modelId,
             });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText);
@@ -1477,6 +1484,7 @@ export async function runEmbeddedPiAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
+                modelId,
               });
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
