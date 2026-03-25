@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../../../src/channels/status-reactions.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -169,14 +169,17 @@ async function processStreamOffDiscordMessage() {
   await processDiscordMessage(ctx as any);
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   vi.useRealTimers();
   ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
     await import("./message-handler.test-harness.js"));
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
   ({ processDiscordMessage } = await import("./message-handler.process.js"));
+});
+
+beforeEach(() => {
+  vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
   editMessageDiscord.mockClear();
