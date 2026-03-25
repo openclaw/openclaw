@@ -275,10 +275,18 @@ export function registerCronEditCommand(cron: Command) {
               delivery.channel = channel ? channel : undefined;
             }
             if (typeof opts.to === "string" || typeof opts.threadId === "string") {
-              const toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
+              }
+              let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
+              // When --thread-id is provided without --to, fetch existing job's delivery target
+              if (threadId && !toRaw) {
+                const listed = (await callGatewayFromCli("cron.list", opts, {
+                  includeDisabled: true,
+                })) as { jobs?: CronJob[] } | null;
+                const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+                toRaw = (existing?.delivery as Record<string, string> | undefined)?.to ?? "";
               }
               const to = threadId ? toRaw.replace(/:(?:topic:)?\d+$/, "") : toRaw;
               if (to && threadId) {
