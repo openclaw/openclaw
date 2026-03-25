@@ -1,5 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import { streamSimpleOpenAICompletions } from "@mariozechner/pi-ai/openai-completions";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
@@ -53,6 +54,13 @@ function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model<Api>>
   expect(supportsUsageInStreaming(normalized)).toBe(false);
 }
 
+function expectSupportsUsageInStreamingForcedOn(overrides?: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsUsageInStreaming(normalized)).toBe(true);
+}
+
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -60,9 +68,118 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
+function decodeBodyText(body: unknown): string {
+  if (!body) {
+    return "";
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body).toString("utf8");
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(body)).toString("utf8");
+  }
+  return "";
+}
+
+function buildSseResponse(events: unknown[]): Response {
+  const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse));
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function installOpenAiCompletionsStreamMock(params: {
+  baseUrl: string;
+  onRequest: (body: Record<string, unknown>) => void;
+}): { restore: () => void } {
+  const originalFetch = globalThis.fetch;
+  const completionsUrl = `${params.baseUrl}/chat/completions`;
+  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (url === completionsUrl) {
+      const bodyText =
+        typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+          ? decodeBodyText((init as { body?: unknown }).body)
+          : input instanceof Request
+            ? await input.clone().text()
+            : "";
+      const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+      params.onRequest(parsed);
+      return buildSseResponse([
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }],
+        },
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        },
+        {
+          id: "chatcmpl_test",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "custom-model",
+          choices: [],
+          usage: { prompt_tokens: 72, completion_tokens: 8, total_tokens: 80 },
+        },
+      ]);
+    }
+
+    if (!originalFetch) {
+      throw new Error(`fetch is not available (url=${url})`);
+    }
+    return await originalFetch(input, init);
+  };
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchImpl;
+  return {
+    restore: () => {
+      (globalThis as unknown as { fetch: typeof fetch }).fetch = originalFetch;
+    },
+  };
+}
+
+async function collectDoneMessage(
+  stream: ReturnType<typeof streamSimpleOpenAICompletions>,
+): Promise<AssistantMessage> {
+  for await (const event of stream) {
+    if (event.type === "done") {
+      return event.message;
+    }
+    if (event.type === "error") {
+      throw new Error(event.error.errorMessage ?? "stream failed");
+    }
+  }
+  throw new Error("stream ended without done");
+}
+
+let restoreFetch: (() => void) | undefined;
+
 beforeEach(() => {
   providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
   providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  restoreFetch?.();
+  restoreFetch = undefined;
 });
 
 describe("normalizeModelCompat — Anthropic baseUrl", () => {
@@ -186,6 +303,50 @@ describe("normalizeModelCompat", () => {
       provider: "custom-cpa",
       baseUrl: "https://cpa.example.com/v1",
     });
+  });
+
+  it("defaults supportsUsageInStreaming on for Scaleway AI compatible endpoints", () => {
+    expectSupportsUsageInStreamingForcedOn({
+      provider: "custom-scaleway",
+      baseUrl: "https://api.scaleway.ai/v1",
+    });
+  });
+
+  it("defaults supportsUsageInStreaming on for DashScope compatible-mode endpoints", () => {
+    expectSupportsUsageInStreamingForcedOn({
+      provider: "custom-bailian",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  });
+
+  it.each([
+    {
+      label: "LM Studio",
+      provider: "custom-lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    },
+    {
+      label: "LocalAI",
+      provider: "localai",
+      baseUrl: "http://localhost:8080/v1",
+    },
+    {
+      label: "TGI",
+      provider: "custom-tgi",
+      baseUrl: "http://localhost:3000/v1",
+    },
+    {
+      label: "Ollama /v1",
+      provider: "custom-ollama",
+      baseUrl: "http://localhost:11434/v1",
+    },
+    {
+      label: "Mistral API",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+    },
+  ])("keeps supportsUsageInStreaming off for %s", ({ provider, baseUrl }) => {
+    expectSupportsUsageInStreamingForcedOff({ provider, baseUrl });
   });
 
   it("forces supportsStrictMode off for z.ai models", () => {
@@ -335,6 +496,52 @@ describe("normalizeModelCompat", () => {
     expect(supportsDeveloperRole(normalized)).toBe(true);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
     expect(supportsStrictMode(normalized)).toBe(true);
+  });
+
+  it("requests streaming usage and records the final usage-only chunk for allowlisted endpoints", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const baseUrl = "https://api.scaleway.ai/v1";
+    restoreFetch = installOpenAiCompletionsStreamMock({
+      baseUrl,
+      onRequest: (body) => {
+        requestBody = body;
+      },
+    }).restore;
+
+    const model = normalizeModelCompat({
+      id: "scw-test",
+      name: "Scaleway Test",
+      api: "openai-completions",
+      provider: "custom-scaleway",
+      baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 1024,
+    }) as Model<"openai-completions">;
+
+    const stream = streamSimpleOpenAICompletions(
+      model,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 0 }],
+        tools: undefined,
+      },
+      {
+        apiKey: "test-key",
+      },
+    );
+
+    const message = await collectDoneMessage(stream);
+
+    expect(requestBody?.stream).toBe(true);
+    expect(requestBody?.stream_options).toEqual({ include_usage: true });
+    expect(message.usage).toMatchObject({
+      input: 72,
+      output: 8,
+      totalTokens: 80,
+    });
   });
 });
 

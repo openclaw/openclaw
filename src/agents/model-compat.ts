@@ -86,6 +86,24 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
   return model.api === "anthropic-messages";
 }
 
+function shouldEnableStreamingUsageByDefault(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    return (
+      host === "api.scaleway.ai" ||
+      ((host === "dashscope.aliyuncs.com" || host === "dashscope-intl.aliyuncs.com") &&
+        path.includes("/compatible-mode/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * pi-ai constructs the Anthropic API endpoint as `${baseUrl}/v1/messages`.
  * If a user configures `baseUrl` with a trailing `/v1` (e.g. the previously
@@ -129,6 +147,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   }
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
+  const defaultStreamingUsage = shouldEnableStreamingUsageByDefault(model.baseUrl);
   const targetStrictMode = compat?.supportsStrictMode ?? false;
   if (
     compat?.supportsDeveloperRole !== undefined &&
@@ -145,12 +164,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
       ? {
           ...compat,
           supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
+          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: defaultStreamingUsage }),
           supportsStrictMode: targetStrictMode,
         }
       : {
           supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
+          supportsUsageInStreaming: defaultStreamingUsage,
           supportsStrictMode: false,
         },
   } as typeof model;
