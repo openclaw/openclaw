@@ -39,24 +39,10 @@ function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): Conf
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockListChannelPlugins.mockReturnValue([
-      {
-        id: "telegram",
-        meta: { label: "Telegram", blurb: "Telegram channel" },
-        configSchema: {
-          schema: {
-            type: "object",
-            properties: {
-              botToken: { type: "string" },
-            },
-          },
-          uiHints: {},
-        },
-      },
-    ]);
+    mockListChannelPlugins.mockReturnValue([]);
   });
 
-  it("uses non-activating plugin loads for valid configs", async () => {
+  it("uses scoped plugin registry channels for valid configs", async () => {
     mockReadConfigFileSnapshot.mockResolvedValueOnce(
       makeSnapshot({
         valid: true,
@@ -74,6 +60,26 @@ describe("readBestEffortRuntimeConfigSchema", () => {
             type: "object",
             properties: {
               mode: { type: "string" },
+            },
+          },
+        },
+      ],
+      channels: [
+        {
+          pluginId: "telegram",
+          pluginName: "Telegram",
+          source: "bundled",
+          plugin: {
+            id: "telegram",
+            meta: { label: "Telegram", blurb: "Telegram channel" },
+            configSchema: {
+              schema: {
+                type: "object",
+                properties: {
+                  botToken: { type: "string" },
+                },
+              },
+              uiHints: {},
             },
           },
         },
@@ -103,6 +109,21 @@ describe("readBestEffortRuntimeConfigSchema", () => {
 
   it("falls back to channel-only schema when config is invalid", async () => {
     mockReadConfigFileSnapshot.mockResolvedValueOnce(makeSnapshot({ valid: false }));
+    mockListChannelPlugins.mockReturnValueOnce([
+      {
+        id: "telegram",
+        meta: { label: "Telegram", blurb: "Telegram channel" },
+        configSchema: {
+          schema: {
+            type: "object",
+            properties: {
+              botToken: { type: "string" },
+            },
+          },
+          uiHints: {},
+        },
+      },
+    ]);
 
     const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
     const result = await readBestEffortRuntimeConfigSchema();
