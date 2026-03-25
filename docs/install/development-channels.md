@@ -4,7 +4,8 @@ read_when:
   - You want to switch between stable/beta/dev
   - You want to pin a specific version, tag, or SHA
   - You are tagging or publishing prereleases
-title: "Development Channels"
+title: "Release Channels"
+sidebarTitle: "Release Channels"
 ---
 
 # Development channels
@@ -47,7 +48,7 @@ update **without** changing your persisted channel:
 
 ```bash
 # Install a specific version
-openclaw update --tag 2026.3.14
+openclaw update --tag 2026.3.22
 
 # Install from the beta dist-tag (one-off, does not persist)
 openclaw update --tag beta
@@ -56,7 +57,7 @@ openclaw update --tag beta
 openclaw update --tag main
 
 # Install a specific npm package spec
-openclaw update --tag openclaw@2026.3.12
+openclaw update --tag openclaw@2026.3.22
 ```
 
 Notes:
@@ -74,7 +75,7 @@ Preview what `openclaw update` would do without making changes:
 ```bash
 openclaw update --dry-run
 openclaw update --channel beta --dry-run
-openclaw update --tag 2026.3.14 --dry-run
+openclaw update --tag 2026.3.22 --dry-run
 openclaw update --dry-run --json
 ```
 

@@ -140,7 +140,7 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("preserves scopes for trusted-proxy non-control-ui browser sessions", async () => {
+  test("clears scopes for trusted-proxy non-control-ui browser sessions", async () => {
     await withTrustedProxyBrowserWs(ALLOWED_BROWSER_ORIGIN, async (ws) => {
       const payload = await connectOk(ws, {
         client: TEST_OPERATOR_CLIENT,
@@ -150,7 +150,8 @@ describe("gateway auth browser hardening", () => {
       expect(payload.type).toBe("hello-ok");
 
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(true);
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
     });
   });
 

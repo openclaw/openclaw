@@ -10,6 +10,7 @@ export * from "../agents/model-auth-markers.js";
 export * from "../agents/model-auth.js";
 export * from "../agents/model-catalog.js";
 export * from "../agents/model-selection.js";
+export * from "../agents/simple-completion-runtime.js";
 export * from "../agents/pi-embedded-block-chunker.js";
 export * from "../agents/pi-embedded-utils.js";
 export * from "../agents/provider-id.js";

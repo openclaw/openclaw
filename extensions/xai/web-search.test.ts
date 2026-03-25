@@ -4,12 +4,19 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test/helpers/extensions/env.js";
+import { __testing as grokProviderTesting } from "./src/grok-web-search-provider.js";
 import { __testing } from "./web-search.js";
 
 const { extractXaiWebSearchContent, resolveXaiInlineCitations, resolveXaiWebSearchModel } =
   __testing;
 
 describe("xai web search config resolution", () => {
+  it("prefers configured api keys and resolves grok scoped defaults", () => {
+    expect(grokProviderTesting.resolveGrokApiKey({ apiKey: "xai-secret" })).toBe("xai-secret");
+    expect(grokProviderTesting.resolveGrokModel()).toBe("grok-4-1-fast");
+    expect(grokProviderTesting.resolveGrokInlineCitations()).toBe(false);
+  });
+
   it("uses config apiKey when provided", () => {
     const searchConfig = { grok: { apiKey: "xai-test-key" } }; // pragma: allowlist secret
     expect(
@@ -40,8 +47,21 @@ describe("xai web search config resolution", () => {
 
   it("uses config model when provided", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
-      "grok-4-fast-reasoning",
+      "grok-4-fast",
     );
+  });
+
+  it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-reasoning" },
+      }),
+    ).toBe("grok-4.20-beta-latest-reasoning");
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-non-reasoning" },
+      }),
+    ).toBe("grok-4.20-beta-latest-non-reasoning");
   });
 
   it("defaults inlineCitations to false", () => {
@@ -52,6 +72,26 @@ describe("xai web search config resolution", () => {
   it("respects inlineCitations config", () => {
     expect(resolveXaiInlineCitations({ grok: { inlineCitations: true } })).toBe(true);
     expect(resolveXaiInlineCitations({ grok: { inlineCitations: false } })).toBe(false);
+  });
+
+  it("builds wrapped payloads with optional inline citations", () => {
+    expect(
+      grokProviderTesting.buildXaiWebSearchPayload({
+        query: "q",
+        provider: "grok",
+        model: "grok-4-fast",
+        tookMs: 12,
+        content: "body",
+        citations: ["https://a.test"],
+      }),
+    ).toMatchObject({
+      query: "q",
+      provider: "grok",
+      model: "grok-4-fast",
+      tookMs: 12,
+      citations: ["https://a.test"],
+      externalContent: expect.objectContaining({ wrapped: true }),
+    });
   });
 });
 

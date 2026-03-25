@@ -16,6 +16,7 @@ import {
   mockedContextEngine,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
+  mockedRunContextEngineMaintenance,
   resetRunOverflowCompactionHarnessMocks,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
@@ -35,6 +36,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
   beforeEach(() => {
     mockedRunEmbeddedAttempt.mockReset();
+    mockedRunContextEngineMaintenance.mockReset();
     mockedCompactDirect.mockReset();
     mockedCoerceToFailoverError.mockReset();
     mockedDescribeFailoverError.mockReset();
@@ -50,6 +52,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       compacted: false,
       reason: "nothing to compact",
     });
+    mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
     mockedCoerceToFailoverError.mockReturnValue(null);
     mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
       message: err instanceof Error ? err.message : String(err),
@@ -237,6 +240,37 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       },
       expect.objectContaining({
         sessionKey: "test-key",
+      }),
+    );
+  });
+
+  it("runs maintenance after successful overflow-recovery compaction", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "engine-owned compaction",
+        tokensAfter: 50,
+      },
+    });
+
+    await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(mockedRunContextEngineMaintenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextEngine: mockedContextEngine,
+        sessionId: "test-session",
+        sessionKey: "test-key",
+        sessionFile: "/tmp/session.json",
+        reason: "compaction",
+        runtimeContext: expect.objectContaining({
+          trigger: "overflow",
+          authProfileId: "test-profile",
+        }),
       }),
     );
   });

@@ -175,7 +175,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
-  if (threadRootId) {
+  if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {

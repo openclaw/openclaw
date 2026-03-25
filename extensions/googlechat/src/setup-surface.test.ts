@@ -1,17 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import {
+  createPluginSetupWizardConfigure,
   createTestWizardPrompter,
+  runSetupWizardConfigure,
   type WizardPrompter,
 } from "../../../test/helpers/extensions/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { googlechatPlugin } from "./channel.js";
 
-const googlechatConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: googlechatPlugin,
-  wizard: googlechatPlugin.setupWizard!,
-});
+const googlechatConfigure = createPluginSetupWizardConfigure(googlechatPlugin);
 
 describe("googlechat setup wizard", () => {
   it("configures service-account auth and webhook audience", async () => {
@@ -27,16 +24,11 @@ describe("googlechat setup wizard", () => {
       }) as WizardPrompter["text"],
     });
 
-    const runtime = createRuntimeEnv();
-
-    const result = await googlechatConfigureAdapter.configure({
+    const result = await runSetupWizardConfigure({
+      configure: googlechatConfigure,
       cfg: {} as OpenClawConfig,
-      runtime,
       prompter,
       options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");

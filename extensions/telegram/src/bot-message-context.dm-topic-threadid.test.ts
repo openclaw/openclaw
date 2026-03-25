@@ -1,11 +1,12 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getRecordedUpdateLastRoute,
+  loadTelegramMessageContextRouteHarness,
+  recordInboundSessionMock,
+} from "./bot-message-context.route-test-support.js";
 
-// Mock recordInboundSession to capture updateLastRoute parameter
-const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("../../../src/channels/session.js", () => ({
-  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-}));
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
 
 describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#8891)", () => {
   async function buildCtx(params: {
@@ -20,10 +21,15 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     });
   }
 
-  function getUpdateLastRoute(): unknown {
-    const callArgs = recordInboundSessionMock.mock.calls[0]?.[0] as { updateLastRoute?: unknown };
-    return callArgs?.updateLastRoute;
-  }
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    recordInboundSessionMock.mockClear();
+  });
+
+  beforeAll(async () => {
+    ({ clearRuntimeConfigSnapshot, buildTelegramMessageContextForTest } =
+      await loadTelegramMessageContextRouteHarness());
+  });
 
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
@@ -41,7 +47,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     // Check that updateLastRoute includes threadId
-    const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
+    const updateLastRoute = getRecordedUpdateLastRoute(0) as
+      | { threadId?: string; to?: string }
+      | undefined;
     expect(updateLastRoute).toBeDefined();
     expect(updateLastRoute?.to).toBe("telegram:1234");
     expect(updateLastRoute?.threadId).toBe("42");
@@ -58,7 +66,9 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     // Check that updateLastRoute does NOT include threadId
-    const updateLastRoute = getUpdateLastRoute() as { threadId?: string; to?: string } | undefined;
+    const updateLastRoute = getRecordedUpdateLastRoute(0) as
+      | { threadId?: string; to?: string }
+      | undefined;
     expect(updateLastRoute).toBeDefined();
     expect(updateLastRoute?.to).toBe("telegram:1234");
     expect(updateLastRoute?.threadId).toBeUndefined();
@@ -79,6 +89,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
     // Check that updateLastRoute is undefined for groups
-    expect(getUpdateLastRoute()).toBeUndefined();
+    expect(getRecordedUpdateLastRoute(0)).toBeUndefined();
   });
 });
