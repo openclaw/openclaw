@@ -36,6 +36,7 @@ vi.mock("../../cli/outbound-send-deps.js", () => ({
 
 vi.mock("../../logger.js", () => ({
   logWarn: vi.fn(),
+  logError: vi.fn(),
 }));
 
 vi.mock("./subagent-followup.js", () => ({
@@ -354,6 +355,29 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.delivered).toBe(true);
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache partial bestEffort delivery replays as delivered", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockImplementation(async (params) => {
+      const failedPayload = Array.isArray(params.payloads) ? params.payloads[0] : undefined;
+      params.onError?.(new Error("payload failed"), failedPayload as never);
+      return [{ ok: true } as never];
+    });
+
+    const params = makeBaseParams({ synthesizedText: "Partial bestEffort replay." }) as Record<
+      string,
+      unknown
+    >;
+    params.deliveryBestEffort = true;
+
+    const first = await dispatchCronDelivery(params as never);
+    const second = await dispatchCronDelivery(params as never);
+
+    expect(first.delivered).toBe(false);
+    expect(second.delivered).toBe(false);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
   it("prunes the completed-delivery cache back to the entry cap", async () => {
