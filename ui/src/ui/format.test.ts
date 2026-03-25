@@ -127,4 +127,13 @@ describe("formatFullDateTime", () => {
   it("returns fallback for NaN", () => {
     expect(formatFullDateTime(NaN)).toBe("n/a");
   });
+
+  it("returns fallback for epoch 0 (unset sentinel)", () => {
+    expect(formatFullDateTime(0)).toBe("n/a");
+  });
+
+  it("returns fallback for negative epoch values", () => {
+    expect(formatFullDateTime(-1)).toBe("n/a");
+    expect(formatFullDateTime(-1_000_000)).toBe("n/a");
+  });
 });
