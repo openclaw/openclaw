@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { parseBooleanValue } from "../utils/boolean.js";
 import { resolveUserPath } from "../utils.js";
+import { parseBooleanValue } from "../utils/boolean.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import { buildAgentTraceBase } from "./trace-base.js";
 
 export type CacheTraceStage =
   | "session:loaded"
@@ -52,7 +52,7 @@ export type CacheTrace = {
 };
 
 type CacheTraceInit = {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runId?: string;
   sessionId?: string;
@@ -72,27 +72,24 @@ type CacheTraceConfig = {
   includeSystem: boolean;
 };
 
-type CacheTraceWriter = {
-  filePath: string;
-  write: (line: string) => void;
-};
+type CacheTraceWriter = QueuedFileWriter;
 
 const writers = new Map<string, CacheTraceWriter>();
 
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
   const config = params.cfg?.diagnostics?.cacheTrace;
-  const envEnabled = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE);
+  const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
-  const fileOverride = config?.filePath?.trim() || env.CLAWDBOT_CACHE_TRACE_FILE?.trim();
+  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
   const includeMessages =
-    parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.CLAWDBOT_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
+  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
+  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
   return {
     enabled,
@@ -104,52 +101,58 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 }
 
 function getWriter(filePath: string): CacheTraceWriter {
-  const existing = writers.get(filePath);
-  if (existing) return existing;
-
-  const dir = path.dirname(filePath);
-  const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
-  let queue = Promise.resolve();
-
-  const writer: CacheTraceWriter = {
-    filePath,
-    write: (line: string) => {
-      queue = queue
-        .then(() => ready)
-        .then(() => fs.appendFile(filePath, line, "utf8"))
-        .catch(() => undefined);
-    },
-  };
-
-  writers.set(filePath, writer);
-  return writer;
+  return getQueuedFileWriter(writers, filePath);
 }
 
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return String(value);
-  if (typeof value === "number" && !Number.isFinite(value)) return JSON.stringify(String(value));
-  if (typeof value === "bigint") return JSON.stringify(value.toString());
-  if (typeof value !== "object") return JSON.stringify(value) ?? "null";
+function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return JSON.stringify(String(value));
+  }
+  if (typeof value === "bigint") {
+    return JSON.stringify(value.toString());
+  }
+  if (typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (seen.has(value)) {
+    return JSON.stringify("[Circular]");
+  }
+  seen.add(value);
   if (value instanceof Error) {
-    return stableStringify({
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-    });
+    return stableStringify(
+      {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      },
+      seen,
+    );
   }
   if (value instanceof Uint8Array) {
-    return stableStringify({
-      type: "Uint8Array",
-      data: Buffer.from(value).toString("base64"),
-    });
+    return stableStringify(
+      {
+        type: "Uint8Array",
+        data: Buffer.from(value).toString("base64"),
+      },
+      seen,
+    );
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+    const serializedEntries: string[] = [];
+    for (const entry of value) {
+      serializedEntries.push(stableStringify(entry, seen));
+    }
+    return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).sort();
-  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${entries.join(",")}}`;
+  const serializedFields: string[] = [];
+  for (const key of Object.keys(record).toSorted()) {
+    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
+  }
+  return `{${serializedFields.join(",")}}`;
 }
 
 function digest(value: unknown): string {
@@ -172,40 +175,16 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
-function safeJsonStringify(value: unknown): string | null {
-  try {
-    return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "bigint") return val.toString();
-      if (typeof val === "function") return "[Function]";
-      if (val instanceof Error) {
-        return { name: val.name, message: val.message, stack: val.stack };
-      }
-      if (val instanceof Uint8Array) {
-        return { type: "Uint8Array", data: Buffer.from(val).toString("base64") };
-      }
-      return val;
-    });
-  } catch {
-    return null;
-  }
-}
-
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const cfg = resolveCacheTraceConfig(params);
-  if (!cfg.enabled) return null;
+  if (!cfg.enabled) {
+    return null;
+  }
 
   const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
-  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = {
-    runId: params.runId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.provider,
-    modelId: params.modelId,
-    modelApi: params.modelApi,
-    workspaceDir: params.workspaceDir,
-  };
+  const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
   const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
     const event: CacheTraceEvent = {
@@ -219,11 +198,15 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.prompt = payload.prompt;
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = payload.system;
+      event.system = sanitizeDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
-    if (payload.options) event.options = payload.options;
-    if (payload.model) event.model = payload.model;
+    if (payload.options) {
+      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+    }
+    if (payload.model) {
+      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+    }
 
     const messages = payload.messages;
     if (Array.isArray(messages)) {
@@ -233,15 +216,21 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = messages;
+        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
       }
     }
 
-    if (payload.note) event.note = payload.note;
-    if (payload.error) event.error = payload.error;
+    if (payload.note) {
+      event.note = payload.note;
+    }
+    if (payload.error) {
+      event.error = payload.error;
+    }
 
     const line = safeJsonStringify(event);
-    if (!line) return;
+    if (!line) {
+      return;
+    }
     writer.write(`${line}\n`);
   };
 
@@ -249,9 +238,9 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     const wrapped: StreamFn = (model, context, options) => {
       recordStage("stream:context", {
         model: {
-          id: (model as Model<Api>)?.id,
-          provider: (model as Model<Api>)?.provider,
-          api: (model as Model<Api>)?.api,
+          id: model?.id,
+          provider: model?.provider,
+          api: model?.api,
         },
         system: (context as { system?: unknown }).system,
         messages: (context as { messages?: AgentMessage[] }).messages ?? [],

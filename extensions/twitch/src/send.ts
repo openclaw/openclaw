@@ -5,12 +5,11 @@
  * They support dependency injection via the `deps` parameter for testability.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-import { resolveTwitchToken } from "./token.js";
+import { DEFAULT_ACCOUNT_ID, resolveTwitchAccountContext } from "./config.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
-import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
+import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
  * Result from sending a message to Twitch.
@@ -27,12 +26,12 @@ export interface SendMessageResult {
 /**
  * Internal send function used by the outbound adapter.
  *
- * This function has access to the full Moltbot config and handles
+ * This function has access to the full OpenClaw config and handles
  * account resolution, markdown stripping, and actual message sending.
  *
  * @param channel - The channel name
  * @param text - The message text
- * @param cfg - Full Moltbot configuration
+ * @param cfg - Full OpenClaw configuration
  * @param accountId - Account ID to use
  * @param stripMarkdown - Whether to strip markdown (default: true)
  * @param logger - Logger instance
@@ -42,7 +41,7 @@ export interface SendMessageResult {
  * const result = await sendMessageTwitchInternal(
  *   "#mychannel",
  *   "Hello Twitch!",
- *   moltbotConfig,
+ *   openclawConfig,
  *   "default",
  *   true,
  *   console,
@@ -51,23 +50,21 @@ export interface SendMessageResult {
 export async function sendMessageTwitchInternal(
   channel: string,
   text: string,
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string = DEFAULT_ACCOUNT_ID,
   stripMarkdown: boolean = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
-  const account = getAccountConfig(cfg, accountId);
+  const { account, configured, availableAccountIds } = resolveTwitchAccountContext(cfg, accountId);
   if (!account) {
-    const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableIds.join(", ") || "none"}`,
+      error: `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
     };
   }
 
-  const tokenResolution = resolveTwitchToken(cfg, { accountId });
-  if (!isAccountConfigured(account, tokenResolution.token)) {
+  if (!configured) {
     return {
       ok: false,
       messageId: generateMessageId(),

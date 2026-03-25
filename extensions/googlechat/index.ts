@@ -1,20 +1,15 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
-import { googlechatDock, googlechatPlugin } from "./src/channel.js";
-import { handleGoogleChatWebhookRequest } from "./src/monitor.js";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { googlechatPlugin } from "./src/channel.js";
 import { setGoogleChatRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { googlechatPlugin } from "./src/channel.js";
+export { setGoogleChatRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "googlechat",
   name: "Google Chat",
-  description: "Moltbot Google Chat channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
-    setGoogleChatRuntime(api.runtime);
-    api.registerChannel({ plugin: googlechatPlugin, dock: googlechatDock });
-    api.registerHttpHandler(handleGoogleChatWebhookRequest);
-  },
-};
-
-export default plugin;
+  description: "OpenClaw Google Chat channel plugin",
+  plugin: googlechatPlugin as ChannelPlugin,
+  setRuntime: setGoogleChatRuntime,
+});

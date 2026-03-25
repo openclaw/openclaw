@@ -1,55 +1,63 @@
+import type { OpenClawApp } from "./app.ts";
 import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
   waitWhatsAppLogin,
-} from "./controllers/channels";
-import { loadConfig, saveConfig } from "./controllers/config";
-import type { MoltbotApp } from "./app";
-import type { NostrProfile } from "./types";
-import { createNostrProfileFormState } from "./views/channels.nostr-profile-form";
+} from "./controllers/channels.ts";
+import { loadConfig, saveConfig } from "./controllers/config.ts";
+import type { NostrProfile } from "./types.ts";
+import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
-export async function handleWhatsAppStart(host: MoltbotApp, force: boolean) {
+export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
   await startWhatsAppLogin(host, force);
   await loadChannels(host, true);
 }
 
-export async function handleWhatsAppWait(host: MoltbotApp) {
+export async function handleWhatsAppWait(host: OpenClawApp) {
   await waitWhatsAppLogin(host);
   await loadChannels(host, true);
 }
 
-export async function handleWhatsAppLogout(host: MoltbotApp) {
+export async function handleWhatsAppLogout(host: OpenClawApp) {
   await logoutWhatsApp(host);
   await loadChannels(host, true);
 }
 
-export async function handleChannelConfigSave(host: MoltbotApp) {
+export async function handleChannelConfigSave(host: OpenClawApp) {
   await saveConfig(host);
   await loadConfig(host);
   await loadChannels(host, true);
 }
 
-export async function handleChannelConfigReload(host: MoltbotApp) {
+export async function handleChannelConfigReload(host: OpenClawApp) {
   await loadConfig(host);
   await loadChannels(host, true);
 }
 
 function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) return {};
+  if (!Array.isArray(details)) {
+    return {};
+  }
   const errors: Record<string, string> = {};
   for (const entry of details) {
-    if (typeof entry !== "string") continue;
+    if (typeof entry !== "string") {
+      continue;
+    }
     const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) continue;
+    if (!rawField || rest.length === 0) {
+      continue;
+    }
     const field = rawField.trim();
     const message = rest.join(":").trim();
-    if (field && message) errors[field] = message;
+    if (field && message) {
+      errors[field] = message;
+    }
   }
   return errors;
 }
 
-function resolveNostrAccountId(host: MoltbotApp): string {
+function resolveNostrAccountId(host: OpenClawApp): string {
   const accounts = host.channelsSnapshot?.channelAccounts?.nostr ?? [];
   return accounts[0]?.accountId ?? host.nostrProfileAccountId ?? "default";
 }
@@ -58,8 +66,29 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
+function resolveGatewayHttpAuthHeader(host: OpenClawApp): string | null {
+  const deviceToken = host.hello?.auth?.deviceToken?.trim();
+  if (deviceToken) {
+    return `Bearer ${deviceToken}`;
+  }
+  const token = host.settings.token.trim();
+  if (token) {
+    return `Bearer ${token}`;
+  }
+  const password = host.password.trim();
+  if (password) {
+    return `Bearer ${password}`;
+  }
+  return null;
+}
+
+function buildGatewayHttpHeaders(host: OpenClawApp): Record<string, string> {
+  const authorization = resolveGatewayHttpAuthHeader(host);
+  return authorization ? { Authorization: authorization } : {};
+}
+
 export function handleNostrProfileEdit(
-  host: MoltbotApp,
+  host: OpenClawApp,
   accountId: string,
   profile: NostrProfile | null,
 ) {
@@ -67,18 +96,20 @@ export function handleNostrProfileEdit(
   host.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
 }
 
-export function handleNostrProfileCancel(host: MoltbotApp) {
+export function handleNostrProfileCancel(host: OpenClawApp) {
   host.nostrProfileFormState = null;
   host.nostrProfileAccountId = null;
 }
 
 export function handleNostrProfileFieldChange(
-  host: MoltbotApp,
+  host: OpenClawApp,
   field: keyof NostrProfile,
   value: string,
 ) {
   const state = host.nostrProfileFormState;
-  if (!state) return;
+  if (!state) {
+    return;
+  }
   host.nostrProfileFormState = {
     ...state,
     values: {
@@ -92,18 +123,22 @@ export function handleNostrProfileFieldChange(
   };
 }
 
-export function handleNostrProfileToggleAdvanced(host: MoltbotApp) {
+export function handleNostrProfileToggleAdvanced(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state) return;
+  if (!state) {
+    return;
+  }
   host.nostrProfileFormState = {
     ...state,
     showAdvanced: !state.showAdvanced,
   };
 }
 
-export async function handleNostrProfileSave(host: MoltbotApp) {
+export async function handleNostrProfileSave(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state || state.saving) return;
+  if (!state || state.saving) {
+    return;
+  }
   const accountId = resolveNostrAccountId(host);
 
   host.nostrProfileFormState = {
@@ -119,12 +154,16 @@ export async function handleNostrProfileSave(host: MoltbotApp) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify(state.values),
     });
-    const data = (await response.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; details?: unknown; persisted?: boolean }
-      | null;
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      details?: unknown;
+      persisted?: boolean;
+    } | null;
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile update failed (${response.status})`;
@@ -167,9 +206,11 @@ export async function handleNostrProfileSave(host: MoltbotApp) {
   }
 }
 
-export async function handleNostrProfileImport(host: MoltbotApp) {
+export async function handleNostrProfileImport(host: OpenClawApp) {
   const state = host.nostrProfileFormState;
-  if (!state || state.importing) return;
+  if (!state || state.importing) {
+    return;
+  }
   const accountId = resolveNostrAccountId(host);
 
   host.nostrProfileFormState = {
@@ -184,12 +225,17 @@ export async function handleNostrProfileImport(host: MoltbotApp) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify({ autoMerge: true }),
     });
-    const data = (await response.json().catch(() => null)) as
-      | { ok?: boolean; error?: string; imported?: NostrProfile; merged?: NostrProfile; saved?: boolean }
-      | null;
+    const data = (await response.json().catch(() => null)) as {
+      ok?: boolean;
+      error?: string;
+      imported?: NostrProfile;
+      merged?: NostrProfile;
+      saved?: boolean;
+    } | null;
 
     if (!response.ok || data?.ok === false || !data) {
       const errorMessage = data?.error ?? `Profile import failed (${response.status})`;

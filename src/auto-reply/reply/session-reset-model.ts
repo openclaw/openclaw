@@ -1,4 +1,4 @@
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   modelKey,
@@ -6,13 +6,12 @@ import {
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
-import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
-import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
+import { resolveModelDirectiveSelection, type ModelDirectiveSelection } from "./model-selection.js";
 
 type ResetModelResult = {
   selection?: ModelDirectiveSelection;
@@ -41,9 +40,13 @@ function buildSelectionFromExplicit(params: {
     defaultProvider: params.defaultProvider,
     aliasIndex: params.aliasIndex,
   });
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) return undefined;
+  if (params.allowedModelKeys.size > 0 && !params.allowedModelKeys.has(key)) {
+    return undefined;
+  }
   const isDefault =
     resolved.ref.provider === params.defaultProvider && resolved.ref.model === params.defaultModel;
   return {
@@ -62,12 +65,16 @@ function applySelectionToSession(params: {
   storePath?: string;
 }) {
   const { selection, sessionEntry, sessionStore, sessionKey, storePath } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey) return;
+  if (!sessionEntry || !sessionStore || !sessionKey) {
+    return;
+  }
   const { updated } = applyModelOverrideToSessionEntry({
     entry: sessionEntry,
     selection,
   });
-  if (!updated) return;
+  if (!updated) {
+    return;
+  }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     updateSessionStore(storePath, (store) => {
@@ -79,7 +86,8 @@ function applySelectionToSession(params: {
 }
 
 export async function applyResetModelOverride(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
+  agentId?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -91,28 +99,40 @@ export async function applyResetModelOverride(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  modelCatalog?: ModelCatalogEntry[];
 }): Promise<ResetModelResult> {
-  if (!params.resetTriggered) return {};
+  if (!params.resetTriggered) {
+    return {};
+  }
   const rawBody = params.bodyStripped?.trim();
-  if (!rawBody) return {};
+  if (!rawBody) {
+    return {};
+  }
 
   const { tokens, first, second } = splitBody(rawBody);
-  if (!first) return {};
+  if (!first) {
+    return {};
+  }
 
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.modelCatalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
   });
   const allowedModelKeys = allowed.allowedKeys;
-  if (allowedModelKeys.size === 0) return {};
+  if (allowedModelKeys.size === 0) {
+    return {};
+  }
 
   const providers = new Set<string>();
   for (const key of allowedModelKeys) {
     const slash = key.indexOf("/");
-    if (slash <= 0) continue;
+    if (slash <= 0) {
+      continue;
+    }
     providers.add(normalizeProviderId(key.slice(0, slash)));
   }
 
@@ -145,7 +165,9 @@ export async function applyResetModelOverride(params: {
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
     });
-    if (selection) consumed = 1;
+    if (selection) {
+      consumed = 1;
+    }
   }
 
   if (!selection) {
@@ -153,17 +175,18 @@ export async function applyResetModelOverride(params: {
     const allowFuzzy = providers.has(normalizeProviderId(first)) || first.trim().length >= 6;
     if (allowFuzzy) {
       selection = resolved.selection;
-      if (selection) consumed = 1;
+      if (selection) {
+        consumed = 1;
+      }
     }
   }
 
-  if (!selection) return {};
+  if (!selection) {
+    return {};
+  }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
-  params.sessionCtx.BodyStripped = formatInboundBodyWithSenderMeta({
-    ctx: params.ctx,
-    body: cleanedBody,
-  });
+  params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 
   applySelectionToSession({

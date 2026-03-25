@@ -1,17 +1,49 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
+  buildToolsMessage,
 } from "../status.js";
-import { buildStatusReply } from "./commands-status.js";
+import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { buildContextReply } from "./commands-context-report.js";
+import { buildExportSessionReply } from "./commands-export-session.js";
+import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveReplyToMode } from "./reply-threading.js";
+
+function extractGroupId(raw: string | undefined | null): string | undefined {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return parts.slice(2).join(":") || undefined;
+  }
+  if (
+    parts.length >= 2 &&
+    parts[0]?.toLowerCase() === "whatsapp" &&
+    trimmed.toLowerCase().includes("@g.us")
+  ) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  return undefined;
+}
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
-  if (params.command.commandBodyNormalized !== "/help") return null;
+  if (!allowTextCommands) {
+    return null;
+  }
+  if (params.command.commandBodyNormalized !== "/help") {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /help from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -25,8 +57,12 @@ export const handleHelpCommand: CommandHandler = async (params, allowTextCommand
 };
 
 export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
-  if (params.command.commandBodyNormalized !== "/commands") return null;
+  if (!allowTextCommands) {
+    return null;
+  }
+  if (params.command.commandBodyNormalized !== "/commands") {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /commands from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -77,6 +113,86 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   };
 };
 
+export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  let verbose = false;
+  if (normalized === "/tools" || normalized === "/tools compact") {
+    verbose = false;
+  } else if (normalized === "/tools verbose") {
+    verbose = true;
+  } else if (normalized.startsWith("/tools ")) {
+    return { shouldContinue: false, reply: { text: "Usage: /tools [compact|verbose]" } };
+  } else {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /tools from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  try {
+    const agentId =
+      params.agentId ??
+      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const threadingContext = buildThreadingToolContext({
+      sessionCtx: params.ctx,
+      config: params.cfg,
+      hasRepliedRef: undefined,
+    });
+    const result = resolveEffectiveToolInventory({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      modelProvider: params.provider,
+      modelId: params.model,
+      messageProvider: params.command.channel,
+      senderIsOwner: params.command.senderIsOwner,
+      senderId: params.command.senderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      accountId: params.ctx.AccountId,
+      currentChannelId: threadingContext.currentChannelId,
+      currentThreadTs:
+        typeof params.ctx.MessageThreadId === "string" ||
+        typeof params.ctx.MessageThreadId === "number"
+          ? String(params.ctx.MessageThreadId)
+          : undefined,
+      currentMessageId: threadingContext.currentMessageId,
+      groupId: params.sessionEntry?.groupId ?? extractGroupId(params.ctx.From),
+      groupChannel:
+        params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+      replyToMode: resolveReplyToMode(
+        params.cfg,
+        params.ctx.OriginatingChannel ?? params.ctx.Provider,
+        params.ctx.AccountId,
+        params.ctx.ChatType,
+      ),
+    });
+    return {
+      shouldContinue: false,
+      reply: { text: buildToolsMessage(result, { verbose }) },
+    };
+  } catch (err) {
+    const message = String(err);
+    const text = message.includes("missing scope:")
+      ? "You do not have permission to view available tools."
+      : "Couldn't load available tools right now. Try again in a moment.";
+    return {
+      shouldContinue: false,
+      reply: { text },
+    };
+  }
+};
+
 export function buildCommandsPaginationKeyboard(
   currentPage: number,
   totalPages: number,
@@ -108,10 +224,14 @@ export function buildCommandsPaginationKeyboard(
 }
 
 export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const statusRequested =
     params.directives.hasStatusDirective || params.command.commandBodyNormalized === "/status";
-  if (!statusRequested) return null;
+  if (!statusRequested) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /status from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -123,6 +243,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     command: params.command,
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
+    parentSessionKey: params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
     provider: params.provider,
     model: params.model,
@@ -140,9 +261,13 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
 };
 
 export const handleContextCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const normalized = params.command.commandBodyNormalized;
-  if (normalized !== "/context" && !normalized.startsWith("/context ")) return null;
+  if (normalized !== "/context" && !normalized.startsWith("/context ")) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /context from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -152,9 +277,35 @@ export const handleContextCommand: CommandHandler = async (params, allowTextComm
   return { shouldContinue: false, reply: await buildContextReply(params) };
 };
 
+export const handleExportSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (
+    normalized !== "/export-session" &&
+    !normalized.startsWith("/export-session ") &&
+    normalized !== "/export" &&
+    !normalized.startsWith("/export ")
+  ) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  return { shouldContinue: false, reply: await buildExportSessionReply(params) };
+};
+
 export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
-  if (params.command.commandBodyNormalized !== "/whoami") return null;
+  if (!allowTextCommands) {
+    return null;
+  }
+  if (params.command.commandBodyNormalized !== "/whoami") {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /whoami from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -164,7 +315,9 @@ export const handleWhoamiCommand: CommandHandler = async (params, allowTextComma
   const senderId = params.ctx.SenderId ?? "";
   const senderUsername = params.ctx.SenderUsername ?? "";
   const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
-  if (senderId) lines.push(`User id: ${senderId}`);
+  if (senderId) {
+    lines.push(`User id: ${senderId}`);
+  }
   if (senderUsername) {
     const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
     lines.push(`Username: ${handle}`);

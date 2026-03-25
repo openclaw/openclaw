@@ -1,23 +1,20 @@
 import type { Command } from "commander";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
+import { readBestEffortConfig } from "../../config/config.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import { WIDE_AREA_DISCOVERY_DOMAIN } from "../../infra/widearea-dns.js";
+import { resolveWideAreaDiscoveryDomain } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
+import { styleHealthChannelLine } from "../../terminal/health-style.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
-import { withProgress } from "../progress.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
-import {
-  runDaemonInstall,
-  runDaemonRestart,
-  runDaemonStart,
-  runDaemonStatus,
-  runDaemonStop,
-  runDaemonUninstall,
-} from "../daemon-cli.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { addGatewayServiceCommands } from "../daemon-cli.js";
+import { formatHelpExamples } from "../help-format.js";
+import { withProgress } from "../progress.js";
 import { callGatewayCli, gatewayCallOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import {
@@ -29,29 +26,6 @@ import {
 } from "./discover.js";
 import { addGatewayRunCommand } from "./run.js";
 
-function styleHealthChannelLine(line: string, rich: boolean): string {
-  if (!rich) return line;
-  const colon = line.indexOf(":");
-  if (colon === -1) return line;
-
-  const label = line.slice(0, colon + 1);
-  const detail = line.slice(colon + 1).trimStart();
-  const normalized = detail.toLowerCase();
-
-  const applyPrefix = (prefix: string, color: (value: string) => string) =>
-    `${label} ${color(detail.slice(0, prefix.length))}${detail.slice(prefix.length)}`;
-
-  if (normalized.startsWith("failed")) return applyPrefix("failed", theme.error);
-  if (normalized.startsWith("ok")) return applyPrefix("ok", theme.success);
-  if (normalized.startsWith("linked")) return applyPrefix("linked", theme.success);
-  if (normalized.startsWith("configured")) return applyPrefix("configured", theme.success);
-  if (normalized.startsWith("not linked")) return applyPrefix("not linked", theme.warn);
-  if (normalized.startsWith("not configured")) return applyPrefix("not configured", theme.muted);
-  if (normalized.startsWith("unknown")) return applyPrefix("unknown", theme.warn);
-
-  return line;
-}
-
 function runGatewayCommand(action: () => Promise<void>, label?: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
     const message = String(err);
@@ -61,12 +35,29 @@ function runGatewayCommand(action: () => Promise<void>, label?: string) {
 }
 
 function parseDaysOption(raw: unknown, fallback = 30): number {
-  if (typeof raw === "number" && Number.isFinite(raw)) return Math.max(1, Math.floor(raw));
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(1, Math.floor(raw));
+  }
   if (typeof raw === "string" && raw.trim() !== "") {
     const parsed = Number(raw);
-    if (Number.isFinite(parsed)) return Math.max(1, Math.floor(parsed));
+    if (Number.isFinite(parsed)) {
+      return Math.max(1, Math.floor(parsed));
+    }
   }
   return fallback;
+}
+
+function resolveGatewayRpcOptions<T extends { token?: string; password?: string }>(
+  opts: T,
+  command?: Command,
+): T {
+  const parentToken = inheritOptionFromParent<string>(command, "token");
+  const parentPassword = inheritOptionFromParent<string>(command, "password");
+  return {
+    ...opts,
+    token: opts.token ?? parentToken,
+    password: opts.password ?? parentPassword,
+  };
 }
 
 function renderCostUsageSummary(summary: CostUsageSummary, days: number, rich: boolean): string[] {
@@ -99,11 +90,16 @@ export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
       .command("gateway")
-      .description("Run the WebSocket Gateway")
+      .description("Run, inspect, and query the WebSocket Gateway")
       .addHelpText(
         "after",
         () =>
-          `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.molt.bot/cli/gateway")}\n`,
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+            ["openclaw gateway run", "Run the gateway in the foreground."],
+            ["openclaw gateway status", "Show service status and probe reachability."],
+            ["openclaw gateway discover", "Find local and wide-area gateway beacons."],
+            ["openclaw gateway call health", "Call a gateway RPC method directly."],
+          ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/gateway", "docs.openclaw.ai/cli/gateway")}\n`,
       ),
   );
 
@@ -111,68 +107,9 @@ export function registerGatewayCli(program: Command) {
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
   );
 
-  gateway
-    .command("status")
-    .description("Show gateway service status + probe the Gateway")
-    .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--no-probe", "Skip RPC probe")
-    .option("--deep", "Scan system-level services", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonStatus({
-        rpc: opts,
-        probe: Boolean(opts.probe),
-        deep: Boolean(opts.deep),
-        json: Boolean(opts.json),
-      });
-    });
-
-  gateway
-    .command("install")
-    .description("Install the Gateway service (launchd/systemd/schtasks)")
-    .option("--port <port>", "Gateway port")
-    .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
-    .option("--token <token>", "Gateway token (token auth)")
-    .option("--force", "Reinstall/overwrite if already installed", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonInstall(opts);
-    });
-
-  gateway
-    .command("uninstall")
-    .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonUninstall(opts);
-    });
-
-  gateway
-    .command("start")
-    .description("Start the Gateway service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonStart(opts);
-    });
-
-  gateway
-    .command("stop")
-    .description("Stop the Gateway service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonStop(opts);
-    });
-
-  gateway
-    .command("restart")
-    .description("Restart the Gateway service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runDaemonRestart(opts);
-    });
+  addGatewayServiceCommands(gateway, {
+    statusDescription: "Show gateway service status + probe the Gateway",
+  });
 
   gatewayCallOpts(
     gateway
@@ -180,19 +117,21 @@ export function registerGatewayCli(program: Command) {
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
-      .action(async (method, opts) => {
+      .action(async (method, opts, command) => {
         await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const config = await readBestEffortConfig();
           const params = JSON.parse(String(opts.params ?? "{}"));
-          const result = await callGatewayCli(method, opts, params);
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+          const result = await callGatewayCli(method, { ...rpcOpts, config }, params);
+          if (rpcOpts.json) {
+            defaultRuntime.writeJson(result);
             return;
           }
           const rich = isRich();
           defaultRuntime.log(
             `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(rich, theme.muted, String(method))}`,
           );
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
         }, "Gateway call failed");
       }),
   );
@@ -202,12 +141,14 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
-      .action(async (opts) => {
+      .action(async (opts, command) => {
         await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const days = parseDaysOption(opts.days);
-          const result = await callGatewayCli("usage.cost", opts, { days });
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+          const config = await readBestEffortConfig();
+          const result = await callGatewayCli("usage.cost", { ...rpcOpts, config }, { days });
+          if (rpcOpts.json) {
+            defaultRuntime.writeJson(result);
             return;
           }
           const rich = isRich();
@@ -223,16 +164,17 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("health")
       .description("Fetch Gateway health")
-      .action(async (opts) => {
+      .action(async (opts, command) => {
         await runGatewayCommand(async () => {
-          const result = await callGatewayCli("health", opts);
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const config = await readBestEffortConfig();
+          const result = await callGatewayCli("health", { ...rpcOpts, config });
+          if (rpcOpts.json) {
+            defaultRuntime.writeJson(result);
             return;
           }
           const rich = isRich();
-          const obj =
-            result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+          const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
           const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
           defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
           defaultRuntime.log(
@@ -258,22 +200,26 @@ export function registerGatewayCli(program: Command) {
     .option("--password <password>", "Gateway password (applies to all probes)")
     .option("--timeout <ms>", "Overall probe budget in ms", "3000")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runGatewayCommand(async () => {
-        await gatewayStatusCommand(opts, defaultRuntime);
+        const rpcOpts = resolveGatewayRpcOptions(opts, command);
+        await gatewayStatusCommand(rpcOpts, defaultRuntime);
       });
     });
 
   gateway
     .command("discover")
-    .description(
-      `Discover gateways via Bonjour (multicast local. + unicast ${WIDE_AREA_DISCOVERY_DOMAIN})`,
-    )
+    .description("Discover gateways via Bonjour (local + wide-area if configured)")
     .option("--timeout <ms>", "Per-command timeout in ms", "2000")
     .option("--json", "Output JSON", false)
     .action(async (opts: GatewayDiscoverOpts) => {
       await runGatewayCommand(async () => {
+        const cfg = await readBestEffortConfig();
+        const wideAreaDomain = resolveWideAreaDiscoveryDomain({
+          configDomain: cfg.discovery?.wideArea?.domain,
+        });
         const timeoutMs = parseDiscoverTimeoutMs(opts.timeout, 2000);
+        const domains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
         const beacons = await withProgress(
           {
             label: "Scanning for gateways…",
@@ -281,10 +227,10 @@ export function registerGatewayCli(program: Command) {
             enabled: opts.json !== true,
             delayMs: 0,
           },
-          async () => await discoverGatewayBeacons({ timeoutMs }),
+          async () => await discoverGatewayBeacons({ timeoutMs, wideAreaDomain }),
         );
 
-        const deduped = dedupeBeacons(beacons).sort((a, b) =>
+        const deduped = dedupeBeacons(beacons).toSorted((a, b) =>
           String(a.displayName || a.instanceName).localeCompare(
             String(b.displayName || b.instanceName),
           ),
@@ -296,18 +242,12 @@ export function registerGatewayCli(program: Command) {
             const port = pickGatewayPort(b);
             return { ...b, wsUrl: host ? `ws://${host}:${port}` : null };
           });
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                timeoutMs,
-                domains: ["local.", WIDE_AREA_DISCOVERY_DOMAIN],
-                count: enriched.length,
-                beacons: enriched,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            timeoutMs,
+            domains,
+            count: enriched.length,
+            beacons: enriched,
+          });
           return;
         }
 
@@ -317,10 +257,12 @@ export function registerGatewayCli(program: Command) {
           colorize(
             rich,
             theme.muted,
-            `Found ${deduped.length} gateway(s) · domains: local., ${WIDE_AREA_DISCOVERY_DOMAIN}`,
+            `Found ${deduped.length} gateway(s) · domains: ${domains.join(", ")}`,
           ),
         );
-        if (deduped.length === 0) return;
+        if (deduped.length === 0) {
+          return;
+        }
 
         for (const beacon of deduped) {
           for (const line of renderBeaconLines(beacon, rich)) {

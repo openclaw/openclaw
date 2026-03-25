@@ -1,4 +1,12 @@
 import {
+  formatSlackStreamingBooleanMigrationMessage,
+  formatSlackStreamModeMigrationMessage,
+  resolveDiscordPreviewStreamMode,
+  resolveSlackNativeStreaming,
+  resolveSlackStreamingMode,
+  resolveTelegramPreviewStreamMode,
+} from "./discord-preview-streaming.js";
+import {
   ensureRecord,
   getRecord,
   isRecord,
@@ -6,60 +14,132 @@ import {
   mergeMissing,
 } from "./legacy.shared.js";
 
+function migrateBindings(
+  raw: Record<string, unknown>,
+  changes: string[],
+  changeNote: string,
+  mutator: (match: Record<string, unknown>) => boolean,
+) {
+  const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
+  if (!bindings) {
+    return;
+  }
+
+  let touched = false;
+  for (const entry of bindings) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const match = getRecord(entry.match);
+    if (!match) {
+      continue;
+    }
+    if (!mutator(match)) {
+      continue;
+    }
+    entry.match = match;
+    touched = true;
+  }
+
+  if (touched) {
+    raw.bindings = bindings;
+    changes.push(changeNote);
+  }
+}
+
+function ensureDefaultGroupEntry(section: Record<string, unknown>): {
+  groups: Record<string, unknown>;
+  entry: Record<string, unknown>;
+} {
+  const groups: Record<string, unknown> = isRecord(section.groups) ? section.groups : {};
+  const defaultKey = "*";
+  const entry: Record<string, unknown> = isRecord(groups[defaultKey]) ? groups[defaultKey] : {};
+  return { groups, entry };
+}
+
+function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function escapeControlForLog(value: string): string {
+  return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+}
+
+function migrateThreadBindingsTtlHoursForPath(params: {
+  owner: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): boolean {
+  const threadBindings = getRecord(params.owner.threadBindings);
+  if (!threadBindings || !hasOwnKey(threadBindings, "ttlHours")) {
+    return false;
+  }
+
+  const hadIdleHours = threadBindings.idleHours !== undefined;
+  if (!hadIdleHours) {
+    threadBindings.idleHours = threadBindings.ttlHours;
+  }
+  delete threadBindings.ttlHours;
+  params.owner.threadBindings = threadBindings;
+
+  if (hadIdleHours) {
+    params.changes.push(
+      `Removed ${params.pathPrefix}.threadBindings.ttlHours (${params.pathPrefix}.threadBindings.idleHours already set).`,
+    );
+  } else {
+    params.changes.push(
+      `Moved ${params.pathPrefix}.threadBindings.ttlHours → ${params.pathPrefix}.threadBindings.idleHours.`,
+    );
+  }
+  return true;
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
   {
     id: "bindings.match.provider->bindings.match.channel",
     describe: "Move bindings[].match.provider to bindings[].match.channel",
     apply: (raw, changes) => {
-      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
-      if (!bindings) return;
-
-      let touched = false;
-      for (const entry of bindings) {
-        if (!isRecord(entry)) continue;
-        const match = getRecord(entry.match);
-        if (!match) continue;
-        if (typeof match.channel === "string" && match.channel.trim()) continue;
-        const provider = typeof match.provider === "string" ? match.provider.trim() : "";
-        if (!provider) continue;
-        match.channel = provider;
-        delete match.provider;
-        entry.match = match;
-        touched = true;
-      }
-
-      if (touched) {
-        raw.bindings = bindings;
-        changes.push("Moved bindings[].match.provider → bindings[].match.channel.");
-      }
+      migrateBindings(
+        raw,
+        changes,
+        "Moved bindings[].match.provider → bindings[].match.channel.",
+        (match) => {
+          if (typeof match.channel === "string" && match.channel.trim()) {
+            return false;
+          }
+          const provider = typeof match.provider === "string" ? match.provider.trim() : "";
+          if (!provider) {
+            return false;
+          }
+          match.channel = provider;
+          delete match.provider;
+          return true;
+        },
+      );
     },
   },
   {
     id: "bindings.match.accountID->bindings.match.accountId",
     describe: "Move bindings[].match.accountID to bindings[].match.accountId",
     apply: (raw, changes) => {
-      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
-      if (!bindings) return;
-
-      let touched = false;
-      for (const entry of bindings) {
-        if (!isRecord(entry)) continue;
-        const match = getRecord(entry.match);
-        if (!match) continue;
-        if (match.accountId !== undefined) continue;
-        const accountID =
-          typeof match.accountID === "string" ? match.accountID.trim() : match.accountID;
-        if (!accountID) continue;
-        match.accountId = accountID;
-        delete match.accountID;
-        entry.match = match;
-        touched = true;
-      }
-
-      if (touched) {
-        raw.bindings = bindings;
-        changes.push("Moved bindings[].match.accountID → bindings[].match.accountId.");
-      }
+      migrateBindings(
+        raw,
+        changes,
+        "Moved bindings[].match.accountID → bindings[].match.accountId.",
+        (match) => {
+          if (match.accountId !== undefined) {
+            return false;
+          }
+          const accountID =
+            typeof match.accountID === "string" ? match.accountID.trim() : match.accountID;
+          if (!accountID) {
+            return false;
+          }
+          match.accountId = accountID;
+          delete match.accountID;
+          return true;
+        },
+      );
     },
   },
   {
@@ -67,20 +147,34 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     describe: "Move session.sendPolicy.rules[].match.provider to match.channel",
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
-      if (!session) return;
+      if (!session) {
+        return;
+      }
       const sendPolicy = getRecord(session.sendPolicy);
-      if (!sendPolicy) return;
+      if (!sendPolicy) {
+        return;
+      }
       const rules = Array.isArray(sendPolicy.rules) ? sendPolicy.rules : null;
-      if (!rules) return;
+      if (!rules) {
+        return;
+      }
 
       let touched = false;
       for (const rule of rules) {
-        if (!isRecord(rule)) continue;
+        if (!isRecord(rule)) {
+          continue;
+        }
         const match = getRecord(rule.match);
-        if (!match) continue;
-        if (typeof match.channel === "string" && match.channel.trim()) continue;
+        if (!match) {
+          continue;
+        }
+        if (typeof match.channel === "string" && match.channel.trim()) {
+          continue;
+        }
         const provider = typeof match.provider === "string" ? match.provider.trim() : "";
-        if (!provider) continue;
+        if (!provider) {
+          continue;
+        }
         match.channel = provider;
         delete match.provider;
         rule.match = match;
@@ -100,10 +194,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     describe: "Move messages.queue.byProvider to messages.queue.byChannel",
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
-      if (!messages) return;
+      if (!messages) {
+        return;
+      }
       const queue = getRecord(messages.queue);
-      if (!queue) return;
-      if (queue.byProvider === undefined) return;
+      if (!queue) {
+        return;
+      }
+      if (queue.byProvider === undefined) {
+        return;
+      }
       if (queue.byChannel === undefined) {
         queue.byChannel = queue.byProvider;
         changes.push("Moved messages.queue.byProvider → messages.queue.byChannel.");
@@ -129,12 +229,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
         "msteams",
       ];
       const legacyEntries = legacyKeys.filter((key) => isRecord(raw[key]));
-      if (legacyEntries.length === 0) return;
+      if (legacyEntries.length === 0) {
+        return;
+      }
 
       const channels = ensureRecord(raw, "channels");
       for (const key of legacyEntries) {
         const legacy = getRecord(raw[key]);
-        if (!legacy) continue;
+        if (!legacy) {
+          continue;
+        }
         const channelEntry = ensureRecord(channels, key);
         const hadEntries = Object.keys(channelEntry).length > 0;
         mergeMissing(channelEntry, legacy);
@@ -148,13 +252,168 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "thread-bindings.ttlHours->idleHours",
+    describe:
+      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channels.discord)",
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (session) {
+        migrateThreadBindingsTtlHoursForPath({
+          owner: session,
+          pathPrefix: "session",
+          changes,
+        });
+        raw.session = session;
+      }
+
+      const channels = getRecord(raw.channels);
+      const discord = getRecord(channels?.discord);
+      if (!channels || !discord) {
+        return;
+      }
+
+      migrateThreadBindingsTtlHoursForPath({
+        owner: discord,
+        pathPrefix: "channels.discord",
+        changes,
+      });
+
+      const accounts = getRecord(discord.accounts);
+      if (accounts) {
+        for (const [accountId, accountRaw] of Object.entries(accounts)) {
+          const account = getRecord(accountRaw);
+          if (!account) {
+            continue;
+          }
+          migrateThreadBindingsTtlHoursForPath({
+            owner: account,
+            pathPrefix: `channels.discord.accounts.${accountId}`,
+            changes,
+          });
+          accounts[accountId] = account;
+        }
+        discord.accounts = accounts;
+      }
+
+      channels.discord = discord;
+      raw.channels = channels;
+    },
+  },
+  {
+    id: "channels.streaming-keys->channels.streaming",
+    describe:
+      "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Discord/Slack)",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      const migrateProviderEntry = (params: {
+        provider: "telegram" | "discord" | "slack";
+        entry: Record<string, unknown>;
+        pathPrefix: string;
+      }) => {
+        const migrateCommonStreamingMode = (
+          resolveMode: (entry: Record<string, unknown>) => string,
+        ) => {
+          const hasLegacyStreamMode = params.entry.streamMode !== undefined;
+          const legacyStreaming = params.entry.streaming;
+          if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+            return false;
+          }
+          const resolved = resolveMode(params.entry);
+          params.entry.streaming = resolved;
+          if (hasLegacyStreamMode) {
+            delete params.entry.streamMode;
+            changes.push(
+              `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+            );
+          }
+          if (typeof legacyStreaming === "boolean") {
+            changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+          }
+          return true;
+        };
+
+        const hasLegacyStreamMode = params.entry.streamMode !== undefined;
+        const legacyStreaming = params.entry.streaming;
+        const legacyNativeStreaming = params.entry.nativeStreaming;
+
+        if (params.provider === "telegram") {
+          migrateCommonStreamingMode(resolveTelegramPreviewStreamMode);
+          return;
+        }
+
+        if (params.provider === "discord") {
+          migrateCommonStreamingMode(resolveDiscordPreviewStreamMode);
+          return;
+        }
+
+        if (!hasLegacyStreamMode && typeof legacyStreaming !== "boolean") {
+          return;
+        }
+        const resolvedStreaming = resolveSlackStreamingMode(params.entry);
+        const resolvedNativeStreaming = resolveSlackNativeStreaming(params.entry);
+        params.entry.streaming = resolvedStreaming;
+        params.entry.nativeStreaming = resolvedNativeStreaming;
+        if (hasLegacyStreamMode) {
+          delete params.entry.streamMode;
+          changes.push(formatSlackStreamModeMigrationMessage(params.pathPrefix, resolvedStreaming));
+        }
+        if (typeof legacyStreaming === "boolean") {
+          changes.push(
+            formatSlackStreamingBooleanMigrationMessage(params.pathPrefix, resolvedNativeStreaming),
+          );
+        } else if (typeof legacyNativeStreaming !== "boolean" && hasLegacyStreamMode) {
+          changes.push(`Set ${params.pathPrefix}.nativeStreaming → ${resolvedNativeStreaming}.`);
+        }
+      };
+
+      const migrateProvider = (provider: "telegram" | "discord" | "slack") => {
+        const providerEntry = getRecord(channels[provider]);
+        if (!providerEntry) {
+          return;
+        }
+        migrateProviderEntry({
+          provider,
+          entry: providerEntry,
+          pathPrefix: `channels.${provider}`,
+        });
+        const accounts = getRecord(providerEntry.accounts);
+        if (!accounts) {
+          return;
+        }
+        for (const [accountId, accountValue] of Object.entries(accounts)) {
+          const account = getRecord(accountValue);
+          if (!account) {
+            continue;
+          }
+          migrateProviderEntry({
+            provider,
+            entry: account,
+            pathPrefix: `channels.${provider}.accounts.${accountId}`,
+          });
+        }
+      };
+
+      migrateProvider("telegram");
+      migrateProvider("discord");
+      migrateProvider("slack");
+    },
+  },
+  {
     id: "routing.allowFrom->channels.whatsapp.allowFrom",
     describe: "Move routing.allowFrom to channels.whatsapp.allowFrom",
     apply: (raw, changes) => {
       const routing = raw.routing;
-      if (!routing || typeof routing !== "object") return;
+      if (!routing || typeof routing !== "object") {
+        return;
+      }
       const allowFrom = (routing as Record<string, unknown>).allowFrom;
-      if (allowFrom === undefined) return;
+      if (allowFrom === undefined) {
+        return;
+      }
 
       const channels = getRecord(raw.channels);
       const whatsapp = channels ? getRecord(channels.whatsapp) : null;
@@ -187,35 +446,36 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     describe: "Move routing.groupChat.requireMention to channels.whatsapp/telegram/imessage groups",
     apply: (raw, changes) => {
       const routing = raw.routing;
-      if (!routing || typeof routing !== "object") return;
+      if (!routing || typeof routing !== "object") {
+        return;
+      }
       const groupChat =
         (routing as Record<string, unknown>).groupChat &&
         typeof (routing as Record<string, unknown>).groupChat === "object"
           ? ((routing as Record<string, unknown>).groupChat as Record<string, unknown>)
           : null;
-      if (!groupChat) return;
+      if (!groupChat) {
+        return;
+      }
       const requireMention = groupChat.requireMention;
-      if (requireMention === undefined) return;
+      if (requireMention === undefined) {
+        return;
+      }
 
       const channels = ensureRecord(raw, "channels");
       const applyTo = (
         key: "whatsapp" | "telegram" | "imessage",
         options?: { requireExisting?: boolean },
       ) => {
-        if (options?.requireExisting && !isRecord(channels[key])) return;
+        if (options?.requireExisting && !isRecord(channels[key])) {
+          return;
+        }
         const section =
           channels[key] && typeof channels[key] === "object"
             ? (channels[key] as Record<string, unknown>)
             : {};
-        const groups =
-          section.groups && typeof section.groups === "object"
-            ? (section.groups as Record<string, unknown>)
-            : {};
+        const { groups, entry } = ensureDefaultGroupEntry(section);
         const defaultKey = "*";
-        const entry =
-          groups[defaultKey] && typeof groups[defaultKey] === "object"
-            ? (groups[defaultKey] as Record<string, unknown>)
-            : {};
         if (entry.requireMention === undefined) {
           entry.requireMention = requireMention;
           groups[defaultKey] = entry;
@@ -250,9 +510,13 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     describe: "Move gateway.token to gateway.auth.token",
     apply: (raw, changes) => {
       const gateway = raw.gateway;
-      if (!gateway || typeof gateway !== "object") return;
+      if (!gateway || typeof gateway !== "object") {
+        return;
+      }
       const token = (gateway as Record<string, unknown>).token;
-      if (token === undefined) return;
+      if (token === undefined) {
+        return;
+      }
 
       const gatewayObj = gateway as Record<string, unknown>;
       const auth =
@@ -261,7 +525,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
           : {};
       if (auth.token === undefined) {
         auth.token = token;
-        if (!auth.mode) auth.mode = "token";
+        if (!auth.mode) {
+          auth.mode = "token";
+        }
         changes.push("Moved gateway.token → gateway.auth.token.");
       } else {
         changes.push("Removed gateway.token (gateway.auth.token already set).");
@@ -274,25 +540,61 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "gateway.bind.host-alias->bind-mode",
+    describe: "Normalize gateway.bind host aliases to supported bind modes",
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway) {
+        return;
+      }
+      const bindRaw = gateway.bind;
+      if (typeof bindRaw !== "string") {
+        return;
+      }
+
+      const normalized = bindRaw.trim().toLowerCase();
+      let mapped: "lan" | "loopback" | undefined;
+      if (
+        normalized === "0.0.0.0" ||
+        normalized === "::" ||
+        normalized === "[::]" ||
+        normalized === "*"
+      ) {
+        mapped = "lan";
+      } else if (
+        normalized === "127.0.0.1" ||
+        normalized === "localhost" ||
+        normalized === "::1" ||
+        normalized === "[::1]"
+      ) {
+        mapped = "loopback";
+      }
+
+      if (!mapped || normalized === mapped) {
+        return;
+      }
+
+      gateway.bind = mapped;
+      raw.gateway = gateway;
+      changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
+    },
+  },
+  {
     id: "telegram.requireMention->channels.telegram.groups.*.requireMention",
     describe: "Move telegram.requireMention to channels.telegram.groups.*.requireMention",
     apply: (raw, changes) => {
       const channels = ensureRecord(raw, "channels");
       const telegram = channels.telegram;
-      if (!telegram || typeof telegram !== "object") return;
+      if (!telegram || typeof telegram !== "object") {
+        return;
+      }
       const requireMention = (telegram as Record<string, unknown>).requireMention;
-      if (requireMention === undefined) return;
+      if (requireMention === undefined) {
+        return;
+      }
 
-      const groups =
-        (telegram as Record<string, unknown>).groups &&
-        typeof (telegram as Record<string, unknown>).groups === "object"
-          ? ((telegram as Record<string, unknown>).groups as Record<string, unknown>)
-          : {};
+      const { groups, entry } = ensureDefaultGroupEntry(telegram as Record<string, unknown>);
       const defaultKey = "*";
-      const entry =
-        groups[defaultKey] && typeof groups[defaultKey] === "object"
-          ? (groups[defaultKey] as Record<string, unknown>)
-          : {};
 
       if (entry.requireMention === undefined) {
         entry.requireMention = requireMention;

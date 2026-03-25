@@ -1,6 +1,6 @@
-import MoltbotKit
+import OpenClawKit
 import Testing
-@testable import Moltbot
+@testable import OpenClaw
 
 @Suite struct IOSGatewayChatTransportTests {
     @Test func requestsFailFastWhenGatewayNotConnected() async {
@@ -25,6 +25,11 @@ import Testing
         do {
             _ = try await transport.requestHealth(timeoutMs: 250)
             Issue.record("Expected requestHealth to throw when gateway not connected")
+        } catch {}
+
+        do {
+            try await transport.resetSession(sessionKey: "node-test")
+            Issue.record("Expected resetSession to throw when gateway not connected")
         } catch {}
     }
 }

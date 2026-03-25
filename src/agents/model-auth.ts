@@ -1,10 +1,17 @@
 import path from "node:path";
-
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
-import type { MoltbotConfig } from "../config/config.js";
-import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { type Api, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { buildProviderMissingAuthMessageWithPlugin } from "../plugins/provider-runtime.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import {
+  normalizeOptionalSecretInput,
+  normalizeSecretInput,
+} from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -13,48 +20,98 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+  OLLAMA_LOCAL_AUTH_MARKER,
+} from "./model-auth-markers.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+
+const log = createSubsystemLogger("model-auth");
 
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
-
 function resolveProviderConfig(
-  cfg: MoltbotConfig | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {
   const providers = cfg?.models?.providers ?? {};
   const direct = providers[provider] as ModelProviderConfig | undefined;
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const normalized = normalizeProviderId(provider);
   if (normalized === provider) {
     const matched = Object.entries(providers).find(
       ([key]) => normalizeProviderId(key) === normalized,
     );
-    return matched?.[1] as ModelProviderConfig | undefined;
+    return matched?.[1];
   }
   return (
     (providers[normalized] as ModelProviderConfig | undefined) ??
-    (Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1] as
-      | ModelProviderConfig
-      | undefined)
+    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
   );
 }
 
 export function getCustomProviderApiKey(
-  cfg: MoltbotConfig | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
   const entry = resolveProviderConfig(cfg, provider);
-  const key = entry?.apiKey?.trim();
-  return key || undefined;
+  return normalizeOptionalSecretInput(entry?.apiKey);
+}
+
+type ResolvedCustomProviderApiKey = {
+  apiKey: string;
+  source: string;
+};
+
+export function resolveUsableCustomProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): ResolvedCustomProviderApiKey | null {
+  const customKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (!customKey) {
+    return null;
+  }
+  if (!isNonSecretApiKeyMarker(customKey)) {
+    return { apiKey: customKey, source: "models.json" };
+  }
+  if (!isKnownEnvApiKeyMarker(customKey)) {
+    return null;
+  }
+  const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[customKey]);
+  if (!envValue) {
+    return null;
+  }
+  const applied = new Set(getShellEnvAppliedKeys());
+  return {
+    apiKey: envValue,
+    source: resolveEnvSourceLabel({
+      applied,
+      envVars: [customKey],
+      label: `${customKey} (models.json marker)`,
+    }),
+  };
+}
+
+export function hasUsableCustomProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
 function resolveProviderAuthOverride(
-  cfg: MoltbotConfig | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
@@ -63,6 +120,91 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      host === "[::ffff:7f00:1]" ||
+      host === "[::ffff:127.0.0.1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
+    coerceSecretRef(providerConfig.apiKey) !== null
+  );
+}
+
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    typeof providerConfig.baseUrl === "string" &&
+    providerConfig.baseUrl.trim().length > 0 &&
+    typeof providerConfig.api === "string" &&
+    providerConfig.api.trim().length > 0 &&
+    Array.isArray(providerConfig.models) &&
+    providerConfig.models.length > 0
+  );
+}
+
+function resolveSyntheticLocalProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | null {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return null;
+  }
+
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return null;
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider === "ollama") {
+    return {
+      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
+  }
+
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return null;
+  }
+  if (!isCustomLocalProviderConfig(providerConfig)) {
+    return null;
+  }
+  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return null;
+  }
+
+  // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
+  // typically don't require auth. Synthesize a local key so the auth resolver
+  // doesn't reject them when the user left the API key blank during setup.
+  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+    return {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key",
+    };
+  }
+
+  return null;
 }
 
 function resolveEnvSourceLabel(params: {
@@ -76,11 +218,15 @@ function resolveEnvSourceLabel(params: {
 }
 
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  if (env[AWS_BEARER_ENV]?.trim()) return AWS_BEARER_ENV;
+  if (env[AWS_BEARER_ENV]?.trim()) {
+    return AWS_BEARER_ENV;
+  }
   if (env[AWS_ACCESS_KEY_ENV]?.trim() && env[AWS_SECRET_KEY_ENV]?.trim()) {
     return AWS_ACCESS_KEY_ENV;
   }
-  if (env[AWS_PROFILE_ENV]?.trim()) return AWS_PROFILE_ENV;
+  if (env[AWS_PROFILE_ENV]?.trim()) {
+    return AWS_PROFILE_ENV;
+  }
   return undefined;
 }
 
@@ -128,7 +274,7 @@ export type ResolvedProviderAuth = {
 
 export async function resolveApiKeyForProvider(params: {
   provider: string;
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
   store?: AuthProfileStore;
@@ -184,7 +330,9 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);
@@ -196,9 +344,14 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
 
-  const customKey = getCustomProviderApiKey(cfg, provider);
+  const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
-    return { apiKey: customKey, source: "models.json", mode: "api-key" };
+    return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
+  }
+
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (syntheticLocalAuth) {
+    return syntheticLocalAuth;
   }
 
   const normalized = normalizeProviderId(provider);
@@ -206,12 +359,29 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  if (provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.2 (ChatGPT OAuth) or set OPENAI_API_KEY for openai/gpt-5.2.',
-      );
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  const hasInlineConfiguredModels =
+    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
+  const owningPluginIds = !hasInlineConfiguredModels
+    ? resolveOwningPluginIdsForProvider({
+        provider,
+        config: cfg,
+      })
+    : undefined;
+  if (owningPluginIds?.length) {
+    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir: params.agentDir,
+        env: process.env,
+        provider,
+        listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+      },
+    });
+    if (pluginMissingAuthMessage) {
+      throw new Error(pluginMissingAuthMessage);
     }
   }
 
@@ -221,87 +391,30 @@ export async function resolveApiKeyForProvider(params: {
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("moltbot agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
   );
 }
 
-export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
-  const normalized = normalizeProviderId(provider);
-  const applied = new Set(getShellEnvAppliedKeys());
-  const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = process.env[envVar]?.trim();
-    if (!value) return null;
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
-    return { apiKey: value, source };
-  };
-
-  if (normalized === "github-copilot") {
-    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
-  }
-
-  if (normalized === "anthropic") {
-    return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
-  }
-
-  if (normalized === "chutes") {
-    return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
-  }
-
-  if (normalized === "zai") {
-    return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
-  }
-
-  if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
-    if (!envKey) return null;
-    return { apiKey: envKey, source: "gcloud adc" };
-  }
-
-  if (normalized === "opencode") {
-    return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
-  }
-
-  if (normalized === "qwen-portal") {
-    return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
-  }
-
-  const envMap: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    google: "GEMINI_API_KEY",
-    groq: "GROQ_API_KEY",
-    deepgram: "DEEPGRAM_API_KEY",
-    cerebras: "CEREBRAS_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-    "kimi-code": "KIMICODE_API_KEY",
-    minimax: "MINIMAX_API_KEY",
-    xiaomi: "XIAOMI_API_KEY",
-    synthetic: "SYNTHETIC_API_KEY",
-    venice: "VENICE_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-  };
-  const envVar = envMap[normalized];
-  if (!envVar) return null;
-  return pick(envVar);
-}
+export { resolveEnvApiKey } from "./model-auth-env.js";
+export type { EnvApiKeyResult } from "./model-auth-env.js";
 
 export function resolveModelAuthMode(
   provider?: string,
-  cfg?: MoltbotConfig,
+  cfg?: OpenClawConfig,
   store?: AuthProfileStore,
 ): ModelAuthMode | undefined {
   const resolved = provider?.trim();
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
 
   const authOverride = resolveProviderAuthOverride(cfg, resolved);
-  if (authOverride === "aws-sdk") return "aws-sdk";
+  if (authOverride === "aws-sdk") {
+    return "aws-sdk";
+  }
 
   const authStore = store ?? ensureAuthProfileStore();
   const profiles = listProfilesForProvider(authStore, resolved);
@@ -314,10 +427,18 @@ export function resolveModelAuthMode(
     const distinct = ["oauth", "token", "api_key"].filter((k) =>
       modes.has(k as "oauth" | "token" | "api_key"),
     );
-    if (distinct.length >= 2) return "mixed";
-    if (modes.has("oauth")) return "oauth";
-    if (modes.has("token")) return "token";
-    if (modes.has("api_key")) return "api-key";
+    if (distinct.length >= 2) {
+      return "mixed";
+    }
+    if (modes.has("oauth")) {
+      return "oauth";
+    }
+    if (modes.has("token")) {
+      return "token";
+    }
+    if (modes.has("api_key")) {
+      return "api-key";
+    }
   }
 
   if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
@@ -329,14 +450,66 @@ export function resolveModelAuthMode(
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
+  if (hasUsableCustomProviderApiKey(cfg, resolved)) {
+    return "api-key";
+  }
 
   return "unknown";
 }
 
+export async function hasAvailableAuthForProvider(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): Promise<boolean> {
+  const { provider, cfg, preferredProfile } = params;
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+
+  const authOverride = resolveProviderAuthOverride(cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    preferredProfile,
+  });
+  for (const candidate of order) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: candidate,
+        agentDir: params.agentDir,
+      });
+      if (resolved) {
+        return true;
+      }
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
+  }
+
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+
+  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
+}
+
 export async function getApiKeyForModel(params: {
   model: Model<Api>;
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
   store?: AuthProfileStore;
@@ -353,7 +526,31 @@ export async function getApiKeyForModel(params: {
 }
 
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
-  const key = auth.apiKey?.trim();
-  if (key) return key;
+  const key = normalizeSecretInput(auth.apiKey);
+  if (key) {
+    return key;
+  }
   throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+}
+
+export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
+  }
+
+  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
+  // placeholder so construction succeeds, then clear the header at request build
+  // time for local servers that intentionally do not require auth.
+  const headers = {
+    ...model.headers,
+    Authorization: null,
+  } as unknown as Record<string, string>;
+
+  return {
+    ...model,
+    headers,
+  };
 }

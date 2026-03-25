@@ -1,3 +1,4 @@
+import { findCodeRegions, isInsideCode } from "./code-regions.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
@@ -5,41 +6,13 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
-interface CodeRegion {
-  start: number;
-  end: number;
-}
-
-function findCodeRegions(text: string): CodeRegion[] {
-  const regions: CodeRegion[] = [];
-
-  const fencedRe = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2(?:\n|$)|$)/g;
-  for (const match of text.matchAll(fencedRe)) {
-    const start = (match.index ?? 0) + match[1].length;
-    regions.push({ start, end: start + match[0].length - match[1].length });
-  }
-
-  const inlineRe = /`+[^`]+`+/g;
-  for (const match of text.matchAll(inlineRe)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    const insideFenced = regions.some((r) => start >= r.start && end <= r.end);
-    if (!insideFenced) {
-      regions.push({ start, end });
-    }
-  }
-
-  regions.sort((a, b) => a.start - b.start);
-  return regions;
-}
-
-function isInsideCode(pos: number, regions: CodeRegion[]): boolean {
-  return regions.some((r) => pos >= r.start && pos < r.end);
-}
-
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
-  if (mode === "none") return value;
-  if (mode === "start") return value.trimStart();
+  if (mode === "none") {
+    return value;
+  }
+  if (mode === "start") {
+    return value.trimStart();
+  }
   return value.trim();
 }
 
@@ -50,8 +23,12 @@ export function stripReasoningTagsFromText(
     trim?: ReasoningTagTrim;
   },
 ): string {
-  if (!text) return text;
-  if (!QUICK_TAG_RE.test(text)) return text;
+  if (!text) {
+    return text;
+  }
+  if (!QUICK_TAG_RE.test(text)) {
+    return text;
+  }
 
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";

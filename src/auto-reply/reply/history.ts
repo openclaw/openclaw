@@ -14,12 +14,16 @@ export function evictOldHistoryKeys<T>(
   historyMap: Map<string, T[]>,
   maxKeys: number = MAX_HISTORY_KEYS,
 ): void {
-  if (historyMap.size <= maxKeys) return;
+  if (historyMap.size <= maxKeys) {
+    return;
+  }
   const keysToDelete = historyMap.size - maxKeys;
   const iterator = historyMap.keys();
   for (let i = 0; i < keysToDelete; i++) {
     const key = iterator.next().value;
-    if (key !== undefined) historyMap.delete(key);
+    if (key !== undefined) {
+      historyMap.delete(key);
+    }
   }
 }
 
@@ -37,7 +41,9 @@ export function buildHistoryContext(params: {
 }): string {
   const { historyText, currentMessage } = params;
   const lineBreak = params.lineBreak ?? "\n";
-  if (!historyText.trim()) return currentMessage;
+  if (!historyText.trim()) {
+    return currentMessage;
+  }
   return [HISTORY_CONTEXT_MARKER, historyText, "", CURRENT_MESSAGE_MARKER, currentMessage].join(
     lineBreak,
   );
@@ -50,10 +56,14 @@ export function appendHistoryEntry<T extends HistoryEntry>(params: {
   limit: number;
 }): T[] {
   const { historyMap, historyKey, entry } = params;
-  if (params.limit <= 0) return [];
+  if (params.limit <= 0) {
+    return [];
+  }
   const history = historyMap.get(historyKey) ?? [];
   history.push(entry);
-  while (history.length > params.limit) history.shift();
+  while (history.length > params.limit) {
+    history.shift();
+  }
   if (historyMap.has(historyKey)) {
     // Refresh insertion order so eviction keeps recently used histories.
     historyMap.delete(historyKey);
@@ -79,8 +89,12 @@ export function recordPendingHistoryEntryIfEnabled<T extends HistoryEntry>(param
   entry?: T | null;
   limit: number;
 }): T[] {
-  if (!params.entry) return [];
-  if (params.limit <= 0) return [];
+  if (!params.entry) {
+    return [];
+  }
+  if (params.limit <= 0) {
+    return [];
+  }
   return recordPendingHistoryEntry({
     historyMap: params.historyMap,
     historyKey: params.historyKey,
@@ -97,7 +111,9 @@ export function buildPendingHistoryContextFromMap(params: {
   formatEntry: (entry: HistoryEntry) => string;
   lineBreak?: string;
 }): string {
-  if (params.limit <= 0) return params.currentMessage;
+  if (params.limit <= 0) {
+    return params.currentMessage;
+  }
   const entries = params.historyMap.get(params.historyKey) ?? [];
   return buildHistoryContextFromEntries({
     entries,
@@ -118,7 +134,9 @@ export function buildHistoryContextFromMap(params: {
   lineBreak?: string;
   excludeLast?: boolean;
 }): string {
-  if (params.limit <= 0) return params.currentMessage;
+  if (params.limit <= 0) {
+    return params.currentMessage;
+  }
   const entries = params.entry
     ? appendHistoryEntry({
         historyMap: params.historyMap,
@@ -148,7 +166,9 @@ export function clearHistoryEntriesIfEnabled(params: {
   historyKey: string;
   limit: number;
 }): void {
-  if (params.limit <= 0) return;
+  if (params.limit <= 0) {
+    return;
+  }
   clearHistoryEntries({ historyMap: params.historyMap, historyKey: params.historyKey });
 }
 
@@ -161,7 +181,9 @@ export function buildHistoryContextFromEntries(params: {
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
   const entries = params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
-  if (entries.length === 0) return params.currentMessage;
+  if (entries.length === 0) {
+    return params.currentMessage;
+  }
   const historyText = entries.map(params.formatEntry).join(lineBreak);
   return buildHistoryContext({
     historyText,

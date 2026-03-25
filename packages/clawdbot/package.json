@@ -1,16 +1,16 @@
 {
-  "name": "moltbot",
-  "version": "2026.1.26",
+  "name": "clawdbot",
+  "version": "2026.2.12",
+  "description": "Compatibility shim that forwards to openclaw",
+  "bin": {
+    "clawdbot": "./bin/clawdbot.js"
+  },
   "type": "module",
-  "description": "Compatibility shim that forwards to moltbot",
   "exports": {
     ".": "./index.js",
-    "./plugin-sdk": "./plugin-sdk/index.js"
-  },
-  "bin": {
-    "moltbot": "./bin/moltbot.js"
+    "./cli-entry": "./bin/clawdbot.js"
   },
   "dependencies": {
-    "moltbot": "workspace:*"
+    "openclaw": "workspace:*"
   }
 }

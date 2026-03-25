@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
@@ -9,35 +8,47 @@ import { normalizeServePath } from "./gmail.js";
 let cachedPythonPath: string | null | undefined;
 const MAX_OUTPUT_CHARS = 800;
 
+export function resetGmailSetupUtilsCachesForTest(): void {
+  cachedPythonPath = undefined;
+}
+
 function trimOutput(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (trimmed.length <= MAX_OUTPUT_CHARS) return trimmed;
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= MAX_OUTPUT_CHARS) {
+    return trimmed;
+  }
   return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
 }
 
-function formatCommandFailure(command: string, result: SpawnResult): string {
+function formatCommandResultInternal(
+  command: string,
+  result: SpawnResult,
+  statusLabel: "failed" | "exited",
+): string {
   const code = result.code ?? "null";
   const signal = result.signal ? `, signal=${result.signal}` : "";
   const killed = result.killed ? ", killed=true" : "";
   const stderr = trimOutput(result.stderr);
   const stdout = trimOutput(result.stdout);
-  const lines = [`${command} failed (code=${code}${signal}${killed})`];
-  if (stderr) lines.push(`stderr: ${stderr}`);
-  if (stdout) lines.push(`stdout: ${stdout}`);
+  const lines = [`${command} ${statusLabel} (code=${code}${signal}${killed})`];
+  if (stderr) {
+    lines.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    lines.push(`stdout: ${stdout}`);
+  }
   return lines.join("\n");
 }
 
+function formatCommandFailure(command: string, result: SpawnResult): string {
+  return formatCommandResultInternal(command, result, "failed");
+}
+
 function formatCommandResult(command: string, result: SpawnResult): string {
-  const code = result.code ?? "null";
-  const signal = result.signal ? `, signal=${result.signal}` : "";
-  const killed = result.killed ? ", killed=true" : "";
-  const stderr = trimOutput(result.stderr);
-  const stdout = trimOutput(result.stdout);
-  const lines = [`${command} exited (code=${code}${signal}${killed})`];
-  if (stderr) lines.push(`stderr: ${stderr}`);
-  if (stdout) lines.push(`stdout: ${stdout}`);
-  return lines.join("\n");
+  return formatCommandResultInternal(command, result, "exited");
 }
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
@@ -57,7 +68,9 @@ function findExecutablesOnPath(bins: string[]): string[] {
   for (const part of parts) {
     for (const bin of bins) {
       const candidate = path.join(part, bin);
-      if (seen.has(candidate)) continue;
+      if (seen.has(candidate)) {
+        continue;
+      }
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
         matches.push(candidate);
@@ -73,13 +86,17 @@ function findExecutablesOnPath(bins: string[]): string[] {
 function ensurePathIncludes(dirPath: string, position: "append" | "prepend") {
   const pathEnv = process.env.PATH ?? "";
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
-  if (parts.includes(dirPath)) return;
+  if (parts.includes(dirPath)) {
+    return;
+  }
   const next = position === "prepend" ? [dirPath, ...parts] : [...parts, dirPath];
   process.env.PATH = next.join(path.delimiter);
 }
 
 function ensureGcloudOnPath(): boolean {
-  if (hasBinary("gcloud")) return true;
+  if (hasBinary("gcloud")) {
+    return true;
+  }
   const candidates = [
     "/opt/homebrew/share/google-cloud-sdk/bin/gcloud",
     "/usr/local/share/google-cloud-sdk/bin/gcloud",
@@ -108,9 +125,13 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
       [candidate, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
       { timeoutMs: 2_000 },
     );
-    if (res.code !== 0) continue;
+    if (res.code !== 0) {
+      continue;
+    }
     const resolved = res.stdout.trim().split(/\s+/)[0];
-    if (!resolved) continue;
+    if (!resolved) {
+      continue;
+    }
     try {
       fs.accessSync(resolved, fs.constants.X_OK);
       cachedPythonPath = resolved;
@@ -124,9 +145,13 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
 }
 
 async function gcloudEnv(): Promise<NodeJS.ProcessEnv | undefined> {
-  if (process.env.CLOUDSDK_PYTHON) return undefined;
+  if (process.env.CLOUDSDK_PYTHON) {
+    return undefined;
+  }
   const pythonPath = await resolvePythonExecutablePath();
-  if (!pythonPath) return undefined;
+  if (!pythonPath) {
+    return undefined;
+  }
   return { CLOUDSDK_PYTHON: pythonPath };
 }
 
@@ -141,8 +166,12 @@ async function runGcloudCommand(
 }
 
 export async function ensureDependency(bin: string, brewArgs: string[]) {
-  if (bin === "gcloud" && ensureGcloudOnPath()) return;
-  if (hasBinary(bin)) return;
+  if (bin === "gcloud" && ensureGcloudOnPath()) {
+    return;
+  }
+  if (hasBinary(bin)) {
+    return;
+  }
   if (process.platform !== "darwin") {
     throw new Error(`${bin} not installed; install it and retry`);
   }
@@ -167,7 +196,9 @@ export async function ensureGcloudAuth() {
     ["auth", "list", "--filter", "status:ACTIVE", "--format", "value(account)"],
     30_000,
   );
-  if (res.code === 0 && res.stdout.trim()) return;
+  if (res.code === 0 && res.stdout.trim()) {
+    return;
+  }
   const login = await runGcloudCommand(["auth", "login"], 600_000);
   if (login.code !== 0) {
     throw new Error(login.stderr || "gcloud auth login failed");
@@ -187,7 +218,9 @@ export async function ensureTopic(projectId: string, topicName: string) {
     ["pubsub", "topics", "describe", topicName, "--project", projectId],
     30_000,
   );
-  if (describe.code === 0) return;
+  if (describe.code === 0) {
+    return;
+  }
   await runGcloud(["pubsub", "topics", "create", topicName, "--project", projectId]);
 }
 
@@ -235,7 +268,9 @@ export async function ensureTailscaleEndpoint(params: {
   target?: string;
   token?: string;
 }): Promise<string> {
-  if (params.mode === "off") return "";
+  if (params.mode === "off") {
+    return "";
+  }
 
   const statusArgs = ["status", "--json"];
   const statusCommand = formatCommand("tailscale", statusArgs);
@@ -249,7 +284,7 @@ export async function ensureTailscaleEndpoint(params: {
   try {
     parsed = JSON.parse(status.stdout) as { Self?: { DNSName?: string } };
   } catch (err) {
-    throw new Error(formatJsonParseFailure(statusCommand, status, err));
+    throw new Error(formatJsonParseFailure(statusCommand, status, err), { cause: err });
   }
   const dnsName = parsed.Self?.DNSName?.replace(/\.$/, "");
   if (!dnsName) {
@@ -283,13 +318,17 @@ export async function ensureTailscaleEndpoint(params: {
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
   const candidates = gogCredentialsPaths();
   for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
     try {
       const raw = fs.readFileSync(candidate, "utf-8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const clientId = extractGogClientId(parsed);
       const projectNumber = extractProjectNumber(clientId);
-      if (!projectNumber) continue;
+      if (!projectNumber) {
+        continue;
+      }
       const res = await runGcloudCommand(
         [
           "projects",
@@ -301,9 +340,13 @@ export async function resolveProjectIdFromGogCredentials(): Promise<string | nul
         ],
         30_000,
       );
-      if (res.code !== 0) continue;
+      if (res.code !== 0) {
+        continue;
+      }
       const projectId = res.stdout.trim().split(/\s+/)[0];
-      if (projectId) return projectId;
+      if (projectId) {
+        return projectId;
+      }
     } catch {
       // keep scanning
     }
@@ -332,7 +375,9 @@ function extractGogClientId(parsed: Record<string, unknown>): string | null {
 }
 
 function extractProjectNumber(clientId: string | null): string | null {
-  if (!clientId) return null;
+  if (!clientId) {
+    return null;
+  }
   const match = clientId.match(/^(\d+)-/);
   return match?.[1] ?? null;
 }

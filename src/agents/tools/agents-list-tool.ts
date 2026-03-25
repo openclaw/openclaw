@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-
 import { loadConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
@@ -27,7 +26,8 @@ export function createAgentsListTool(opts?: {
   return {
     label: "Agents",
     name: "agents_list",
-    description: "List agent ids you can target with sessions_spawn (based on allowlists).",
+    description:
+      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = loadConfig();
@@ -59,20 +59,28 @@ export function createAgentsListTool(opts?: {
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";
-        if (!name) continue;
+        if (!name) {
+          continue;
+        }
         configuredNameMap.set(normalizeAgentId(entry.id), name);
       }
 
       const allowed = new Set<string>();
       allowed.add(requesterAgentId);
       if (allowAny) {
-        for (const id of configuredIds) allowed.add(id);
+        for (const id of configuredIds) {
+          allowed.add(id);
+        }
       } else {
-        for (const id of allowSet) allowed.add(id);
+        for (const id of allowSet) {
+          allowed.add(id);
+        }
       }
 
       const all = Array.from(allowed);
-      const rest = all.filter((id) => id !== requesterAgentId).sort((a, b) => a.localeCompare(b));
+      const rest = all
+        .filter((id) => id !== requesterAgentId)
+        .toSorted((a, b) => a.localeCompare(b));
       const ordered = [requesterAgentId, ...rest];
       const agents: AgentListEntry[] = ordered.map((id) => ({
         id,

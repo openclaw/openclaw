@@ -1,53 +1,43 @@
+import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
+import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../../commands/daemon-runtime.js";
-import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { loadConfig, resolveGatewayPort } from "../../config/config.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
-import { parsePort } from "./shared.js";
+import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
+import {
+  createDaemonInstallActionContext,
+  failIfNixDaemonInstallMode,
+  parsePort,
+} from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-export async function runDaemonInstall(opts: DaemonInstallOptions) {
-  const json = Boolean(opts.json);
-  const warnings: string[] = [];
-  const stdout = json ? createNullWriter() : process.stdout;
-  const emit = (payload: {
-    ok: boolean;
-    result?: string;
-    message?: string;
-    error?: string;
-    service?: {
-      label: string;
-      loaded: boolean;
-      loadedText: string;
-      notLoadedText: string;
-    };
-    hints?: string[];
-    warnings?: string[];
-  }) => {
-    if (!json) return;
-    emitDaemonActionJson({ action: "install", ...payload });
+function mergeInstallInvocationEnv(params: {
+  env: NodeJS.ProcessEnv;
+  existingServiceEnv?: Record<string, string>;
+}): NodeJS.ProcessEnv {
+  if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
+    return params.env;
+  }
+  return {
+    ...params.existingServiceEnv,
+    ...params.env,
   };
-  const fail = (message: string) => {
-    if (json) {
-      emit({ ok: false, error: message, warnings: warnings.length ? warnings : undefined });
-    } else {
-      defaultRuntime.error(message);
-    }
-    defaultRuntime.exit(1);
-  };
+}
 
-  if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; service install is disabled.");
+export async function runDaemonInstall(opts: DaemonInstallOptions) {
+  const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
+  if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = await readBestEffortConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail("Invalid port");
@@ -66,66 +56,131 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
 
   const service = resolveGatewayService();
   let loaded = false;
+  let existingServiceEnv: Record<string, string> | undefined;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    fail(`Gateway service check failed: ${String(err)}`);
-    return;
+    if (isNonFatalSystemdInstallProbeError(err)) {
+      loaded = false;
+    } else {
+      fail(`Gateway service check failed: ${String(err)}`);
+      return;
+    }
   }
   if (loaded) {
+    existingServiceEnv = (await service.readCommand(process.env).catch(() => null))?.environment;
+  }
+  const installEnv = mergeInstallInvocationEnv({
+    env: process.env,
+    existingServiceEnv,
+  });
+  if (loaded) {
     if (!opts.force) {
-      emit({
-        ok: true,
-        result: "already-installed",
-        message: `Gateway service already ${service.loadedText}.`,
-        service: buildDaemonServiceSnapshot(service, loaded),
-        warnings: warnings.length ? warnings : undefined,
-      });
-      if (!json) {
-        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log(
-          `Reinstall with: ${formatCliCommand("moltbot gateway install --force")}`,
-        );
+      if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
+        const message = "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+        if (json) {
+          warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
+      } else {
+        emit({
+          ok: true,
+          result: "already-installed",
+          message: `Gateway service already ${service.loadedText}.`,
+          service: buildDaemonServiceSnapshot(service, loaded),
+        });
+        if (!json) {
+          defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+          defaultRuntime.log(
+            `Reinstall with: ${formatCliCommand("openclaw gateway install --force")}`,
+          );
+        }
+        return;
       }
-      return;
+    }
+  }
+
+  const tokenResolution = await resolveGatewayInstallToken({
+    config: cfg,
+    env: installEnv,
+    explicitToken: opts.token,
+    autoGenerateWhenMissing: true,
+    persistGeneratedToken: true,
+  });
+  if (tokenResolution.unavailableReason) {
+    fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
+    return;
+  }
+  for (const warning of tokenResolution.warnings) {
+    if (json) {
+      warnings.push(warning);
+    } else {
+      defaultRuntime.log(warning);
     }
   }
 
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: process.env,
+    env: installEnv,
     port,
-    token: opts.token || cfg.gateway?.auth?.token || process.env.CLAWDBOT_GATEWAY_TOKEN,
     runtime: runtimeRaw,
     warn: (message) => {
-      if (json) warnings.push(message);
-      else defaultRuntime.log(message);
+      if (json) {
+        warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
     },
     config: cfg,
   });
 
-  try {
-    await service.install({
-      env: process.env,
-      stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-  } catch (err) {
-    fail(`Gateway install failed: ${String(err)}`);
-    return;
-  }
-
-  let installed = true;
-  try {
-    installed = await service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
-  }
-  emit({
-    ok: true,
-    result: "installed",
-    service: buildDaemonServiceSnapshot(service, installed),
-    warnings: warnings.length ? warnings : undefined,
+  await installDaemonServiceAndEmit({
+    serviceNoun: "Gateway",
+    service,
+    warnings,
+    emit,
+    fail,
+    install: async () => {
+      await service.install({
+        env: installEnv,
+        stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+      });
+    },
   });
+}
+
+async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  env: Record<string, string | undefined>;
+}): Promise<boolean> {
+  try {
+    const currentCommand = await params.service.readCommand(params.env);
+    if (!currentCommand) {
+      return false;
+    }
+    const currentExecPath = currentCommand.programArguments[0]?.trim();
+    if (!currentExecPath) {
+      return false;
+    }
+    const currentEnvironment = currentCommand.environment ?? {};
+    const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+    const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
+      env: {
+        ...params.env,
+        ...currentEnvironment,
+        NODE_EXTRA_CA_CERTS: undefined,
+      },
+      execPath: currentExecPath,
+      includeDarwinDefaults: false,
+    }).NODE_EXTRA_CA_CERTS;
+    if (!expectedNodeExtraCaCerts) {
+      return false;
+    }
+    return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
+  } catch {
+    return false;
+  }
 }

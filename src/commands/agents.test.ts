@@ -1,19 +1,19 @@
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   applyAgentBindings,
   applyAgentConfig,
   buildAgentSummaries,
   pruneAgentConfig,
+  removeAgentBindings,
 } from "./agents.js";
 
 describe("agents helpers", () => {
   it("buildAgentSummaries includes default + configured agents", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: "/main-ws",
@@ -45,7 +45,9 @@ describe("agents helpers", () => {
     const work = summaries.find((summary) => summary.id === "work");
 
     expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(path.join(os.homedir(), "clawd-main"));
+    expect(main?.workspace).toBe(
+      path.join(resolveStateDir(process.env, os.homedir), "workspace-main"),
+    );
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
     expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);
@@ -59,7 +61,7 @@ describe("agents helpers", () => {
   });
 
   it("applyAgentConfig merges updates", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "work", workspace: "/old-ws", model: "anthropic/claude" }],
       },
@@ -80,7 +82,7 @@ describe("agents helpers", () => {
   });
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       bindings: [
         {
           agentId: "main",
@@ -110,8 +112,116 @@ describe("agents helpers", () => {
     expect(result.config.bindings).toHaveLength(2);
   });
 
+  it("applyAgentBindings upgrades channel-only binding to account-specific binding for same agent", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram" },
+        },
+      ],
+    };
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.updated).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toEqual([
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+  });
+
+  it("applyAgentBindings treats role-based bindings as distinct routes", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+            roles: ["111", "222"],
+          },
+        },
+      ],
+    };
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toHaveLength(2);
+  });
+
+  it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+            roles: ["111", "222"],
+          },
+        },
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+          },
+        },
+      ],
+    };
+
+    const result = removeAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+
+    expect(result.removed).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+          roles: ["111", "222"],
+        },
+      },
+    ]);
+  });
+
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         list: [
           { id: "work", default: true, workspace: "/work-ws" },

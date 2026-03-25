@@ -1,23 +1,35 @@
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
-import type { MoltbotConfig } from "../config/config.js";
-import type { GetReplyOptions } from "../auto-reply/types.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
+import type { GetReplyOptions } from "../auto-reply/types.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];
 
 export type ReplyPrefixContextBundle = {
   prefixContext: ResponsePrefixContext;
   responsePrefix?: string;
+  enableSlackInteractiveReplies?: boolean;
   responsePrefixContextProvider: () => ResponsePrefixContext;
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
+export type ReplyPrefixOptions = Pick<
+  ReplyPrefixContextBundle,
+  | "responsePrefix"
+  | "enableSlackInteractiveReplies"
+  | "responsePrefixContextProvider"
+  | "onModelSelected"
+>;
+
 export function createReplyPrefixContext(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
+  channel?: string;
+  accountId?: string;
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;
   const prefixContext: ResponsePrefixContext = {
@@ -34,8 +46,37 @@ export function createReplyPrefixContext(params: {
 
   return {
     prefixContext,
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix,
+    responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId, {
+      channel: params.channel,
+      accountId: params.accountId,
+    }).responsePrefix,
+    enableSlackInteractiveReplies: params.channel
+      ? (getChannelPlugin(params.channel)?.messaging?.enableInteractiveReplies?.({
+          cfg,
+          accountId: params.accountId,
+        }) ?? undefined)
+      : undefined,
     responsePrefixContextProvider: () => prefixContext,
+    onModelSelected,
+  };
+}
+
+export function createReplyPrefixOptions(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  channel?: string;
+  accountId?: string;
+}): ReplyPrefixOptions {
+  const {
+    responsePrefix,
+    enableSlackInteractiveReplies,
+    responsePrefixContextProvider,
+    onModelSelected,
+  } = createReplyPrefixContext(params);
+  return {
+    responsePrefix,
+    enableSlackInteractiveReplies,
+    responsePrefixContextProvider,
     onModelSelected,
   };
 }

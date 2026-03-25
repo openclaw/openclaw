@@ -1,4 +1,5 @@
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { getSafeLocalStorage } from "../local-storage.ts";
 
 type StoredIdentity = {
   version: 1;
@@ -14,11 +15,13 @@ export type DeviceIdentity = {
   privateKey: string;
 };
 
-const STORAGE_KEY = "moltbot-device-identity-v1";
+const STORAGE_KEY = "openclaw-device-identity-v1";
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
@@ -27,7 +30,9 @@ function base64UrlDecode(input: string): Uint8Array {
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   const binary = atob(padded);
   const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  for (let i = 0; i < binary.length; i += 1) {
+    out[i] = binary.charCodeAt(i);
+  }
   return out;
 }
 
@@ -38,7 +43,7 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey);
+  const hash = await crypto.subtle.digest("SHA-256", publicKey.slice().buffer);
   return bytesToHex(new Uint8Array(hash));
 }
 
@@ -54,8 +59,9 @@ async function generateIdentity(): Promise<DeviceIdentity> {
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
+  const storage = getSafeLocalStorage();
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = storage?.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as StoredIdentity;
       if (
@@ -70,7 +76,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
             ...parsed,
             deviceId: derivedId,
           };
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+          storage?.setItem(STORAGE_KEY, JSON.stringify(updated));
           return {
             deviceId: derivedId,
             publicKey: parsed.publicKey,
@@ -96,7 +102,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
     privateKey: identity.privateKey,
     createdAtMs: Date.now(),
   };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  storage?.setItem(STORAGE_KEY, JSON.stringify(stored));
   return identity;
 }
 

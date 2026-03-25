@@ -1,37 +1,39 @@
 ---
-summary: "Moltbot on Raspberry Pi (budget self-hosted setup)"
+summary: "OpenClaw on Raspberry Pi (budget self-hosted setup)"
 read_when:
-  - Setting up Moltbot on a Raspberry Pi
-  - Running Moltbot on ARM devices
+  - Setting up OpenClaw on a Raspberry Pi
+  - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
+title: "Raspberry Pi (Platform)"
 ---
 
-# Moltbot on Raspberry Pi
+# OpenClaw on Raspberry Pi
 
 ## Goal
 
-Run a persistent, always-on Moltbot Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
+Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
 
 Perfect for:
+
 - 24/7 personal AI assistant
 - Home automation hub
 - Low-power, always-available Telegram/WhatsApp bot
 
 ## Hardware Requirements
 
-| Pi Model | RAM | Works? | Notes |
-|----------|-----|--------|-------|
-| **Pi 5** | 4GB/8GB | ✅ Best | Fastest, recommended |
-| **Pi 4** | 4GB | ✅ Good | Sweet spot for most users |
-| **Pi 4** | 2GB | ✅ OK | Works, add swap |
-| **Pi 4** | 1GB | ⚠️ Tight | Possible with swap, minimal config |
-| **Pi 3B+** | 1GB | ⚠️ Slow | Works but sluggish |
-| **Pi Zero 2 W** | 512MB | ❌ | Not recommended |
+| Pi Model        | RAM     | Works?   | Notes                              |
+| --------------- | ------- | -------- | ---------------------------------- |
+| **Pi 5**        | 4GB/8GB | ✅ Best  | Fastest, recommended               |
+| **Pi 4**        | 4GB     | ✅ Good  | Sweet spot for most users          |
+| **Pi 4**        | 2GB     | ✅ OK    | Works, add swap                    |
+| **Pi 4**        | 1GB     | ⚠️ Tight | Possible with swap, minimal config |
+| **Pi 3B+**      | 1GB     | ⚠️ Slow  | Works but sluggish                 |
+| **Pi Zero 2 W** | 512MB   | ❌       | Not recommended                    |
 
 **Minimum specs:** 1GB RAM, 1 core, 500MB disk  
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
 
-## What You'll Need
+## What you need
 
 - Raspberry Pi 4 or 5 (2GB+ recommended)
 - MicroSD card (16GB+) or USB SSD (better performance)
@@ -74,15 +76,15 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Install Node.js 22 (ARM64)
+## 4) Install Node.js 24 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs
 
 # Verify
-node --version  # Should show v22.x.x
+node --version  # Should show v24.x.x
 npm --version
 ```
 
@@ -105,19 +107,19 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Install Moltbot
+## 6) Install OpenClaw
 
 ### Option A: Standard Install (Recommended)
 
 ```bash
-curl -fsSL https://molt.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ### Option B: Hackable Install (For tinkering)
 
 ```bash
-git clone https://github.com/moltbot/moltbot.git
-cd moltbot
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
 npm install
 npm run build
 npm link
@@ -128,10 +130,11 @@ The hackable install gives you direct access to logs and code — useful for deb
 ## 7) Run Onboarding
 
 ```bash
-moltbot onboard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Follow the wizard:
+
 1. **Gateway mode:** Local
 2. **Auth:** API keys recommended (OAuth can be finicky on headless Pi)
 3. **Channels:** Telegram is easiest to start with
@@ -141,38 +144,41 @@ Follow the wizard:
 
 ```bash
 # Check status
-moltbot status
+openclaw status
 
 # Check service
-sudo systemctl status moltbot
+sudo systemctl status openclaw
 
 # View logs
-journalctl -u moltbot -f
+journalctl -u openclaw -f
 ```
 
-## 9) Access the Dashboard
+## 9) Access the OpenClaw Dashboard
 
-Since the Pi is headless, use an SSH tunnel:
+Replace `user@gateway-host` with your Pi username and hostname or IP address.
+
+On your computer, ask the Pi to print a fresh dashboard URL:
 
 ```bash
-# From your laptop/desktop
-ssh -L 18789:localhost:18789 user@gateway-host
-
-# Then open in browser
-open http://localhost:18789
+ssh user@gateway-host 'openclaw dashboard --no-open'
 ```
 
-Or use Tailscale for always-on access:
+The command prints `Dashboard URL:`. Depending on how `gateway.auth.token`
+is configured, the URL may be a plain `http://127.0.0.1:18789/` link or one
+that includes `#token=...`.
+
+In another terminal on your computer, create the SSH tunnel:
 
 ```bash
-# On the Pi
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-
-# Update config
-moltbot config set gateway.bind tailnet
-sudo systemctl restart moltbot
+ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 ```
+
+Then open the printed Dashboard URL in your local browser.
+
+If the UI asks for auth, paste the token from `gateway.auth.token`
+(or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
+
+For always-on remote access, see [Tailscale](/gateway/tailscale).
 
 ---
 
@@ -188,6 +194,57 @@ lsblk
 ```
 
 See [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#usb-mass-storage-boot) for setup.
+
+### Speed up CLI startup (module compile cache)
+
+On lower-power Pi hosts, enable Node's module compile cache so repeated CLI runs are faster:
+
+```bash
+grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
+export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+mkdir -p /var/tmp/openclaw-compile-cache
+export OPENCLAW_NO_RESPAWN=1
+EOF
+source ~/.bashrc
+```
+
+Notes:
+
+- `NODE_COMPILE_CACHE` speeds up subsequent runs (`status`, `health`, `--help`).
+- `/var/tmp` survives reboots better than `/tmp`.
+- `OPENCLAW_NO_RESPAWN=1` avoids extra startup cost from CLI self-respawn.
+- First run warms the cache; later runs benefit most.
+
+### systemd startup tuning (optional)
+
+If this Pi is mostly running OpenClaw, add a service drop-in to reduce restart
+jitter and keep startup env stable:
+
+```bash
+sudo systemctl edit openclaw
+```
+
+```ini
+[Service]
+Environment=OPENCLAW_NO_RESPAWN=1
+Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Restart=always
+RestartSec=2
+TimeoutStartSec=90
+```
+
+Then apply:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart openclaw
+```
+
+If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
+random-I/O bottlenecks during cold starts.
+
+How `Restart=` policies help automated recovery:
+[systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
 
 ### Reduce Memory Usage
 
@@ -218,15 +275,15 @@ htop
 
 ### Binary Compatibility
 
-Most Moltbot features work on ARM64, but some external binaries may need ARM builds:
+Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
 
-| Tool | ARM64 Status | Notes |
-|------|--------------|-------|
-| Node.js | ✅ | Works great |
-| WhatsApp (Baileys) | ✅ | Pure JS, no issues |
-| Telegram | ✅ | Pure JS, no issues |
-| gog (Gmail CLI) | ⚠️ | Check for ARM release |
-| Chromium (browser) | ✅ | `sudo apt install chromium-browser` |
+| Tool               | ARM64 Status | Notes                               |
+| ------------------ | ------------ | ----------------------------------- |
+| Node.js            | ✅           | Works great                         |
+| WhatsApp (Baileys) | ✅           | Pure JS, no issues                  |
+| Telegram           | ✅           | Pure JS, no issues                  |
+| gog (Gmail CLI)    | ⚠️           | Check for ARM release               |
+| Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
 
 If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
 
@@ -264,17 +321,17 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
 
 ## Auto-Start on Boot
 
-The onboarding wizard sets this up, but to verify:
+Onboarding sets this up, but to verify:
 
 ```bash
 # Check service is enabled
-sudo systemctl is-enabled moltbot
+sudo systemctl is-enabled openclaw
 
 # Enable if not
-sudo systemctl enable moltbot
+sudo systemctl enable openclaw
 
 # Start on boot
-sudo systemctl start moltbot
+sudo systemctl start openclaw
 ```
 
 ---
@@ -297,21 +354,22 @@ free -h
 - Disable unused services: `sudo systemctl disable cups bluetooth avahi-daemon`
 - Check CPU throttling: `vcgencmd get_throttled` (should return `0x0`)
 
-### Service Won't Start
+### Service will not start
 
 ```bash
 # Check logs
-journalctl -u moltbot --no-pager -n 100
+journalctl -u openclaw --no-pager -n 100
 
 # Common fix: rebuild
-cd ~/moltbot  # if using hackable install
+cd ~/openclaw  # if using hackable install
 npm run build
-sudo systemctl restart moltbot
+sudo systemctl restart openclaw
 ```
 
 ### ARM Binary Issues
 
 If a skill fails with "exec format error":
+
 1. Check if the binary has an ARM64 build
 2. Try building from source
 3. Or use a Docker container with ARM support
@@ -332,14 +390,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Cost Comparison
 
-| Setup | One-Time Cost | Monthly Cost | Notes |
-|-------|---------------|--------------|-------|
-| **Pi 4 (2GB)** | ~$45 | $0 | + power (~$5/yr) |
-| **Pi 4 (4GB)** | ~$55 | $0 | Recommended |
-| **Pi 5 (4GB)** | ~$60 | $0 | Best performance |
-| **Pi 5 (8GB)** | ~$80 | $0 | Overkill but future-proof |
-| DigitalOcean | $0 | $6/mo | $72/year |
-| Hetzner | $0 | €3.79/mo | ~$50/year |
+| Setup          | One-Time Cost | Monthly Cost | Notes                     |
+| -------------- | ------------- | ------------ | ------------------------- |
+| **Pi 4 (2GB)** | ~$45          | $0           | + power (~$5/yr)          |
+| **Pi 4 (4GB)** | ~$55          | $0           | Recommended               |
+| **Pi 5 (4GB)** | ~$60          | $0           | Best performance          |
+| **Pi 5 (8GB)** | ~$80          | $0           | Overkill but future-proof |
+| DigitalOcean   | $0            | $6/mo        | $72/year                  |
+| Hetzner        | $0            | €3.79/mo     | ~$50/year                 |
 
 **Break-even:** A Pi pays for itself in ~6-12 months vs cloud VPS.
 
@@ -349,6 +407,6 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 - [Linux guide](/platforms/linux) — general Linux setup
 - [DigitalOcean guide](/platforms/digitalocean) — cloud alternative
-- [Hetzner guide](/platforms/hetzner) — Docker setup
+- [Hetzner guide](/install/hetzner) — Docker setup
 - [Tailscale](/gateway/tailscale) — remote access
 - [Nodes](/nodes) — pair your laptop/phone with the Pi gateway

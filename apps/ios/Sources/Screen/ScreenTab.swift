@@ -1,4 +1,4 @@
-import MoltbotKit
+import OpenClawKit
 import SwiftUI
 
 struct ScreenTab: View {
@@ -7,9 +7,11 @@ struct ScreenTab: View {
     var body: some View {
         ZStack(alignment: .top) {
             ScreenWebView(controller: self.appModel.screen)
-                .ignoresSafeArea()
+                .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
                 .overlay(alignment: .top) {
-                    if let errorText = self.appModel.screen.errorText {
+                    if let errorText = self.appModel.screen.errorText,
+                       self.appModel.gatewayServerName == nil
+                    {
                         Text(errorText)
                             .font(.footnote)
                             .padding(10)

@@ -1,16 +1,66 @@
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { MoltbotConfig, GatewayBindMode } from "../config/config.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { note } from "../terminal/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveDmAllowState } from "../security/dm-policy-shared.js";
+import { note } from "../terminal/note.js";
+import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
-export async function noteSecurityWarnings(cfg: MoltbotConfig) {
+function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("moltbot security audit --deep")}`;
+
+  const maybeWarn = (params: {
+    label: string;
+    heartbeat: AgentConfig["heartbeat"] | undefined;
+    pathHint: string;
+  }) => {
+    const heartbeat = params.heartbeat;
+    if (!heartbeat || heartbeat.target === undefined || heartbeat.target === "none") {
+      return;
+    }
+    if (heartbeat.directPolicy !== undefined) {
+      return;
+    }
+    warnings.push(
+      `- ${params.label}: heartbeat delivery is configured while ${params.pathHint} is unset.`,
+      '  Heartbeat now allows direct/DM targets by default. Set it explicitly to "allow" or "block" to pin upgrade behavior.',
+    );
+  };
+
+  maybeWarn({
+    label: "Heartbeat defaults",
+    heartbeat: cfg.agents?.defaults?.heartbeat,
+    pathHint: "agents.defaults.heartbeat.directPolicy",
+  });
+
+  for (const agent of cfg.agents?.list ?? []) {
+    maybeWarn({
+      label: `Heartbeat agent "${agent.id}"`,
+      heartbeat: agent.heartbeat,
+      pathHint: `heartbeat.directPolicy for agent "${agent.id}"`,
+    });
+  }
+
+  return warnings;
+}
+
+export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+  const warnings: string[] = [];
+  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
+
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    );
+  }
+
+  warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -36,31 +86,41 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
   });
   const authToken = resolvedAuth.token?.trim() ?? "";
   const authPassword = resolvedAuth.password?.trim() ?? "";
-  const hasToken = authToken.length > 0;
-  const hasPassword = authPassword.length > 0;
+  const hasToken =
+    authToken.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
+  const hasPassword =
+    authPassword.length > 0 ||
+    hasConfiguredSecretInput(cfg.gateway?.auth?.password, cfg.secrets?.defaults);
   const hasSharedSecret =
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
+  const saferRemoteAccessLines = [
+    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    "  Docs: https://docs.openclaw.ai/gateway/remote",
+  ];
 
   if (isExposed) {
     if (!hasSharedSecret) {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
-              `  Fix: ${formatCliCommand("moltbot configure")} to set a password`,
-              `  Or switch to token: ${formatCliCommand("moltbot config set gateway.auth.mode token")}`,
+              `  Fix: ${formatCliCommand("openclaw configure")} to set a password`,
+              `  Or switch to token: ${formatCliCommand("openclaw config set gateway.auth.mode token")}`,
             ]
           : [
-              `  Fix: ${formatCliCommand("moltbot doctor --fix")} to generate a token`,
+              `  Fix: ${formatCliCommand("openclaw doctor --fix")} to generate a token`,
               `  Or set token directly: ${formatCliCommand(
-                "moltbot config set gateway.auth.mode token",
+                "openclaw config set gateway.auth.mode token",
               )}`,
             ];
       warnings.push(
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
-        `  Fix: ${formatCliCommand("moltbot config set gateway.bind loopback")}`,
+        `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+        ...saferRemoteAccessLines,
         ...authFixLines,
       );
     } else {
@@ -68,6 +128,7 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
         `  Ensure your auth credentials are strong and not exposed.`,
+        ...saferRemoteAccessLines,
       );
     }
   }
@@ -75,6 +136,7 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
+    accountId: string;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
@@ -84,21 +146,13 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
-    const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
-    const normalizedCfg = configAllowFrom
-      .filter((v) => v !== "*")
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+      provider: params.provider,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+      normalizeEntry: params.normalizeEntry,
+    });
     const dmScope = cfg.session?.dmScope ?? "main";
-    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
@@ -124,26 +178,31 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
 
     if (dmScope === "main" && isMultiUserDm) {
       warnings.push(
-        `- ${params.label} DMs: multiple senders share the main session; set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate sessions.`,
+        `- ${params.label} DMs: multiple senders share the main session; run: ` +
+          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
       );
     }
   };
 
   for (const plugin of listChannelPlugins()) {
-    if (!plugin.security) continue;
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
-    if (!enabled) continue;
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
-    if (!configured) continue;
+    if (!plugin.security) {
+      continue;
+    }
+    const { defaultAccountId, account, enabled, configured, diagnostics } =
+      await resolveDefaultChannelAccountContext(plugin, cfg, {
+        mode: "read_only",
+        commandName: "doctor",
+      });
+    for (const diagnostic of diagnostics) {
+      warnings.push(`- [secrets] ${diagnostic}`);
+    }
+    if (!enabled) {
+      continue;
+    }
+    if (!configured) {
+      continue;
+    }
     const dmPolicy = plugin.security.resolveDmPolicy?.({
       cfg,
       accountId: defaultAccountId,
@@ -153,6 +212,7 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
       await warnDmPolicy({
         label: plugin.meta.label ?? plugin.id,
         provider: plugin.id,
+        accountId: defaultAccountId,
         dmPolicy: dmPolicy.policy,
         allowFrom: dmPolicy.allowFrom,
         policyPath: dmPolicy.policyPath,
@@ -167,7 +227,9 @@ export async function noteSecurityWarnings(cfg: MoltbotConfig) {
         accountId: defaultAccountId,
         account,
       });
-      if (extra?.length) warnings.push(...extra);
+      if (extra?.length) {
+        warnings.push(...extra);
+      }
     }
   }
 

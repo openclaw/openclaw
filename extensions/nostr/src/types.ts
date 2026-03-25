@@ -1,11 +1,21 @@
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-import { getPublicKeyFromPrivate } from "./nostr-bus.js";
-import { DEFAULT_RELAYS } from "./nostr-bus.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
+import {
+  listCombinedAccountIds,
+  resolveListedDefaultAccountId,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "../api.js";
 import type { NostrProfile } from "./config-schema.js";
+import { DEFAULT_RELAYS } from "./default-relays.js";
+import { getPublicKeyFromPrivate } from "./nostr-bus.js";
 
 export interface NostrAccountConfig {
   enabled?: boolean;
   name?: string;
+  defaultAccount?: string;
   privateKey?: string;
   relays?: string[];
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
@@ -25,41 +35,46 @@ export interface ResolvedNostrAccount {
   config: NostrAccountConfig;
 }
 
-const DEFAULT_ACCOUNT_ID = "default";
+function resolveConfiguredDefaultNostrAccountId(cfg: OpenClawConfig): string | undefined {
+  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
+    | NostrAccountConfig
+    | undefined;
+  return normalizeOptionalAccountId(nostrCfg?.defaultAccount);
+}
 
 /**
  * List all configured Nostr account IDs
  */
-export function listNostrAccountIds(cfg: MoltbotConfig): string[] {
+export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
   const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;
-
-  // If privateKey is configured at top level, we have a default account
-  if (nostrCfg?.privateKey) {
-    return [DEFAULT_ACCOUNT_ID];
-  }
-
-  return [];
+  return listCombinedAccountIds({
+    configuredAccountIds: [],
+    implicitAccountId: nostrCfg?.privateKey
+      ? (resolveConfiguredDefaultNostrAccountId(cfg) ?? DEFAULT_ACCOUNT_ID)
+      : undefined,
+  });
 }
 
 /**
  * Get the default account ID
  */
-export function resolveDefaultNostrAccountId(cfg: MoltbotConfig): string {
-  const ids = listNostrAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
-  return ids[0] ?? DEFAULT_ACCOUNT_ID;
+export function resolveDefaultNostrAccountId(cfg: OpenClawConfig): string {
+  return resolveListedDefaultAccountId({
+    accountIds: listNostrAccountIds(cfg),
+    configuredDefaultAccountId: resolveConfiguredDefaultNostrAccountId(cfg),
+  });
 }
 
 /**
  * Resolve a Nostr account from config
  */
 export function resolveNostrAccount(opts: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedNostrAccount {
-  const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeAccountId(opts.accountId ?? resolveDefaultNostrAccountId(opts.cfg));
   const nostrCfg = (opts.cfg.channels as Record<string, unknown> | undefined)?.nostr as
     | NostrAccountConfig
     | undefined;

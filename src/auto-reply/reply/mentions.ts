@@ -1,12 +1,10 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
+import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
@@ -24,11 +22,19 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
 }
 
 const BACKSPACE_CHAR = "\u0008";
+const mentionMatchRegexCompileCache = new Map<string, RegExp[]>();
+const mentionStripRegexCompileCache = new Map<string, RegExp[]>();
+const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
+const mentionPatternWarningCache = new Set<string>();
+const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
+const log = createSubsystemLogger("mentions");
 
 export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
 function normalizeMentionPattern(pattern: string): string {
-  if (!pattern.includes(BACKSPACE_CHAR)) return pattern;
+  if (!pattern.includes(BACKSPACE_CHAR)) {
+    return pattern;
+  }
   return pattern.split(BACKSPACE_CHAR).join("\\b");
 }
 
@@ -36,8 +42,68 @@ function normalizeMentionPatterns(patterns: string[]): string[] {
   return patterns.map(normalizeMentionPattern);
 }
 
-function resolveMentionPatterns(cfg: MoltbotConfig | undefined, agentId?: string): string[] {
-  if (!cfg) return [];
+function warnRejectedMentionPattern(
+  pattern: string,
+  flags: string,
+  reason: ConfigRegexRejectReason,
+) {
+  const key = `${flags}::${reason}::${pattern}`;
+  if (mentionPatternWarningCache.has(key)) {
+    return;
+  }
+  mentionPatternWarningCache.add(key);
+  if (mentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+    mentionPatternWarningCache.clear();
+    mentionPatternWarningCache.add(key);
+  }
+  log.warn("Ignoring unsupported group mention pattern", {
+    pattern,
+    flags,
+    reason,
+  });
+}
+
+function cacheMentionRegexes(
+  cache: Map<string, RegExp[]>,
+  cacheKey: string,
+  regexes: RegExp[],
+): RegExp[] {
+  cache.set(cacheKey, regexes);
+  if (cache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
+    cache.clear();
+    cache.set(cacheKey, regexes);
+  }
+  return [...regexes];
+}
+
+function compileMentionPatternsCached(params: {
+  patterns: string[];
+  flags: string;
+  cache: Map<string, RegExp[]>;
+  warnRejected: boolean;
+}): RegExp[] {
+  if (params.patterns.length === 0) {
+    return [];
+  }
+  const cacheKey = `${params.flags}\u001e${params.patterns.join("\u001f")}`;
+  const cached = params.cache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+
+  const compiled = compileConfigRegexes(params.patterns, params.flags);
+  if (params.warnRejected) {
+    for (const rejected of compiled.rejected) {
+      warnRejectedMentionPattern(rejected.pattern, rejected.flags, rejected.reason);
+    }
+  }
+  return cacheMentionRegexes(params.cache, cacheKey, compiled.regexes);
+}
+
+function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
+  if (!cfg) {
+    return [];
+  }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentGroupChat = agentConfig?.groupChat;
   if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
@@ -51,17 +117,25 @@ function resolveMentionPatterns(cfg: MoltbotConfig | undefined, agentId?: string
   return derived.length > 0 ? derived : [];
 }
 
-export function buildMentionRegexes(cfg: MoltbotConfig | undefined, agentId?: string): RegExp[] {
+function resolveFallbackProviderMentionStripRegexes(providerId?: string | null): RegExp[] {
+  switch (providerId?.trim().toLowerCase()) {
+    case "discord":
+      return [/<@!?\d+>/gi];
+    case "slack":
+      return [/<@[^>\s]+>/gi];
+    default:
+      return [];
+  }
+}
+
+export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
-  return patterns
-    .map((pattern) => {
-      try {
-        return new RegExp(pattern, "i");
-      } catch {
-        return null;
-      }
-    })
-    .filter((value): value is RegExp => Boolean(value));
+  return compileMentionPatternsCached({
+    patterns,
+    flags: "i",
+    cache: mentionMatchRegexCompileCache,
+    warnRejected: true,
+  });
 }
 
 export function normalizeMentionText(text: string): string {
@@ -69,9 +143,13 @@ export function normalizeMentionText(text: string): string {
 }
 
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
-  if (mentionRegexes.length === 0) return false;
+  if (mentionRegexes.length === 0) {
+    return false;
+  }
   const cleaned = normalizeMentionText(text ?? "");
-  if (!cleaned) return false;
+  if (!cleaned) {
+    return false;
+  }
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
@@ -85,19 +163,30 @@ export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
   explicit?: ExplicitMentionSignal;
+  transcript?: string;
 }): boolean {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
   const explicitAvailable = params.explicit?.canResolveExplicit === true;
   const hasAnyMention = params.explicit?.hasAnyMention === true;
+
+  // Check transcript if text is empty and transcript is provided
+  const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
+  const textToCheck = cleaned || transcriptCleaned;
+
   if (hasAnyMention && explicitAvailable) {
-    return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+    return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
   }
-  if (!cleaned) return explicit;
-  return explicit || params.mentionRegexes.some((re) => re.test(cleaned));
+  if (!textToCheck) {
+    return explicit;
+  }
+  return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
 export function stripStructuralPrefixes(text: string): string {
+  if (!text) {
+    return "";
+  }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
   const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
@@ -115,23 +204,32 @@ export function stripStructuralPrefixes(text: string): string {
 export function stripMentions(
   text: string,
   ctx: MsgContext,
-  cfg: MoltbotConfig | undefined,
+  cfg: OpenClawConfig | undefined,
   agentId?: string,
 ): string {
   let result = text;
   const providerId = ctx.Provider ? normalizeChannelId(ctx.Provider) : null;
-  const providerMentions = providerId ? getChannelDock(providerId)?.mentions : undefined;
-  const patterns = normalizeMentionPatterns([
-    ...resolveMentionPatterns(cfg, agentId),
-    ...(providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []),
-  ]);
-  for (const p of patterns) {
-    try {
-      const re = new RegExp(p, "gi");
-      result = result.replace(re, " ");
-    } catch {
-      // ignore invalid regex
-    }
+  const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
+  const configRegexes = compileMentionPatternsCached({
+    patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
+    flags: "gi",
+    cache: mentionStripRegexCompileCache,
+    warnRejected: true,
+  });
+  const providerRegexes =
+    providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
+    compileMentionPatternsCached({
+      patterns: normalizeMentionPatterns(
+        providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
+      ),
+      flags: "gi",
+      cache: mentionStripRegexCompileCache,
+      warnRejected: false,
+    });
+  const fallbackProviderRegexes =
+    providerRegexes.length > 0 ? [] : resolveFallbackProviderMentionStripRegexes(providerId);
+  for (const re of [...configRegexes, ...providerRegexes, ...fallbackProviderRegexes]) {
+    result = result.replace(re, " ");
   }
   if (providerMentions?.stripMentions) {
     result = providerMentions.stripMentions({

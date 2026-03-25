@@ -1,5 +1,5 @@
+import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "../../runtime-api.js";
 import type { MatrixRoomConfig } from "../../types.js";
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "clawdbot/plugin-sdk";
 
 export type MatrixRoomConfigResolved = {
   allowed: boolean;
@@ -13,7 +13,6 @@ export function resolveMatrixRoomConfig(params: {
   rooms?: Record<string, MatrixRoomConfig>;
   roomId: string;
   aliases: string[];
-  name?: string | null;
 }): MatrixRoomConfigResolved {
   const rooms = params.rooms ?? {};
   const keys = Object.keys(rooms);
@@ -22,9 +21,13 @@ export function resolveMatrixRoomConfig(params: {
     params.roomId,
     `room:${params.roomId}`,
     ...params.aliases,
-    params.name ?? "",
   );
-  const { entry: matched, key: matchedKey, wildcardEntry, wildcardKey } = resolveChannelEntryMatch({
+  const {
+    entry: matched,
+    key: matchedKey,
+    wildcardEntry,
+    wildcardKey,
+  } = resolveChannelEntryMatch({
     entries: rooms,
     keys: candidates,
     wildcardKey: "*",

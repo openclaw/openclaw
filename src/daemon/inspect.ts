@@ -1,37 +1,34 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
-  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
-  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
-  resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
+import { resolveHomeDir } from "./paths.js";
+import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
   platform: "darwin" | "linux" | "win32";
   label: string;
   detail: string;
   scope: "user" | "system";
+  marker?: "openclaw" | "clawdbot" | "moltbot";
+  legacy?: boolean;
 };
 
 export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["moltbot"];
-const execFileAsync = promisify(execFile);
+const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
-  const profile = env.CLAWDBOT_PROFILE;
+  const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
@@ -53,65 +50,131 @@ export function renderGatewayServiceCleanupHints(
   }
 }
 
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) throw new Error("Missing HOME");
-  return home;
-}
+type Marker = (typeof EXTRA_MARKERS)[number];
 
-function containsMarker(content: string): boolean {
+function detectMarker(content: string): Marker | null {
   const lower = content.toLowerCase();
-  return EXTRA_MARKERS.some((marker) => lower.includes(marker));
+  for (const marker of EXTRA_MARKERS) {
+    if (lower.includes(marker)) {
+      return marker;
+    }
+  }
+  return null;
 }
 
 function hasGatewayServiceMarker(content: string): boolean {
   const lower = content.toLowerCase();
+  const markerKeys = ["openclaw_service_marker"];
+  const kindKeys = ["openclaw_service_kind"];
+  const markerValues = [GATEWAY_SERVICE_MARKER.toLowerCase()];
+  const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
+  const hasKindKey = kindKeys.some((key) => lower.includes(key));
+  const hasMarkerValue = markerValues.some((value) => lower.includes(value));
   return (
-    lower.includes("moltbot_service_marker") &&
-    lower.includes(GATEWAY_SERVICE_MARKER.toLowerCase()) &&
-    lower.includes("moltbot_service_kind") &&
+    hasMarkerKey &&
+    hasKindKey &&
+    hasMarkerValue &&
     lower.includes(GATEWAY_SERVICE_KIND.toLowerCase())
   );
 }
 
-function isMoltbotGatewayLaunchdService(label: string, contents: string): boolean {
-  if (hasGatewayServiceMarker(contents)) return true;
+function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
+  if (hasGatewayServiceMarker(contents)) {
+    return true;
+  }
   const lowerContents = contents.toLowerCase();
-  if (!lowerContents.includes("gateway")) return false;
-  return label.startsWith("bot.molt.") || label.startsWith("com.clawdbot.");
+  if (!lowerContents.includes("gateway")) {
+    return false;
+  }
+  return label.startsWith("ai.openclaw.");
 }
 
-function isMoltbotGatewaySystemdService(name: string, contents: string): boolean {
-  if (hasGatewayServiceMarker(contents)) return true;
-  if (!name.startsWith("moltbot-gateway")) return false;
+function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
+  if (hasGatewayServiceMarker(contents)) {
+    return true;
+  }
+  if (!name.startsWith("openclaw-gateway")) {
+    return false;
+  }
   return contents.toLowerCase().includes("gateway");
 }
 
-function isMoltbotGatewayTaskName(name: string): boolean {
+function isOpenClawGatewayTaskName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
-  if (!normalized) return false;
+  if (!normalized) {
+    return false;
+  }
   const defaultName = resolveGatewayWindowsTaskName().toLowerCase();
-  return normalized === defaultName || normalized.startsWith("moltbot gateway");
+  return normalized === defaultName || normalized.startsWith("openclaw gateway");
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
   const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return match[1]?.trim() || null;
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {
-  return (
-    label === resolveGatewayLaunchAgentLabel() ||
-    resolveLegacyGatewayLaunchAgentLabels(process.env.CLAWDBOT_PROFILE).includes(label)
-  );
+  return label === resolveGatewayLaunchAgentLabel();
 }
 
 function isIgnoredSystemdName(name: string): boolean {
-  return (
-    name === resolveGatewaySystemdServiceName() ||
-    LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES.includes(name)
-  );
+  return name === resolveGatewaySystemdServiceName();
+}
+
+function isLegacyLabel(label: string): boolean {
+  const lower = label.toLowerCase();
+  return lower.includes("clawdbot") || lower.includes("moltbot");
+}
+
+async function readDirEntries(dir: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+}
+
+async function readUtf8File(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+type ServiceFileEntry = {
+  entry: string;
+  name: string;
+  fullPath: string;
+  contents: string;
+};
+
+async function collectServiceFiles(params: {
+  dir: string;
+  extension: string;
+  isIgnoredName: (name: string) => boolean;
+}): Promise<ServiceFileEntry[]> {
+  const out: ServiceFileEntry[] = [];
+  const entries = await readDirEntries(params.dir);
+  for (const entry of entries) {
+    if (!entry.endsWith(params.extension)) {
+      continue;
+    }
+    const name = entry.slice(0, -params.extension.length);
+    if (params.isIgnoredName(name)) {
+      continue;
+    }
+    const fullPath = path.join(params.dir, entry);
+    const contents = await readUtf8File(fullPath);
+    if (contents === null) {
+      continue;
+    }
+    out.push({ entry, name, fullPath, contents });
+  }
+  return out;
 }
 
 async function scanLaunchdDir(params: {
@@ -119,33 +182,43 @@ async function scanLaunchdDir(params: {
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const candidates = await collectServiceFiles({
+    dir: params.dir,
+    extension: ".plist",
+    isIgnoredName: isIgnoredLaunchdLabel,
+  });
 
-  for (const entry of entries) {
-    if (!entry.endsWith(".plist")) continue;
-    const labelFromName = entry.replace(/\.plist$/, "");
-    if (isIgnoredLaunchdLabel(labelFromName)) continue;
-    const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+  for (const { name: labelFromName, fullPath, contents } of candidates) {
+    const marker = detectMarker(contents);
+    const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    if (!marker) {
+      const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
+      if (!legacyLabel) {
+        continue;
+      }
+      results.push({
+        platform: "darwin",
+        label,
+        detail: `plist: ${fullPath}`,
+        scope: params.scope,
+        marker: isLegacyLabel(label) ? "clawdbot" : "moltbot",
+        legacy: true,
+      });
       continue;
     }
-    if (!containsMarker(contents)) continue;
-    const label = tryExtractPlistLabel(contents) ?? labelFromName;
-    if (isIgnoredLaunchdLabel(label)) continue;
-    if (isMoltbotGatewayLaunchdService(label, contents)) continue;
+    if (isIgnoredLaunchdLabel(label)) {
+      continue;
+    }
+    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
+      continue;
+    }
     results.push({
       platform: "darwin",
       label,
       detail: `plist: ${fullPath}`,
       scope: params.scope,
+      marker,
+      legacy: marker !== "openclaw" || isLegacyLabel(label),
     });
   }
 
@@ -157,31 +230,27 @@ async function scanSystemdDir(params: {
   scope: "user" | "system";
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(params.dir);
-  } catch {
-    return results;
-  }
+  const candidates = await collectServiceFiles({
+    dir: params.dir,
+    extension: ".service",
+    isIgnoredName: isIgnoredSystemdName,
+  });
 
-  for (const entry of entries) {
-    if (!entry.endsWith(".service")) continue;
-    const name = entry.replace(/\.service$/, "");
-    if (isIgnoredSystemdName(name)) continue;
-    const fullPath = path.join(params.dir, entry);
-    let contents = "";
-    try {
-      contents = await fs.readFile(fullPath, "utf8");
-    } catch {
+  for (const { entry, name, fullPath, contents } of candidates) {
+    const marker = detectMarker(contents);
+    if (!marker) {
       continue;
     }
-    if (!containsMarker(contents)) continue;
-    if (isMoltbotGatewaySystemdService(name, contents)) continue;
+    if (marker === "openclaw" && isOpenClawGatewaySystemdService(name, contents)) {
+      continue;
+    }
     results.push({
       platform: "linux",
       label: entry,
       detail: `unit: ${fullPath}`,
       scope: params.scope,
+      marker,
+      legacy: marker !== "openclaw",
     });
   }
 
@@ -207,52 +276,33 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
       continue;
     }
     const idx = line.indexOf(":");
-    if (idx <= 0) continue;
+    if (idx <= 0) {
+      continue;
+    }
     const key = line.slice(0, idx).trim().toLowerCase();
     const value = line.slice(idx + 1).trim();
-    if (!value) continue;
+    if (!value) {
+      continue;
+    }
     if (key === "taskname") {
-      if (current) tasks.push(current);
+      if (current) {
+        tasks.push(current);
+      }
       current = { name: value };
       continue;
     }
-    if (!current) continue;
+    if (!current) {
+      continue;
+    }
     if (key === "task to run") {
       current.taskToRun = value;
     }
   }
 
-  if (current) tasks.push(current);
-  return tasks;
-}
-
-async function execSchtasks(
-  args: string[],
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  try {
-    const { stdout, stderr } = await execFileAsync("schtasks", args, {
-      encoding: "utf8",
-      windowsHide: true,
-    });
-    return {
-      stdout: String(stdout ?? ""),
-      stderr: String(stderr ?? ""),
-      code: 0,
-    };
-  } catch (error) {
-    const e = error as {
-      stdout?: unknown;
-      stderr?: unknown;
-      code?: unknown;
-      message?: unknown;
-    };
-    return {
-      stdout: typeof e.stdout === "string" ? e.stdout : "",
-      stderr:
-        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
-      code: typeof e.code === "number" ? e.code : 1,
-    };
+  if (current) {
+    tasks.push(current);
   }
+  return tasks;
 }
 
 export async function findExtraGatewayServices(
@@ -263,7 +313,9 @@ export async function findExtraGatewayServices(
   const seen = new Set<string>();
   const push = (svc: ExtraGatewayService) => {
     const key = `${svc.platform}:${svc.label}:${svc.detail}:${svc.scope}`;
-    if (seen.has(key)) return;
+    if (seen.has(key)) {
+      return;
+    }
     seen.add(key);
     results.push(svc);
   };
@@ -329,26 +381,41 @@ export async function findExtraGatewayServices(
   }
 
   if (process.platform === "win32") {
-    if (!opts.deep) return results;
+    if (!opts.deep) {
+      return results;
+    }
     const res = await execSchtasks(["/Query", "/FO", "LIST", "/V"]);
-    if (res.code !== 0) return results;
+    if (res.code !== 0) {
+      return results;
+    }
     const tasks = parseSchtasksList(res.stdout);
     for (const task of tasks) {
       const name = task.name.trim();
-      if (!name) continue;
-      if (isMoltbotGatewayTaskName(name)) continue;
-      if (LEGACY_GATEWAY_WINDOWS_TASK_NAMES.includes(name)) continue;
+      if (!name) {
+        continue;
+      }
+      if (isOpenClawGatewayTaskName(name)) {
+        continue;
+      }
       const lowerName = name.toLowerCase();
       const lowerCommand = task.taskToRun?.toLowerCase() ?? "";
-      const matches = EXTRA_MARKERS.some(
-        (marker) => lowerName.includes(marker) || lowerCommand.includes(marker),
-      );
-      if (!matches) continue;
+      let marker: Marker | null = null;
+      for (const candidate of EXTRA_MARKERS) {
+        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
+          marker = candidate;
+          break;
+        }
+      }
+      if (!marker) {
+        continue;
+      }
       push({
         platform: "win32",
         label: name,
         detail: task.taskToRun ? `task: ${name}, run: ${task.taskToRun}` : name,
         scope: "system",
+        marker,
+        legacy: marker !== "openclaw",
       });
     }
     return results;

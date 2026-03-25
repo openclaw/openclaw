@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>MoltbotTests</string>
+	<string>OpenClawTests</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -17,8 +17,8 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.1.29</string>
+	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>20260129</string>
+	<string>$(OPENCLAW_BUILD_VERSION)</string>
 </dict>
 </plist>

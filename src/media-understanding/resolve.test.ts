@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
-const providerRegistry = new Map([
+const providerRegistry = new Map<string, { capabilities: MediaUnderstandingCapability[] }>([
   ["openai", { capabilities: ["image"] }],
   ["groq", { capabilities: ["audio"] }],
 ]);
 
 describe("resolveModelEntries", () => {
   it("uses provider capabilities for shared entries without explicit caps", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           models: [{ provider: "openai", model: "gpt-5.2" }],
@@ -34,7 +34,7 @@ describe("resolveModelEntries", () => {
   });
 
   it("keeps per-capability entries even without explicit caps", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           image: {
@@ -54,7 +54,7 @@ describe("resolveModelEntries", () => {
   });
 
   it("skips shared CLI entries without capabilities", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           models: [{ type: "cli", command: "gemini", args: ["--file", "{{MediaPath}}"] }],
@@ -72,8 +72,40 @@ describe("resolveModelEntries", () => {
 });
 
 describe("resolveEntriesWithActiveFallback", () => {
+  type ResolveWithFallbackInput = Parameters<typeof resolveEntriesWithActiveFallback>[0];
+  const defaultActiveModel = { provider: "groq", model: "whisper-large-v3" } as const;
+
+  function resolveWithActiveFallback(params: {
+    cfg: ResolveWithFallbackInput["cfg"];
+    capability: ResolveWithFallbackInput["capability"];
+    config: ResolveWithFallbackInput["config"];
+  }) {
+    return resolveEntriesWithActiveFallback({
+      cfg: params.cfg,
+      capability: params.capability,
+      config: params.config,
+      providerRegistry,
+      activeModel: defaultActiveModel,
+    });
+  }
+
+  function expectResolvedProviders(params: {
+    cfg: OpenClawConfig;
+    capability: ResolveWithFallbackInput["capability"];
+    config: ResolveWithFallbackInput["config"];
+    providers: string[];
+  }) {
+    const entries = resolveWithActiveFallback({
+      cfg: params.cfg,
+      capability: params.capability,
+      config: params.config,
+    });
+    expect(entries).toHaveLength(params.providers.length);
+    expect(entries.map((entry) => entry.provider)).toEqual(params.providers);
+  }
+
   it("uses active model when enabled and no models are configured", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: { enabled: true },
@@ -81,19 +113,16 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveEntriesWithActiveFallback({
+    expectResolvedProviders({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
-      providerRegistry,
-      activeModel: { provider: "groq", model: "whisper-large-v3" },
+      providers: ["groq"],
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.provider).toBe("groq");
   });
 
   it("ignores active model when configured entries exist", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: { enabled: true, models: [{ provider: "openai", model: "whisper-1" }] },
@@ -101,19 +130,16 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveEntriesWithActiveFallback({
+    expectResolvedProviders({
       cfg,
       capability: "audio",
       config: cfg.tools?.media?.audio,
-      providerRegistry,
-      activeModel: { provider: "groq", model: "whisper-large-v3" },
+      providers: ["openai"],
     });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.provider).toBe("openai");
   });
 
   it("skips active model when provider lacks capability", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           video: { enabled: true },
@@ -121,12 +147,10 @@ describe("resolveEntriesWithActiveFallback", () => {
       },
     };
 
-    const entries = resolveEntriesWithActiveFallback({
+    const entries = resolveWithActiveFallback({
       cfg,
       capability: "video",
       config: cfg.tools?.media?.video,
-      providerRegistry,
-      activeModel: { provider: "groq", model: "whisper-large-v3" },
     });
     expect(entries).toHaveLength(0);
   });

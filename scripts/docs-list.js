@@ -1,26 +1,26 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
-process.stdout.on('error', (error) => {
-  if (error?.code === 'EPIPE') {
+process.stdout.on("error", (error) => {
+  if (error?.code === "EPIPE") {
     process.exit(0);
   }
   throw error;
 });
 
-const DOCS_DIR = join(process.cwd(), 'docs');
+const DOCS_DIR = join(process.cwd(), "docs");
 if (!existsSync(DOCS_DIR)) {
-  console.error('docs:list: missing docs directory. Run from repo root.');
+  console.error("docs:list: missing docs directory. Run from repo root.");
   process.exit(1);
 }
 if (!statSync(DOCS_DIR).isDirectory()) {
-  console.error('docs:list: docs path is not a directory.');
+  console.error("docs:list: docs path is not a directory.");
   process.exit(1);
 }
 
-const EXCLUDED_DIRS = new Set(['archive', 'research']);
+const EXCLUDED_DIRS = new Set(["archive", "research"]);
 
 /**
  * @param {unknown[]} values
@@ -32,8 +32,14 @@ function compactStrings(values) {
     if (value === null || value === undefined) {
       continue;
     }
-    const normalized = String(value).trim();
-    if (normalized.length > 0) {
+    const normalized =
+      typeof value === "string"
+        ? value.trim()
+        : typeof value === "number" || typeof value === "boolean"
+          ? String(value).trim()
+          : null;
+
+    if (normalized?.length > 0) {
       result.push(normalized);
     }
   }
@@ -49,7 +55,7 @@ function walkMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
-    if (entry.name.startsWith('.')) {
+    if (entry.name.startsWith(".")) {
       continue;
     }
     const fullPath = join(dir, entry.name);
@@ -58,11 +64,11 @@ function walkMarkdownFiles(dir, base = dir) {
         continue;
       }
       files.push(...walkMarkdownFiles(fullPath, base));
-    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
       files.push(relative(base, fullPath));
     }
   }
-  return files.sort((a, b) => a.localeCompare(b));
+  return files.toSorted((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -70,19 +76,19 @@ function walkMarkdownFiles(dir, base = dir) {
  * @returns {{ summary: string | null; readWhen: string[]; error?: string }}
  */
 function extractMetadata(fullPath) {
-  const content = readFileSync(fullPath, 'utf8');
+  const content = readFileSync(fullPath, "utf8");
 
-  if (!content.startsWith('---')) {
-    return { summary: null, readWhen: [], error: 'missing front matter' };
+  if (!content.startsWith("---")) {
+    return { summary: null, readWhen: [], error: "missing front matter" };
   }
 
-  const endIndex = content.indexOf('\n---', 3);
+  const endIndex = content.indexOf("\n---", 3);
   if (endIndex === -1) {
-    return { summary: null, readWhen: [], error: 'unterminated front matter' };
+    return { summary: null, readWhen: [], error: "unterminated front matter" };
   }
 
   const frontMatter = content.slice(3, endIndex).trim();
-  const lines = frontMatter.split('\n');
+  const lines = frontMatter.split("\n");
 
   let summaryLine = null;
   const readWhen = [];
@@ -91,16 +97,16 @@ function extractMetadata(fullPath) {
   for (const rawLine of lines) {
     const line = rawLine.trim();
 
-    if (line.startsWith('summary:')) {
+    if (line.startsWith("summary:")) {
       summaryLine = line;
       collectingField = null;
       continue;
     }
 
-    if (line.startsWith('read_when:')) {
-      collectingField = 'read_when';
-      const inline = line.slice('read_when:'.length).trim();
-      if (inline.startsWith('[') && inline.endsWith(']')) {
+    if (line.startsWith("read_when:")) {
+      collectingField = "read_when";
+      const inline = line.slice("read_when:".length).trim();
+      if (inline.startsWith("[") && inline.endsWith("]")) {
         try {
           const parsed = JSON.parse(inline.replace(/'/g, '"'));
           if (Array.isArray(parsed)) {
@@ -113,13 +119,13 @@ function extractMetadata(fullPath) {
       continue;
     }
 
-    if (collectingField === 'read_when') {
-      if (line.startsWith('- ')) {
+    if (collectingField === "read_when") {
+      if (line.startsWith("- ")) {
         const hint = line.slice(2).trim();
         if (hint) {
           readWhen.push(hint);
         }
-      } else if (line === '') {
+      } else if (line === "") {
         // allow blank lines inside the list
       } else {
         collectingField = null;
@@ -128,23 +134,23 @@ function extractMetadata(fullPath) {
   }
 
   if (!summaryLine) {
-    return { summary: null, readWhen, error: 'summary key missing' };
+    return { summary: null, readWhen, error: "summary key missing" };
   }
 
-  const summaryValue = summaryLine.slice('summary:'.length).trim();
+  const summaryValue = summaryLine.slice("summary:".length).trim();
   const normalized = summaryValue
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 
   if (!normalized) {
-    return { summary: null, readWhen, error: 'summary is empty' };
+    return { summary: null, readWhen, error: "summary is empty" };
   }
 
   return { summary: normalized, readWhen };
 }
 
-console.log('Listing all markdown files in docs folder:');
+console.log("Listing all markdown files in docs folder:");
 
 const markdownFiles = walkMarkdownFiles(DOCS_DIR);
 
@@ -154,14 +160,14 @@ for (const relativePath of markdownFiles) {
   if (summary) {
     console.log(`${relativePath} - ${summary}`);
     if (readWhen.length > 0) {
-      console.log(`  Read when: ${readWhen.join('; ')}`);
+      console.log(`  Read when: ${readWhen.join("; ")}`);
     }
   } else {
-    const reason = error ? ` - [${error}]` : '';
+    const reason = error ? ` - [${error}]` : "";
     console.log(`${relativePath}${reason}`);
   }
 }
 
 console.log(
-  '\nReminder: keep docs up to date as behavior changes. When your task matches any "Read when" hint above (React hooks, cache directives, database work, tests, etc.), read that doc before coding, and suggest new coverage when it is missing.'
+  '\nReminder: keep docs up to date as behavior changes. When your task matches any "Read when" hint above (React hooks, cache directives, database work, tests, etc.), read that doc before coding, and suggest new coverage when it is missing.',
 );

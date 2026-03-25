@@ -6,11 +6,14 @@ export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,
 ): EmbeddedSandboxInfo | undefined {
-  if (!sandbox?.enabled) return undefined;
+  if (!sandbox?.enabled) {
+    return undefined;
+  }
   const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
+    containerWorkspaceDir: sandbox.containerWorkdir,
     workspaceAccess: sandbox.workspaceAccess,
     agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
     browserBridgeUrl: sandbox.browser?.bridgeUrl,

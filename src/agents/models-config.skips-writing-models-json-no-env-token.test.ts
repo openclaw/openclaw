@@ -1,187 +1,227 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { MoltbotConfig } from "../config/config.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import {
+  CUSTOM_PROXY_MODELS_CONFIG,
+  installModelsConfigTestHooks,
+  MODELS_CONFIG_IMPLICIT_ENV_VARS,
+  unsetEnv,
+  withTempEnv,
+  withModelsTempHome as withTempHome,
+} from "./models-config.e2e-harness.js";
+import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.js";
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "moltbot-models-" });
-}
+vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  syncExternalCliCredentials: () => false,
+}));
 
-const MODELS_CONFIG: MoltbotConfig = {
-  models: {
-    providers: {
-      "custom-proxy": {
-        baseUrl: "http://localhost:4000/v1",
-        apiKey: "TEST_KEY",
-        api: "openai-completions",
-        models: [
-          {
-            id: "llama-3.1-8b",
-            name: "Llama 3.1 8B (Proxy)",
-            api: "openai-completions",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128000,
-            maxTokens: 32000,
-          },
-        ],
-      },
+vi.mock("./models-config.providers.js", async () => {
+  const actual = await vi.importActual<typeof import("./models-config.providers.js")>(
+    "./models-config.providers.js",
+  );
+  const [
+    { buildDeepSeekProvider },
+    { buildMinimaxProvider },
+    { buildMistralProvider },
+    { buildSyntheticProvider },
+    { buildXaiProvider },
+  ] = await Promise.all([
+    import("../../extensions/deepseek/provider-catalog.js"),
+    import("../../extensions/minimax/provider-catalog.js"),
+    import("../../extensions/mistral/provider-catalog.js"),
+    import("../../extensions/synthetic/provider-catalog.js"),
+    import("../../extensions/xai/provider-catalog.js"),
+  ]);
+  return {
+    ...actual,
+    resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
+      const providers: Record<string, ModelsProviderConfig> = {
+        chutes: {
+          baseUrl: "https://llm.chutes.ai/v1",
+          api: "openai-completions" as const,
+          models: [],
+        },
+        deepseek: {
+          ...buildDeepSeekProvider(),
+          apiKey: "DEEPSEEK_API_KEY",
+        },
+        mistral: {
+          ...buildMistralProvider(),
+          apiKey: "MISTRAL_API_KEY",
+        },
+        xai: {
+          ...buildXaiProvider(),
+          apiKey: "XAI_API_KEY",
+        },
+      };
+      if (env?.MINIMAX_API_KEY) {
+        providers["minimax"] = {
+          ...buildMinimaxProvider(),
+          apiKey: "MINIMAX_API_KEY",
+        };
+      }
+      if (env?.SYNTHETIC_API_KEY) {
+        providers["synthetic"] = {
+          ...buildSyntheticProvider(),
+          apiKey: "SYNTHETIC_API_KEY",
+        };
+      }
+      return providers;
     },
-  },
+  };
+});
+
+installModelsConfigTestHooks();
+
+let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
+
+type ParsedProviderConfig = {
+  baseUrl?: string;
+  apiKey?: string;
+  models?: Array<{ id: string }>;
 };
 
-describe("models-config", () => {
-  let previousHome: string | undefined;
+async function runEnvProviderCase(params: {
+  envVar: "MINIMAX_API_KEY" | "SYNTHETIC_API_KEY";
+  envValue: string;
+  providerKey: "minimax" | "synthetic";
+  expectedBaseUrl: string;
+  expectedApiKeyRef: string;
+  expectedModelIds: string[];
+}) {
+  const previousValue = process.env[params.envVar];
+  process.env[params.envVar] = params.envValue;
+  try {
+    await ensureOpenClawModelsJson({});
 
-  beforeEach(() => {
-    previousHome = process.env.HOME;
+    const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+    const raw = await fs.readFile(modelPath, "utf8");
+    const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
+    const provider = parsed.providers[params.providerKey];
+    expect(provider?.baseUrl).toBe(params.expectedBaseUrl);
+    expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
+    const ids = provider?.models?.map((model) => model.id) ?? [];
+    for (const expectedId of params.expectedModelIds) {
+      expect(ids).toContain(expectedId);
+    }
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env[params.envVar];
+    } else {
+      process.env[params.envVar] = previousValue;
+    }
+  }
+}
+
+describe("models-config", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+    ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
+    ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+      await import("./models-config.js"));
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    resetModelsJsonReadyCacheForTest();
   });
 
   afterEach(() => {
-    process.env.HOME = previousHome;
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    resetModelsJsonReadyCacheForTest();
   });
 
-  it("skips writing models.json when no env token or profile exists", async () => {
+  it("writes marker-backed defaults but skips env-gated providers when no env token or profile exists", async () => {
     await withTempHome(async (home) => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
-      const previousGh = process.env.GH_TOKEN;
-      const previousGithub = process.env.GITHUB_TOKEN;
-      const previousKimiCode = process.env.KIMICODE_API_KEY;
-      const previousMinimax = process.env.MINIMAX_API_KEY;
-      const previousMoonshot = process.env.MOONSHOT_API_KEY;
-      const previousSynthetic = process.env.SYNTHETIC_API_KEY;
-      const previousVenice = process.env.VENICE_API_KEY;
-      const previousXiaomi = process.env.XIAOMI_API_KEY;
-      delete process.env.COPILOT_GITHUB_TOKEN;
-      delete process.env.GH_TOKEN;
-      delete process.env.GITHUB_TOKEN;
-      delete process.env.KIMICODE_API_KEY;
-      delete process.env.MINIMAX_API_KEY;
-      delete process.env.MOONSHOT_API_KEY;
-      delete process.env.SYNTHETIC_API_KEY;
-      delete process.env.VENICE_API_KEY;
-      delete process.env.XIAOMI_API_KEY;
-
-      try {
-        vi.resetModules();
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS, "KIMI_API_KEY"]);
 
         const agentDir = path.join(home, "agent-empty");
-        const result = await ensureMoltbotModelsJson(
+        // ensureAuthProfileStore merges the main auth store into non-main dirs; point main at our temp dir.
+        process.env.OPENCLAW_AGENT_DIR = agentDir;
+        process.env.PI_CODING_AGENT_DIR = agentDir;
+
+        const result = await ensureOpenClawModelsJson(
           {
             models: { providers: {} },
           },
           agentDir,
         );
 
-        await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toThrow();
-        expect(result.wrote).toBe(false);
-      } finally {
-        if (previous === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
-        else process.env.COPILOT_GITHUB_TOKEN = previous;
-        if (previousGh === undefined) delete process.env.GH_TOKEN;
-        else process.env.GH_TOKEN = previousGh;
-        if (previousGithub === undefined) delete process.env.GITHUB_TOKEN;
-        else process.env.GITHUB_TOKEN = previousGithub;
-        if (previousKimiCode === undefined) delete process.env.KIMICODE_API_KEY;
-        else process.env.KIMICODE_API_KEY = previousKimiCode;
-        if (previousMinimax === undefined) delete process.env.MINIMAX_API_KEY;
-        else process.env.MINIMAX_API_KEY = previousMinimax;
-        if (previousMoonshot === undefined) delete process.env.MOONSHOT_API_KEY;
-        else process.env.MOONSHOT_API_KEY = previousMoonshot;
-        if (previousSynthetic === undefined) delete process.env.SYNTHETIC_API_KEY;
-        else process.env.SYNTHETIC_API_KEY = previousSynthetic;
-        if (previousVenice === undefined) delete process.env.VENICE_API_KEY;
-        else process.env.VENICE_API_KEY = previousVenice;
-        if (previousXiaomi === undefined) delete process.env.XIAOMI_API_KEY;
-        else process.env.XIAOMI_API_KEY = previousXiaomi;
-      }
+        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
+        const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
+
+        expect(result.wrote).toBe(true);
+        expect(Object.keys(parsed.providers)).toEqual(
+          expect.arrayContaining(["chutes", "deepseek", "mistral", "xai"]),
+        );
+        expect(parsed.providers["deepseek"]?.apiKey).toBe("DEEPSEEK_API_KEY");
+        expect(parsed.providers["mistral"]?.apiKey).toBe("MISTRAL_API_KEY");
+        expect(parsed.providers["xai"]?.apiKey).toBe("XAI_API_KEY");
+        expect(parsed.providers["openai"]).toBeUndefined();
+        expect(parsed.providers["minimax"]).toBeUndefined();
+        expect(parsed.providers["synthetic"]).toBeUndefined();
+      });
     });
   });
+
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
-      const { ensureMoltbotModelsJson } = await import("./models-config.js");
-      const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      await ensureMoltbotModelsJson(MODELS_CONFIG);
-
-      const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
+      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
-        providers: Record<string, { baseUrl?: string }>;
+        providers: Record<
+          string,
+          {
+            baseUrl?: string;
+            models?: Array<{
+              id?: string;
+              cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+            }>;
+          }
+        >;
       };
 
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["custom-proxy"]?.models?.[0]).toMatchObject({
+        id: "llama-3.1-8b",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
     });
   });
+
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
-      const prevKey = process.env.MINIMAX_API_KEY;
-      process.env.MINIMAX_API_KEY = "sk-minimax-test";
-      try {
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
-
-        await ensureMoltbotModelsJson({});
-
-        const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
-        const raw = await fs.readFile(modelPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<
-            string,
-            {
-              baseUrl?: string;
-              apiKey?: string;
-              models?: Array<{ id: string }>;
-            }
-          >;
-        };
-        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.chat/v1");
-        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
-        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
-        expect(ids).toContain("MiniMax-M2.1");
-        expect(ids).toContain("MiniMax-VL-01");
-      } finally {
-        if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
-        else process.env.MINIMAX_API_KEY = prevKey;
-      }
+      await runEnvProviderCase({
+        envVar: "MINIMAX_API_KEY",
+        envValue: "sk-minimax-test",
+        providerKey: "minimax",
+        expectedBaseUrl: "https://api.minimax.io/anthropic",
+        expectedApiKeyRef: "MINIMAX_API_KEY", // pragma: allowlist secret
+        expectedModelIds: ["MiniMax-M2.7", "MiniMax-VL-01"],
+      });
     });
   });
+
   it("adds synthetic provider when SYNTHETIC_API_KEY is set", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
-      const prevKey = process.env.SYNTHETIC_API_KEY;
-      process.env.SYNTHETIC_API_KEY = "sk-synthetic-test";
-      try {
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
-
-        await ensureMoltbotModelsJson({});
-
-        const modelPath = path.join(resolveMoltbotAgentDir(), "models.json");
-        const raw = await fs.readFile(modelPath, "utf8");
-        const parsed = JSON.parse(raw) as {
-          providers: Record<
-            string,
-            {
-              baseUrl?: string;
-              apiKey?: string;
-              models?: Array<{ id: string }>;
-            }
-          >;
-        };
-        expect(parsed.providers.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-        expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
-        const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
-        expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
-      } finally {
-        if (prevKey === undefined) delete process.env.SYNTHETIC_API_KEY;
-        else process.env.SYNTHETIC_API_KEY = prevKey;
-      }
+      await runEnvProviderCase({
+        envVar: "SYNTHETIC_API_KEY",
+        envValue: "sk-synthetic-test",
+        providerKey: "synthetic",
+        expectedBaseUrl: "https://api.synthetic.new/anthropic",
+        expectedApiKeyRef: "SYNTHETIC_API_KEY", // pragma: allowlist secret
+        expectedModelIds: ["hf:MiniMaxAI/MiniMax-M2.5"],
+      });
     });
   });
 });

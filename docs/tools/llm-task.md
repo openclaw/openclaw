@@ -3,6 +3,7 @@ summary: "JSON-only LLM tasks for workflows (optional plugin tool)"
 read_when:
   - You want a JSON-only LLM step inside workflows
   - You need schema-validated LLM output for automation
+title: "LLM Task"
 ---
 
 # LLM Task
@@ -11,11 +12,11 @@ read_when:
 returns structured output (optionally validated against JSON Schema).
 
 This is ideal for workflow engines like Lobster: you can add a single LLM step
-without writing custom Moltbot code for each workflow.
+without writing custom OpenClaw code for each workflow.
 
 ## Enable the plugin
 
-1) Enable the plugin:
+1. Enable the plugin:
 
 ```json
 {
@@ -27,7 +28,7 @@ without writing custom Moltbot code for each workflow.
 }
 ```
 
-2) Allowlist the tool (it is registered with `optional: true`):
+2. Allowlist the tool (it is registered with `optional: true`):
 
 ```json
 {
@@ -52,9 +53,9 @@ without writing custom Moltbot code for each workflow.
         "enabled": true,
         "config": {
           "defaultProvider": "openai-codex",
-          "defaultModel": "gpt-5.2",
+          "defaultModel": "gpt-5.4",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai-codex/gpt-5.2"],
+          "allowedModels": ["openai-codex/gpt-5.4"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -74,10 +75,13 @@ outside the list is rejected.
 - `schema` (object, optional JSON Schema)
 - `provider` (string, optional)
 - `model` (string, optional)
+- `thinking` (string, optional)
 - `authProfileId` (string, optional)
 - `temperature` (number, optional)
 - `maxTokens` (number, optional)
 - `timeoutMs` (number, optional)
+
+`thinking` accepts the standard OpenClaw reasoning presets, such as `low` or `medium`.
 
 ## Output
 
@@ -87,8 +91,9 @@ Returns `details.json` containing the parsed JSON (and validates against
 ## Example: Lobster workflow step
 
 ```lobster
-clawd.invoke --tool llm-task --action json --args-json '{
+openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
+  "thinking": "low",
   "input": {
     "subject": "Hello",
     "body": "Can you help?"

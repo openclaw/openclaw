@@ -1,9 +1,14 @@
 {
-  "name": "@moltbot/llm-task",
-  "version": "2026.1.29",
+  "name": "@openclaw/llm-task",
+  "version": "2026.3.22",
+  "private": true,
+  "description": "OpenClaw JSON-only LLM task plugin",
   "type": "module",
-  "description": "Moltbot JSON-only LLM task plugin",
-  "moltbot": {
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "ajv": "^8.18.0"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

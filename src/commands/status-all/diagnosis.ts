@@ -1,11 +1,16 @@
 import type { ProgressReporter } from "../../cli/progress.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { formatAge, redactSecrets } from "./format.js";
+import {
+  formatPluginCompatibilityNotice,
+  type PluginCompatibilityNotice,
+} from "../../plugins/status.js";
+import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
 type ConfigIssueLike = { path: string; message: string };
@@ -49,6 +54,7 @@ export async function appendStatusAllDiagnosis(params: {
   connectionDetailsForReport: string;
   snap: ConfigSnapshotLike | null;
   remoteUrlMissing: boolean;
+  secretDiagnostics: string[];
   sentinel: { payload?: RestartSentinelPayload | null } | null;
   lastErr: string | null;
   port: number;
@@ -57,6 +63,7 @@ export async function appendStatusAllDiagnosis(params: {
   tailscale: TailscaleStatusLike;
   tailscaleHttpsUrl: string | null;
   skillStatus: SkillStatusLike | null;
+  pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
   gatewayReachable: boolean;
@@ -71,7 +78,7 @@ export async function appendStatusAllDiagnosis(params: {
   };
 
   lines.push("");
-  lines.push(`${muted("Gateway connection details:")}`);
+  lines.push(muted("Gateway connection details:"));
   for (const line of redactSecrets(params.connectionDetailsForReport)
     .split("\n")
     .map((l) => l.trimEnd())) {
@@ -88,7 +95,7 @@ export async function appendStatusAllDiagnosis(params: {
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
-      lines.push(`  - ${issue.path}: ${issue.message}`);
+      lines.push(`  ${formatConfigIssueLine(issue, "-")}`);
     }
     if (uniqueIssues.length > 12) {
       lines.push(`  ${muted(`… +${uniqueIssues.length - 12} more`)}`);
@@ -103,10 +110,21 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
   }
 
+  emitCheck(
+    `Secret diagnostics (${params.secretDiagnostics.length})`,
+    params.secretDiagnostics.length === 0 ? "ok" : "warn",
+  );
+  for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
+    lines.push(`  - ${muted(redactSecrets(diagnostic))}`);
+  }
+  if (params.secretDiagnostics.length > 10) {
+    lines.push(`  ${muted(`… +${params.secretDiagnostics.length - 10} more`)}`);
+  }
+
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
     lines.push(
-      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatAge(Date.now() - params.sentinel.payload.ts)}`)}`,
+      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
   } else {
     emitCheck("Restart sentinel: none", "ok");
@@ -116,7 +134,7 @@ export async function appendStatusAllDiagnosis(params: {
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(`${muted("Gateway last log line:")}`);
+    lines.push(muted("Gateway last log line:"));
     lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
   }
 
@@ -163,6 +181,18 @@ export async function appendStatusAllDiagnosis(params: {
     );
   }
 
+  emitCheck(
+    `Plugin compatibility (${params.pluginCompatibility.length || "none"})`,
+    params.pluginCompatibility.length === 0 ? "ok" : "warn",
+  );
+  for (const notice of params.pluginCompatibility.slice(0, 12)) {
+    const severity = notice.severity === "warn" ? "warn" : "info";
+    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
+  }
+  if (params.pluginCompatibility.length > 12) {
+    lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);
+  }
+
   params.progress.setLabel("Reading logs…");
   const logPaths = (() => {
     try {
@@ -179,7 +209,7 @@ export async function appendStatusAllDiagnosis(params: {
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
-      lines.push(`${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`);
+      lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
       lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
       for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
@@ -214,12 +244,20 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   const healthErr = (() => {
-    if (!params.health || typeof params.health !== "object") return "";
+    if (!params.health || typeof params.health !== "object") {
+      return "";
+    }
     const record = params.health as Record<string, unknown>;
-    if (!("error" in record)) return "";
+    if (!("error" in record)) {
+      return "";
+    }
     const value = record.error;
-    if (!value) return "";
-    if (typeof value === "string") return value;
+    if (!value) {
+      return "";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
     try {
       return JSON.stringify(value, null, 2);
     } catch {
@@ -228,12 +266,12 @@ export async function appendStatusAllDiagnosis(params: {
   })();
   if (healthErr) {
     lines.push("");
-    lines.push(`${muted("Gateway health:")}`);
+    lines.push(muted("Gateway health:"));
     lines.push(`  ${muted(redactSecrets(healthErr))}`);
   }
 
   lines.push("");
   lines.push(muted("Pasteable debug report. Auth tokens redacted."));
-  lines.push("Troubleshooting: https://docs.molt.bot/troubleshooting");
+  lines.push("Troubleshooting: https://docs.openclaw.ai/troubleshooting");
   lines.push("");
 }

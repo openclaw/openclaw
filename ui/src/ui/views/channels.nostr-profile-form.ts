@@ -5,8 +5,7 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
-
-import type { NostrProfile as NostrProfileType } from "../types";
+import type { NostrProfile as NostrProfileType } from "../types.ts";
 
 // ============================================================================
 // Types
@@ -82,7 +81,7 @@ export function renderNostrProfileForm(params: {
       placeholder?: string;
       maxLength?: number;
       help?: string;
-    } = {}
+    } = {},
   ) => {
     const { type = "text", placeholder, maxLength, help } = opts;
     const value = state.values[field] ?? "";
@@ -102,7 +101,7 @@ export function renderNostrProfileForm(params: {
             placeholder=${placeholder ?? ""}
             maxlength=${maxLength ?? 2000}
             rows="3"
-            style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; resize: vertical; font-family: inherit;"
+            style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); resize: vertical; font-family: inherit;"
             @input=${(e: InputEvent) => {
               const target = e.target as HTMLTextAreaElement;
               callbacks.onFieldChange(field, target.value);
@@ -126,7 +125,7 @@ export function renderNostrProfileForm(params: {
           .value=${value}
           placeholder=${placeholder ?? ""}
           maxlength=${maxLength ?? 256}
-          style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;"
+          style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm);"
           @input=${(e: InputEvent) => {
             const target = e.target as HTMLInputElement;
             callbacks.onFieldChange(field, target.value);
@@ -141,7 +140,9 @@ export function renderNostrProfileForm(params: {
 
   const renderPicturePreview = () => {
     const picture = state.values.picture;
-    if (!picture) return nothing;
+    if (!picture) {
+      return nothing;
+    }
 
     return html`
       <div style="margin-bottom: 12px;">
@@ -163,19 +164,23 @@ export function renderNostrProfileForm(params: {
   };
 
   return html`
-    <div class="nostr-profile-form" style="padding: 16px; background: var(--bg-secondary); border-radius: 8px; margin-top: 12px;">
+    <div class="nostr-profile-form" style="padding: 16px; background: var(--bg-secondary); border-radius: var(--radius-md); margin-top: 12px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <div style="font-weight: 600; font-size: 16px;">Edit Profile</div>
         <div style="font-size: 12px; color: var(--text-muted);">Account: ${accountId}</div>
       </div>
 
-      ${state.error
-        ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
-        : nothing}
+      ${
+        state.error
+          ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
+          : nothing
+      }
 
-      ${state.success
-        ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
-        : nothing}
+      ${
+        state.success
+          ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
+          : nothing
+      }
 
       ${renderPicturePreview()}
 
@@ -204,8 +209,9 @@ export function renderNostrProfileForm(params: {
         help: "HTTPS URL to your profile picture",
       })}
 
-      ${state.showAdvanced
-        ? html`
+      ${
+        state.showAdvanced
+          ? html`
             <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
               <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">Advanced</div>
 
@@ -232,7 +238,8 @@ export function renderNostrProfileForm(params: {
               })}
             </div>
           `
-        : nothing}
+          : nothing
+      }
 
       <div style="display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap;">
         <button
@@ -267,11 +274,15 @@ export function renderNostrProfileForm(params: {
         </button>
       </div>
 
-      ${isDirty
-        ? html`<div style="font-size: 12px; color: var(--warning-color); margin-top: 8px;">
-            You have unsaved changes
-          </div>`
-        : nothing}
+      ${
+        isDirty
+          ? html`
+              <div style="font-size: 12px; color: var(--warning-color); margin-top: 8px">
+                You have unsaved changes
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
@@ -284,7 +295,7 @@ export function renderNostrProfileForm(params: {
  * Create initial form state from existing profile
  */
 export function createNostrProfileFormState(
-  profile: NostrProfileType | undefined
+  profile: NostrProfileType | undefined,
 ): NostrProfileFormState {
   const values: NostrProfileType = {
     name: profile?.name ?? "",
@@ -305,8 +316,6 @@ export function createNostrProfileFormState(
     error: null,
     success: null,
     fieldErrors: {},
-    showAdvanced: Boolean(
-      profile?.banner || profile?.website || profile?.nip05 || profile?.lud16
-    ),
+    showAdvanced: Boolean(profile?.banner || profile?.website || profile?.nip05 || profile?.lud16),
   };
 }

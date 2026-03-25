@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
 
+// launchd applies ThrottleInterval to any rapid relaunch, including
+// intentional gateway restarts. Keep it low so CLI restarts and forced
+// reinstalls do not stall for a full minute.
+export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 1;
+// launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
+export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
+
 const plistEscape = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
@@ -17,11 +24,15 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&amp;", "&");
 
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
-  if (!env) return "";
+  if (!env) {
+    return "";
+  }
   const entries = Object.entries(env).filter(
     ([, value]) => typeof value === "string" && value.trim(),
   );
-  if (entries.length === 0) return "";
+  if (entries.length === 0) {
+    return "";
+  }
   const items = entries
     .map(
       ([key, value]) =>
@@ -40,7 +51,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
   try {
     const plist = await fs.readFile(plistPath, "utf8");
     const programMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
-    if (!programMatch) return null;
+    if (!programMatch) {
+      return null;
+    }
     const args = Array.from(programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
       (match) => plistUnescape(match[1] ?? "").trim(),
     );
@@ -55,7 +68,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
         /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
       )) {
         const key = plistUnescape(pair[1] ?? "").trim();
-        if (!key) continue;
+        if (!key) {
+          continue;
+        }
         const value = plistUnescape(pair[2] ?? "").trim();
         environment[key] = value;
       }
@@ -98,5 +113,5 @@ export function buildLaunchAgentPlist({
     ? `\n    <key>Comment</key>\n    <string>${plistEscape(comment.trim())}</string>`
     : "";
   const envXml = renderEnvDict(environment);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n  <dict>\n    <key>Label</key>\n    <string>${plistEscape(label)}</string>\n    ${commentXml}\n    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>\n    <key>ThrottleInterval</key>\n    <integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>\n    <key>Umask</key>\n    <integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>\n    <key>ProgramArguments</key>\n    <array>${argsXml}\n    </array>\n    ${workingDirXml}\n    <key>StandardOutPath</key>\n    <string>${plistEscape(stdoutPath)}</string>\n    <key>StandardErrorPath</key>\n    <string>${plistEscape(stderrPath)}</string>${envXml}\n  </dict>\n</plist>\n`;
 }

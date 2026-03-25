@@ -1,20 +1,15 @@
-import { describe, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
-const CDP_URL = process.env.CLAWDBOT_LIVE_BROWSER_CDP_URL?.trim() || "";
+const LIVE = isLiveTestEnabled();
+const CDP_URL = process.env.OPENCLAW_LIVE_BROWSER_CDP_URL?.trim() || "";
 const describeLive = LIVE && CDP_URL ? describe : describe.skip;
 
 async function waitFor(
   fn: () => Promise<boolean>,
   opts: { timeoutMs: number; intervalMs: number },
 ): Promise<void> {
-  const deadline = Date.now() + opts.timeoutMs;
-  while (Date.now() < deadline) {
-    if (await fn()) return;
-    await new Promise((r) => setTimeout(r, opts.intervalMs));
-  }
-  throw new Error("timed out");
+  await expect.poll(fn, { timeout: opts.timeoutMs, interval: opts.intervalMs }).toBe(true);
 }
 
 describeLive("browser (live): remote CDP tab persistence", () => {

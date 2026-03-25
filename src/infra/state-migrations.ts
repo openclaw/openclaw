@@ -1,26 +1,28 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
+import { listTelegramAccountIds } from "../../extensions/telegram/api.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
-  resolveLegacyStateDir,
+  resolveLegacyStateDirs,
   resolveNewStateDir,
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { SessionScope } from "../config/sessions/types.js";
 import { saveSessionStore } from "../config/sessions.js";
+import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import type { SessionScope } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
   existsDir,
@@ -55,7 +57,17 @@ export type LegacyStateDetection = {
     targetDir: string;
     hasLegacy: boolean;
   };
+  pairingAllowFrom: {
+    hasLegacyTelegram: boolean;
+    copyPlans: FileCopyPlan[];
+  };
   preview: string[];
+};
+
+type FileCopyPlan = {
+  label: string;
+  sourcePath: string;
+  targetPath: string;
 };
 
 type MigrationLogger = {
@@ -72,14 +84,48 @@ function isSurfaceGroupKey(key: string): boolean {
 
 function isLegacyGroupKey(key: string): boolean {
   const trimmed = key.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("group:")) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith("group:")) {
+    return true;
+  }
   const lower = trimmed.toLowerCase();
-  if (!lower.includes("@g.us")) return false;
+  if (!lower.includes("@g.us")) {
+    return false;
+  }
   // Legacy WhatsApp group keys: bare JID or "whatsapp:<jid>" without explicit ":group:" kind.
-  if (!trimmed.includes(":")) return true;
-  if (lower.startsWith("whatsapp:") && !trimmed.includes(":group:")) return true;
+  if (!trimmed.includes(":")) {
+    return true;
+  }
+  if (lower.startsWith("whatsapp:") && !trimmed.includes(":group:")) {
+    return true;
+  }
   return false;
+}
+
+function buildFileCopyPreview(plan: FileCopyPlan): string {
+  return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
+}
+
+async function runFileCopyPlans(
+  plans: FileCopyPlan[],
+): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const plan of plans) {
+    if (fileExists(plan.targetPath)) {
+      continue;
+    }
+    try {
+      ensureDir(path.dirname(plan.targetPath));
+      fs.copyFileSync(plan.sourcePath, plan.targetPath);
+      changes.push(`Copied ${plan.label} → ${plan.targetPath}`);
+    } catch (err) {
+      warnings.push(`Failed migrating ${plan.label} (${plan.sourcePath}): ${String(err)}`);
+    }
+  }
+  return { changes, warnings };
 }
 
 function canonicalizeSessionKeyForAgent(params: {
@@ -90,24 +136,34 @@ function canonicalizeSessionKeyForAgent(params: {
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
-  if (!raw) return raw;
-  if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") return raw.toLowerCase();
+  if (!raw) {
+    return raw;
+  }
+  if (raw.toLowerCase() === "global" || raw.toLowerCase() === "unknown") {
+    return raw.toLowerCase();
+  }
 
   const canonicalMain = canonicalizeMainSessionAlias({
     cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
     agentId,
     sessionKey: raw,
   });
-  if (canonicalMain !== raw) return canonicalMain.toLowerCase();
+  if (canonicalMain !== raw) {
+    return canonicalMain.toLowerCase();
+  }
 
-  if (raw.toLowerCase().startsWith("agent:")) return raw.toLowerCase();
+  if (raw.toLowerCase().startsWith("agent:")) {
+    return raw.toLowerCase();
+  }
   if (raw.toLowerCase().startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
     return `agent:${agentId}:subagent:${rest}`.toLowerCase();
   }
   if (raw.startsWith("group:")) {
     const id = raw.slice("group:".length).trim();
-    if (!id) return raw;
+    if (!id) {
+      return raw;
+    }
     const channel = id.toLowerCase().includes("@g.us") ? "whatsapp" : "unknown";
     return `agent:${agentId}:${channel}:group:${id}`.toLowerCase();
   }
@@ -133,13 +189,25 @@ function pickLatestLegacyDirectEntry(
   let best: SessionEntryLike | null = null;
   let bestUpdated = -1;
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const normalized = key.trim();
-    if (!normalized) continue;
-    if (normalized === "global") continue;
-    if (normalized.startsWith("agent:")) continue;
-    if (normalized.toLowerCase().startsWith("subagent:")) continue;
-    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) continue;
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === "global") {
+      continue;
+    }
+    if (normalized.startsWith("agent:")) {
+      continue;
+    }
+    if (normalized.toLowerCase().startsWith("subagent:")) {
+      continue;
+    }
+    if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {
+      continue;
+    }
     const updatedAt = typeof entry.updatedAt === "number" ? entry.updatedAt : 0;
     if (updatedAt > bestUpdated) {
       bestUpdated = updatedAt;
@@ -151,7 +219,9 @@ function pickLatestLegacyDirectEntry(
 
 function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
   const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
-  if (!sessionId) return null;
+  if (!sessionId) {
+    return null;
+  }
   const updatedAt =
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
@@ -176,11 +246,17 @@ function mergeSessionEntry(params: {
   incoming: SessionEntryLike;
   preferIncomingOnTie?: boolean;
 }): SessionEntryLike {
-  if (!params.existing) return params.incoming;
+  if (!params.existing) {
+    return params.incoming;
+  }
   const existingUpdated = resolveUpdatedAt(params.existing);
   const incomingUpdated = resolveUpdatedAt(params.incoming);
-  if (incomingUpdated > existingUpdated) return params.incoming;
-  if (incomingUpdated < existingUpdated) return params.existing;
+  if (incomingUpdated > existingUpdated) {
+    return params.incoming;
+  }
+  if (incomingUpdated < existingUpdated) {
+    return params.existing;
+  }
   return params.preferIncomingOnTie ? params.incoming : params.existing;
 }
 
@@ -195,7 +271,9 @@ function canonicalizeSessionStore(params: {
   const legacyKeys: string[] = [];
 
   for (const [key, entry] of Object.entries(params.store)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const canonicalKey = canonicalizeSessionKeyForAgent({
       key,
       agentId: params.agentId,
@@ -203,7 +281,9 @@ function canonicalizeSessionStore(params: {
       scope: params.scope,
     });
     const isCanonical = canonicalKey === key;
-    if (!isCanonical) legacyKeys.push(key);
+    if (!isCanonical) {
+      legacyKeys.push(key);
+    }
     const existing = canonical[canonicalKey];
     if (!existing) {
       canonical[canonicalKey] = entry;
@@ -219,8 +299,12 @@ function canonicalizeSessionStore(params: {
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
       continue;
     }
-    if (incomingUpdated < existingUpdated) continue;
-    if (existingMeta?.isCanonical && !isCanonical) continue;
+    if (incomingUpdated < existingUpdated) {
+      continue;
+    }
+    if (existingMeta?.isCanonical && !isCanonical) {
+      continue;
+    }
     if (!existingMeta?.isCanonical && isCanonical) {
       canonical[canonicalKey] = entry;
       meta.set(canonicalKey, { isCanonical, updatedAt: incomingUpdated });
@@ -245,19 +329,27 @@ function listLegacySessionKeys(params: {
       mainKey: params.mainKey,
       scope: params.scope,
     });
-    if (canonical !== key) legacy.push(key);
+    if (canonical !== key) {
+      legacy.push(key);
+    }
   }
   return legacy;
 }
 
 function emptyDirOrMissing(dir: string): boolean {
-  if (!existsDir(dir)) return true;
+  if (!existsDir(dir)) {
+    return true;
+  }
   return safeReadDir(dir).length === 0;
 }
 
 function removeDirIfEmpty(dir: string) {
-  if (!existsDir(dir)) return;
-  if (!emptyDirOrMissing(dir)) return;
+  if (!existsDir(dir)) {
+    return;
+  }
+  if (!emptyDirOrMissing(dir)) {
+    return;
+  }
   try {
     fs.rmdirSync(dir);
   } catch {
@@ -305,6 +397,63 @@ function isDirPath(filePath: string): boolean {
   }
 }
 
+function isLegacyTreeSymlinkMirror(currentDir: string, realTargetDir: string): boolean {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(currentDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (entries.length === 0) {
+    return false;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(currentDir, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(entryPath);
+    } catch {
+      return false;
+    }
+    if (stat.isSymbolicLink()) {
+      const resolvedTarget = resolveSymlinkTarget(entryPath);
+      if (!resolvedTarget) {
+        return false;
+      }
+      let resolvedRealTarget: string;
+      try {
+        resolvedRealTarget = fs.realpathSync(resolvedTarget);
+      } catch {
+        return false;
+      }
+      if (!isWithinDir(realTargetDir, resolvedRealTarget)) {
+        return false;
+      }
+      continue;
+    }
+    if (stat.isDirectory()) {
+      if (!isLegacyTreeSymlinkMirror(entryPath, realTargetDir)) {
+        return false;
+      }
+      continue;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean {
+  let realTargetDir: string;
+  try {
+    realTargetDir = fs.realpathSync(targetDir);
+  } catch {
+    return false;
+  }
+  return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
+}
+
 export async function autoMigrateLegacyStateDir(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -316,19 +465,26 @@ export async function autoMigrateLegacyStateDir(params: {
   autoMigrateStateDirChecked = true;
 
   const env = params.env ?? process.env;
-  if (env.MOLTBOT_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim()) {
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
   }
 
   const homedir = params.homedir ?? os.homedir;
-  const legacyDir = resolveLegacyStateDir(homedir);
   const targetDir = resolveNewStateDir(homedir);
+  const legacyDirs = resolveLegacyStateDirs(homedir);
+  let legacyDir = legacyDirs.find((dir) => {
+    try {
+      return fs.existsSync(dir);
+    } catch {
+      return false;
+    }
+  });
   const warnings: string[] = [];
   const changes: string[] = [];
 
   let legacyStat: fs.Stats | null = null;
   try {
-    legacyStat = fs.lstatSync(legacyDir);
+    legacyStat = legacyDir ? fs.lstatSync(legacyDir) : null;
   } catch {
     legacyStat = null;
   }
@@ -340,18 +496,50 @@ export async function autoMigrateLegacyStateDir(params: {
     return { migrated: false, skipped: false, changes, warnings };
   }
 
-  if (legacyStat.isSymbolicLink()) {
-    const legacyTarget = resolveSymlinkTarget(legacyDir);
-    if (legacyTarget && path.resolve(legacyTarget) === path.resolve(targetDir)) {
+  let symlinkDepth = 0;
+  while (legacyStat.isSymbolicLink()) {
+    const legacyTarget = legacyDir ? resolveSymlinkTarget(legacyDir) : null;
+    if (!legacyTarget) {
+      warnings.push(
+        `Legacy state dir is a symlink (${legacyDir ?? "unknown"}); could not resolve target.`,
+      );
       return { migrated: false, skipped: false, changes, warnings };
     }
+    if (path.resolve(legacyTarget) === path.resolve(targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
+    if (legacyDirs.some((dir) => path.resolve(dir) === path.resolve(legacyTarget))) {
+      legacyDir = legacyTarget;
+      try {
+        legacyStat = fs.lstatSync(legacyDir);
+      } catch {
+        legacyStat = null;
+      }
+      if (!legacyStat) {
+        warnings.push(`Legacy state dir missing after symlink resolution: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+        warnings.push(`Legacy state path is not a directory: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      symlinkDepth += 1;
+      if (symlinkDepth > 2) {
+        warnings.push(`Legacy state dir symlink chain too deep: ${legacyDir}`);
+        return { migrated: false, skipped: false, changes, warnings };
+      }
+      continue;
+    }
     warnings.push(
-      `Legacy state dir is a symlink (${legacyDir} → ${legacyTarget ?? "unknown"}); skipping auto-migration.`,
+      `Legacy state dir is a symlink (${legacyDir ?? "unknown"} → ${legacyTarget}); skipping auto-migration.`,
     );
     return { migrated: false, skipped: false, changes, warnings };
   }
 
   if (isDirPath(targetDir)) {
+    if (legacyDir && isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
+      return { migrated: false, skipped: false, changes, warnings };
+    }
     warnings.push(
       `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
     );
@@ -359,18 +547,29 @@ export async function autoMigrateLegacyStateDir(params: {
   }
 
   try {
+    if (!legacyDir) {
+      throw new Error("Legacy state dir not found");
+    }
     fs.renameSync(legacyDir, targetDir);
   } catch (err) {
-    warnings.push(`Failed to move legacy state dir (${legacyDir} → ${targetDir}): ${String(err)}`);
+    warnings.push(
+      `Failed to move legacy state dir (${legacyDir ?? "unknown"} → ${targetDir}): ${String(err)}`,
+    );
     return { migrated: false, skipped: false, changes, warnings };
   }
 
   try {
+    if (!legacyDir) {
+      throw new Error("Legacy state dir not found");
+    }
     fs.symlinkSync(targetDir, legacyDir, "dir");
     changes.push(formatStateDirMigration(legacyDir, targetDir));
   } catch (err) {
     try {
       if (process.platform === "win32") {
+        if (!legacyDir) {
+          throw new Error("Legacy state dir not found", { cause: err });
+        }
         fs.symlinkSync(targetDir, legacyDir, "junction");
         changes.push(formatStateDirMigration(legacyDir, targetDir));
       } else {
@@ -378,6 +577,10 @@ export async function autoMigrateLegacyStateDir(params: {
       }
     } catch (fallbackErr) {
       try {
+        if (!legacyDir) {
+          // oxlint-disable-next-line preserve-caught-error
+          throw new Error("Legacy state dir not found", { cause: fallbackErr });
+        }
         fs.renameSync(targetDir, legacyDir);
         warnings.push(
           `State dir migration rolled back (failed to link legacy path): ${String(fallbackErr)}`,
@@ -385,12 +588,12 @@ export async function autoMigrateLegacyStateDir(params: {
         return { migrated: false, skipped: false, changes: [], warnings };
       } catch (rollbackErr) {
         warnings.push(
-          `State dir moved but failed to link legacy path (${legacyDir} → ${targetDir}): ${String(fallbackErr)}`,
+          `State dir moved but failed to link legacy path (${legacyDir ?? "unknown"} → ${targetDir}): ${String(fallbackErr)}`,
         );
         warnings.push(
-          `Rollback failed; set MOLTBOT_STATE_DIR=${targetDir} to avoid split state: ${String(rollbackErr)}`,
+          `Rollback failed; set OPENCLAW_STATE_DIR=${targetDir} to avoid split state: ${String(rollbackErr)}`,
         );
-        changes.push(`State dir: ${legacyDir} → ${targetDir}`);
+        changes.push(`State dir: ${legacyDir ?? "unknown"} → ${targetDir}`);
       }
     }
   }
@@ -399,7 +602,7 @@ export async function autoMigrateLegacyStateDir(params: {
 }
 
 export async function detectLegacyStateMigrations(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<LegacyStateDetection> {
@@ -445,6 +648,25 @@ export async function detectLegacyStateMigrations(params: {
   const hasLegacyWhatsAppAuth =
     fileExists(path.join(oauthDir, "creds.json")) &&
     !fileExists(path.join(targetWhatsAppAuthDir, "creds.json"));
+  const legacyTelegramAllowFromPath = resolveChannelAllowFromPath("telegram", env);
+  const telegramPairingAllowFromPlans = fileExists(legacyTelegramAllowFromPath)
+    ? Array.from(
+        new Set(
+          listTelegramAccountIds(params.cfg).map((accountId) =>
+            resolveChannelAllowFromPath("telegram", env, accountId),
+          ),
+        ),
+      )
+        .filter((targetPath) => !fileExists(targetPath))
+        .map(
+          (targetPath): FileCopyPlan => ({
+            label: "Telegram pairing allowFrom",
+            sourcePath: legacyTelegramAllowFromPath,
+            targetPath,
+          }),
+        )
+    : [];
+  const hasLegacyTelegramAllowFrom = telegramPairingAllowFromPlans.length > 0;
 
   const preview: string[] = [];
   if (hasLegacySessions) {
@@ -458,6 +680,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (hasLegacyWhatsAppAuth) {
     preview.push(`- WhatsApp auth: ${oauthDir} → ${targetWhatsAppAuthDir} (keep oauth.json)`);
+  }
+  if (hasLegacyTelegramAllowFrom) {
+    preview.push(...telegramPairingAllowFromPlans.map(buildFileCopyPreview));
   }
 
   return {
@@ -484,6 +709,10 @@ export async function detectLegacyStateMigrations(params: {
       targetDir: targetWhatsAppAuthDir,
       hasLegacy: hasLegacyWhatsAppAuth,
     },
+    pairingAllowFrom: {
+      hasLegacyTelegram: hasLegacyTelegramAllowFrom,
+      copyPlans: telegramPairingAllowFromPlans,
+    },
     preview,
   };
 }
@@ -494,7 +723,9 @@ async function migrateLegacySessions(
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  if (!detected.sessions.hasLegacy) return { changes, warnings };
+  if (!detected.sessions.hasLegacy) {
+    return { changes, warnings };
+  }
 
   ensureDir(detected.sessions.targetDir);
 
@@ -554,10 +785,14 @@ async function migrateLegacySessions(
     const normalized: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(merged)) {
       const normalizedEntry = normalizeSessionEntry(entry);
-      if (!normalizedEntry) continue;
+      if (!normalizedEntry) {
+        continue;
+      }
       normalized[key] = normalizedEntry;
     }
-    await saveSessionStore(detected.sessions.targetStorePath, normalized);
+    await saveSessionStore(detected.sessions.targetStorePath, normalized, {
+      skipMaintenance: true,
+    });
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
@@ -566,11 +801,17 @@ async function migrateLegacySessions(
 
   const entries = safeReadDir(detected.sessions.legacyDir);
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (entry.name === "sessions.json") continue;
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name === "sessions.json") {
+      continue;
+    }
     const from = path.join(detected.sessions.legacyDir, entry.name);
     const to = path.join(detected.sessions.targetDir, entry.name);
-    if (fileExists(to)) continue;
+    if (fileExists(to)) {
+      continue;
+    }
     try {
       fs.renameSync(from, to);
       changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
@@ -610,7 +851,9 @@ export async function migrateLegacyAgentDir(
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  if (!detected.agentDir.hasLegacy) return { changes, warnings };
+  if (!detected.agentDir.hasLegacy) {
+    return { changes, warnings };
+  }
 
   ensureDir(detected.agentDir.targetDir);
 
@@ -618,7 +861,9 @@ export async function migrateLegacyAgentDir(
   for (const entry of entries) {
     const from = path.join(detected.agentDir.legacyDir, entry.name);
     const to = path.join(detected.agentDir.targetDir, entry.name);
-    if (fs.existsSync(to)) continue;
+    if (fs.existsSync(to)) {
+      continue;
+    }
     try {
       fs.renameSync(from, to);
       changes.push(`Moved agent file ${entry.name} → agents/${detected.targetAgentId}/agent`);
@@ -651,18 +896,28 @@ async function migrateLegacyWhatsAppAuth(
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  if (!detected.whatsappAuth.hasLegacy) return { changes, warnings };
+  if (!detected.whatsappAuth.hasLegacy) {
+    return { changes, warnings };
+  }
 
   ensureDir(detected.whatsappAuth.targetDir);
 
   const entries = safeReadDir(detected.whatsappAuth.legacyDir);
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (entry.name === "oauth.json") continue;
-    if (!isLegacyWhatsAppAuthFile(entry.name)) continue;
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name === "oauth.json") {
+      continue;
+    }
+    if (!isLegacyWhatsAppAuthFile(entry.name)) {
+      continue;
+    }
     const from = path.join(detected.whatsappAuth.legacyDir, entry.name);
     const to = path.join(detected.whatsappAuth.targetDir, entry.name);
-    if (fileExists(to)) continue;
+    if (fileExists(to)) {
+      continue;
+    }
     try {
       fs.renameSync(from, to);
       changes.push(`Moved WhatsApp auth ${entry.name} → whatsapp/default`);
@@ -674,6 +929,17 @@ async function migrateLegacyWhatsAppAuth(
   return { changes, warnings };
 }
 
+async function migrateLegacyTelegramPairingAllowFrom(
+  detected: LegacyStateDetection,
+): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!detected.pairingAllowFrom.hasLegacyTelegram) {
+    return { changes, warnings };
+  }
+  return await runFileCopyPlans(detected.pairingAllowFrom.copyPlans);
+}
+
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   now?: () => number;
@@ -683,14 +949,25 @@ export async function runLegacyStateMigrations(params: {
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const whatsappAuth = await migrateLegacyWhatsAppAuth(detected);
+  const telegramPairingAllowFrom = await migrateLegacyTelegramPairingAllowFrom(detected);
   return {
-    changes: [...sessions.changes, ...agentDir.changes, ...whatsappAuth.changes],
-    warnings: [...sessions.warnings, ...agentDir.warnings, ...whatsappAuth.warnings],
+    changes: [
+      ...sessions.changes,
+      ...agentDir.changes,
+      ...whatsappAuth.changes,
+      ...telegramPairingAllowFrom.changes,
+    ],
+    warnings: [
+      ...sessions.warnings,
+      ...agentDir.warnings,
+      ...whatsappAuth.warnings,
+      ...telegramPairingAllowFrom.warnings,
+    ],
   };
 }
 
 export async function autoMigrateLegacyAgentDir(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -705,7 +982,7 @@ export async function autoMigrateLegacyAgentDir(params: {
 }
 
 export async function autoMigrateLegacyState(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -727,7 +1004,7 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
     log: params.log,
   });
-  if (env.CLAWDBOT_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
+  if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
     return {
       migrated: stateDirResult.migrated,
       skipped: true,

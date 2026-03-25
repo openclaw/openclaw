@@ -1,8 +1,11 @@
-import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadMoltbotPlugins } from "./loader.js";
-import type { MoltbotPluginToolContext } from "./types.js";
+import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import { loadOpenClawPlugins } from "./loader.js";
+import { createPluginLoaderLogger } from "./logger.js";
+import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
+import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -17,6 +20,13 @@ export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefine
   return pluginToolMeta.get(tool);
 }
 
+export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
+  const meta = pluginToolMeta.get(source);
+  if (meta) {
+    pluginToolMeta.set(target, meta);
+  }
+}
+
 function normalizeAllowlist(list?: string[]) {
   return new Set((list ?? []).map(normalizeToolName).filter(Boolean));
 }
@@ -26,29 +36,52 @@ function isOptionalToolAllowed(params: {
   pluginId: string;
   allowlist: Set<string>;
 }): boolean {
-  if (params.allowlist.size === 0) return false;
+  if (params.allowlist.size === 0) {
+    return false;
+  }
   const toolName = normalizeToolName(params.toolName);
-  if (params.allowlist.has(toolName)) return true;
+  if (params.allowlist.has(toolName)) {
+    return true;
+  }
   const pluginKey = normalizeToolName(params.pluginId);
-  if (params.allowlist.has(pluginKey)) return true;
+  if (params.allowlist.has(pluginKey)) {
+    return true;
+  }
   return params.allowlist.has("group:plugins");
 }
 
 export function resolvePluginTools(params: {
-  context: MoltbotPluginToolContext;
+  context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
+  suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
-  const registry = loadMoltbotPlugins({
-    config: params.context.config,
-    workspaceDir: params.context.workspaceDir,
-    logger: {
-      info: (msg) => log.info(msg),
-      warn: (msg) => log.warn(msg),
-      error: (msg) => log.error(msg),
-      debug: (msg) => log.debug(msg),
-    },
-  });
+  // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
+  // This matters a lot for unit tests and for tool construction hot paths.
+  const env = params.env ?? process.env;
+  const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
+  const normalized = normalizePluginsConfig(effectiveConfig.plugins);
+  if (!normalized.enabled) {
+    return [];
+  }
+
+  const activeRegistry = getActivePluginRegistry();
+  const registry =
+    getActivePluginRegistryKey() && activeRegistry
+      ? activeRegistry
+      : loadOpenClawPlugins({
+          config: effectiveConfig,
+          workspaceDir: params.context.workspaceDir,
+          runtimeOptions: params.allowGatewaySubagentBinding
+            ? {
+                allowGatewaySubagentBinding: true,
+              }
+            : undefined,
+          env,
+          logger: createPluginLoaderLogger(log),
+        });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
@@ -57,17 +90,21 @@ export function resolvePluginTools(params: {
   const blockedPlugins = new Set<string>();
 
   for (const entry of registry.tools) {
-    if (blockedPlugins.has(entry.pluginId)) continue;
+    if (blockedPlugins.has(entry.pluginId)) {
+      continue;
+    }
     const pluginIdKey = normalizeToolName(entry.pluginId);
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
-      log.error(message);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: entry.pluginId,
-        source: entry.source,
-        message,
-      });
+      if (!params.suppressNameConflicts) {
+        log.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+      }
       blockedPlugins.add(entry.pluginId);
       continue;
     }
@@ -78,7 +115,14 @@ export function resolvePluginTools(params: {
       log.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
       continue;
     }
-    if (!resolved) continue;
+    if (!resolved) {
+      if (entry.names.length > 0) {
+        log.debug(
+          `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
+        );
+      }
+      continue;
+    }
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
     const list = entry.optional
       ? listRaw.filter((tool) =>
@@ -89,18 +133,22 @@ export function resolvePluginTools(params: {
           }),
         )
       : listRaw;
-    if (list.length === 0) continue;
+    if (list.length === 0) {
+      continue;
+    }
     const nameSet = new Set<string>();
     for (const tool of list) {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
-        log.error(message);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: entry.pluginId,
-          source: entry.source,
-          message,
-        });
+        if (!params.suppressNameConflicts) {
+          log.error(message);
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: entry.pluginId,
+            source: entry.source,
+            message,
+          });
+        }
         continue;
       }
       nameSet.add(tool.name);

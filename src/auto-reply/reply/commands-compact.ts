@@ -4,8 +4,12 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
-import type { MoltbotConfig } from "../../config/config.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
@@ -16,7 +20,7 @@ import { incrementCompactionCount } from "./session-updates.js";
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId?: string;
   isGroup: boolean;
 }): string | undefined {
@@ -25,12 +29,18 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const lowered = trimmed.toLowerCase();
   const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) return undefined;
+  if (!prefix) {
+    return undefined;
+  }
   let rest = trimmed.slice(prefix.length).trimStart();
-  if (rest.startsWith(":")) rest = rest.slice(1).trimStart();
+  if (rest.startsWith(":")) {
+    rest = rest.slice(1).trimStart();
+  }
   return rest.length ? rest : undefined;
 }
 
@@ -38,7 +48,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
     params.command.commandBodyNormalized.startsWith("/compact ");
-  if (!compactRequested) return null;
+  if (!compactRequested) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -66,13 +78,22 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
+    allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: params.sessionEntry.groupId,
     groupChannel: params.sessionEntry.groupChannel,
     groupSpace: params.sessionEntry.space,
     spawnedBy: params.sessionEntry.spawnedBy,
-    sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry),
+    sessionFile: resolveSessionFilePath(
+      sessionId,
+      params.sessionEntry,
+      resolveSessionFilePathOptions({
+        agentId: params.agentId,
+        storePath: params.storePath,
+      }),
+    ),
     workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
     config: params.cfg,
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
@@ -84,6 +105,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       defaultLevel: "off",
     },
     customInstructions,
+    trigger: "manual",
+    senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
@@ -108,12 +131,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   // Use the post-compaction token count for context summary if available
   const tokensAfterCompaction = result.result?.tokensAfter;
-  const totalTokens =
-    tokensAfterCompaction ??
-    params.sessionEntry.totalTokens ??
-    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
+  const totalTokens = tokensAfterCompaction ?? resolveFreshSessionTotalTokens(params.sessionEntry);
   const contextSummary = formatContextUsageShort(
-    totalTokens > 0 ? totalTokens : null,
+    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
   const reason = result.reason?.trim();

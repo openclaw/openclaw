@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -78,8 +77,11 @@ async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
     return true;
-  } catch (error: any) {
-    const stderr = error?.stderr || error?.message || "";
+  } catch (error) {
+    const stderr =
+      (error as { stderr: string } | undefined)?.stderr ||
+      (error as { message: string } | undefined)?.message ||
+      "";
     if (String(stderr).includes("No such image")) {
       return false;
     }
@@ -87,17 +89,22 @@ async function dockerImageExists(image: string): Promise<boolean> {
   }
 }
 
-function resolveSandboxDockerImage(cfg: MoltbotConfig): string {
+function resolveSandboxDockerImage(cfg: OpenClawConfig): string {
   const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_IMAGE;
 }
 
-function resolveSandboxBrowserImage(cfg: MoltbotConfig): string {
+function resolveSandboxBackend(cfg: OpenClawConfig): string {
+  const backend = cfg.agents?.defaults?.sandbox?.backend?.trim();
+  return backend || "docker";
+}
+
+function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
   const image = cfg.agents?.defaults?.sandbox?.browser?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
-function updateSandboxDockerImage(cfg: MoltbotConfig, image: string): MoltbotConfig {
+function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -116,7 +123,7 @@ function updateSandboxDockerImage(cfg: MoltbotConfig, image: string): MoltbotCon
   };
 }
 
-function updateSandboxBrowserImage(cfg: MoltbotConfig, image: string): MoltbotConfig {
+function updateSandboxBrowserImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -136,7 +143,7 @@ function updateSandboxBrowserImage(cfg: MoltbotConfig, image: string): MoltbotCo
 }
 
 type SandboxImageCheck = {
-  label: string;
+  kind: string;
   image: string;
   buildScript?: string;
   updateConfig: (image: string) => void;
@@ -148,17 +155,19 @@ async function handleMissingSandboxImage(
   prompter: DoctorPrompter,
 ) {
   const exists = await dockerImageExists(params.image);
-  if (exists) return;
+  if (exists) {
+    return;
+  }
 
   const buildHint = params.buildScript
     ? `Build it with ${params.buildScript}.`
     : "Build or pull it first.";
-  note(`Sandbox ${params.label} image missing: ${params.image}. ${buildHint}`, "Sandbox");
+  note(`Sandbox ${params.kind} image missing: ${params.image}. ${buildHint}`, "Sandbox");
 
   let built = false;
   if (params.buildScript) {
-    const build = await prompter.confirmSkipInNonInteractive({
-      message: `Build ${params.label} sandbox image now?`,
+    const build = await prompter.confirmRuntimeRepair({
+      message: `Build ${params.kind} sandbox image now?`,
       initialValue: true,
     });
     if (build) {
@@ -166,21 +175,44 @@ async function handleMissingSandboxImage(
     }
   }
 
-  if (built) return;
+  if (built) {
+    return;
+  }
 }
 
 export async function maybeRepairSandboxImages(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-): Promise<MoltbotConfig> {
+): Promise<OpenClawConfig> {
   const sandbox = cfg.agents?.defaults?.sandbox;
   const mode = sandbox?.mode ?? "off";
-  if (!sandbox || mode === "off") return cfg;
+  if (!sandbox || mode === "off") {
+    return cfg;
+  }
+  const backend = resolveSandboxBackend(cfg);
+  if (backend !== "docker") {
+    if (sandbox.browser?.enabled) {
+      note(
+        `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
+        "Sandbox",
+      );
+    }
+    return cfg;
+  }
 
   const dockerAvailable = await isDockerAvailable();
   if (!dockerAvailable) {
-    note("Docker not available; skipping sandbox image checks.", "Sandbox");
+    const lines = [
+      `Sandbox mode is enabled (mode: "${mode}") but Docker is not available.`,
+      "Docker is required for sandbox mode to function.",
+      "Isolated sessions (cron jobs, sub-agents) will fail without Docker.",
+      "",
+      "Options:",
+      "- Install Docker and restart the gateway",
+      "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+    ];
+    note(lines.join("\n"), "Sandbox");
     return cfg;
   }
 
@@ -190,7 +222,7 @@ export async function maybeRepairSandboxImages(
   const dockerImage = resolveSandboxDockerImage(cfg);
   await handleMissingSandboxImage(
     {
-      label: "base",
+      kind: "base",
       image: dockerImage,
       buildScript:
         dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
@@ -210,7 +242,7 @@ export async function maybeRepairSandboxImages(
   if (sandbox.browser?.enabled) {
     await handleMissingSandboxImage(
       {
-        label: "browser",
+        kind: "browser",
         image: resolveSandboxBrowserImage(cfg),
         buildScript: "scripts/sandbox-browser-setup.sh",
         updateConfig: (image) => {
@@ -230,7 +262,7 @@ export async function maybeRepairSandboxImages(
   return next;
 }
 
-export function noteSandboxScopeWarnings(cfg: MoltbotConfig) {
+export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const warnings: string[] = [];
@@ -238,14 +270,18 @@ export function noteSandboxScopeWarnings(cfg: MoltbotConfig) {
   for (const agent of agents) {
     const agentId = agent.id;
     const agentSandbox = agent.sandbox;
-    if (!agentSandbox) continue;
+    if (!agentSandbox) {
+      continue;
+    }
 
     const scope = resolveSandboxScope({
       scope: agentSandbox.scope ?? globalSandbox?.scope,
       perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
 
-    if (scope !== "shared") continue;
+    if (scope !== "shared") {
+      continue;
+    }
 
     const overrides: string[] = [];
     if (agentSandbox.docker && Object.keys(agentSandbox.docker).length > 0) {
@@ -258,7 +294,9 @@ export function noteSandboxScopeWarnings(cfg: MoltbotConfig) {
       overrides.push("prune");
     }
 
-    if (overrides.length === 0) continue;
+    if (overrides.length === 0) {
+      continue;
+    }
 
     warnings.push(
       [

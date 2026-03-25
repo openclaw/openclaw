@@ -14,10 +14,14 @@ type BrowserRequestParams = {
 };
 
 function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, string> | undefined {
-  if (!query) return undefined;
+  if (!query) {
+    return undefined;
+  }
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(query)) {
-    if (value === undefined) continue;
+    if (value === undefined) {
+      continue;
+    }
     out[key] = String(value);
   }
   return Object.keys(out).length ? out : undefined;
@@ -55,4 +59,26 @@ export async function callBrowserRequest<T>(
     throw new Error("Unexpected browser.request response");
   }
   return payload as T;
+}
+
+export async function callBrowserResize(
+  opts: BrowserParentOpts,
+  params: { profile?: string; width: number; height: number; targetId?: string },
+  extra?: { timeoutMs?: number },
+): Promise<unknown> {
+  return callBrowserRequest(
+    opts,
+    {
+      method: "POST",
+      path: "/act",
+      query: params.profile ? { profile: params.profile } : undefined,
+      body: {
+        kind: "resize",
+        width: params.width,
+        height: params.height,
+        targetId: params.targetId?.trim() || undefined,
+      },
+    },
+    extra,
+  );
 }

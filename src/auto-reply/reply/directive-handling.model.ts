@@ -1,3 +1,4 @@
+import { buildBrowseProvidersButton } from "../../../extensions/telegram/api.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
@@ -6,25 +7,51 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { shortenHomePath } from "../../utils.js";
+import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveModelsCommandReply } from "./commands-models.js";
 import {
   formatAuthLabel,
   type ModelAuthDetailMode,
   resolveAuthLabel,
-  resolveProfileOverride,
 } from "./directive-handling.auth.js";
 import {
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
+export { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { resolveModelsCommandReply } from "./commands-models.js";
-import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
+
+function pushUniqueCatalogEntry(params: {
+  keys: Set<string>;
+  out: ModelPickerCatalogEntry[];
+  provider: string;
+  id: string;
+  name?: string;
+  fallbackNameToId: boolean;
+}) {
+  const provider = normalizeProviderId(params.provider);
+  const id = String(params.id ?? "").trim();
+  if (!provider || !id) {
+    return;
+  }
+  const key = modelKey(provider, id);
+  if (params.keys.has(key)) {
+    return;
+  }
+  params.keys.add(key);
+  params.out.push({
+    provider,
+    id,
+    name: params.fallbackNameToId ? (params.name ?? id) : params.name,
+  });
+}
 
 function buildModelPickerCatalog(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
@@ -41,24 +68,29 @@ function buildModelPickerCatalog(params: {
     const keys = new Set<string>();
 
     const pushRef = (ref: { provider: string; model: string }, name?: string) => {
-      const provider = normalizeProviderId(ref.provider);
-      const id = String(ref.model ?? "").trim();
-      if (!provider || !id) return;
-      const key = modelKey(provider, id);
-      if (keys.has(key)) return;
-      keys.add(key);
-      out.push({ provider, id, name: name ?? id });
+      pushUniqueCatalogEntry({
+        keys,
+        out,
+        provider: ref.provider,
+        id: ref.model,
+        name,
+        fallbackNameToId: true,
+      });
     };
 
     const pushRaw = (raw?: string) => {
       const value = String(raw ?? "").trim();
-      if (!value) return;
+      if (!value) {
+        return;
+      }
       const resolved = resolveModelRefFromString({
         raw: value,
         defaultProvider: params.defaultProvider,
         aliasIndex: params.aliasIndex,
       });
-      if (!resolved) return;
+      if (!resolved) {
+        return;
+      }
       pushRef(resolved.ref);
     };
 
@@ -90,13 +122,14 @@ function buildModelPickerCatalog(params: {
   const out: ModelPickerCatalogEntry[] = [];
 
   const push = (entry: ModelPickerCatalogEntry) => {
-    const provider = normalizeProviderId(entry.provider);
-    const id = String(entry.id ?? "").trim();
-    if (!provider || !id) return;
-    const key = modelKey(provider, id);
-    if (keys.has(key)) return;
-    keys.add(key);
-    out.push({ provider, id, name: entry.name });
+    pushUniqueCatalogEntry({
+      keys,
+      out,
+      provider: entry.provider,
+      id: String(entry.id ?? ""),
+      name: entry.name,
+      fallbackNameToId: false,
+    });
   };
 
   const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
@@ -131,7 +164,9 @@ function buildModelPickerCatalog(params: {
       defaultProvider: params.defaultProvider,
       aliasIndex: params.aliasIndex,
     });
-    if (!resolved) continue;
+    if (!resolved) {
+      continue;
+    }
     push({
       provider: resolved.ref.provider,
       id: resolved.ref.model,
@@ -153,7 +188,7 @@ function buildModelPickerCatalog(params: {
 
 export async function maybeHandleModelDirectiveInfo(params: {
   directives: InlineDirectives;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentDir: string;
   activeAgentId: string;
   provider: string;
@@ -163,15 +198,21 @@ export async function maybeHandleModelDirectiveInfo(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
+  surface?: string;
+  sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
 }): Promise<ReplyPayload | undefined> {
-  if (!params.directives.hasModelDirective) return undefined;
+  if (!params.directives.hasModelDirective) {
+    return undefined;
+  }
 
   const rawDirective = params.directives.rawModelDirective?.trim();
   const directive = rawDirective?.toLowerCase();
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";
-  if (!wantsSummary && !wantsStatus && !wantsLegacyList) return undefined;
+  if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
+    return undefined;
+  }
 
   if (params.directives.rawModelProfile) {
     return { text: "Auth profile override requires a model selection." };
@@ -194,27 +235,61 @@ export async function maybeHandleModelDirectiveInfo(params: {
   }
 
   if (wantsSummary) {
-    const current = `${params.provider}/${params.model}`;
+    const modelRefs = resolveSelectedAndActiveModel({
+      selectedProvider: params.provider,
+      selectedModel: params.model,
+      sessionEntry: params.sessionEntry,
+    });
+    const current = modelRefs.selected.label;
+    const isTelegram = params.surface === "telegram";
+    const activeRuntimeLine = modelRefs.activeDiffers
+      ? `Active: ${modelRefs.active.label} (runtime)`
+      : null;
+
+    if (isTelegram) {
+      const buttons = buildBrowseProvidersButton();
+      return {
+        text: [
+          `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+          activeRuntimeLine,
+          "",
+          "Tap below to browse models, or use:",
+          "/model <provider/model> to switch",
+          "/model status for details",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        channelData: { telegram: { buttons } },
+      };
+    }
+
     return {
       text: [
-        `Current: ${current}`,
+        `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+        activeRuntimeLine,
         "",
         "Switch: /model <provider/model>",
         "Browse: /models (providers) or /models <provider> (models)",
         "More: /model status",
-      ].join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
     };
   }
 
   const modelsPath = `${params.agentDir}/models.json`;
   const formatPath = (value: string) => shortenHomePath(value);
   const authMode: ModelAuthDetailMode = "verbose";
-  if (pickerCatalog.length === 0) return { text: "No models available." };
+  if (pickerCatalog.length === 0) {
+    return { text: "No models available." };
+  }
 
   const authByProvider = new Map<string, string>();
   for (const entry of pickerCatalog) {
     const provider = normalizeProviderId(entry.provider);
-    if (authByProvider.has(provider)) continue;
+    if (authByProvider.has(provider)) {
+      continue;
+    }
     const auth = await resolveAuthLabel(
       provider,
       params.cfg,
@@ -225,14 +300,20 @@ export async function maybeHandleModelDirectiveInfo(params: {
     authByProvider.set(provider, formatAuthLabel(auth));
   }
 
-  const current = `${params.provider}/${params.model}`;
+  const modelRefs = resolveSelectedAndActiveModel({
+    selectedProvider: params.provider,
+    selectedModel: params.model,
+    sessionEntry: params.sessionEntry,
+  });
+  const current = modelRefs.selected.label;
   const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
   const lines = [
-    `Current: ${current}`,
+    `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
+    modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
     `Auth file: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
-  ];
+  ].filter((line): line is string => Boolean(line));
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);
   }
@@ -250,7 +331,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   for (const provider of byProvider.keys()) {
     const models = byProvider.get(provider);
-    if (!models) continue;
+    if (!models) {
+      continue;
+    }
     const authLabel = authByProvider.get(provider) ?? "missing";
     const endpoint = resolveProviderEndpointLabel(provider, params.cfg);
     const endpointSuffix = endpoint.endpoint
@@ -267,94 +350,4 @@ export async function maybeHandleModelDirectiveInfo(params: {
     }
   }
   return { text: lines.join("\n") };
-}
-
-export function resolveModelSelectionFromDirective(params: {
-  directives: InlineDirectives;
-  cfg: MoltbotConfig;
-  agentDir: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-  allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
-  provider: string;
-}): {
-  modelSelection?: ModelDirectiveSelection;
-  profileOverride?: string;
-  errorText?: string;
-} {
-  if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
-    if (params.directives.rawModelProfile) {
-      return { errorText: "Auth profile override requires a model selection." };
-    }
-    return {};
-  }
-
-  const raw = params.directives.rawModelDirective.trim();
-  let modelSelection: ModelDirectiveSelection | undefined;
-
-  if (/^[0-9]+$/.test(raw)) {
-    return {
-      errorText: [
-        "Numeric model selection is not supported in chat.",
-        "",
-        "Browse: /models or /models <provider>",
-        "Switch: /model <provider/model>",
-      ].join("\n"),
-    };
-  }
-
-  const explicit = resolveModelRefFromString({
-    raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-  });
-  if (explicit) {
-    const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
-      modelSelection = {
-        provider: explicit.ref.provider,
-        model: explicit.ref.model,
-        isDefault:
-          explicit.ref.provider === params.defaultProvider &&
-          explicit.ref.model === params.defaultModel,
-        ...(explicit.alias ? { alias: explicit.alias } : {}),
-      };
-    }
-  }
-
-  if (!modelSelection) {
-    const resolved = resolveModelDirectiveSelection({
-      raw,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
-      aliasIndex: params.aliasIndex,
-      allowedModelKeys: params.allowedModelKeys,
-    });
-
-    if (resolved.error) {
-      return { errorText: resolved.error };
-    }
-
-    if (resolved.selection) {
-      modelSelection = resolved.selection;
-    }
-  }
-
-  let profileOverride: string | undefined;
-  if (modelSelection && params.directives.rawModelProfile) {
-    const profileResolved = resolveProfileOverride({
-      rawProfile: params.directives.rawModelProfile,
-      provider: modelSelection.provider,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
-    if (profileResolved.error) {
-      return { errorText: profileResolved.error };
-    }
-    profileOverride = profileResolved.profileId;
-  }
-
-  return { modelSelection, profileOverride };
 }

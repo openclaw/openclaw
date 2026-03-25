@@ -4,10 +4,11 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { type MoltbotConfig, writeConfigFile } from "../../config/config.js";
+import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
@@ -16,9 +17,11 @@ export type ChannelsRemoveOptions = {
   delete?: boolean;
 };
 
-function listAccountIds(cfg: MoltbotConfig, channel: ChatChannel): string[] {
+function listAccountIds(cfg: OpenClawConfig, channel: ChatChannel): string[] {
   const plugin = getChannelPlugin(channel);
-  if (!plugin) return [];
+  if (!plugin) {
+    return [];
+  }
   return plugin.config.listAccountIds(cfg);
 }
 
@@ -27,36 +30,40 @@ export async function channelsRemoveCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  const loadedCfg = await requireValidConfig(runtime);
+  if (!loadedCfg) {
+    return;
+  }
+  let cfg = loadedCfg;
 
   const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  let channel: ChatChannel | null = normalizeChannelId(opts.channel);
+  const rawChannel = opts.channel?.trim() ?? "";
+  let channel: ChatChannel | null = normalizeChannelId(rawChannel);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
   if (useWizard && prompter) {
     await prompter.intro("Remove channel account");
-    const selectedChannel = (await prompter.select({
+    const selectedChannel = await prompter.select({
       message: "Channel",
       options: listChannelPlugins().map((plugin) => ({
         value: plugin.id,
         label: plugin.meta.label,
       })),
-    })) as ChatChannel;
+    });
     channel = selectedChannel;
 
     accountId = await (async () => {
       const ids = listAccountIds(cfg, selectedChannel);
-      const choice = (await prompter.select({
+      const choice = await prompter.select({
         message: "Account",
         options: ids.map((id) => ({
           value: id,
           label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
         })),
         initialValue: ids[0] ?? DEFAULT_ACCOUNT_ID,
-      })) as string;
+      });
       return normalizeAccountId(choice);
     })();
 
@@ -69,15 +76,16 @@ export async function channelsRemoveCommand(
       return;
     }
   } else {
-    if (!channel) {
+    if (!rawChannel) {
       runtime.error("Channel is required. Use --channel <name>.");
       runtime.exit(1);
       return;
     }
     if (!deleteConfig) {
       const confirm = createClackPrompter();
+      const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
       const ok = await confirm.confirm({
-        message: `Disable ${channelLabel(channel)} account "${accountId}"? (keeps config)`,
+        message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
         initialValue: true,
       });
       if (!ok) {
@@ -86,18 +94,38 @@ export async function channelsRemoveCommand(
     }
   }
 
-  const plugin = getChannelPlugin(channel);
-  if (!plugin) {
-    runtime.error(`Unknown channel: ${channel}`);
+  const resolvedPluginState =
+    !useWizard && rawChannel
+      ? await resolveInstallableChannelPlugin({
+          cfg,
+          runtime,
+          rawChannel,
+          allowInstall: true,
+        })
+      : null;
+  if (resolvedPluginState?.configChanged) {
+    cfg = resolvedPluginState.cfg;
+  }
+  const resolvedChannel = resolvedPluginState?.channelId ?? channel;
+  if (!resolvedChannel) {
+    runtime.error(`Unknown channel: ${rawChannel}`);
     runtime.exit(1);
     return;
   }
-
+  channel = resolvedChannel;
+  const plugin = resolvedPluginState?.plugin ?? getChannelPlugin(resolvedChannel);
+  if (!plugin) {
+    runtime.error(`Unknown channel: ${resolvedChannel}`);
+    runtime.exit(1);
+    return;
+  }
+  const resolvedChannelId: ChatChannel = resolvedChannel;
   const resolvedAccountId =
     normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
 
   let next = { ...cfg };
+  const prevCfg = cfg;
   if (deleteConfig) {
     if (!plugin.config.deleteAccount) {
       runtime.error(`Channel ${channel} does not support delete.`);
@@ -107,6 +135,11 @@ export async function channelsRemoveCommand(
     next = plugin.config.deleteAccount({
       cfg: next,
       accountId: resolvedAccountId,
+    });
+    await plugin.lifecycle?.onAccountRemoved?.({
+      prevCfg,
+      accountId: resolvedAccountId,
+      runtime,
     });
   } else {
     if (!plugin.config.setAccountEnabled) {
@@ -119,20 +152,26 @@ export async function channelsRemoveCommand(
       accountId: resolvedAccountId,
       enabled: false,
     });
+    await plugin.lifecycle?.onAccountConfigChanged?.({
+      prevCfg,
+      nextCfg: next,
+      accountId: resolvedAccountId,
+      runtime,
+    });
   }
 
   await writeConfigFile(next);
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountKey}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${channelLabel(channel)} account "${accountKey}".`
-        : `Disabled ${channelLabel(channel)} account "${accountKey}".`,
+        ? `Deleted ${channelLabel(resolvedChannelId)} account "${accountKey}".`
+        : `Disabled ${channelLabel(resolvedChannelId)} account "${accountKey}".`,
     );
   }
 }

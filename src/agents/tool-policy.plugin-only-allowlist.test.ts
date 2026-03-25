@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { stripPluginOnlyAllowlist, type PluginToolGroups } from "./tool-policy.js";
 
 const pluginGroups: PluginToolGroups = {
@@ -18,6 +17,12 @@ describe("stripPluginOnlyAllowlist", () => {
   it("strips allowlist when it only targets plugin groups", () => {
     const policy = stripPluginOnlyAllowlist({ allow: ["group:plugins"] }, pluginGroups, coreTools);
     expect(policy.policy?.allow).toBeUndefined();
+    expect(policy.unknownAllowlist).toEqual([]);
+  });
+
+  it('keeps allowlist when it uses "*"', () => {
+    const policy = stripPluginOnlyAllowlist({ allow: ["*"] }, pluginGroups, coreTools);
+    expect(policy.policy?.allow).toEqual(["*"]);
     expect(policy.unknownAllowlist).toEqual([]);
   });
 

@@ -2,14 +2,16 @@ import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompt
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
-import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../../terminal/prompt-style.js";
+import { pad, truncate } from "./list.format.js";
+import { loadModelsConfig } from "./load-config.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -24,52 +26,59 @@ const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
     ),
   });
 
-const pad = (value: string, size: number) => value.padEnd(size);
-
-const truncate = (value: string, max: number) => {
-  if (value.length <= max) return value;
-  if (max <= 3) return value.slice(0, max);
-  return `${value.slice(0, max - 3)}...`;
-};
+function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+  if (isCancel(value)) {
+    cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
+    runtime.exit(0);
+    throw new Error("unreachable");
+  }
+  return value;
+}
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
-    if (aImage !== bImage) return bImage - aImage;
+    if (aImage !== bImage) {
+      return bImage - aImage;
+    }
 
     const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
     const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) return aToolLatency - bToolLatency;
+    if (aToolLatency !== bToolLatency) {
+      return aToolLatency - bToolLatency;
+    }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) return bCtx - aCtx;
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) return bParams - aParams;
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) return aLatency - bLatency;
+    if (aLatency !== bLatency) {
+      return aLatency - bLatency;
+    }
 
-    const aCtx = a.contextLength ?? 0;
-    const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) return bCtx - aCtx;
-
-    const aParams = a.inferredParamB ?? 0;
-    const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) return bParams - aParams;
-
-    return a.modelRef.localeCompare(b.modelRef);
+    return compareScanMetadata(a, b);
   });
+}
+
+function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
+  const aCtx = a.contextLength ?? 0;
+  const bCtx = b.contextLength ?? 0;
+  if (aCtx !== bCtx) {
+    return bCtx - aCtx;
+  }
+
+  const aParams = a.inferredParamB ?? 0;
+  const bParams = b.inferredParamB ?? 0;
+  if (aParams !== bParams) {
+    return bParams - aParams;
+  }
+
+  return a.modelRef.localeCompare(b.modelRef);
 }
 
 function buildScanHint(result: ModelScanResult): string {
@@ -158,7 +167,7 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
-  const cfg = loadConfig();
+  const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
   const probe = opts.probe ?? true;
   let storedKey: string | undefined;
   if (probe) {
@@ -188,7 +197,9 @@ export async function modelsScanCommand(
         concurrency,
         probe,
         onProgress: ({ phase, completed, total }) => {
-          if (phase !== "probe") return;
+          if (phase !== "probe") {
+            return;
+          }
           const labelBase = probe ? "Probing models" : "Scanning models";
           update({
             completed,
@@ -206,7 +217,7 @@ export async function modelsScanCommand(
       );
       printScanTable(sortScanResults(results), runtime);
     } else {
-      runtime.log(JSON.stringify(results, null, 2));
+      writeRuntimeJson(runtime, results);
     }
     return;
   }
@@ -250,12 +261,7 @@ export async function modelsScanCommand(
       initialValues: preselected,
     });
 
-    if (isCancel(selection)) {
-      cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-      runtime.exit(0);
-    }
-
-    selected = selection as string[];
+    selected = guardPromptCancel(selection, runtime);
     if (imageSorted.length > 0) {
       const imageSelection = await multiselect({
         message: "Select image fallback models (ordered)",
@@ -267,12 +273,7 @@ export async function modelsScanCommand(
         initialValues: imagePreselected,
       });
 
-      if (isCancel(imageSelection)) {
-        cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
-        runtime.exit(0);
-      }
-
-      selectedImages = imageSelection as string[];
+      selectedImages = guardPromptCancel(imageSelection, runtime);
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
@@ -288,14 +289,16 @@ export async function modelsScanCommand(
   const _updated = await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
-      if (!nextModels[entry]) nextModels[entry] = {};
+      if (!nextModels[entry]) {
+        nextModels[entry] = {};
+      }
     }
     for (const entry of selectedImages) {
-      if (!nextModels[entry]) nextModels[entry] = {};
+      if (!nextModels[entry]) {
+        nextModels[entry] = {};
+      }
     }
-    const existingImageModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
     const nextImageModel =
       selectedImages.length > 0
         ? {
@@ -304,9 +307,7 @@ export async function modelsScanCommand(
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
     const defaults = {
       ...cfg.agents?.defaults,
       model: {
@@ -327,20 +328,14 @@ export async function modelsScanCommand(
   });
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          selected,
-          selectedImages,
-          setDefault: Boolean(opts.setDefault),
-          setImage: Boolean(opts.setImage),
-          results,
-          warnings: [],
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      selected,
+      selectedImages,
+      setDefault: Boolean(opts.setDefault),
+      setImage: Boolean(opts.setImage),
+      results,
+      warnings: [],
+    });
     return;
   }
 

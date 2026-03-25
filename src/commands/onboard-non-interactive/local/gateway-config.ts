@@ -1,15 +1,17 @@
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { isValidEnvSecretRefId } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { randomToken } from "../../onboard-helpers.js";
+import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 export function applyNonInteractiveGatewayConfig(params: {
-  nextConfig: MoltbotConfig;
+  nextConfig: OpenClawConfig;
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   defaultPort: number;
 }): {
-  nextConfig: MoltbotConfig;
+  nextConfig: OpenClawConfig;
   port: number;
   bind: string;
   authMode: string;
@@ -41,25 +43,73 @@ export function applyNonInteractiveGatewayConfig(params: {
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
   // - If using Tailscale Funnel, require password auth.
-  if (tailscaleMode !== "off" && bind !== "loopback") bind = "loopback";
-  if (tailscaleMode === "funnel" && authMode !== "password") authMode = "password";
+  if (tailscaleMode !== "off" && bind !== "loopback") {
+    bind = "loopback";
+  }
+  if (tailscaleMode === "funnel" && authMode !== "password") {
+    authMode = "password";
+  }
 
   let nextConfig = params.nextConfig;
-  let gatewayToken = opts.gatewayToken?.trim() || undefined;
+  const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);
+  const envGatewayToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+  let gatewayToken = explicitGatewayToken || envGatewayToken || undefined;
+  const gatewayTokenRefEnv = String(opts.gatewayTokenRefEnv ?? "").trim();
 
   if (authMode === "token") {
-    if (!gatewayToken) gatewayToken = randomToken();
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        auth: {
-          ...nextConfig.gateway?.auth,
-          mode: "token",
-          token: gatewayToken,
+    if (gatewayTokenRefEnv) {
+      if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
+        runtime.error(
+          "Invalid --gateway-token-ref-env (use env var name like OPENCLAW_GATEWAY_TOKEN).",
+        );
+        runtime.exit(1);
+        return null;
+      }
+      if (explicitGatewayToken) {
+        runtime.error("Use either --gateway-token or --gateway-token-ref-env, not both.");
+        runtime.exit(1);
+        return null;
+      }
+      const resolvedFromEnv = process.env[gatewayTokenRefEnv]?.trim();
+      if (!resolvedFromEnv) {
+        runtime.error(`Environment variable "${gatewayTokenRefEnv}" is missing or empty.`);
+        runtime.exit(1);
+        return null;
+      }
+      gatewayToken = resolvedFromEnv;
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          auth: {
+            ...nextConfig.gateway?.auth,
+            mode: "token",
+            token: {
+              source: "env",
+              provider: resolveDefaultSecretProviderAlias(nextConfig, "env", {
+                preferFirstProviderForSource: true,
+              }),
+              id: gatewayTokenRefEnv,
+            },
+          },
         },
-      },
-    };
+      };
+    } else {
+      if (!gatewayToken) {
+        gatewayToken = randomToken();
+      }
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          auth: {
+            ...nextConfig.gateway?.auth,
+            mode: "token",
+            token: gatewayToken,
+          },
+        },
+      };
+    }
   }
 
   if (authMode === "password") {

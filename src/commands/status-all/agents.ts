@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
-import { listAgentsForGateway } from "../../gateway/session-utils.js";
+import { listGatewayAgentsBasic } from "../../gateway/agent-list.js";
 
 async function fileExists(p: string): Promise<boolean> {
   try {
@@ -14,8 +14,8 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-export async function getAgentLocalStatuses(cfg: MoltbotConfig) {
-  const agentList = listAgentsForGateway(cfg);
+export async function getAgentLocalStatuses(cfg: OpenClawConfig) {
+  const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
   const agents = await Promise.all(

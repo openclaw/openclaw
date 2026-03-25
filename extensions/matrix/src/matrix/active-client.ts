@@ -1,11 +1,26 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { MatrixClient } from "./sdk.js";
 
-let activeClient: MatrixClient | null = null;
+const activeClients = new Map<string, MatrixClient>();
 
-export function setActiveMatrixClient(client: MatrixClient | null): void {
-  activeClient = client;
+function resolveAccountKey(accountId?: string | null): string {
+  const normalized = normalizeAccountId(accountId);
+  return normalized || DEFAULT_ACCOUNT_ID;
 }
 
-export function getActiveMatrixClient(): MatrixClient | null {
-  return activeClient;
+export function setActiveMatrixClient(
+  client: MatrixClient | null,
+  accountId?: string | null,
+): void {
+  const key = resolveAccountKey(accountId);
+  if (!client) {
+    activeClients.delete(key);
+    return;
+  }
+  activeClients.set(key, client);
+}
+
+export function getActiveMatrixClient(accountId?: string | null): MatrixClient | null {
+  const key = resolveAccountKey(accountId);
+  return activeClients.get(key) ?? null;
 }

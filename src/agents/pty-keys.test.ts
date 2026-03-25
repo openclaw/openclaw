@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-
+import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import {
   BRACKETED_PASTE_END,
   BRACKETED_PASTE_START,
@@ -38,4 +38,16 @@ test("encodePaste wraps bracketed sequences by default", () => {
   const payload = encodePaste("line1\nline2\n");
   expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true);
   expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true);
+});
+
+test("stripDsrRequests removes cursor queries and counts them", () => {
+  const input = "hi\x1b[6nthere\x1b[?6n";
+  const { cleaned, requests } = stripDsrRequests(input);
+  expect(cleaned).toBe("hithere");
+  expect(requests).toBe(2);
+});
+
+test("buildCursorPositionResponse returns CPR sequence", () => {
+  expect(buildCursorPositionResponse()).toBe("\x1b[1;1R");
+  expect(buildCursorPositionResponse(12, 34)).toBe("\x1b[12;34R");
 });

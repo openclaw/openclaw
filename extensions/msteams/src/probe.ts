@@ -1,11 +1,14 @@
-import type { MSTeamsConfig } from "clawdbot/plugin-sdk";
+import {
+  normalizeStringEntries,
+  type BaseProbeResult,
+  type MSTeamsConfig,
+} from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
-import { loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-export type ProbeMSTeamsResult = {
-  ok: boolean;
-  error?: string;
+export type ProbeMSTeamsResult = BaseProbeResult<string> & {
   appId?: string;
   graph?: {
     ok: boolean;
@@ -15,20 +18,11 @@ export type ProbeMSTeamsResult = {
   };
 };
 
-function readAccessToken(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object") {
-    const token =
-      (value as { accessToken?: unknown }).accessToken ??
-      (value as { token?: unknown }).token;
-    return typeof token === "string" ? token : null;
-  }
-  return null;
-}
-
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const parts = token.split(".");
-  if (parts.length < 2) return null;
+  if (parts.length < 2) {
+    return null;
+  }
   const payload = parts[1] ?? "";
   const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
   const normalized = padded.replace(/-/g, "+").replace(/_/g, "/");
@@ -42,14 +36,21 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 }
 
 function readStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const out = value.map((entry) => String(entry).trim()).filter(Boolean);
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out = normalizeStringEntries(value);
   return out.length > 0 ? out : undefined;
 }
 
 function readScopes(value: unknown): string[] | undefined {
-  if (typeof value !== "string") return undefined;
-  const out = value.split(/\s+/).map((entry) => entry.trim()).filter(Boolean);
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const out = value
+    .split(/\s+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
   return out.length > 0 ? out : undefined;
 }
 
@@ -63,9 +64,13 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   }
 
   try {
-    const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-    const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-    await tokenProvider.getAccessToken("https://api.botframework.com");
+    const { app } = await loadMSTeamsSdkWithAuth(creds);
+    const tokenProvider = createMSTeamsTokenProvider(app);
+    const botTokenValue = await tokenProvider.getAccessToken("https://api.botframework.com");
+    if (!botTokenValue) {
+      throw new Error("Failed to acquire bot token");
+    }
+
     let graph:
       | {
           ok: boolean;
@@ -75,10 +80,8 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
         }
       | undefined;
     try {
-      const graphToken = await tokenProvider.getAccessToken(
-        "https://graph.microsoft.com",
-      );
-      const accessToken = readAccessToken(graphToken);
+      const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+      const accessToken = readAccessToken(graphTokenValue);
       const payload = accessToken ? decodeJwtPayload(accessToken) : null;
       graph = {
         ok: true,

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
@@ -8,7 +7,7 @@ import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { requireValidConfig } from "./agents.command-shared.js";
@@ -71,7 +70,9 @@ export async function agentsSetIdentityCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const agentRaw = coerceTrimmed(opts.agent);
   const nameRaw = coerceTrimmed(opts.name);
@@ -197,26 +198,30 @@ export async function agentsSetIdentityCommand(
   await writeConfigFile(nextConfig);
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          agentId,
-          identity: nextIdentity,
-          workspace: workspaceDir ?? null,
-          identityFile: identityFilePath ?? null,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      agentId,
+      identity: nextIdentity,
+      workspace: workspaceDir ?? null,
+      identityFile: identityFilePath ?? null,
+    });
     return;
   }
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${agentId}`);
-  if (nextIdentity.name) runtime.log(`Name: ${nextIdentity.name}`);
-  if (nextIdentity.theme) runtime.log(`Theme: ${nextIdentity.theme}`);
-  if (nextIdentity.emoji) runtime.log(`Emoji: ${nextIdentity.emoji}`);
-  if (nextIdentity.avatar) runtime.log(`Avatar: ${nextIdentity.avatar}`);
-  if (workspaceDir) runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
+  if (nextIdentity.name) {
+    runtime.log(`Name: ${nextIdentity.name}`);
+  }
+  if (nextIdentity.theme) {
+    runtime.log(`Theme: ${nextIdentity.theme}`);
+  }
+  if (nextIdentity.emoji) {
+    runtime.log(`Emoji: ${nextIdentity.emoji}`);
+  }
+  if (nextIdentity.avatar) {
+    runtime.log(`Avatar: ${nextIdentity.avatar}`);
+  }
+  if (workspaceDir) {
+    runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
+  }
 }

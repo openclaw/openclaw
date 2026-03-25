@@ -1,18 +1,14 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { msteamsPlugin } from "./src/channel.js";
 import { setMSTeamsRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { msteamsPlugin } from "./src/channel.js";
+export { setMSTeamsRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "msteams",
   name: "Microsoft Teams",
   description: "Microsoft Teams channel plugin (Bot Framework)",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
-    setMSTeamsRuntime(api.runtime);
-    api.registerChannel({ plugin: msteamsPlugin });
-  },
-};
-
-export default plugin;
+  plugin: msteamsPlugin,
+  setRuntime: setMSTeamsRuntime,
+});

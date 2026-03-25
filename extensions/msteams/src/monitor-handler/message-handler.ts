@@ -1,15 +1,25 @@
 import {
+  DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createChannelPairingController,
+  dispatchReplyFromConfigWithSettledDispatcher,
   DEFAULT_GROUP_HISTORY_LIMIT,
   logInboundDrop,
+  evaluateSenderGroupAccessForPolicy,
+  resolveSenderScopedGroupPolicy,
   recordPendingHistoryEntryIfEnabled,
-  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+  resolveDefaultGroupPolicy,
+  isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveMentionGating,
+  resolveInboundSessionEnvelopeContext,
   formatAllowlistMatchMeta,
+  resolveEffectiveAllowFromLists,
+  resolveDmGroupAccessWithLists,
   type HistoryEntry,
-} from "clawdbot/plugin-sdk";
-
+} from "../../runtime-api.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -20,6 +30,7 @@ import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
+  extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
@@ -34,10 +45,10 @@ import {
 } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
-import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
+import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
+import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -53,9 +64,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
+  const pairing = createChannelPairingController({
+    core,
+    channel: "msteams",
+    accountId: DEFAULT_ACCOUNT_ID,
+  });
   const logVerboseMessage = (message: string) => {
     if (core.logging.shouldLogVerbose()) {
-      log.debug(message);
+      log.debug?.(message);
     }
   };
   const msteamsCfg = cfg.channels?.msteams;
@@ -88,6 +104,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -105,10 +122,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       from: from?.id,
       conversation: conversation?.id,
     });
-    if (htmlSummary) log.debug("html attachment summary", htmlSummary);
+    if (htmlSummary) {
+      log.debug?.("html attachment summary", htmlSummary);
+    }
 
     if (!from?.id) {
-      log.debug("skipping message without from.id");
+      log.debug?.("skipping message without from.id");
       return;
     }
 
@@ -123,69 +142,32 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
-    const storedAllowFrom = await core.channel.pairing
-      .readAllowFromStore("msteams")
-      .catch(() => []);
+    const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
+    const storedAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "msteams",
+      accountId: pairing.accountId,
+      dmPolicy,
+      readStore: pairing.readStoreForDmPolicy,
+    });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
     // Check DM policy for direct messages.
     const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
-    const effectiveDmAllowFrom = [...dmAllowFrom.map((v) => String(v)), ...storedAllowFrom];
-    if (isDirectMessage && msteamsCfg) {
-      const dmPolicy = msteamsCfg.dmPolicy ?? "pairing";
-      const allowFrom = dmAllowFrom;
+    const configuredDmAllowFrom = dmAllowFrom.map((v) => String(v));
+    const groupAllowFrom = msteamsCfg?.groupAllowFrom;
+    const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom,
+      storeAllowFrom: storedAllowFrom,
+      dmPolicy,
+    });
 
-      if (dmPolicy === "disabled") {
-        log.debug("dropping dm (dms disabled)");
-        return;
-      }
-
-      if (dmPolicy !== "open") {
-        const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
-        const allowMatch = resolveMSTeamsAllowlistMatch({
-          allowFrom: effectiveAllowFrom,
-          senderId,
-          senderName,
-        });
-
-        if (!allowMatch.allowed) {
-          if (dmPolicy === "pairing") {
-            const request = await core.channel.pairing.upsertPairingRequest({
-              channel: "msteams",
-              id: senderId,
-              meta: { name: senderName },
-            });
-            if (request) {
-              log.info("msteams pairing request created", {
-                sender: senderId,
-                label: senderName,
-              });
-            }
-          }
-          log.debug("dropping dm (not allowlisted)", {
-            sender: senderId,
-            label: senderName,
-            allowlistMatch: formatAllowlistMatchMeta(allowMatch),
-          });
-          return;
-        }
-      }
-    }
-
-    const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+    const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
     const groupPolicy =
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
-    const groupAllowFrom =
-      !isDirectMessage && msteamsCfg
-        ? (msteamsCfg.groupAllowFrom ??
-          (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []))
-        : [];
-    const effectiveGroupAllowFrom =
-      !isDirectMessage && msteamsCfg
-        ? [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom]
-        : [];
+    const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
@@ -195,76 +177,144 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamName,
       conversationId,
       channelName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
+    // When a route-level (team/channel) allowlist is configured but the sender allowlist is
+    // empty, resolveSenderScopedGroupPolicy would otherwise downgrade the policy to "open",
+    // allowing any sender. To close this bypass (GHSA-g7cr-9h7q-4qxq), treat an empty sender
+    // allowlist as deny-all whenever the route allowlist is active.
+    const senderGroupPolicy =
+      channelGate.allowlistConfigured && effectiveGroupAllowFrom.length === 0
+        ? groupPolicy
+        : resolveSenderScopedGroupPolicy({
+            groupPolicy,
+            groupAllowFrom: effectiveGroupAllowFrom,
+          });
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: !isDirectMessage,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom,
+      storeAllowFrom: storedAllowFrom,
+      groupAllowFromFallbackToAllowFrom: false,
+      isSenderAllowed: (allowFrom) =>
+        resolveMSTeamsAllowlistMatch({
+          allowFrom,
+          senderId,
+          senderName,
+          allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+        }).allowed,
+    });
+    const effectiveDmAllowFrom = access.effectiveAllowFrom;
+
+    if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
+      if (access.reason === "dmPolicy=disabled") {
+        log.debug?.("dropping dm (dms disabled)");
+        return;
+      }
+      const allowMatch = resolveMSTeamsAllowlistMatch({
+        allowFrom: effectiveDmAllowFrom,
+        senderId,
+        senderName,
+        allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+      });
+      if (access.decision === "pairing") {
+        const request = await pairing.upsertPairingRequest({
+          id: senderId,
+          meta: { name: senderName },
+        });
+        if (request) {
+          log.info("msteams pairing request created", {
+            sender: senderId,
+            label: senderName,
+          });
+        }
+      }
+      log.debug?.("dropping dm (not allowlisted)", {
+        sender: senderId,
+        label: senderName,
+        allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+      });
+      return;
+    }
 
     if (!isDirectMessage && msteamsCfg) {
-      if (groupPolicy === "disabled") {
-        log.debug("dropping group message (groupPolicy: disabled)", {
+      if (channelGate.allowlistConfigured && !channelGate.allowed) {
+        log.debug?.("dropping group message (not in team/channel allowlist)", {
+          conversationId,
+          teamKey: channelGate.teamKey ?? "none",
+          channelKey: channelGate.channelKey ?? "none",
+          channelMatchKey: channelGate.channelMatchKey ?? "none",
+          channelMatchSource: channelGate.channelMatchSource ?? "none",
+        });
+        return;
+      }
+      const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
+        groupPolicy,
+        groupAllowFrom: effectiveGroupAllowFrom,
+        senderId,
+        isSenderAllowed: (_senderId, allowFrom) =>
+          resolveMSTeamsAllowlistMatch({
+            allowFrom,
+            senderId,
+            senderName,
+            allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+          }).allowed,
+      });
+
+      if (!senderGroupAccess.allowed && senderGroupAccess.reason === "disabled") {
+        log.debug?.("dropping group message (groupPolicy: disabled)", {
           conversationId,
         });
         return;
       }
-
-      if (groupPolicy === "allowlist") {
-        if (channelGate.allowlistConfigured && !channelGate.allowed) {
-          log.debug("dropping group message (not in team/channel allowlist)", {
-            conversationId,
-            teamKey: channelGate.teamKey ?? "none",
-            channelKey: channelGate.channelKey ?? "none",
-            channelMatchKey: channelGate.channelMatchKey ?? "none",
-            channelMatchSource: channelGate.channelMatchSource ?? "none",
-          });
-          return;
-        }
-        if (effectiveGroupAllowFrom.length === 0 && !channelGate.allowlistConfigured) {
-          log.debug("dropping group message (groupPolicy: allowlist, no allowlist)", {
-            conversationId,
-          });
-          return;
-        }
-        if (effectiveGroupAllowFrom.length > 0) {
-          const allowMatch = resolveMSTeamsAllowlistMatch({
-            groupPolicy,
-            allowFrom: effectiveGroupAllowFrom,
-            senderId,
-            senderName,
-          });
-          if (!allowMatch.allowed) {
-            log.debug("dropping group message (not in groupAllowFrom)", {
-              sender: senderId,
-              label: senderName,
-              allowlistMatch: formatAllowlistMatchMeta(allowMatch),
-            });
-            return;
-          }
-        }
+      if (!senderGroupAccess.allowed && senderGroupAccess.reason === "empty_allowlist") {
+        log.debug?.("dropping group message (groupPolicy: allowlist, no allowlist)", {
+          conversationId,
+        });
+        return;
+      }
+      if (!senderGroupAccess.allowed && senderGroupAccess.reason === "sender_not_allowlisted") {
+        const allowMatch = resolveMSTeamsAllowlistMatch({
+          allowFrom: effectiveGroupAllowFrom,
+          senderId,
+          senderName,
+          allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+        });
+        log.debug?.("dropping group message (not in groupAllowFrom)", {
+          sender: senderId,
+          label: senderName,
+          allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+        });
+        return;
       }
     }
 
+    const commandDmAllowFrom = isDirectMessage ? effectiveDmAllowFrom : configuredDmAllowFrom;
     const ownerAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
-      allowFrom: effectiveDmAllowFrom,
+      allowFrom: commandDmAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: effectiveGroupAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
-    const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
-    const commandGate = resolveControlCommandGate({
+    const { commandAuthorized, shouldBlock } = resolveDualTextControlCommandGate({
       useAccessGroups,
-      authorizers: [
-        { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
-        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
-      ],
-      allowTextCommands: true,
-      hasControlCommand: hasControlCommandInMessage,
+      primaryConfigured: commandDmAllowFrom.length > 0,
+      primaryAllowed: ownerAllowedForCommands,
+      secondaryConfigured: effectiveGroupAllowFrom.length > 0,
+      secondaryAllowed: groupAllowedForCommands,
+      hasControlCommand: core.channel.text.hasControlCommand(text, cfg),
     });
-    const commandAuthorized = commandGate.commandAuthorized;
-    if (commandGate.shouldBlock) {
+    if (shouldBlock) {
       logInboundDrop({
         log: logVerboseMessage,
         channel: "msteams",
@@ -273,6 +323,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
       return;
     }
+
+    // Extract clientInfo entity (Teams sends this on every activity with timezone, locale, etc.)
+    const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+      | { timezone?: string; locale?: string; country?: string; platform?: string }
+      | undefined;
 
     // Build conversation reference for proactive replies.
     const agent = activity.recipient;
@@ -290,9 +345,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
       locale: activity.locale,
+      // Only set timezone if present (preserve previously stored value on next upsert)
+      ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
     };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
-      log.debug("failed to save conversation reference", {
+      log.debug?.("failed to save conversation reference", {
         error: formatUnknownError(err),
       });
     });
@@ -306,7 +363,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           selections: pollVote.selections,
         });
         if (!poll) {
-          log.debug("poll vote ignored (poll not found)", {
+          log.debug?.("poll vote ignored (poll not found)", {
             pollId: pollVote.pollId,
           });
         } else {
@@ -326,7 +383,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
 
     if (!rawBody) {
-      log.debug("skipping empty message after stripping mentions");
+      log.debug?.("skipping empty message after stripping mentions");
       return;
     }
 
@@ -341,7 +398,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       cfg,
       channel: "msteams",
       peer: {
-        kind: isDirectMessage ? "dm" : isChannel ? "channel" : "group",
+        kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
       },
     });
@@ -376,7 +433,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
       const mentioned = mentionGate.effectiveWasMentioned;
       if (requireMention && mentionGate.shouldSkip) {
-        log.debug("skipping message (mention required)", {
+        log.debug?.("skipping message (mention required)", {
           teamId,
           channelId,
           requireMention,
@@ -402,6 +459,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxBytes: mediaMaxBytes,
       tokenProvider,
       allowHosts: msteamsCfg?.mediaAllowHosts,
+      authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
       conversationType,
       conversationId,
       conversationMessageId: conversationMessageId ?? undefined,
@@ -411,27 +469,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         channelData: activity.channelData,
       },
       log,
-      preserveFilenames: cfg.media?.preserveFilenames,
+      preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
+        ?.preserveFilenames,
     });
 
-	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
-	    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-	      agentId: route.agentId,
-	    });
-	    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-	    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-	      storePath,
-	      sessionKey: route.sessionKey,
-	    });
-	    const body = core.channel.reply.formatAgentEnvelope({
-	      channel: "Teams",
-	      from: envelopeFrom,
-	      timestamp,
-	      previousTimestamp,
-	      envelope: envelopeOptions,
-	      body: rawBody,
-	    });
+    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+    const envelopeFrom = isDirectMessage ? senderName : conversationType;
+    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+      cfg,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+    });
+    const body = core.channel.reply.formatAgentEnvelope({
+      channel: "Teams",
+      from: envelopeFrom,
+      timestamp,
+      previousTimestamp,
+      envelope: envelopeOptions,
+      body: rawBody,
+    });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
@@ -441,25 +497,38 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
-	        formatEntry: (entry) =>
-	          core.channel.reply.formatAgentEnvelope({
-	            channel: "Teams",
-	            from: conversationType,
-	            timestamp: entry.timestamp,
-	            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-	            envelope: envelopeOptions,
-	          }),
-	      });
-	    }
+        formatEntry: (entry) =>
+          core.channel.reply.formatAgentEnvelope({
+            channel: "Teams",
+            from: conversationType,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+            envelope: envelopeOptions,
+          }),
+      });
+    }
 
-	    const ctxPayload = core.channel.reply.finalizeInboundContext({
-	      Body: combinedBody,
-	      RawBody: rawBody,
-	      CommandBody: rawBody,
-	      From: teamsFrom,
-	      To: teamsTo,
-	      SessionKey: route.sessionKey,
-	      AccountId: route.accountId,
+    const inboundHistory =
+      isRoomish && historyKey && historyLimit > 0
+        ? (conversationHistories.get(historyKey) ?? []).map((entry) => ({
+            sender: entry.sender,
+            body: entry.body,
+            timestamp: entry.timestamp,
+          }))
+        : undefined;
+    const commandBody = text.trim();
+
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
+      Body: combinedBody,
+      BodyForAgent: rawBody,
+      InboundHistory: inboundHistory,
+      RawBody: rawBody,
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
+      From: teamsFrom,
+      To: teamsTo,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
@@ -469,12 +538,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-	      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
-	      CommandAuthorized: commandAuthorized,
-	      OriginatingChannel: "msteams" as const,
-	      OriginatingTo: teamsTo,
-	      ...mediaPayload,
-	    });
+      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      CommandAuthorized: commandAuthorized,
+      OriginatingChannel: "msteams" as const,
+      OriginatingTo: teamsTo,
+      ReplyToId: activity.replyToId ?? undefined,
+      ReplyToBody: quoteInfo?.body,
+      ReplyToSender: quoteInfo?.sender,
+      ReplyToIsQuote: quoteInfo ? true : undefined,
+      ...mediaPayload,
+    });
 
     await core.channel.session.recordInboundSession({
       storePath,
@@ -491,6 +564,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
+      accountId: route.accountId,
       runtime,
       log,
       adapter,
@@ -508,19 +582,33 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       sharePointSiteId,
     });
 
+    // Use Teams clientInfo timezone if no explicit userTimezone is configured.
+    // This ensures the agent knows the sender's timezone for time-aware responses
+    // and proactive sends within the same session.
+    // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
+    const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
+    const configOverride =
+      senderTimezone && !cfg.agents?.defaults?.userTimezone
+        ? {
+            agents: {
+              defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
+            },
+          }
+        : undefined;
+
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
+      const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
         cfg,
+        ctxPayload,
         dispatcher,
+        onSettled: () => markDispatchIdle(),
         replyOptions,
+        configOverride,
       });
 
-      markDispatchIdle();
       log.info("dispatch complete", { queuedFinal, counts });
 
-      const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
@@ -563,17 +651,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       );
       const senderId =
         entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
-      if (!senderId || !conversationId) return null;
+      if (!senderId || !conversationId) {
+        return null;
+      }
       return `msteams:${appId}:${conversationId}:${senderId}`;
     },
     shouldDebounce: (entry) => {
-      if (!entry.text.trim()) return false;
-      if (entry.attachments.length > 0) return false;
+      if (!entry.text.trim()) {
+        return false;
+      }
+      if (entry.attachments.length > 0) {
+        return false;
+      }
       return !core.channel.text.hasControlCommand(entry.text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);
-      if (!last) return;
+      if (!last) {
+        return;
+      }
       if (entries.length === 1) {
         await handleTeamsMessageNow(last);
         return;
@@ -582,7 +678,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .map((entry) => entry.text)
         .filter(Boolean)
         .join("\n");
-      if (!combinedText.trim()) return;
+      if (!combinedText.trim()) {
+        return;
+      }
       const combinedRawText = entries
         .map((entry) => entry.rawText)
         .filter(Boolean)

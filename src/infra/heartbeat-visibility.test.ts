@@ -1,10 +1,43 @@
 import { describe, expect, it } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 
 describe("resolveHeartbeatVisibility", () => {
+  function createChannelDefaultsHeartbeatConfig(heartbeat: {
+    showOk?: boolean;
+    showAlerts?: boolean;
+    useIndicator?: boolean;
+  }): OpenClawConfig {
+    return {
+      channels: {
+        defaults: {
+          heartbeat,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function createTelegramAccountHeartbeatConfig(): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          heartbeat: {
+            showOk: true,
+          },
+          accounts: {
+            primary: {
+              heartbeat: {
+                showOk: false,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   it("returns default values when no config is provided", () => {
-    const cfg = {} as MoltbotConfig;
+    const cfg = {} as OpenClawConfig;
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
     expect(result).toEqual({
@@ -15,17 +48,11 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("uses channel defaults when provided", () => {
-    const cfg = {
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: true,
-            showAlerts: false,
-            useIndicator: false,
-          },
-        },
-      },
-    } as MoltbotConfig;
+    const cfg = createChannelDefaultsHeartbeatConfig({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -52,7 +79,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
@@ -88,7 +115,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,
@@ -120,7 +147,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,
@@ -136,46 +163,14 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("handles missing accountId gracefully", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          heartbeat: {
-            showOk: true,
-          },
-          accounts: {
-            primary: {
-              heartbeat: {
-                showOk: false,
-              },
-            },
-          },
-        },
-      },
-    } as MoltbotConfig;
-
+    const cfg = createTelegramAccountHeartbeatConfig();
     const result = resolveHeartbeatVisibility({ cfg, channel: "telegram" });
 
     expect(result.showOk).toBe(true);
   });
 
   it("handles non-existent account gracefully", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          heartbeat: {
-            showOk: true,
-          },
-          accounts: {
-            primary: {
-              heartbeat: {
-                showOk: false,
-              },
-            },
-          },
-        },
-      },
-    } as MoltbotConfig;
-
+    const cfg = createTelegramAccountHeartbeatConfig();
     const result = resolveHeartbeatVisibility({
       cfg,
       channel: "telegram",
@@ -195,7 +190,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "whatsapp" });
 
@@ -215,7 +210,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "discord" });
 
@@ -237,7 +232,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "slack" });
 
@@ -249,17 +244,11 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("webchat uses channel defaults only (no per-channel config)", () => {
-    const cfg = {
-      channels: {
-        defaults: {
-          heartbeat: {
-            showOk: true,
-            showAlerts: false,
-            useIndicator: false,
-          },
-        },
-      },
-    } as MoltbotConfig;
+    const cfg = createChannelDefaultsHeartbeatConfig({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
 
@@ -271,7 +260,7 @@ describe("resolveHeartbeatVisibility", () => {
   });
 
   it("webchat returns defaults when no channel defaults configured", () => {
-    const cfg = {} as MoltbotConfig;
+    const cfg = {} as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({ cfg, channel: "webchat" });
 
@@ -291,7 +280,7 @@ describe("resolveHeartbeatVisibility", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const result = resolveHeartbeatVisibility({
       cfg,

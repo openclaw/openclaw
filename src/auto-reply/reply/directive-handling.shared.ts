@@ -1,12 +1,10 @@
 import { formatCliCommand } from "../../cli/command-format.js";
+import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
-export const SYSTEM_MARK = "⚙️";
-
 export const formatDirectiveAck = (text: string): string => {
-  if (!text) return text;
-  if (text.startsWith(SYSTEM_MARK)) return text;
-  return `${SYSTEM_MARK} ${text}`;
+  return prefixSystemMessage(text);
 };
 
 export const formatOptionsLine = (options: string) => `Options: ${options}.`;
@@ -15,6 +13,20 @@ export const withOptions = (line: string, options: string) =>
 
 export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
+
+export const formatInternalExecPersistenceDeniedText = () =>
+  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export function canPersistInternalExecDirective(params: {
+  surface?: string;
+  gatewayClientScopes?: string[];
+}): boolean {
+  if (!isInternalMessageChannel(params.surface)) {
+    return true;
+  }
+  const scopes = params.gatewayClientScopes ?? [];
+  return scopes.includes("operator.admin");
+}
 
 export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {
@@ -27,10 +39,37 @@ export const formatElevatedEvent = (level: ElevatedLevel) => {
 };
 
 export const formatReasoningEvent = (level: ReasoningLevel) => {
-  if (level === "stream") return "Reasoning STREAM — emit live <think>.";
-  if (level === "on") return "Reasoning ON — include <think>.";
+  if (level === "stream") {
+    return "Reasoning STREAM — emit live <think>.";
+  }
+  if (level === "on") {
+    return "Reasoning ON — include <think>.";
+  }
   return "Reasoning OFF — hide <think>.";
 };
+
+export function enqueueModeSwitchEvents(params: {
+  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
+  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
+  sessionKey: string;
+  elevatedChanged?: boolean;
+  reasoningChanged?: boolean;
+}): void {
+  if (params.elevatedChanged) {
+    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:elevated",
+    });
+  }
+  if (params.reasoningChanged) {
+    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:reasoning",
+    });
+  }
+}
 
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;
@@ -51,7 +90,7 @@ export function formatElevatedUnavailableText(params: {
   }
   if (params.sessionKey) {
     lines.push(
-      `See: ${formatCliCommand(`moltbot sandbox explain --session ${params.sessionKey}`)}`,
+      `See: ${formatCliCommand(`openclaw sandbox explain --session ${params.sessionKey}`)}`,
     );
   }
   return lines.join("\n");

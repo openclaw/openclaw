@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
@@ -13,6 +14,7 @@ export type GatewayServiceCommand = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 } | null;
 
@@ -34,9 +36,12 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
+  gatewayTokenEmbedded: "gateway-token-embedded",
+  gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -67,21 +72,35 @@ function parseSystemdUnit(content: string): {
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line) continue;
-    if (line.startsWith("#") || line.startsWith(";")) continue;
-    if (line.startsWith("[")) continue;
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("#") || line.startsWith(";")) {
+      continue;
+    }
+    if (line.startsWith("[")) {
+      continue;
+    }
     const idx = line.indexOf("=");
-    if (idx <= 0) continue;
+    if (idx <= 0) {
+      continue;
+    }
     const key = line.slice(0, idx).trim();
     const value = line.slice(idx + 1).trim();
-    if (!value) continue;
+    if (!value) {
+      continue;
+    }
     if (key === "After") {
       for (const entry of value.split(/\s+/)) {
-        if (entry) after.add(entry);
+        if (entry) {
+          after.add(entry);
+        }
       }
     } else if (key === "Wants") {
       for (const entry of value.split(/\s+/)) {
-        if (entry) wants.add(entry);
+        if (entry) {
+          wants.add(entry);
+        }
       }
     } else if (key === "RestartSec") {
       restartSec = value;
@@ -92,9 +111,13 @@ function parseSystemdUnit(content: string): {
 }
 
 function isRestartSecPreferred(value: string | undefined): boolean {
-  if (!value) return false;
+  if (!value) {
+    return false;
+  }
   const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) return false;
+  if (!Number.isFinite(parsed)) {
+    return false;
+  }
   return Math.abs(parsed - 5) < 0.01;
 }
 
@@ -170,7 +193,9 @@ async function auditLaunchdPlist(
 }
 
 function auditGatewayCommand(programArguments: string[] | undefined, issues: ServiceConfigIssue[]) {
-  if (!programArguments || programArguments.length === 0) return;
+  if (!programArguments || programArguments.length === 0) {
+    return;
+  }
   if (!hasGatewaySubcommand(programArguments)) {
     issues.push({
       code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
@@ -180,14 +205,42 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
+function auditGatewayToken(
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  expectedGatewayToken?: string,
+) {
+  const serviceToken = readEmbeddedGatewayToken(command);
+  if (!serviceToken) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
+    message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
+    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
+    level: "recommended",
+  });
+  const expectedToken = expectedGatewayToken?.trim();
+  if (!expectedToken || serviceToken === expectedToken) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
+    message:
+      "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
+    detail: "service token is stale",
+    level: "recommended",
+  });
 }
 
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
+export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+  if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
+    return undefined;
+  }
+  return command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
 }
 
 function getPathModule(platform: NodeJS.Platform) {
@@ -209,7 +262,9 @@ function auditGatewayServicePath(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ) {
-  if (platform === "win32") return;
+  if (platform === "win32") {
+    return;
+  }
   const servicePath = command?.environment?.PATH;
   if (!servicePath) {
     issues.push({
@@ -225,11 +280,11 @@ function auditGatewayServicePath(
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
-  const normalizedParts = parts.map((entry) => normalizePathEntry(entry, platform));
+  const normalizedParts = new Set(parts.map((entry) => normalizePathEntry(entry, platform)));
   const normalizedExpected = new Set(expected.map((entry) => normalizePathEntry(entry, platform)));
   const missing = expected.filter((entry) => {
     const normalized = normalizePathEntry(entry, platform);
-    return !normalizedParts.includes(normalized);
+    return !normalizedParts.has(normalized);
   });
   if (missing.length > 0) {
     issues.push({
@@ -276,7 +331,9 @@ async function auditGatewayRuntime(
   platform: NodeJS.Platform,
 ) {
   const execPath = command?.programArguments?.[0];
-  if (!execPath) return;
+  if (!execPath) {
+    return;
+  }
 
   if (isBunRuntime(execPath)) {
     issues.push({
@@ -288,7 +345,9 @@ async function auditGatewayRuntime(
     return;
   }
 
-  if (!isNodeRuntime(execPath)) return;
+  if (!isNodeRuntime(execPath)) {
+    return;
+  }
 
   if (isVersionManagedNodePath(execPath, platform)) {
     issues.push({
@@ -303,7 +362,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.16+) or Node 24 not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -311,15 +370,46 @@ async function auditGatewayRuntime(
   }
 }
 
+/**
+ * Check if the service's embedded token differs from the config file token.
+ * Returns an issue if drift is detected (service will use old token after restart).
+ */
+export function checkTokenDrift(params: {
+  serviceToken: string | undefined;
+  configToken: string | undefined;
+}): ServiceConfigIssue | null {
+  const serviceToken = params.serviceToken?.trim() || undefined;
+  const configToken = params.configToken?.trim() || undefined;
+
+  // Tokenless service units are canonical; no drift to report.
+  if (!serviceToken) {
+    return null;
+  }
+
+  if (configToken && serviceToken !== configToken) {
+    return {
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      detail: "Run `openclaw gateway install --force` to sync the token.",
+      level: "recommended",
+    };
+  }
+
+  return null;
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
   platform?: NodeJS.Platform;
+  expectedGatewayToken?: string;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

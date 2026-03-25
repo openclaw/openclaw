@@ -1,7 +1,19 @@
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { isRecord } from "../utils.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
 };
+
+export function isMinimaxVlmProvider(provider: string): boolean {
+  return provider === "minimax" || provider === "minimax-portal";
+}
+
+export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
+  return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
+}
 
 function coerceApiHost(params: {
   apiHost?: string;
@@ -28,10 +40,6 @@ function coerceApiHost(params: {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function pickString(rec: Record<string, unknown>, key: string): string {
   const v = rec[key];
   return typeof v === "string" ? v : "";
@@ -44,12 +52,18 @@ export async function minimaxUnderstandImage(params: {
   apiHost?: string;
   modelBaseUrl?: string;
 }): Promise<string> {
-  const apiKey = params.apiKey.trim();
-  if (!apiKey) throw new Error("MiniMax VLM: apiKey required");
+  const apiKey = normalizeSecretInput(params.apiKey);
+  if (!apiKey) {
+    throw new Error("MiniMax VLM: apiKey required");
+  }
   const prompt = params.prompt.trim();
-  if (!prompt) throw new Error("MiniMax VLM: prompt required");
+  if (!prompt) {
+    throw new Error("MiniMax VLM: prompt required");
+  }
   const imageDataUrl = params.imageDataUrl.trim();
-  if (!imageDataUrl) throw new Error("MiniMax VLM: imageDataUrl required");
+  if (!imageDataUrl) {
+    throw new Error("MiniMax VLM: imageDataUrl required");
+  }
   if (!/^data:image\/(png|jpeg|webp);base64,/i.test(imageDataUrl)) {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
@@ -60,12 +74,16 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
+  // Ensure env-based proxy dispatcher is active before the outbound fetch call.
+  // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
+  ensureGlobalUndiciEnvProxyDispatcher();
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "MM-API-Source": "Moltbot",
+      "MM-API-Source": "OpenClaw",
     },
     body: JSON.stringify({
       prompt,

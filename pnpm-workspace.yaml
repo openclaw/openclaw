@@ -5,10 +5,17 @@ packages:
   - extensions/*
 
 onlyBuiltDependencies:
-  - '@whiskeysockets/baileys'
-  - '@lydell/node-pty'
-  - '@matrix-org/matrix-sdk-crypto-nodejs'
+  - "@lydell/node-pty"
+  - "@matrix-org/matrix-sdk-crypto-nodejs"
+  - "@napi-rs/canvas"
+  - "@tloncorp/api"
+  - "@whiskeysockets/baileys"
   - authenticate-pam
   - esbuild
+  - node-llama-cpp
   - protobufjs
   - sharp
+
+ignoredBuiltDependencies:
+  - "@discordjs/opus"
+  - koffi

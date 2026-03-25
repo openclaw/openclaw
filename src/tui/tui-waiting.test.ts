@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-
 import { buildWaitingStatusMessage, pickWaitingPhrase } from "./tui-waiting.js";
 
 const theme = {
   dim: (s: string) => `<d>${s}</d>`,
   bold: (s: string) => `<b>${s}</b>`,
   accentSoft: (s: string) => `<a>${s}</a>`,
+  // oxlint-disable-next-line typescript/no-explicit-any
 } as any;
 
 describe("tui-waiting", () => {

@@ -1,31 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { mountApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
-import { MoltbotApp } from "./app";
-
-const originalConnect = MoltbotApp.prototype.connect;
-
-function mountApp(pathname: string) {
-  window.history.replaceState({}, "", pathname);
-  const app = document.createElement("moltbot-app") as MoltbotApp;
-  document.body.append(app);
-  return app;
-}
-
-beforeEach(() => {
-  MoltbotApp.prototype.connect = () => {
-    // no-op: avoid real gateway WS connections in browser tests
-  };
-  window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
-
-afterEach(() => {
-  MoltbotApp.prototype.connect = originalConnect;
-  window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
-  localStorage.clear();
-  document.body.innerHTML = "";
-});
+registerAppMountHooks();
 
 describe("chat markdown rendering", () => {
   it("renders markdown inside tool output sidebar", async () => {
@@ -46,9 +22,7 @@ describe("chat markdown rendering", () => {
 
     await app.updateComplete;
 
-    const toolCards = Array.from(
-      app.querySelectorAll<HTMLElement>(".chat-tool-card"),
-    );
+    const toolCards = Array.from(app.querySelectorAll<HTMLElement>(".chat-tool-card"));
     const toolCard = toolCards.find((card) =>
       card.querySelector(".chat-tool-card__preview, .chat-tool-card__inline"),
     );

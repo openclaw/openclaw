@@ -1,65 +1,27 @@
-import type { MoltbotConfig } from "../config/config.js";
-import { getChannelDock } from "../channels/dock.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
-import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  resolveStoredSubagentCapabilities,
+  type SubagentSessionRole,
+} from "./subagent-capabilities.js";
+import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { normalizeToolName } from "./tool-policy.js";
 
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
-
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolName(pattern);
-  if (!normalized) return { kind: "exact", value: "" };
-  if (normalized === "*") return { kind: "all" };
-  if (!normalized.includes("*")) return { kind: "exact", value: normalized };
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return {
-    kind: "regex",
-    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
-  };
-}
-
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) return [];
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
-}
-
-function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") return true;
-    if (pattern.kind === "exact" && name === pattern.value) return true;
-    if (pattern.kind === "regex" && pattern.value.test(name)) return true;
-  }
-  return false;
-}
-
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
-  const deny = compilePatterns(policy.deny);
-  const allow = compilePatterns(policy.allow);
-  return (name: string) => {
-    const normalized = normalizeToolName(name);
-    if (matchesAny(normalized, deny)) return false;
-    if (allow.length === 0) return true;
-    if (matchesAny(normalized, allow)) return true;
-    if (normalized === "apply_patch" && matchesAny("exec", allow)) return true;
-    return false;
-  };
-}
-
-const DEFAULT_SUBAGENT_TOOL_DENY = [
-  // Session management - main agent orchestrates
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
+/**
+ * Tools always denied for sub-agents regardless of depth.
+ * These are system-level or interactive tools that sub-agents should never use.
+ */
+const SUBAGENT_TOOL_DENY_ALWAYS = [
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
@@ -71,27 +33,91 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   // Memory - pass relevant info in spawn prompt instead
   "memory_search",
   "memory_get",
+  // Direct session sends - subagents communicate through announce chain
+  "sessions_send",
 ];
 
-export function resolveSubagentToolPolicy(cfg?: MoltbotConfig): SandboxToolPolicy {
-  const configured = cfg?.tools?.subagents?.tools;
-  const deny = [
-    ...DEFAULT_SUBAGENT_TOOL_DENY,
-    ...(Array.isArray(configured?.deny) ? configured.deny : []),
-  ];
-  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
-  return { allow, deny };
+/**
+ * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
+ * These are tools that only make sense for orchestrator sub-agents that can spawn children.
+ */
+const SUBAGENT_TOOL_DENY_LEAF = [
+  "subagents",
+  "sessions_list",
+  "sessions_history",
+  "sessions_spawn",
+];
+
+/**
+ * Build the deny list for a sub-agent at a given depth.
+ *
+ * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn,
+ *   subagents, sessions_list, sessions_history so it can manage its children.
+ * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
+ *   session management tools.
+ */
+function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[] {
+  const isLeaf = depth >= Math.max(1, Math.floor(maxSpawnDepth));
+  if (isLeaf) {
+    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
+  }
+  // Orchestrator sub-agent: only deny the always-denied tools.
+  // sessions_spawn, subagents, sessions_list, sessions_history are allowed.
+  return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) return true;
-  return makeToolPolicyMatcher(policy)(name);
+function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
+  if (role === "leaf") {
+    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
+  }
+  return [...SUBAGENT_TOOL_DENY_ALWAYS];
+}
+
+export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
+  const configured = cfg?.tools?.subagents?.tools;
+  const maxSpawnDepth =
+    cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
+  const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const explicitAllow = new Set(
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+  );
+  const deny = [
+    ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return { allow: mergedAllow, deny };
+}
+
+export function resolveSubagentToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string,
+): SandboxToolPolicy {
+  const configured = cfg?.tools?.subagents?.tools;
+  const capabilities = resolveStoredSubagentCapabilities(sessionKey, { cfg });
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  const explicitAllow = new Set(
+    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
+  );
+  const deny = [
+    ...resolveSubagentDenyListForRole(capabilities.role).filter(
+      (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
+    ),
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return { allow: mergedAllow, deny };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
-  if (!policy) return tools;
-  const matcher = makeToolPolicyMatcher(policy);
-  return tools.filter((tool) => matcher(tool.name));
+  if (!policy) {
+    return tools;
+  }
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 type ToolPolicyConfig = {
@@ -100,28 +126,6 @@ type ToolPolicyConfig = {
   deny?: string[];
   profile?: string;
 };
-
-function unionAllow(base?: string[], extra?: string[]) {
-  if (!Array.isArray(extra) || extra.length === 0) return base;
-  // If the user is using alsoAllow without an allowlist, treat it as additive on top of
-  // an implicit allow-all policy.
-  if (!Array.isArray(base) || base.length === 0) {
-    return Array.from(new Set(["*", ...extra]));
-  }
-  return Array.from(new Set([...base, ...extra]));
-}
-
-function pickToolPolicy(config?: ToolPolicyConfig): SandboxToolPolicy | undefined {
-  if (!config) return undefined;
-  const allow = Array.isArray(config.allow)
-    ? unionAllow(config.allow, config.alsoAllow)
-    : Array.isArray(config.alsoAllow) && config.alsoAllow.length > 0
-      ? unionAllow(undefined, config.alsoAllow)
-      : undefined;
-  const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) return undefined;
-  return { allow, deny };
-}
 
 function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
@@ -132,18 +136,26 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   groupId?: string;
 } {
   const raw = (sessionKey ?? "").trim();
-  if (!raw) return {};
+  if (!raw) {
+    return {};
+  }
   const base = resolveThreadParentSessionKey(raw) ?? raw;
   const parts = base.split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
     body = body.slice(1);
   }
-  if (body.length < 3) return {};
+  if (body.length < 3) {
+    return {};
+  }
   const [channel, kind, ...rest] = body;
-  if (kind !== "group" && kind !== "channel") return {};
+  if (kind !== "group" && kind !== "channel") {
+    return {};
+  }
   const groupId = rest.join(":").trim();
-  if (!groupId) return {};
+  if (!groupId) {
+    return {};
+  }
   return { channel: channel.trim().toLowerCase(), groupId };
 }
 
@@ -153,15 +165,21 @@ function resolveProviderToolPolicy(params: {
   modelId?: string;
 }): ToolPolicyConfig | undefined {
   const provider = params.modelProvider?.trim();
-  if (!provider || !params.byProvider) return undefined;
+  if (!provider || !params.byProvider) {
+    return undefined;
+  }
 
   const entries = Object.entries(params.byProvider);
-  if (entries.length === 0) return undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
 
   const lookup = new Map<string, ToolPolicyConfig>();
   for (const [key, value] of entries) {
     const normalized = normalizeProviderKey(key);
-    if (!normalized) continue;
+    if (!normalized) {
+      continue;
+    }
     lookup.set(normalized, value);
   }
 
@@ -174,18 +192,58 @@ function resolveProviderToolPolicy(params: {
 
   for (const key of candidates) {
     const match = lookup.get(key);
-    if (match) return match;
+    if (match) {
+      return match;
+    }
   }
   return undefined;
 }
 
+function resolveExplicitProfileAlsoAllow(tools?: OpenClawConfig["tools"]): string[] | undefined {
+  return Array.isArray(tools?.alsoAllow) ? tools.alsoAllow : undefined;
+}
+
+function hasExplicitToolSection(section: unknown): boolean {
+  return section !== undefined && section !== null;
+}
+
+function resolveImplicitProfileAlsoAllow(params: {
+  globalTools?: OpenClawConfig["tools"];
+  agentTools?: AgentToolsConfig;
+}): string[] | undefined {
+  const implicit = new Set<string>();
+  if (
+    hasExplicitToolSection(params.agentTools?.exec) ||
+    hasExplicitToolSection(params.globalTools?.exec)
+  ) {
+    implicit.add("exec");
+    implicit.add("process");
+  }
+  if (
+    hasExplicitToolSection(params.agentTools?.fs) ||
+    hasExplicitToolSection(params.globalTools?.fs)
+  ) {
+    implicit.add("read");
+    implicit.add("write");
+    implicit.add("edit");
+  }
+  return implicit.size > 0 ? Array.from(implicit) : undefined;
+}
+
 export function resolveEffectiveToolPolicy(params: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
+  agentId?: string;
   modelProvider?: string;
   modelId?: string;
 }) {
-  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
+  const explicitAgentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? normalizeAgentId(params.agentId)
+      : undefined;
+  const agentId =
+    explicitAgentId ??
+    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   const agentTools = agentConfig?.tools;
@@ -202,20 +260,25 @@ export function resolveEffectiveToolPolicy(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const explicitProfileAlsoAllow =
+    resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
+  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({ globalTools, agentTools });
+  const profileAlsoAllow =
+    explicitProfileAlsoAllow || implicitProfileAlsoAllow
+      ? Array.from(
+          new Set([...(explicitProfileAlsoAllow ?? []), ...(implicitProfileAlsoAllow ?? [])]),
+        )
+      : undefined;
   return {
     agentId,
-    globalPolicy: pickToolPolicy(globalTools),
-    globalProviderPolicy: pickToolPolicy(providerPolicy),
-    agentPolicy: pickToolPolicy(agentTools),
-    agentProviderPolicy: pickToolPolicy(agentProviderPolicy),
+    globalPolicy: pickSandboxToolPolicy(globalTools),
+    globalProviderPolicy: pickSandboxToolPolicy(providerPolicy),
+    agentPolicy: pickSandboxToolPolicy(agentTools),
+    agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
     // alsoAllow is applied at the profile stage (to avoid being filtered out early).
-    profileAlsoAllow: Array.isArray(agentTools?.alsoAllow)
-      ? agentTools?.alsoAllow
-      : Array.isArray(globalTools?.alsoAllow)
-        ? globalTools?.alsoAllow
-        : undefined,
+    profileAlsoAllow,
     providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
       ? agentProviderPolicy?.alsoAllow
       : Array.isArray(providerPolicy?.alsoAllow)
@@ -225,7 +288,7 @@ export function resolveEffectiveToolPolicy(params: {
 }
 
 export function resolveGroupToolPolicy(params: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
   spawnedBy?: string | null;
   messageProvider?: string;
@@ -238,22 +301,28 @@ export function resolveGroupToolPolicy(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
 }): SandboxToolPolicy | undefined {
-  if (!params.config) return undefined;
+  if (!params.config) {
+    return undefined;
+  }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
   const groupId = params.groupId ?? sessionContext.groupId ?? spawnedContext.groupId;
-  if (!groupId) return undefined;
+  if (!groupId) {
+    return undefined;
+  }
   const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
   const channel = normalizeMessageChannel(channelRaw);
-  if (!channel) return undefined;
-  let dock;
+  if (!channel) {
+    return undefined;
+  }
+  let plugin;
   try {
-    dock = getChannelDock(channel);
+    plugin = getChannelPlugin(channel);
   } catch {
-    dock = undefined;
+    plugin = undefined;
   }
   const toolsConfig =
-    dock?.groups?.resolveToolPolicy?.({
+    plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: params.groupChannel,
@@ -274,12 +343,7 @@ export function resolveGroupToolPolicy(params: {
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-  return pickToolPolicy(toolsConfig);
+  return pickSandboxToolPolicy(toolsConfig);
 }
 
-export function isToolAllowedByPolicies(
-  name: string,
-  policies: Array<SandboxToolPolicy | undefined>,
-) {
-  return policies.every((policy) => isToolAllowedByPolicyName(name, policy));
-}
+export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

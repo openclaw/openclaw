@@ -4,7 +4,9 @@ read_when:
   - Adding or modifying models CLI (models list/set/scan/aliases/fallbacks)
   - Changing model fallback behavior or selection UX
   - Updating model scan probes (tools/images)
+title: "Models CLI"
 ---
+
 # Models CLI
 
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
@@ -13,53 +15,56 @@ Quick provider overview + examples: [/concepts/model-providers](/concepts/model-
 
 ## How model selection works
 
-Moltbot selects models in this order:
+OpenClaw selects models in this order:
 
-1) **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
-2) **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
-3) **Provider auth failover** happens inside a provider before moving to the
+1. **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
+2. **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
+3. **Provider auth failover** happens inside a provider before moving to the
    next model.
 
 Related:
-- `agents.defaults.models` is the allowlist/catalog of models Moltbot can use (plus aliases).
+
+- `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer a provider default from compatible auth-backed image-generation plugins. If you set a specific provider/model, also configure that provider's auth/API key.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
-## Quick model picks (anecdotal)
+## Quick model policy
 
-- **GLM**: a bit better for coding/tool calling.
-- **MiniMax**: better for writing and vibes.
+- Set your primary to the strongest latest-generation model available to you.
+- Use fallbacks for cost/latency-sensitive tasks and lower-stakes chat.
+- For tool-enabled agents or untrusted inputs, avoid older/weaker model tiers.
 
-## Setup wizard (recommended)
+## Onboarding (recommended)
 
-If you don’t want to hand-edit config, run the onboarding wizard:
+If you don’t want to hand-edit config, run onboarding:
 
 ```bash
-moltbot onboard
+openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
-subscription** (OAuth) and **Anthropic** (API key recommended; `claude
-setup-token` also supported).
+subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
 
 ## Config keys (overview)
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
-Provider configuration examples (including OpenCode Zen) live in
-[/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
+Provider configuration examples (including OpenCode) live in
+[/providers/opencode](/providers/opencode).
 
-## “Model is not allowed” (and why replies stop)
+## "Model is not allowed" (and why replies stop)
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
 session overrides. When a user selects a model that isn’t in that allowlist,
-Moltbot returns:
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
@@ -77,12 +82,12 @@ Example allowlist config:
 ```json5
 {
   agent: {
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+    model: { primary: "anthropic/claude-sonnet-4-6" },
     models: {
-      "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
-      "anthropic/claude-opus-4-5": { alias: "Opus" }
-    }
-  }
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
+    },
+  },
 }
 ```
 
@@ -99,39 +104,41 @@ You can switch models for the current session without restarting:
 ```
 
 Notes:
+
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
+- On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
 - `/model <#>` selects from that picker.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, Moltbot treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 
 ## CLI commands
 
 ```bash
-moltbot models list
-moltbot models status
-moltbot models set <provider/model>
-moltbot models set-image <provider/model>
+openclaw models list
+openclaw models status
+openclaw models set <provider/model>
+openclaw models set-image <provider/model>
 
-moltbot models aliases list
-moltbot models aliases add <alias> <provider/model>
-moltbot models aliases remove <alias>
+openclaw models aliases list
+openclaw models aliases add <alias> <provider/model>
+openclaw models aliases remove <alias>
 
-moltbot models fallbacks list
-moltbot models fallbacks add <provider/model>
-moltbot models fallbacks remove <provider/model>
-moltbot models fallbacks clear
+openclaw models fallbacks list
+openclaw models fallbacks add <provider/model>
+openclaw models fallbacks remove <provider/model>
+openclaw models fallbacks clear
 
-moltbot models image-fallbacks list
-moltbot models image-fallbacks add <provider/model>
-moltbot models image-fallbacks remove <provider/model>
-moltbot models image-fallbacks clear
+openclaw models image-fallbacks list
+openclaw models image-fallbacks add <provider/model>
+openclaw models image-fallbacks remove <provider/model>
+openclaw models image-fallbacks clear
 ```
 
-`moltbot models` (no subcommand) is a shortcut for `models status`.
+`openclaw models` (no subcommand) is a shortcut for `models status`.
 
 ### `models list`
 
@@ -155,16 +162,18 @@ JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
-Preferred Anthropic auth is the Claude Code CLI setup-token (run anywhere; paste on the gateway host if needed):
+Auth choice is provider/account dependent. For always-on gateway hosts, API keys are usually the most predictable; subscription token flows are also supported.
+
+Example (Anthropic setup-token):
 
 ```bash
 claude setup-token
-moltbot models status
+openclaw models status
 ```
 
 ## Scanning (OpenRouter free models)
 
-`moltbot models scan` inspects OpenRouter’s **free model catalog** and can
+`openclaw models scan` inspects OpenRouter’s **free model catalog** and can
 optionally probe models for tool and image support.
 
 Key flags:
@@ -181,14 +190,16 @@ Probing requires an OpenRouter API key (from auth profiles or
 `OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
 
 Scan results are ranked by:
-1) Image support
-2) Tool latency
-3) Context size
-4) Parameter count
+
+1. Image support
+2. Tool latency
+3. Context size
+4. Parameter count
 
 Input
+
 - OpenRouter `/models` list (filter `:free`)
-- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
+- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/help/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe controls: `--timeout`, `--concurrency`
 
@@ -198,5 +209,17 @@ mode, pass `--yes` to accept defaults.
 ## Models registry (`models.json`)
 
 Custom providers in `models.providers` are written into `models.json` under the
-agent directory (default `~/.clawdbot/agents/<agentId>/models.json`). This file
+agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file
 is merged by default unless `models.mode` is set to `replace`.
+
+Merge mode precedence for matching provider IDs:
+
+- Non-empty `baseUrl` already present in the agent `models.json` wins.
+- Non-empty `apiKey` in the agent `models.json` wins only when that provider is not SecretRef-managed in current config/auth-profile context.
+- SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
+- SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
+- Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
+- Other provider fields are refreshed from config and normalized catalog data.
+
+Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+This applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.

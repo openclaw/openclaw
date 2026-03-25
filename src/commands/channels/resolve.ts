@@ -1,9 +1,12 @@
-import { loadConfig } from "../../config/config.js";
-import { danger } from "../../globals.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -25,17 +28,29 @@ type ResolveResult = {
 function resolvePreferredKind(
   kind?: ChannelsResolveOptions["kind"],
 ): ChannelResolveKind | undefined {
-  if (!kind || kind === "auto") return undefined;
-  if (kind === "user") return "user";
+  if (!kind || kind === "auto") {
+    return undefined;
+  }
+  if (kind === "user") {
+    return "user";
+  }
   return "group";
 }
 
 function detectAutoKind(input: string): ChannelResolveKind {
   const trimmed = input.trim();
-  if (!trimmed) return "group";
-  if (trimmed.startsWith("@")) return "user";
-  if (/^<@!?/.test(trimmed)) return "user";
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return "user";
+  if (!trimmed) {
+    return "group";
+  }
+  if (trimmed.startsWith("@")) {
+    return "user";
+  }
+  if (/^<@!?/.test(trimmed)) {
+    return "user";
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return "user";
+  }
   if (
     /^(user|discord|slack|matrix|msteams|teams|zalo|zalouser|googlechat|google-chat|gchat):/i.test(
       trimmed,
@@ -47,26 +62,60 @@ function detectAutoKind(input: string): ChannelResolveKind {
 }
 
 function formatResolveResult(result: ResolveResult): string {
-  if (!result.resolved || !result.id) return `${result.input} -> unresolved`;
+  if (!result.resolved || !result.id) {
+    return `${result.input} -> unresolved`;
+  }
   const name = result.name ? ` (${result.name})` : "";
   const note = result.note ? ` [${result.note}]` : "";
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
-  const cfg = loadConfig();
+  const loadedRaw = loadConfig();
+  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+    config: loadedRaw,
+    commandName: "channels resolve",
+    targetIds: getChannelsCommandSecretTargetIds(),
+    mode: "read_only_operational",
+  });
+  let cfg = resolvedConfig;
+  for (const entry of diagnostics) {
+    runtime.log(`[secrets] ${entry}`);
+  }
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
     throw new Error("At least one entry is required.");
   }
 
-  const selection = await resolveMessageChannelSelection({
-    cfg,
-    channel: opts.channel ?? null,
-  });
-  const plugin = getChannelPlugin(selection.channel);
+  const explicitChannel = opts.channel?.trim();
+  const resolvedExplicit = explicitChannel
+    ? await resolveInstallableChannelPlugin({
+        cfg,
+        runtime,
+        rawChannel: explicitChannel,
+        allowInstall: true,
+        supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
+      })
+    : null;
+  if (resolvedExplicit?.configChanged) {
+    cfg = resolvedExplicit.cfg;
+    await writeConfigFile(cfg);
+  }
+
+  const selection = explicitChannel
+    ? {
+        channel: resolvedExplicit?.channelId,
+      }
+    : await resolveMessageChannelSelection({
+        cfg,
+        channel: opts.channel ?? null,
+      });
+  const plugin =
+    (explicitChannel ? resolvedExplicit?.plugin : undefined) ??
+    (selection.channel ? getChannelPlugin(selection.channel) : undefined);
   if (!plugin?.resolver?.resolveTargets) {
-    throw new Error(`Channel ${selection.channel} does not support resolve.`);
+    const channelText = selection.channel ?? explicitChannel ?? "";
+    throw new Error(`Channel ${channelText} does not support resolve.`);
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
@@ -117,7 +166,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(results, null, 2));
+    writeRuntimeJson(runtime, results);
     return;
   }
 

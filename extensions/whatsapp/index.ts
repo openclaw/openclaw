@@ -1,18 +1,14 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { whatsappPlugin } from "./src/channel.js";
 import { setWhatsAppRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { whatsappPlugin } from "./src/channel.js";
+export { setWhatsAppRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "whatsapp",
   name: "WhatsApp",
   description: "WhatsApp channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
-    setWhatsAppRuntime(api.runtime);
-    api.registerChannel({ plugin: whatsappPlugin });
-  },
-};
-
-export default plugin;
+  plugin: whatsappPlugin,
+  setRuntime: setWhatsAppRuntime,
+});

@@ -1,14 +1,18 @@
 import { fetchBrowserJson } from "./client-fetch.js";
 
+export type BrowserTransport = "cdp" | "chrome-mcp";
+
 export type BrowserStatus = {
   enabled: boolean;
   profile?: string;
+  driver?: "openclaw" | "existing-session";
+  transport?: BrowserTransport;
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
   pid: number | null;
-  cdpPort: number;
-  cdpUrl?: string;
+  cdpPort: number | null;
+  cdpUrl?: string | null;
   chosenBrowser: string | null;
   detectedBrowser?: string | null;
   detectedExecutablePath?: string | null;
@@ -23,13 +27,17 @@ export type BrowserStatus = {
 
 export type ProfileStatus = {
   name: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
   color: string;
+  driver: "openclaw" | "existing-session";
   running: boolean;
   tabCount: number;
   isDefault: boolean;
   isRemote: boolean;
+  missingFromConfig?: boolean;
+  reconcileReason?: string | null;
 };
 
 export type BrowserResetProfileResult = {
@@ -92,7 +100,9 @@ function buildProfileQuery(profile?: string): string {
 
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
-  if (!trimmed) return path;
+  if (!trimmed) {
+    return path;
+  }
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
@@ -149,8 +159,10 @@ export async function browserResetProfile(
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
-  cdpPort: number;
-  cdpUrl: string;
+  transport?: BrowserTransport;
+  cdpPort: number | null;
+  cdpUrl: string | null;
+  userDataDir: string | null;
   color: string;
   isRemote: boolean;
 };
@@ -161,7 +173,8 @@ export async function browserCreateProfile(
     name: string;
     color?: string;
     cdpUrl?: string;
-    driver?: "clawd" | "extension";
+    userDataDir?: string;
+    driver?: "openclaw" | "existing-session";
   },
 ): Promise<BrowserCreateProfileResult> {
   return await fetchBrowserJson<BrowserCreateProfileResult>(
@@ -173,6 +186,7 @@ export async function browserCreateProfile(
         name: opts.name,
         color: opts.color,
         cdpUrl: opts.cdpUrl,
+        userDataDir: opts.userDataDir,
         driver: opts.driver,
       }),
       timeoutMs: 10000,
@@ -274,7 +288,7 @@ export async function browserTabAction(
 export async function browserSnapshot(
   baseUrl: string | undefined,
   opts: {
-    format: "aria" | "ai";
+    format?: "aria" | "ai";
     targetId?: string;
     limit?: number;
     maxChars?: number;
@@ -290,22 +304,45 @@ export async function browserSnapshot(
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
-  q.set("format", opts.format);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
+  if (opts.format) {
+    q.set("format", opts.format);
+  }
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.limit === "number") {
+    q.set("limit", String(opts.limit));
+  }
   if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
     q.set("maxChars", String(opts.maxChars));
   }
-  if (opts.refs === "aria" || opts.refs === "role") q.set("refs", opts.refs);
-  if (typeof opts.interactive === "boolean") q.set("interactive", String(opts.interactive));
-  if (typeof opts.compact === "boolean") q.set("compact", String(opts.compact));
-  if (typeof opts.depth === "number" && Number.isFinite(opts.depth))
+  if (opts.refs === "aria" || opts.refs === "role") {
+    q.set("refs", opts.refs);
+  }
+  if (typeof opts.interactive === "boolean") {
+    q.set("interactive", String(opts.interactive));
+  }
+  if (typeof opts.compact === "boolean") {
+    q.set("compact", String(opts.compact));
+  }
+  if (typeof opts.depth === "number" && Number.isFinite(opts.depth)) {
     q.set("depth", String(opts.depth));
-  if (opts.selector?.trim()) q.set("selector", opts.selector.trim());
-  if (opts.frame?.trim()) q.set("frame", opts.frame.trim());
-  if (opts.labels === true) q.set("labels", "1");
-  if (opts.mode) q.set("mode", opts.mode);
-  if (opts.profile) q.set("profile", opts.profile);
+  }
+  if (opts.selector?.trim()) {
+    q.set("selector", opts.selector.trim());
+  }
+  if (opts.frame?.trim()) {
+    q.set("frame", opts.frame.trim());
+  }
+  if (opts.labels === true) {
+    q.set("labels", "1");
+  }
+  if (opts.mode) {
+    q.set("mode", opts.mode);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
     timeoutMs: 20000,
   });

@@ -1,17 +1,22 @@
-import { normalizeChatChannelId } from "../../channels/registry.js";
-import type { MoltbotConfig } from "../../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStoreSummary } from "../../config/sessions/store-summary.js";
+import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
+import { normalizeChatChannelId } from "../registry.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
 type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
 
-function getSessionRecipients(cfg: MoltbotConfig) {
+function getSessionRecipients(cfg: OpenClawConfig) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  if (scope === "global") return [];
+  if (scope === "global") {
+    return [];
+  }
   const storePath = resolveStorePath(cfg.session?.store);
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStoreSummary(storePath);
   const isGroupKey = (key: string) =>
     key.includes(":group:") || key.includes(":channel:") || key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
@@ -27,19 +32,21 @@ function getSessionRecipients(cfg: MoltbotConfig) {
       updatedAt: entry?.updatedAt ?? 0,
     }))
     .filter(({ to }) => to.length > 1)
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+    .toSorted((a, b) => b.updatedAt - a.updatedAt);
 
   // Dedupe while preserving recency ordering.
   const seen = new Set<string>();
   return recipients.filter((r) => {
-    if (seen.has(r.to)) return false;
+    if (seen.has(r.to)) {
+      return false;
+    }
     seen.add(r.to);
     return true;
   });
 }
 
 export function resolveWhatsAppHeartbeatRecipients(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   opts: HeartbeatRecipientsOpts = {},
 ): HeartbeatRecipientsResult {
   if (opts.to) {
@@ -47,16 +54,36 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const allowFrom =
+  const configuredAllowFrom =
     Array.isArray(cfg.channels?.whatsapp?.allowFrom) && cfg.channels.whatsapp.allowFrom.length > 0
       ? cfg.channels.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
       : [];
+  const storeAllowFrom = readChannelAllowFromStoreSync(
+    "whatsapp",
+    process.env,
+    DEFAULT_ACCOUNT_ID,
+  ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
+  const allowFrom = unique([...configuredAllowFrom, ...storeAllowFrom]);
 
   if (opts.all) {
     const all = unique([...sessionRecipients.map((s) => s.to), ...allowFrom]);
     return { recipients: all, source: "all" };
+  }
+
+  if (allowFrom.length > 0) {
+    const allowSet = new Set(allowFrom);
+    const authorizedSessionRecipients = sessionRecipients
+      .map((entry) => entry.to)
+      .filter((recipient) => allowSet.has(recipient));
+    if (authorizedSessionRecipients.length === 1) {
+      return { recipients: [authorizedSessionRecipients[0]], source: "session-single" };
+    }
+    if (authorizedSessionRecipients.length > 1) {
+      return { recipients: authorizedSessionRecipients, source: "session-ambiguous" };
+    }
+    return { recipients: allowFrom, source: "allowFrom" };
   }
 
   if (sessionRecipients.length === 1) {

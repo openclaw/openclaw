@@ -1,24 +1,64 @@
 import { randomUUID } from "node:crypto";
-
 import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
-import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
+import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
+import { upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
-
+import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
-import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
-import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
+import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
+import { broadcastPresenceSnapshot } from "./presence-events.js";
+import {
+  attachGatewayWsMessageHandler,
+  type WsOriginCheckMetrics,
+} from "./ws-connection/message-handler.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-export function attachGatewayWsConnectionHandler(params: {
+const LOG_HEADER_MAX_LEN = 300;
+const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
+
+function replaceControlChars(value: string): string {
+  let cleaned = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
+    ) {
+      cleaned += " ";
+      continue;
+    }
+    cleaned += char;
+  }
+  return cleaned;
+}
+const sanitizeLogValue = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const cleaned = replaceControlChars(value)
+    .replace(LOG_HEADER_FORMAT_REGEX, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (cleaned.length <= LOG_HEADER_MAX_LEN) {
+    return cleaned;
+  }
+  return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
+};
+
+export type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   port: number;
@@ -26,8 +66,15 @@ export function attachGatewayWsConnectionHandler(params: {
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
+  /** Optional rate limiter for auth brute-force protection. */
+  rateLimiter?: AuthRateLimiter;
+  /** Browser-origin fallback limiter (loopback is never exempt). */
+  browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
+};
+
+export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -41,7 +88,9 @@ export function attachGatewayWsConnectionHandler(params: {
     },
   ) => void;
   buildRequestContext: () => GatewayRequestContext;
-}) {
+};
+
+export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const {
     wss,
     clients,
@@ -50,6 +99,8 @@ export function attachGatewayWsConnectionHandler(params: {
     canvasHostEnabled,
     canvasHostServerPort,
     resolvedAuth,
+    rateLimiter,
+    browserRateLimiter,
     gatewayMethods,
     events,
     logGateway,
@@ -59,6 +110,7 @@ export function attachGatewayWsConnectionHandler(params: {
     broadcast,
     buildRequestContext,
   } = params;
+  const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
 
   wss.on("connection", (socket, upgradeReq) => {
     let client: GatewayWsClient | null = null;
@@ -95,7 +147,9 @@ export function attachGatewayWsConnectionHandler(params: {
     let lastFrameId: string | undefined;
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
-      if (!closeCause) closeCause = cause;
+      if (!closeCause) {
+        closeCause = cause;
+      }
       if (meta && Object.keys(meta).length > 0) {
         closeMeta = { ...closeMeta, ...meta };
       }
@@ -125,10 +179,14 @@ export function attachGatewayWsConnectionHandler(params: {
     });
 
     const close = (code = 1000, reason?: string) => {
-      if (closed) return;
+      if (closed) {
+        return;
+      }
       closed = true;
       clearTimeout(handshakeTimer);
-      if (client) clients.delete(client);
+      if (client) {
+        clients.delete(client);
+      }
       try {
         socket.close(code, reason);
       } catch {
@@ -148,6 +206,11 @@ export function attachGatewayWsConnectionHandler(params: {
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
+      const logForwardedFor = sanitizeLogValue(forwardedFor);
+      const logOrigin = sanitizeLogValue(requestOrigin);
+      const logHost = sanitizeLogValue(requestHost);
+      const logUserAgent = sanitizeLogValue(requestUserAgent);
+      const logReason = sanitizeLogValue(reason?.toString());
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
@@ -155,10 +218,10 @@ export function attachGatewayWsConnectionHandler(params: {
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
-        host: requestHost,
-        origin: requestOrigin,
-        userAgent: requestUserAgent,
-        forwardedFor,
+        host: logHost,
+        origin: logOrigin,
+        userAgent: logUserAgent,
+        forwardedFor: logForwardedFor,
         ...closeMeta,
       };
       if (!client) {
@@ -166,41 +229,32 @@ export function attachGatewayWsConnectionHandler(params: {
           ? logWsControl.debug
           : logWsControl.warn;
         logFn(
-          `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
+          `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,
         );
       }
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(
-          `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
+          `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
       if (client?.presenceKey) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
-        incrementPresenceVersion();
-        broadcast(
-          "presence",
-          { presence: listSystemPresence() },
-          {
-            dropIfSlow: true,
-            stateVersion: {
-              presence: getPresenceVersion(),
-              health: getHealthVersion(),
-            },
-          },
-        );
+        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
+      const context = buildRequestContext();
+      context.unsubscribeAllSessionEvents(connId);
       if (client?.connect?.role === "node") {
-        const context = buildRequestContext();
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {
+          removeRemoteNodeInfo(nodeId);
           context.nodeUnsubscribeAll(nodeId);
         }
       }
       logWs("out", "close", {
         connId,
         code,
-        reason: reason?.toString(),
+        reason: logReason,
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
@@ -236,6 +290,8 @@ export function attachGatewayWsConnectionHandler(params: {
       canvasHostUrl,
       connectNonce,
       resolvedAuth,
+      rateLimiter,
+      browserRateLimiter,
       gatewayMethods,
       events,
       extraHandlers,
@@ -254,6 +310,7 @@ export function attachGatewayWsConnectionHandler(params: {
       },
       setCloseCause,
       setLastFrameMeta,
+      originCheckMetrics,
       logGateway,
       logHealth,
       logWsControl,

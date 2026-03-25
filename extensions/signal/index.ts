@@ -1,18 +1,14 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { signalPlugin } from "./src/channel.js";
 import { setSignalRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { signalPlugin } from "./src/channel.js";
+export { setSignalRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "signal",
   name: "Signal",
   description: "Signal channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
-    setSignalRuntime(api.runtime);
-    api.registerChannel({ plugin: signalPlugin });
-  },
-};
-
-export default plugin;
+  plugin: signalPlugin,
+  setRuntime: setSignalRuntime,
+});

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -11,7 +10,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -24,8 +23,8 @@ import {
 } from "./agents.bindings.js";
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
 import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
-import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { setupChannels } from "./onboard-channels.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 import type { ChannelChoice } from "./onboard-types.js";
@@ -55,7 +54,9 @@ export async function agentsAddCommand(
   params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -124,10 +125,12 @@ export async function agentsAddCommand(
     const bindingResult =
       bindingParse.bindings.length > 0
         ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], skipped: [], conflicts: [] };
+        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
-    if (!opts.json) logConfigUpdated(runtime);
+    if (!opts.json) {
+      logConfigUpdated(runtime);
+    }
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
       skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
@@ -142,6 +145,7 @@ export async function agentsAddCommand(
       model,
       bindings: {
         added: bindingResult.added.map(describeBinding),
+        updated: bindingResult.updated.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
         conflicts: bindingResult.conflicts.map(
           (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
@@ -149,12 +153,14 @@ export async function agentsAddCommand(
       },
     };
     if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+      writeRuntimeJson(runtime, payload);
     } else {
       runtime.log(`Agent: ${agentId}`);
       runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
       runtime.log(`Agent dir: ${shortenHomePath(agentDir)}`);
-      if (model) runtime.log(`Model: ${model}`);
+      if (model) {
+        runtime.log(`Model: ${model}`);
+      }
       if (bindingResult.conflicts.length > 0) {
         runtime.error(
           [
@@ -172,13 +178,15 @@ export async function agentsAddCommand(
 
   const prompter = createClackPrompter();
   try {
-    await prompter.intro("Add Moltbot agent");
+    await prompter.intro("Add OpenClaw agent");
     const name =
       nameInput ??
       (await prompter.text({
         message: "Agent name",
         validate: (value) => {
-          if (!value?.trim()) return "Required";
+          if (!value?.trim()) {
+            return "Required";
+          }
           const normalized = normalizeAgentId(value);
           if (normalized === DEFAULT_AGENT_ID) {
             return `"${DEFAULT_AGENT_ID}" is reserved. Choose another name.`;
@@ -187,7 +195,7 @@ export async function agentsAddCommand(
         },
       }));
 
-    const agentName = String(name).trim();
+    const agentName = String(name ?? "").trim();
     const agentId = normalizeAgentId(agentName);
     if (agentName !== agentId) {
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
@@ -213,7 +221,7 @@ export async function agentsAddCommand(
       initialValue: workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const workspaceDir = resolveUserPath(String(workspaceInput).trim() || workspaceDefault);
+    const workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || workspaceDefault);
     const agentDir = resolveAgentDir(cfg, agentId);
 
     let nextConfig = applyAgentConfig(cfg, {
@@ -258,6 +266,7 @@ export async function agentsAddCommand(
         prompter,
         store: authStore,
         includeSkip: true,
+        config: nextConfig,
       });
 
       const authResult = await applyAuthChoice({
@@ -326,7 +335,7 @@ export async function agentsAddCommand(
         await prompter.note(
           [
             "Routing unchanged. Add bindings when you're ready.",
-            "Docs: https://docs.molt.bot/concepts/multi-agent",
+            "Docs: https://docs.openclaw.ai/concepts/multi-agent",
           ].join("\n"),
           "Routing",
         );
@@ -347,12 +356,12 @@ export async function agentsAddCommand(
       agentDir,
     };
     if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+      writeRuntimeJson(runtime, payload);
     }
     await prompter.outro(`Agent "${agentId}" ready.`);
   } catch (err) {
     if (err instanceof WizardCancelledError) {
-      runtime.exit(0);
+      runtime.exit(1);
       return;
     }
     throw err;

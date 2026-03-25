@@ -1,12 +1,32 @@
 {
-  "name": "@moltbot/matrix",
-  "version": "2026.1.29",
+  "name": "@openclaw/matrix",
+  "version": "2026.3.22",
+  "description": "OpenClaw Matrix channel plugin",
   "type": "module",
-  "description": "Moltbot Matrix channel plugin",
-  "moltbot": {
+  "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "fake-indexeddb": "^6.2.5",
+    "markdown-it": "14.1.1",
+    "matrix-js-sdk": "41.2.0-rc.0",
+    "music-metadata": "^11.12.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "matrix",
       "label": "Matrix",
@@ -18,19 +38,17 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/matrix",
+      "npmSpec": "@openclaw/matrix",
       "localPath": "extensions/matrix",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.22"
+    },
+    "releaseChecks": {
+      "rootDependencyMirrorAllowlist": [
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "matrix-js-sdk",
+        "music-metadata"
+      ]
     }
-  },
-  "dependencies": {
-    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "markdown-it": "14.1.0",
-    "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
-    "music-metadata": "^11.10.6",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "moltbot": "workspace:*"
   }
 }

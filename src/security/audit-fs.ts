@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import {
   formatIcaclsResetCommand,
   formatWindowsAclSummary,
@@ -81,7 +80,19 @@ export async function inspectPathPermissions(
     };
   }
 
-  const bits = modeBits(st.mode);
+  let effectiveMode = st.mode;
+  let effectiveIsDir = st.isDir;
+  if (st.isSymlink) {
+    try {
+      const target = await fs.stat(targetPath);
+      effectiveMode = typeof target.mode === "number" ? target.mode : st.mode;
+      effectiveIsDir = target.isDirectory();
+    } catch {
+      // Keep lstat-derived metadata when target lookup fails.
+    }
+  }
+
+  const bits = modeBits(effectiveMode);
   const platform = opts?.platform ?? process.platform;
 
   if (platform === "win32") {
@@ -90,8 +101,8 @@ export async function inspectPathPermissions(
       return {
         ok: true,
         isSymlink: st.isSymlink,
-        isDir: st.isDir,
-        mode: st.mode,
+        isDir: effectiveIsDir,
+        mode: effectiveMode,
         bits,
         source: "unknown",
         worldWritable: false,
@@ -104,8 +115,8 @@ export async function inspectPathPermissions(
     return {
       ok: true,
       isSymlink: st.isSymlink,
-      isDir: st.isDir,
-      mode: st.mode,
+      isDir: effectiveIsDir,
+      mode: effectiveMode,
       bits,
       source: "windows-acl",
       worldWritable: acl.untrustedWorld.some((entry) => entry.canWrite),
@@ -119,8 +130,8 @@ export async function inspectPathPermissions(
   return {
     ok: true,
     isSymlink: st.isSymlink,
-    isDir: st.isDir,
-    mode: st.mode,
+    isDir: effectiveIsDir,
+    mode: effectiveMode,
     bits,
     source: "posix",
     worldWritable: isWorldWritable(bits),
@@ -153,31 +164,43 @@ export function formatPermissionRemediation(params: {
 }
 
 export function modeBits(mode: number | null): number | null {
-  if (mode == null) return null;
+  if (mode == null) {
+    return null;
+  }
   return mode & 0o777;
 }
 
 export function formatOctal(bits: number | null): string {
-  if (bits == null) return "unknown";
+  if (bits == null) {
+    return "unknown";
+  }
   return bits.toString(8).padStart(3, "0");
 }
 
 export function isWorldWritable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o002) !== 0;
 }
 
 export function isGroupWritable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o020) !== 0;
 }
 
 export function isWorldReadable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o004) !== 0;
 }
 
 export function isGroupReadable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o040) !== 0;
 }

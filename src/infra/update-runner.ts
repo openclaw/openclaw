@@ -1,12 +1,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
-import { compareSemverStrings } from "./update-check.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
-import { detectGlobalInstallManagerForRoot, globalInstallArgs } from "./update-global.js";
+import {
+  resolveControlUiDistIndexHealth,
+  resolveControlUiDistIndexPathForRoot,
+} from "./control-ui-assets.js";
+import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { readPackageName, readPackageVersion } from "./package-json.js";
+import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
+import {
+  channelToNpmTag,
+  DEFAULT_PACKAGE_CHANNEL,
+  DEV_BRANCH,
+  isBetaTag,
+  isStableTag,
+  type UpdateChannel,
+} from "./update-channels.js";
+import { compareSemverStrings } from "./update-check.js";
+import {
+  collectInstalledGlobalPackageErrors,
+  cleanupGlobalRenameDirs,
+  createGlobalInstallEnv,
+  detectGlobalInstallManagerForRoot,
+  globalInstallArgs,
+  globalInstallFallbackArgs,
+  resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallSpec,
+  resolveGlobalPackageRoot,
+} from "./update-global.js";
 
 export type UpdateStepResult = {
   name: string;
@@ -62,17 +86,23 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
+type BuildManager = "pnpm" | "bun" | "npm";
+
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
-const DEFAULT_PACKAGE_NAME = "moltbot";
-const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME, "moltbot"]);
+const DEFAULT_PACKAGE_NAME = "openclaw";
+const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 function normalizeDir(value?: string | null) {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return path.resolve(trimmed);
 }
 
@@ -80,8 +110,12 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0) return null;
-  if (parts[binIndex - 1] !== "node_modules") return null;
+  if (binIndex <= 0) {
+    return null;
+  }
+  if (parts[binIndex - 1] !== "node_modules") {
+    return null;
+  }
   const binName = path.basename(normalized);
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   return path.join(nodeModulesDir, binName);
@@ -90,37 +124,22 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
   const cwd = normalizeDir(opts.cwd);
-  if (cwd) dirs.push(cwd);
+  if (cwd) {
+    dirs.push(cwd);
+  }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
     dirs.push(path.dirname(argv1));
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
-    if (packageRoot) dirs.push(packageRoot);
+    if (packageRoot) {
+      dirs.push(packageRoot);
+    }
   }
   const proc = normalizeDir(process.cwd());
-  if (proc) dirs.push(proc);
+  if (proc) {
+    dirs.push(proc);
+  }
   return Array.from(new Set(dirs));
-}
-
-async function readPackageVersion(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed?.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readPackageName(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: string };
-    const name = parsed?.name?.trim();
-    return name ? name : null;
-  } catch {
-    return null;
-  }
 }
 
 async function readBranchName(
@@ -131,7 +150,9 @@ async function readBranchName(
   const res = await runCommand(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
     timeoutMs,
   }).catch(() => null);
-  if (!res || res.code !== 0) return null;
+  if (!res || res.code !== 0) {
+    return null;
+  }
   const branch = res.stdout.trim();
   return branch || null;
 }
@@ -145,7 +166,9 @@ async function listGitTags(
   const res = await runCommand(["git", "-C", root, "tag", "--list", pattern, "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  if (!res || res.code !== 0) return [];
+  if (!res || res.code !== 0) {
+    return [];
+  }
   return res.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -162,10 +185,16 @@ async function resolveChannelTag(
   if (channel === "beta") {
     const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
     const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;
-    if (!betaTag) return stableTag;
-    if (!stableTag) return betaTag;
+    if (!betaTag) {
+      return stableTag;
+    }
+    if (!stableTag) {
+      return betaTag;
+    }
     const cmp = compareSemverStrings(betaTag, stableTag);
-    if (cmp != null && cmp < 0) return stableTag;
+    if (cmp != null && cmp < 0) {
+      return stableTag;
+    }
     return betaTag;
   }
   return tags.find((tag) => isStableTag(tag)) ?? null;
@@ -179,10 +208,15 @@ async function resolveGitRoot(
   for (const dir of candidates) {
     const res = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
       timeoutMs,
-    });
+    }).catch(() => null);
+    if (!res) {
+      continue;
+    }
     if (res.code === 0) {
       const root = res.stdout.trim();
-      if (root) return root;
+      if (root) {
+        return root;
+      }
     }
   }
   return null;
@@ -197,33 +231,105 @@ async function findPackageRoot(candidates: string[]) {
         const raw = await fs.readFile(pkgPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: string };
         const name = parsed?.name?.trim();
-        if (name && CORE_PACKAGE_NAMES.has(name)) return current;
+        if (name && CORE_PACKAGE_NAMES.has(name)) {
+          return current;
+        }
       } catch {
         // ignore
       }
       const parent = path.dirname(current);
-      if (parent === current) break;
+      if (parent === current) {
+        break;
+      }
       current = parent;
     }
   }
   return null;
 }
 
-async function detectPackageManager(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { packageManager?: string };
-    const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") return pm;
-  } catch {
-    // ignore
-  }
+async function detectPackageManager(root: string): Promise<BuildManager> {
+  return (await detectPackageManagerImpl(root)) ?? "npm";
+}
 
-  const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) return "pnpm";
-  if (files.includes("bun.lockb")) return "bun";
-  if (files.includes("package-lock.json")) return "npm";
-  return "npm";
+function managerPreferenceOrder(preferred: BuildManager): BuildManager[] {
+  if (preferred === "pnpm") {
+    return ["pnpm", "npm", "bun"];
+  }
+  if (preferred === "bun") {
+    return ["bun", "npm", "pnpm"];
+  }
+  return ["npm", "pnpm", "bun"];
+}
+
+function managerVersionArgs(manager: BuildManager): string[] {
+  if (manager === "pnpm") {
+    return ["pnpm", "--version"];
+  }
+  if (manager === "bun") {
+    return ["bun", "--version"];
+  }
+  return ["npm", "--version"];
+}
+
+async function isManagerAvailable(
+  runCommand: CommandRunner,
+  manager: BuildManager,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const res = await runCommand(managerVersionArgs(manager), { timeoutMs });
+    return res.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function isCommandAvailable(
+  runCommand: CommandRunner,
+  argv: string[],
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const res = await runCommand(argv, { timeoutMs });
+    return res.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function ensurePnpmAvailable(runCommand: CommandRunner, timeoutMs: number): Promise<boolean> {
+  if (await isManagerAvailable(runCommand, "pnpm", timeoutMs)) {
+    return true;
+  }
+  if (!(await isCommandAvailable(runCommand, ["corepack", "--version"], timeoutMs))) {
+    return false;
+  }
+  try {
+    const res = await runCommand(["corepack", "enable"], { timeoutMs });
+    if (res.code !== 0) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return await isManagerAvailable(runCommand, "pnpm", timeoutMs);
+}
+
+async function resolveAvailableManager(
+  runCommand: CommandRunner,
+  root: string,
+  timeoutMs: number,
+): Promise<{ manager: BuildManager; fallback: boolean }> {
+  const preferred = await detectPackageManager(root);
+  if (preferred === "pnpm" && (await ensurePnpmAvailable(runCommand, timeoutMs))) {
+    return { manager: "pnpm", fallback: false };
+  }
+  for (const manager of managerPreferenceOrder(preferred)) {
+    if (await isManagerAvailable(runCommand, manager, timeoutMs)) {
+      return { manager, fallback: manager !== preferred };
+    }
+  }
+  return { manager: "npm", fallback: preferred !== "npm" };
 }
 
 type RunStepOptions = {
@@ -275,35 +381,64 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   };
 }
 
-function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args: string[] = []) {
-  if (manager === "pnpm") return ["pnpm", script, ...args];
-  if (manager === "bun") return ["bun", "run", script, ...args];
-  if (args.length > 0) return ["npm", "run", script, "--", ...args];
+function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
+  if (manager === "pnpm") {
+    return ["pnpm", script, ...args];
+  }
+  if (manager === "bun") {
+    return ["bun", "run", script, ...args];
+  }
+  if (args.length > 0) {
+    return ["npm", "run", script, "--", ...args];
+  }
   return ["npm", "run", script];
 }
 
-function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
-  if (manager === "pnpm") return ["pnpm", "install"];
-  if (manager === "bun") return ["bun", "install"];
+function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
+  if (manager === "pnpm") {
+    return ["pnpm", "install"];
+  }
+  if (manager === "bun") {
+    return ["bun", "install"];
+  }
+  if (opts?.compatFallback) {
+    // pnpm/bun workspaces can hit npm-only peer resolution conflicts and should not create
+    // a package-lock.json when npm is only acting as a compatibility fallback.
+    return ["npm", "install", "--no-package-lock", "--legacy-peer-deps"];
+  }
   return ["npm", "install"];
 }
 
 function normalizeTag(tag?: string) {
-  const trimmed = tag?.trim();
-  if (!trimmed) return "latest";
-  if (trimmed.startsWith("moltbot@")) return trimmed.slice("moltbot@".length);
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
+  return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
+}
+
+function mergeCommandEnvironments(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  overrideEnv: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!baseEnv) {
+    return overrideEnv;
   }
-  return trimmed;
+  if (!overrideEnv) {
+    return baseEnv;
+  }
+  return {
+    ...baseEnv,
+    ...overrideEnv,
+  };
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
+  const defaultCommandEnv = await createGlobalInstallEnv();
   const runCommand =
     opts.runCommand ??
     (async (argv, options) => {
-      const res = await runCommandWithTimeout(argv, options);
+      const res = await runCommandWithTimeout(argv, {
+        ...options,
+        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+      });
       return { stdout: res.stdout, stderr: res.stderr, code: res.code };
     });
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -347,7 +482,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       status: "error",
       mode: "unknown",
       root: gitRoot,
-      reason: "not-moltbot-root",
+      reason: "not-openclaw-root",
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -365,6 +500,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    const buildGitErrorResult = (reason: string): UpdateRunResult => ({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason,
+      before: { sha: beforeSha, version: beforeVersion },
+      steps,
+      durationMs: Date.now() - startedAt,
+    });
+    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
+      const checkoutStep = await runStep(step(name, argv, gitRoot));
+      steps.push(checkoutStep);
+      if (checkoutStep.exitCode !== 0) {
+        return buildGitErrorResult("checkout-failed");
+      }
+      return null;
+    };
 
     const statusCheck = await runStep(
       step(
@@ -390,24 +542,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const checkoutStep = await runStep(
-          step(
-            `git checkout ${DEV_BRANCH}`,
-            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-            gitRoot,
-          ),
-        );
-        steps.push(checkoutStep);
-        if (checkoutStep.exitCode !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "checkout-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          DEV_BRANCH,
+        ]);
+        if (failure) {
+          return failure;
         }
       }
 
@@ -501,8 +644,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await detectPackageManager(gitRoot);
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-update-preflight-"));
+      const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
+      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
       const worktreeDir = path.join(preflightRoot, "worktree");
       const worktreeStep = await runStep(
         step(
@@ -537,25 +680,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             ),
           );
           steps.push(checkoutStep);
-          if (checkoutStep.exitCode !== 0) continue;
+          if (checkoutStep.exitCode !== 0) {
+            continue;
+          }
 
           const depsStep = await runStep(
-            step(`preflight deps install (${shortSha})`, managerInstallArgs(manager), worktreeDir),
+            step(
+              `preflight deps install (${shortSha})`,
+              managerInstallArgs(manager.manager, {
+                compatFallback: manager.fallback && manager.manager === "npm",
+              }),
+              worktreeDir,
+            ),
           );
           steps.push(depsStep);
-          if (depsStep.exitCode !== 0) continue;
-
-          const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) continue;
+          if (depsStep.exitCode !== 0) {
+            continue;
+          }
 
           const buildStep = await runStep(
-            step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
+            step(
+              `preflight build (${shortSha})`,
+              managerScriptArgs(manager.manager, "build"),
+              worktreeDir,
+            ),
           );
           steps.push(buildStep);
-          if (buildStep.exitCode !== 0) continue;
+          if (buildStep.exitCode !== 0) {
+            continue;
+          }
+
+          const lintStep = await runStep(
+            step(
+              `preflight lint (${shortSha})`,
+              managerScriptArgs(manager.manager, "lint"),
+              worktreeDir,
+            ),
+          );
+          steps.push(lintStep);
+          if (lintStep.exitCode !== 0) {
+            continue;
+          }
 
           selectedSha = sha;
           break;
@@ -646,56 +811,160 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const checkoutStep = await runStep(
-        step(`git checkout ${tag}`, ["git", "-C", gitRoot, "checkout", "--detach", tag], gitRoot),
-      );
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
+      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        tag,
+      ]);
+      if (failure) {
+        return failure;
+      }
+    }
+
+    const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
+
+    const depsStep = await runStep(
+      step(
+        "deps install",
+        managerInstallArgs(manager.manager, {
+          compatFallback: manager.fallback && manager.manager === "npm",
+        }),
+        gitRoot,
+      ),
+    );
+    steps.push(depsStep);
+    if (depsStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "deps-install-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const buildStep = await runStep(
+      step("build", managerScriptArgs(manager.manager, "build"), gitRoot),
+    );
+    steps.push(buildStep);
+    if (buildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const uiBuildStep = await runStep(
+      step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot),
+    );
+    steps.push(uiBuildStep);
+    if (uiBuildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "ui-build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+    const doctorEntryExists = await fs
+      .stat(doctorEntry)
+      .then(() => true)
+      .catch(() => false);
+    if (!doctorEntryExists) {
+      steps.push({
+        name: "openclaw doctor entry",
+        command: `verify ${doctorEntry}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `missing ${doctorEntry}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "doctor-entry-missing",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    // Use --fix so that doctor auto-strips unknown config keys introduced by
+    // schema changes between versions, preventing a startup validation crash.
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+    const doctorStep = await runStep(
+      step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+    );
+    steps.push(doctorStep);
+
+    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    if (!uiIndexHealth.exists) {
+      const repairArgv = managerScriptArgs(manager.manager, "ui:build");
+      const started = Date.now();
+      const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
+      const repairStep: UpdateStepResult = {
+        name: "ui:build (post-doctor repair)",
+        command: repairArgv.join(" "),
+        cwd: gitRoot,
+        durationMs: Date.now() - started,
+        exitCode: repairResult.code,
+        stdoutTail: trimLogTail(repairResult.stdout, MAX_LOG_CHARS),
+        stderrTail: trimLogTail(repairResult.stderr, MAX_LOG_CHARS),
+      };
+      steps.push(repairStep);
+
+      if (repairResult.code !== 0) {
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "checkout-failed",
+          reason: repairStep.name,
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+      if (!repairedUiIndexHealth.exists) {
+        const uiIndexPath =
+          repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+        steps.push({
+          name: "ui assets verify",
+          command: `verify ${uiIndexPath}`,
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: `missing ${uiIndexPath}`,
+        });
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "ui-assets-missing",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
         };
       }
     }
-
-    const manager = await detectPackageManager(gitRoot);
-
-    const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
-    steps.push(depsStep);
-
-    const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
-    steps.push(buildStep);
-
-    const uiBuildStep = await runStep(
-      step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
-    );
-    steps.push(uiBuildStep);
-
-    // Restore dist/control-ui/ to committed state to prevent dirty repo after update
-    // (ui:build regenerates assets with new hashes, which would block future updates)
-    const restoreUiStep = await runStep(
-      step(
-        "restore control-ui",
-        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    steps.push(restoreUiStep);
-
-    const doctorStep = await runStep(
-      step(
-        "moltbot doctor",
-        managerScriptArgs(manager, "moltbot", ["doctor", "--non-interactive"]),
-        gitRoot,
-        { CLAWDBOT_UPDATE_IN_PROGRESS: "1" },
-      ),
-    );
-    steps.push(doctorStep);
 
     const failedStep = steps.find((s) => s.exitCode !== 0);
     const afterShaStep = await runStep(
@@ -733,24 +1002,80 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
-    const spec = `${packageName}@${normalizeTag(opts.tag)}`;
+    await cleanupGlobalRenameDirs({
+      globalRoot: path.dirname(pkgRoot),
+      packageName,
+    });
+    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
+    const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
+    const steps: UpdateStepResult[] = [];
+    const globalInstallEnv = await createGlobalInstallEnv();
+    const spec = resolveGlobalInstallSpec({
+      packageName,
+      tag,
+      env: globalInstallEnv,
+    });
     const updateStep = await runStep({
       runCommand,
       name: "global update",
       argv: globalInstallArgs(globalManager, spec),
       cwd: pkgRoot,
       timeoutMs,
+      env: globalInstallEnv,
       progress,
       stepIndex: 0,
       totalSteps: 1,
     });
-    const steps = [updateStep];
-    const afterVersion = await readPackageVersion(pkgRoot);
+    steps.push(updateStep);
+
+    let finalStep = updateStep;
+    if (updateStep.exitCode !== 0) {
+      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      if (fallbackArgv) {
+        const fallbackStep = await runStep({
+          runCommand,
+          name: "global update (omit optional)",
+          argv: fallbackArgv,
+          cwd: pkgRoot,
+          timeoutMs,
+          env: globalInstallEnv,
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+        steps.push(fallbackStep);
+        finalStep = fallbackStep;
+      }
+    }
+
+    const verifiedPackageRoot =
+      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs)) ?? pkgRoot;
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+      });
+    }
+    const afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const failedStep =
+      finalStep.exitCode !== 0
+        ? finalStep
+        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
+          null);
     return {
-      status: updateStep.exitCode === 0 ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       mode: globalManager,
-      root: pkgRoot,
-      reason: updateStep.exitCode === 0 ? undefined : updateStep.name,
+      root: verifiedPackageRoot,
+      reason: failedStep ? failedStep.name : undefined,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,

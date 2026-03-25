@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
+import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -24,6 +25,21 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
   return parsed;
 }
 
+async function runWithVerboseAndTimeout(
+  opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
+  action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
+): Promise<void> {
+  const verbose = resolveVerbose(opts);
+  setVerbose(verbose);
+  const timeoutMs = parseTimeoutMs(opts.timeout);
+  if (timeoutMs === null) {
+    return;
+  }
+  await runCommandWithRuntime(defaultRuntime, async () => {
+    await action({ verbose, timeoutMs });
+  });
+}
+
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")
@@ -39,37 +55,31 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["moltbot status", "Show channel health + session summary."],
-          ["moltbot status --all", "Full diagnosis (read-only)."],
-          ["moltbot status --json", "Machine-readable output."],
-          ["moltbot status --usage", "Show model provider usage/quota snapshots."],
+          ["openclaw status", "Show channel health + session summary."],
+          ["openclaw status --all", "Full diagnosis (read-only)."],
+          ["openclaw status --json", "Machine-readable output."],
+          ["openclaw status --usage", "Show model provider usage/quota snapshots."],
           [
-            "moltbot status --deep",
+            "openclaw status --deep",
             "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
           ],
-          ["moltbot status --deep --timeout 5000", "Tighten probe timeout."],
+          ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
         ])}`,
     )
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.molt.bot/cli/status")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.openclaw.ai/cli/status")}\n`,
     )
     .action(async (opts) => {
-      const verbose = resolveVerbose(opts);
-      setVerbose(verbose);
-      const timeout = parseTimeoutMs(opts.timeout);
-      if (timeout === null) {
-        return;
-      }
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         await statusCommand(
           {
             json: Boolean(opts.json),
             all: Boolean(opts.all),
             deep: Boolean(opts.deep),
             usage: Boolean(opts.usage),
-            timeoutMs: timeout,
+            timeoutMs,
             verbose,
           },
           defaultRuntime,
@@ -87,20 +97,14 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.molt.bot/cli/health")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.openclaw.ai/cli/health")}\n`,
     )
     .action(async (opts) => {
-      const verbose = resolveVerbose(opts);
-      setVerbose(verbose);
-      const timeout = parseTimeoutMs(opts.timeout);
-      if (timeout === null) {
-        return;
-      }
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runWithVerboseAndTimeout(opts, async ({ verbose, timeoutMs }) => {
         await healthCommand(
           {
             json: Boolean(opts.json),
-            timeoutMs: timeout,
+            timeoutMs,
             verbose,
           },
           defaultRuntime,
@@ -108,29 +112,33 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  program
+  const sessionsCmd = program
     .command("sessions")
     .description("List stored conversation sessions")
     .option("--json", "Output as JSON", false)
     .option("--verbose", "Verbose logging", false)
     .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
     .option("--active <minutes>", "Only show sessions updated within the past N minutes")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["moltbot sessions", "List all sessions."],
-          ["moltbot sessions --active 120", "Only last 2 hours."],
-          ["moltbot sessions --json", "Machine-readable output."],
-          ["moltbot sessions --store ./tmp/sessions.json", "Use a specific session store."],
+          ["openclaw sessions", "List all sessions."],
+          ["openclaw sessions --agent work", "List sessions for one agent."],
+          ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
+          ["openclaw sessions --active 120", "Only last 2 hours."],
+          ["openclaw sessions --json", "Machine-readable output."],
+          ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
-          "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.",
+          "Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to cap the window and show %.",
         )}`,
     )
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.molt.bot/cli/sessions")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -138,9 +146,71 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         {
           json: Boolean(opts.json),
           store: opts.store as string | undefined,
+          agent: opts.agent as string | undefined,
+          allAgents: Boolean(opts.allAgents),
           active: opts.active as string | undefined,
         },
         defaultRuntime,
       );
+    });
+  sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("cleanup")
+    .description("Run session-store maintenance now")
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to maintain (default: configured default agent)")
+    .option("--all-agents", "Run maintenance across all configured agents", false)
+    .option("--dry-run", "Preview maintenance actions without writing", false)
+    .option("--enforce", "Apply maintenance even when configured mode is warn", false)
+    .option(
+      "--fix-missing",
+      "Remove store entries whose transcript files are missing (bypasses age/count retention)",
+      false,
+    )
+    .option("--active-key <key>", "Protect this session key from budget-eviction")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions cleanup --dry-run", "Preview stale/cap cleanup."],
+          [
+            "openclaw sessions cleanup --dry-run --fix-missing",
+            "Also preview pruning entries with missing transcript files.",
+          ],
+          ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
+          ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
+          ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
+          [
+            "openclaw sessions cleanup --enforce --store ./tmp/sessions.json",
+            "Use a specific store.",
+          ],
+        ])}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+            json?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsCleanupCommand(
+          {
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            dryRun: Boolean(opts.dryRun),
+            enforce: Boolean(opts.enforce),
+            fixMissing: Boolean(opts.fixMissing),
+            activeKey: opts.activeKey as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
     });
 }

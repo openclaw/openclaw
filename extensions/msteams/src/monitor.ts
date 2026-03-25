@@ -1,26 +1,37 @@
 import type { Request, Response } from "express";
 import {
+  DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+  keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
-  type MoltbotConfig,
+  type OpenClawConfig,
   type RuntimeEnv,
-} from "clawdbot/plugin-sdk";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+} from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import { registerMSTeamsHandlers } from "./monitor-handler.js";
+import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 import { getMSTeamsRuntime } from "./runtime.js";
+import {
+  createBotFrameworkJwtValidator,
+  createMSTeamsAdapter,
+  createMSTeamsTokenProvider,
+  loadMSTeamsSdkWithAuth,
+} from "./sdk.js";
+import { resolveMSTeamsCredentials } from "./token.js";
+import {
+  applyMSTeamsWebhookTimeouts,
+  type ApplyMSTeamsWebhookTimeoutsOpts,
+} from "./webhook-timeouts.js";
 
 export type MonitorMSTeamsOpts = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
@@ -32,6 +43,7 @@ export type MonitorMSTeamsResult = {
   shutdown: () => Promise<void>;
 };
 
+const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -40,7 +52,7 @@ export async function monitorMSTeamsProvider(
   let cfg = opts.cfg;
   let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
-    log.debug("msteams provider disabled");
+    log.debug?.("msteams provider disabled");
     return { app: null, shutdown: async () => {} };
   }
 
@@ -70,7 +82,9 @@ export async function monitorMSTeamsProvider(
       .trim();
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
-    if (entries.length === 0) return { additions: [], unresolved: [] };
+    if (entries.length === 0) {
+      return { additions: [], unresolved: [] };
+    }
     const resolved = await resolveMSTeamsUserAllowlist({ cfg, entries });
     const additions: string[] = [];
     const unresolved: string[] = [];
@@ -90,9 +104,9 @@ export async function monitorMSTeamsProvider(
 
   try {
     const allowEntries =
-      allowFrom?.map((entry) => cleanAllowEntry(String(entry))).filter(
-        (entry) => entry && entry !== "*",
-      ) ?? [];
+      allowFrom
+        ?.map((entry) => cleanAllowEntry(String(entry)))
+        .filter((entry) => entry && entry !== "*") ?? [];
     if (allowEntries.length > 0) {
       const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -111,7 +125,9 @@ export async function monitorMSTeamsProvider(
     if (teamsConfig && Object.keys(teamsConfig).length > 0) {
       const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
       for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
-        if (teamKey === "*") continue;
+        if (teamKey === "*") {
+          continue;
+        }
         const channels = teamCfg?.channels ?? {};
         const channelKeys = Object.keys(channels).filter((key) => key !== "*");
         if (channelKeys.length === 0) {
@@ -134,11 +150,13 @@ export async function monitorMSTeamsProvider(
         });
         const mapping: string[] = [];
         const unresolved: string[] = [];
-        const nextTeams = { ...(teamsConfig ?? {}) };
+        const nextTeams = { ...teamsConfig };
 
         resolved.forEach((entry, idx) => {
           const source = entries[idx];
-          if (!source) return;
+          if (!source) {
+            return;
+          }
           const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
           if (!entry.resolved || !entry.teamId) {
             unresolved.push(entry.input);
@@ -151,8 +169,8 @@ export async function monitorMSTeamsProvider(
           );
           const existing = nextTeams[entry.teamId] ?? {};
           const mergedChannels = {
-            ...(sourceTeam.channels ?? {}),
-            ...(existing.channels ?? {}),
+            ...sourceTeam.channels,
+            ...existing.channels,
           };
           const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
           nextTeams[entry.teamId] = mergedTeam;
@@ -165,7 +183,7 @@ export async function monitorMSTeamsProvider(
                   ...mergedChannels,
                   [entry.channelId]: {
                     ...sourceChannel,
-                    ...(mergedChannels?.[entry.channelId] ?? {}),
+                    ...mergedChannels?.[entry.channelId],
                   },
                 },
               };
@@ -211,14 +229,16 @@ export async function monitorMSTeamsProvider(
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
+  const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
 
-  // Auth configuration - create early so adapter is available for deliverReplies
-  const tokenProvider = new MsalTokenProvider(authConfig);
-  const adapter = createMSTeamsAdapter(authConfig, sdk);
+  // Build a token provider adapter for Graph API operations
+  const tokenProvider = createMSTeamsTokenProvider(app);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler(), {
+  const adapter = createMSTeamsAdapter(app, sdk);
+
+  // Build a simple ActivityHandler-compatible object
+  const handler = buildActivityHandler();
+  registerMSTeamsHandlers(handler, {
     cfg,
     runtime,
     appId,
@@ -233,15 +253,56 @@ export async function monitorMSTeamsProvider(
 
   // Create Express server
   const expressApp = express.default();
-  expressApp.use(express.json());
-  expressApp.use(authorizeJWT(authConfig));
+
+  // Cheap pre-parse auth gate: reject requests without a Bearer token before
+  // spending CPU/memory on JSON body parsing. This prevents unauthenticated
+  // request floods from forcing body parsing on internet-exposed webhooks.
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
+
+  expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
+  });
+
+  // JWT validation — verify Bot Framework tokens using the Teams SDK's
+  // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
+  const jwtValidator = await createBotFrameworkJwtValidator(creds);
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    // Authorization header is guaranteed by the pre-parse auth gate above.
+    const authHeader = req.headers.authorization!;
+    const serviceUrl = (req.body as Record<string, unknown>)?.serviceUrl as string | undefined;
+    jwtValidator
+      .validate(authHeader, serviceUrl)
+      .then((valid) => {
+        if (!valid) {
+          log.debug?.("JWT validation failed");
+          res.status(401).json({ error: "Unauthorized" });
+          return;
+        }
+        next();
+      })
+      .catch((err) => {
+        log.debug?.(`JWT validation error: ${String(err)}`);
+        res.status(401).json({ error: "Unauthorized" });
+      });
+  });
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
-    type HandlerContext = Parameters<(typeof handler)["run"]>[0];
     void adapter
-      .process(req, res, (context: unknown) => handler.run(context as HandlerContext))
+      .process(req, res, (context: unknown) => handler.run!(context))
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });
@@ -253,15 +314,28 @@ export async function monitorMSTeamsProvider(
     expressApp.post("/api/messages", messageHandler);
   }
 
-  log.debug("listening on paths", {
+  log.debug?.("listening on paths", {
     primary: configuredPath,
     fallback: "/api/messages",
   });
 
-  // Start listening and capture the HTTP server handle
-  const httpServer = expressApp.listen(port, () => {
-    log.info(`msteams provider started on port ${port}`);
+  // Start listening and fail fast if bind/listen fails.
+  const httpServer = expressApp.listen(port);
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      httpServer.off("error", onError);
+      log.info(`msteams provider started on port ${port}`);
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      httpServer.off("listening", onListening);
+      log.error("msteams server error", { error: String(err) });
+      reject(err);
+    };
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onError);
   });
+  applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: String(err) });
@@ -272,19 +346,81 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: String(err) });
         }
         resolve();
       });
     });
   };
 
-  // Handle abort signal
-  if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
-  }
+  // Keep this task alive until close so gateway runtime does not treat startup as exit.
+  await keepHttpServerTaskAlive({
+    server: httpServer,
+    abortSignal: opts.abortSignal,
+    onAbort: shutdown,
+  });
 
   return { app: expressApp, shutdown };
+}
+
+/**
+ * Build a minimal ActivityHandler-compatible object that supports
+ * onMessage / onMembersAdded registration and a run() method.
+ */
+function buildActivityHandler(): MSTeamsActivityHandler {
+  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
+  const messageHandlers: Handler[] = [];
+  const membersAddedHandlers: Handler[] = [];
+  const reactionsAddedHandlers: Handler[] = [];
+  const reactionsRemovedHandlers: Handler[] = [];
+
+  const handler: MSTeamsActivityHandler = {
+    onMessage(cb) {
+      messageHandlers.push(cb);
+      return handler;
+    },
+    onMembersAdded(cb) {
+      membersAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsAdded(cb) {
+      reactionsAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsRemoved(cb) {
+      reactionsRemovedHandlers.push(cb);
+      return handler;
+    },
+    async run(context: unknown) {
+      const ctx = context as { activity?: { type?: string } };
+      const activityType = ctx?.activity?.type;
+      const noop = async () => {};
+
+      if (activityType === "message") {
+        for (const h of messageHandlers) {
+          await h(context, noop);
+        }
+      } else if (activityType === "conversationUpdate") {
+        for (const h of membersAddedHandlers) {
+          await h(context, noop);
+        }
+      } else if (activityType === "messageReaction") {
+        const activity = (
+          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
+        )?.activity;
+        if (activity?.reactionsAdded?.length) {
+          for (const h of reactionsAddedHandlers) {
+            await h(context, noop);
+          }
+        }
+        if (activity?.reactionsRemoved?.length) {
+          for (const h of reactionsRemovedHandlers) {
+            await h(context, noop);
+          }
+        }
+      }
+    },
+  };
+
+  return handler;
 }

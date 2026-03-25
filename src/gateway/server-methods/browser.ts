@@ -3,13 +3,17 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
+import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  isPersistentBrowserProfileMutation,
+  resolveRequestedBrowserProfile,
+} from "../../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
-import { saveMediaBuffer } from "../../media/store.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
-import { safeParseJson } from "./nodes.helpers.js";
+import { respondUnavailableOnNodeInvokeError, safeParseJson } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type BrowserRequestParams = {
@@ -46,18 +50,32 @@ function normalizeNodeKey(value: string) {
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
   const q = query.trim();
-  if (!q) return null;
+  if (!q) {
+    return null;
+  }
   const qNorm = normalizeNodeKey(q);
   const matches = nodes.filter((node) => {
-    if (node.nodeId === q) return true;
-    if (typeof node.remoteIp === "string" && node.remoteIp === q) return true;
+    if (node.nodeId === q) {
+      return true;
+    }
+    if (typeof node.remoteIp === "string" && node.remoteIp === q) {
+      return true;
+    }
     const name = typeof node.displayName === "string" ? node.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) return true;
-    if (q.length >= 6 && node.nodeId.startsWith(q)) return true;
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && node.nodeId.startsWith(q)) {
+      return true;
+    }
     return false;
   });
-  if (matches.length === 1) return matches[0] ?? null;
-  if (matches.length === 0) return null;
+  if (matches.length === 1) {
+    return matches[0] ?? null;
+  }
+  if (matches.length === 0) {
+    return null;
+  }
   throw new Error(
     `ambiguous node: ${q} (matches: ${matches
       .map((node) => node.displayName || node.remoteIp || node.nodeId)
@@ -71,7 +89,9 @@ function resolveBrowserNodeTarget(params: {
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
-  if (mode === "off") return null;
+  if (mode === "off") {
+    return null;
+  }
   const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
   if (browserNodes.length === 0) {
     if (policy?.node?.trim()) {
@@ -87,38 +107,21 @@ function resolveBrowserNodeTarget(params: {
     }
     return resolved;
   }
-  if (mode === "manual") return null;
-  if (browserNodes.length === 1) return browserNodes[0] ?? null;
+  if (mode === "manual") {
+    return null;
+  }
+  if (browserNodes.length === 1) {
+    return browserNodes[0] ?? null;
+  }
   return null;
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) return new Map<string, string>();
-  const mapping = new Map<string, string>();
-  for (const file of files) {
-    const buffer = Buffer.from(file.base64, "base64");
-    const saved = await saveMediaBuffer(buffer, file.mimeType, "browser", buffer.byteLength);
-    mapping.set(file.path, saved.path);
-  }
-  return mapping;
+  return await persistBrowserProxyFiles(files);
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") return;
-  const obj = result as Record<string, unknown>;
-  if (typeof obj.path === "string" && mapping.has(obj.path)) {
-    obj.path = mapping.get(obj.path);
-  }
-  if (typeof obj.imagePath === "string" && mapping.has(obj.imagePath)) {
-    obj.imagePath = mapping.get(obj.imagePath);
-  }
-  const download = obj.download;
-  if (download && typeof download === "object") {
-    const d = download as Record<string, unknown>;
-    if (typeof d.path === "string" && mapping.has(d.path)) {
-      d.path = mapping.get(d.path);
-    }
-  }
+  applyBrowserProxyPaths(result, mapping);
 }
 
 export const browserHandlers: GatewayRequestHandlers = {
@@ -149,6 +152,17 @@ export const browserHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot create or delete persistent browser profiles",
+        ),
+      );
+      return;
+    }
 
     const cfg = loadConfig();
     let nodeTarget: NodeSession | null = null;
@@ -170,10 +184,12 @@ export const browserHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
+        const platform = nodeTarget.platform ?? "unknown";
+        const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command: "browser.proxy" },
           }),
         );
@@ -186,7 +202,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         query,
         body,
         timeoutMs,
-        profile: typeof query?.profile === "string" ? query.profile : undefined,
+        profile: resolveRequestedBrowserProfile({ query, body }),
       };
       const res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,
@@ -195,14 +211,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         timeoutMs,
         idempotencyKey: crypto.randomUUID(),
       });
-      if (!res.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
-            details: { nodeError: res.error ?? null },
-          }),
-        );
+      if (!respondUnavailableOnNodeInvokeError(respond, res)) {
         return;
       }
       const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;

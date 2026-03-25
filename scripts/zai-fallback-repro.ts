@@ -1,28 +1,30 @@
-import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 type RunResult = {
   code: number | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   stdout: string;
   stderr: string;
 };
 
 function pickAnthropicEnv(): { type: "oauth" | "api"; value: string } | null {
   const oauth = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
-  if (oauth) return { type: "oauth", value: oauth };
+  if (oauth) {
+    return { type: "oauth", value: oauth };
+  }
   const api = process.env.ANTHROPIC_API_KEY?.trim();
-  if (api) return { type: "api", value: api };
+  if (api) {
+    return { type: "api", value: api };
+  }
   return null;
 }
 
 function pickZaiKey(): string | null {
-  return (
-    process.env.ZAI_API_KEY?.trim() ?? process.env.Z_AI_API_KEY?.trim() ?? null
-  );
+  return process.env.ZAI_API_KEY?.trim() ?? process.env.Z_AI_API_KEY?.trim() ?? null;
 }
 
 async function runCommand(
@@ -74,21 +76,20 @@ async function main() {
     process.exit(1);
   }
 
-  const baseDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "moltbot-zai-fallback-"),
-  );
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-fallback-"));
   const stateDir = path.join(baseDir, "state");
-  const configPath = path.join(baseDir, "moltbot.json");
+  const configPath = path.join(baseDir, "openclaw.json");
   await fs.mkdir(stateDir, { recursive: true });
 
   const config = {
     agents: {
       defaults: {
         model: {
-          primary: "anthropic/claude-opus-4-5",
+          primary: "anthropic/claude-opus-4-6",
           fallbacks: ["zai/glm-4.7"],
         },
         models: {
+          "anthropic/claude-opus-4-6": {},
           "anthropic/claude-opus-4-5": {},
           "zai/glm-4.7": {},
         },
@@ -97,13 +98,12 @@ async function main() {
   };
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
-  const sessionId =
-    process.env.CLAWDBOT_ZAI_FALLBACK_SESSION_ID ?? randomUUID();
+  const sessionId = process.env.OPENCLAW_ZAI_FALLBACK_SESSION_ID ?? randomUUID();
 
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    CLAWDBOT_CONFIG_PATH: configPath,
-    CLAWDBOT_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_STATE_DIR: stateDir,
     ZAI_API_KEY: zaiKey,
     Z_AI_API_KEY: "",
   };
@@ -126,28 +126,14 @@ async function main() {
     "Then use the read tool to display the file contents. Reply with just the file contents.";
   const run1 = await runCommand(
     "run1",
-    [
-      "moltbot",
-      "agent",
-      "--local",
-      "--session-id",
-      sessionId,
-      "--message",
-      toolPrompt,
-    ],
+    ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", toolPrompt],
     envValidAnthropic,
   );
   if (run1.code !== 0) {
     process.exit(run1.code ?? 1);
   }
 
-  const sessionFile = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "sessions",
-    `${sessionId}.jsonl`,
-  );
+  const sessionFile = path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
   const transcript = await fs.readFile(sessionFile, "utf8").catch(() => "");
   if (!transcript.includes('"toolResult"')) {
     console.warn("Warning: no toolResult entries detected in session history.");
@@ -158,15 +144,7 @@ async function main() {
     "What is the content of zai-fallback-tool.txt? Reply with just the contents.";
   const run2 = await runCommand(
     "run2",
-    [
-      "moltbot",
-      "agent",
-      "--local",
-      "--session-id",
-      sessionId,
-      "--message",
-      followupPrompt,
-    ],
+    ["openclaw", "agent", "--local", "--session-id", sessionId, "--message", followupPrompt],
     envInvalidAnthropic,
   );
 

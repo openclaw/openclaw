@@ -1,27 +1,30 @@
 ---
-summary: "CLI reference for `moltbot hooks` (agent hooks)"
+summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
-  - You want to install or update hooks
+  - You want to inspect hook availability or enable workspace hooks
+title: "hooks"
 ---
 
-# `moltbot hooks`
+# `openclaw hooks`
 
 Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
 
 Related:
-- Hooks: [Hooks](/hooks)
-- Plugin hooks: [Plugins](/plugin#plugin-hooks)
+
+- Hooks: [Hooks](/automation/hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
 
 ## List All Hooks
 
 ```bash
-moltbot hooks list
+openclaw hooks list
 ```
 
-List all discovered hooks from workspace, managed, and bundled directories.
+List all discovered hooks from workspace, managed, extra, and bundled directories.
 
 **Options:**
+
 - `--eligible`: Show only eligible hooks (requirements met)
 - `--json`: Output as JSON
 - `-v, --verbose`: Show detailed information including missing requirements
@@ -33,15 +36,15 @@ Hooks (4/4 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
+  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
-  😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
+  💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
 **Example (verbose):**
 
 ```bash
-moltbot hooks list --verbose
+openclaw hooks list --verbose
 ```
 
 Shows missing requirements for ineligible hooks.
@@ -49,7 +52,7 @@ Shows missing requirements for ineligible hooks.
 **Example (JSON):**
 
 ```bash
-moltbot hooks list --json
+openclaw hooks list --json
 ```
 
 Returns structured JSON for programmatic use.
@@ -57,21 +60,23 @@ Returns structured JSON for programmatic use.
 ## Get Hook Information
 
 ```bash
-moltbot hooks info <name>
+openclaw hooks info <name>
 ```
 
 Show detailed information about a specific hook.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `session-memory`)
 
 **Options:**
+
 - `--json`: Output as JSON
 
 **Example:**
 
 ```bash
-moltbot hooks info session-memory
+openclaw hooks info session-memory
 ```
 
 **Output:**
@@ -79,14 +84,14 @@ moltbot hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to memory when /new or /reset command is issued
 
 Details:
-  Source: moltbot-bundled
-  Path: /path/to/moltbot/hooks/bundled/session-memory/HOOK.md
-  Handler: /path/to/moltbot/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.molt.bot/hooks#session-memory
-  Events: command:new
+  Source: openclaw-bundled
+  Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
+  Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
+  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -95,12 +100,13 @@ Requirements:
 ## Check Hooks Eligibility
 
 ```bash
-moltbot hooks check
+openclaw hooks check
 ```
 
 Show summary of hook eligibility status (how many are ready vs. not ready).
 
 **Options:**
+
 - `--json`: Output as JSON
 
 **Example output:**
@@ -116,21 +122,21 @@ Not ready: 0
 ## Enable a Hook
 
 ```bash
-moltbot hooks enable <name>
+openclaw hooks enable <name>
 ```
 
-Enable a specific hook by adding it to your config (`~/.clawdbot/config.json`).
+Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
 
-**Note:** Hooks managed by plugins show `plugin:<id>` in `moltbot hooks list` and
-can’t be enabled/disabled here. Enable/disable the plugin instead.
+**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `session-memory`)
 
 **Example:**
 
 ```bash
-moltbot hooks enable session-memory
+openclaw hooks enable session-memory
 ```
 
 **Output:**
@@ -140,28 +146,34 @@ moltbot hooks enable session-memory
 ```
 
 **What it does:**
+
 - Checks if hook exists and is eligible
 - Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - Saves config to disk
 
+If the hook came from `<workspace>/hooks/`, this opt-in step is required before
+the Gateway will load it.
+
 **After enabling:**
+
 - Restart the gateway so hooks reload (menu bar app restart on macOS, or restart your gateway process in dev).
 
 ## Disable a Hook
 
 ```bash
-moltbot hooks disable <name>
+openclaw hooks disable <name>
 ```
 
 Disable a specific hook by updating your config.
 
 **Arguments:**
+
 - `<name>`: Hook name (e.g., `command-logger`)
 
 **Example:**
 
 ```bash
-moltbot hooks disable command-logger
+openclaw hooks disable command-logger
 ```
 
 **Output:**
@@ -171,23 +183,40 @@ moltbot hooks disable command-logger
 ```
 
 **After disabling:**
+
 - Restart the gateway so hooks reload
 
-## Install Hooks
+## Install Hook Packs
 
 ```bash
-moltbot hooks install <path-or-spec>
+openclaw plugins install <package>        # ClawHub first, then npm
+openclaw plugins install <package> --pin  # pin version
+openclaw plugins install <path>           # local path
 ```
 
-Install a hook pack from a local folder/archive or npm.
+Install hook packs through the unified plugins installer.
+
+`openclaw hooks install` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `openclaw plugins install`.
+
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
+installs run with `--ignore-scripts` for safety.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 **What it does:**
-- Copies the hook pack into `~/.clawdbot/hooks/<id>`
+
+- Copies the hook pack into `~/.openclaw/hooks/<id>`
 - Enables the installed hooks in `hooks.internal.entries.*`
 - Records the install under `hooks.internal.installs`
 
 **Options:**
+
 - `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
+- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
 
 **Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
 
@@ -195,46 +224,69 @@ Install a hook pack from a local folder/archive or npm.
 
 ```bash
 # Local directory
-moltbot hooks install ./my-hook-pack
+openclaw plugins install ./my-hook-pack
 
 # Local archive
-moltbot hooks install ./my-hook-pack.zip
+openclaw plugins install ./my-hook-pack.zip
 
 # NPM package
-moltbot hooks install @moltbot/my-hook-pack
+openclaw plugins install @openclaw/my-hook-pack
 
 # Link a local directory without copying
-moltbot hooks install -l ./my-hook-pack
+openclaw plugins install -l ./my-hook-pack
 ```
 
-## Update Hooks
+Linked hook packs are treated as managed hooks from an operator-configured
+directory, not as workspace hooks.
+
+## Update Hook Packs
 
 ```bash
-moltbot hooks update <id>
-moltbot hooks update --all
+openclaw plugins update <id>
+openclaw plugins update --all
 ```
 
-Update installed hook packs (npm installs only).
+Update tracked npm-based hook packs through the unified plugins updater.
+
+`openclaw hooks update` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `openclaw plugins update`.
 
 **Options:**
+
 - `--all`: Update all tracked hook packs
 - `--dry-run`: Show what would change without writing
+
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.
 
 ## Bundled Hooks
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
 **Enable:**
 
 ```bash
-moltbot hooks enable session-memory
+openclaw hooks enable session-memory
 ```
 
-**Output:** `~/clawd/memory/YYYY-MM-DD-slug.md`
+**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
 
-**See:** [session-memory documentation](/hooks#session-memory)
+**See:** [session-memory documentation](/automation/hooks#session-memory)
+
+### bootstrap-extra-files
+
+Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+
+**Enable:**
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
+**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
 
 ### command-logger
 
@@ -243,37 +295,25 @@ Logs all command events to a centralized audit file.
 **Enable:**
 
 ```bash
-moltbot hooks enable command-logger
+openclaw hooks enable command-logger
 ```
 
-**Output:** `~/.clawdbot/logs/commands.log`
+**Output:** `~/.openclaw/logs/commands.log`
 
 **View logs:**
 
 ```bash
 # Recent commands
-tail -n 20 ~/.clawdbot/logs/commands.log
+tail -n 20 ~/.openclaw/logs/commands.log
 
 # Pretty-print
-cat ~/.clawdbot/logs/commands.log | jq .
+cat ~/.openclaw/logs/commands.log | jq .
 
 # Filter by action
-grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
+grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
-**See:** [command-logger documentation](/hooks#command-logger)
-
-### soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Enable:**
-
-```bash
-moltbot hooks enable soul-evil
-```
-
-**See:** [SOUL Evil Hook](/hooks/soul-evil)
+**See:** [command-logger documentation](/automation/hooks#command-logger)
 
 ### boot-md
 
@@ -284,7 +324,7 @@ Runs `BOOT.md` when the gateway starts (after channels start).
 **Enable**:
 
 ```bash
-moltbot hooks enable boot-md
+openclaw hooks enable boot-md
 ```
 
-**See:** [boot-md documentation](/hooks#boot-md)
+**See:** [boot-md documentation](/automation/hooks#boot-md)

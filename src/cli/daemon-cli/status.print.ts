@@ -1,4 +1,5 @@
 import { resolveControlUiLinks } from "../../commands/onboard-helpers.js";
+import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -12,12 +13,14 @@ import {
 import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { colorize } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
+  createCliStatusTextStyles,
   filterDaemonEnv,
   formatRuntimeStatus,
+  resolveRuntimeStatusColor,
   renderRuntimeHints,
   safeDaemonEnv,
 } from "./shared.js";
@@ -29,7 +32,9 @@ import {
 
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   const command = status.service.command;
-  if (!command?.environment) return status;
+  if (!command?.environment) {
+    return status;
+  }
   const safeEnv = filterDaemonEnv(command.environment);
   const nextCommand = {
     ...command,
@@ -47,20 +52,15 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
-    defaultRuntime.log(JSON.stringify(sanitized, null, 2));
+    defaultRuntime.writeJson(sanitized);
     return;
   }
 
-  const rich = isRich();
-  const label = (value: string) => colorize(rich, theme.muted, value);
-  const accent = (value: string) => colorize(rich, theme.accent, value);
-  const infoText = (value: string) => colorize(rich, theme.info, value);
-  const okText = (value: string) => colorize(rich, theme.success, value);
-  const warnText = (value: string) => colorize(rich, theme.warn, value);
-  const errorText = (value: string) => colorize(rich, theme.error, value);
+  const { rich, label, accent, infoText, okText, warnText, errorText } =
+    createCliStatusTextStyles();
   const spacer = () => defaultRuntime.log("");
 
-  const { service, rpc, legacyServices, extraServices } = status;
+  const { service, rpc, extraServices } = status;
   const serviceStatus = service.loaded
     ? okText(service.loadedText)
     : warnText(service.notLoadedText);
@@ -100,7 +100,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     }
     defaultRuntime.error(
       warnText(
-        `Recommendation: run "${formatCliCommand("moltbot doctor")}" (or "${formatCliCommand("moltbot doctor --repair")}").`,
+        `Recommendation: run "${formatCliCommand("openclaw doctor")}" (or "${formatCliCommand("openclaw doctor --repair")}").`,
       ),
     );
   }
@@ -111,7 +111,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     if (!status.config.cli.valid && status.config.cli.issues?.length) {
       for (const issue of status.config.cli.issues.slice(0, 5)) {
         defaultRuntime.error(
-          `${errorText("Config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
+          `${errorText("Config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
         );
       }
     }
@@ -121,7 +121,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
-            `${errorText("Service config issue:")} ${issue.path || "<root>"}: ${issue.message}`,
+            `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
@@ -134,7 +134,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       );
       defaultRuntime.error(
         errorText(
-          `Fix: rerun \`${formatCliCommand("moltbot gateway install --force")}\` from the same --profile / CLAWDBOT_STATE_DIR you expect.`,
+          `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`,
         ),
       );
     }
@@ -167,15 +167,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
 
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
-    const runtimeStatus = service.runtime?.status ?? "unknown";
-    const runtimeColor =
-      runtimeStatus === "running"
-        ? theme.success
-        : runtimeStatus === "stopped"
-          ? theme.error
-          : runtimeStatus === "unknown"
-            ? theme.muted
-            : theme.warn;
+    const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
@@ -189,7 +181,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
-      if (rpc.url) defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+      if (rpc.authWarning) {
+        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+      }
+      if (rpc.url) {
+        defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+      }
       const lines = String(rpc.error ?? "unknown")
         .split(/\r?\n/)
         .filter(Boolean);
@@ -197,6 +194,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         defaultRuntime.error(`  ${errorText(line)}`);
       }
     }
+    spacer();
+  }
+
+  if (
+    status.health &&
+    status.health.staleGatewayPids.length > 0 &&
+    service.runtime?.status === "running" &&
+    typeof service.runtime.pid === "number"
+  ) {
+    defaultRuntime.error(
+      errorText(
+        `Gateway runtime PID does not own the listening port. Other gateway process(es) are listening: ${status.health.staleGatewayPids.join(", ")}`,
+      ),
+    );
+    defaultRuntime.error(
+      errorText(
+        `Fix: run ${formatCliCommand("openclaw gateway restart")} and re-check with ${formatCliCommand("openclaw gateway status --deep")}.`,
+      ),
+    );
     spacer();
   }
 
@@ -221,7 +237,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
-      (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
+      service.command?.environment ?? process.env,
     )) {
       defaultRuntime.error(errorText(hint));
     }
@@ -229,15 +245,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
-    const labelValue = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+    const env = service.command?.environment ?? process.env;
+    const labelValue = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
     defaultRuntime.error(
       errorText(
         `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${labelValue}`,
       ),
     );
     defaultRuntime.error(
-      errorText(`Then reinstall: ${formatCliCommand("moltbot gateway install")}`),
+      errorText(`Then reinstall: ${formatCliCommand("openclaw gateway install")}`),
     );
     spacer();
   }
@@ -272,27 +288,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
-      const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
+      const env = service.command?.environment ?? process.env;
+      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(
-        (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
-      );
+      const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
     }
-    spacer();
-  }
-
-  if (legacyServices.length > 0) {
-    defaultRuntime.error(errorText("Legacy gateway services detected:"));
-    for (const svc of legacyServices) {
-      defaultRuntime.error(`- ${errorText(svc.label)} (${svc.detail})`);
-    }
-    defaultRuntime.error(errorText(`Cleanup: ${formatCliCommand("moltbot doctor")}`));
     spacer();
   }
 
@@ -307,7 +312,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  if (legacyServices.length > 0 || extraServices.length > 0) {
+  if (extraServices.length > 0) {
     defaultRuntime.error(
       errorText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",
@@ -321,6 +326,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("moltbot status")}`);
-  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.molt.bot/troubleshooting`);
+  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
+  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
 }

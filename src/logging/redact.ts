@@ -1,8 +1,9 @@
-import { createRequire } from "node:module";
+import type { OpenClawConfig } from "../config/config.js";
+import { compileConfigRegex } from "../security/config-regex.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { replacePatternBounded } from "./redact-bounded.js";
 
-import type { MoltbotConfig } from "../config/config.js";
-
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -33,6 +34,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
   String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
+  // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
+  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
@@ -46,17 +49,15 @@ function normalizeMode(value?: string): RedactSensitiveMode {
 }
 
 function parsePattern(raw: string): RegExp | null {
-  if (!raw.trim()) return null;
-  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-  try {
-    if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
-    }
-    return new RegExp(raw, "gi");
-  } catch {
+  if (!raw.trim()) {
     return null;
   }
+  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (match) {
+    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+    return compileConfigRegex(match[1], flags)?.regex ?? null;
+  }
+  return compileConfigRegex(raw, "gi")?.regex ?? null;
 }
 
 function resolvePatterns(value?: string[]): RegExp[] {
@@ -65,7 +66,9 @@ function resolvePatterns(value?: string[]): RegExp[] {
 }
 
 function maskToken(token: string): string {
-  if (token.length < DEFAULT_REDACT_MIN_LENGTH) return "***";
+  if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
+    return "***";
+  }
   const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
   const end = token.slice(-DEFAULT_REDACT_KEEP_END);
   return `${start}…${end}`;
@@ -73,23 +76,29 @@ function maskToken(token: string): string {
 
 function redactPemBlock(block: string): string {
   const lines = block.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return "***";
+  if (lines.length < 2) {
+    return "***";
+  }
   return `${lines[0]}\n…redacted…\n${lines[lines.length - 1]}`;
 }
 
 function redactMatch(match: string, groups: string[]): string {
-  if (match.includes("PRIVATE KEY-----")) return redactPemBlock(match);
+  if (match.includes("PRIVATE KEY-----")) {
+    return redactPemBlock(match);
+  }
   const token =
     groups.filter((value) => typeof value === "string" && value.length > 0).at(-1) ?? match;
   const masked = maskToken(token);
-  if (token === match) return masked;
+  if (token === match) {
+    return masked;
+  }
   return match.replace(token, masked);
 }
 
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = next.replace(pattern, (...args: string[]) =>
+    next = replacePatternBounded(next, pattern, (...args: string[]) =>
       redactMatch(args[0], args.slice(1, args.length - 2)),
     );
   }
@@ -97,12 +106,14 @@ function redactText(text: string, patterns: RegExp[]): string {
 }
 
 function resolveConfigRedaction(): RedactOptions {
-  let cfg: MoltbotConfig["logging"] | undefined;
+  let cfg: OpenClawConfig["logging"] | undefined;
   try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => MoltbotConfig;
-    };
-    cfg = loaded.loadConfig?.().logging;
+    const loaded = requireConfig?.("../config/config.js") as
+      | {
+          loadConfig?: () => OpenClawConfig;
+        }
+      | undefined;
+    cfg = loaded?.loadConfig?.().logging;
   } catch {
     cfg = undefined;
   }
@@ -113,17 +124,25 @@ function resolveConfigRedaction(): RedactOptions {
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
   const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") return text;
+  if (normalizeMode(resolved.mode) === "off") {
+    return text;
+  }
   const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) return text;
+  if (!patterns.length) {
+    return text;
+  }
   return redactText(text, patterns);
 }
 
 export function redactToolDetail(detail: string): string {
   const resolved = resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) !== "tools") return detail;
+  if (normalizeMode(resolved.mode) !== "tools") {
+    return detail;
+  }
   return redactSensitiveText(detail, resolved);
 }
 

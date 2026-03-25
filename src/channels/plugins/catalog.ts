@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-
-import { LEGACY_MANIFEST_KEY } from "../../compat/legacy-names.js";
-import { discoverMoltbotPlugins } from "../../plugins/discovery.js";
+import { MANIFEST_KEY } from "../../compat/legacy-names.js";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { resolveBundledPluginsDir } from "../../plugins/bundled-dir.js";
+import { discoverOpenClawPlugins } from "../../plugins/discovery.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
+import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
+import type { PackageManifest as PluginPackageManifest } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/types.js";
-import type { MoltbotPackageManifest } from "../../plugins/manifest.js";
-import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import type { ChannelMeta } from "./types.js";
 
 export type ChannelUiMetaEntry = {
@@ -26,6 +29,7 @@ export type ChannelUiCatalog = {
 
 export type ChannelPluginCatalogEntry = {
   id: string;
+  pluginId?: string;
   meta: ChannelMeta;
   install: {
     npmSpec: string;
@@ -37,6 +41,8 @@ export type ChannelPluginCatalogEntry = {
 type CatalogOptions = {
   workspaceDir?: string;
   catalogPaths?: string[];
+  officialCatalogPaths?: string[];
+  env?: NodeJS.ProcessEnv;
 };
 
 const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
@@ -46,39 +52,39 @@ const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
   bundled: 3,
 };
 
+const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
+const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
+
 type ExternalCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
-  moltbot?: MoltbotPackageManifest;
-  [LEGACY_MANIFEST_KEY]?: MoltbotPackageManifest;
-};
+} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
 
-const DEFAULT_CATALOG_PATHS = [
-  path.join(CONFIG_DIR, "mpm", "plugins.json"),
-  path.join(CONFIG_DIR, "mpm", "catalog.json"),
-  path.join(CONFIG_DIR, "plugins", "catalog.json"),
-];
+const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
+const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
 
-const ENV_CATALOG_PATHS = ["CLAWDBOT_PLUGIN_CATALOG_PATHS", "CLAWDBOT_MPM_CATALOG_PATHS"];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+type ManifestKey = typeof MANIFEST_KEY;
 
 function parseCatalogEntries(raw: unknown): ExternalCatalogEntry[] {
   if (Array.isArray(raw)) {
     return raw.filter((entry): entry is ExternalCatalogEntry => isRecord(entry));
   }
-  if (!isRecord(raw)) return [];
+  if (!isRecord(raw)) {
+    return [];
+  }
   const list = raw.entries ?? raw.packages ?? raw.plugins;
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    return [];
+  }
   return list.filter((entry): entry is ExternalCatalogEntry => isRecord(entry));
 }
 
 function splitEnvPaths(value: string): string[] {
   const trimmed = value.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   return trimmed
     .split(/[;,]/g)
     .flatMap((chunk) => chunk.split(path.delimiter))
@@ -86,27 +92,44 @@ function splitEnvPaths(value: string): string[] {
     .filter(Boolean);
 }
 
+function resolveDefaultCatalogPaths(env: NodeJS.ProcessEnv): string[] {
+  const configDir = resolveConfigDir(env);
+  return [
+    path.join(configDir, "mpm", "plugins.json"),
+    path.join(configDir, "mpm", "catalog.json"),
+    path.join(configDir, "plugins", "catalog.json"),
+  ];
+}
+
 function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
   if (options.catalogPaths && options.catalogPaths.length > 0) {
     return options.catalogPaths.map((entry) => entry.trim()).filter(Boolean);
   }
+  const env = options.env ?? process.env;
   for (const key of ENV_CATALOG_PATHS) {
-    const raw = process.env[key];
+    const raw = env[key];
     if (raw && raw.trim()) {
       return splitEnvPaths(raw);
     }
   }
-  return DEFAULT_CATALOG_PATHS;
+  return resolveDefaultCatalogPaths(env);
 }
 
 function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEntry[] {
-  const paths = resolveExternalCatalogPaths(options);
+  const paths = resolveExternalCatalogPaths(options).map((rawPath) =>
+    resolveUserPath(rawPath, options.env ?? process.env),
+  );
+  return loadCatalogEntriesFromPaths(paths);
+}
+
+function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
   const entries: ExternalCatalogEntry[] = [];
-  for (const rawPath of paths) {
-    const resolved = resolveUserPath(rawPath);
-    if (!fs.existsSync(resolved)) continue;
+  for (const resolvedPath of paths) {
+    if (!fs.existsSync(resolvedPath)) {
+      continue;
+    }
     try {
-      const payload = JSON.parse(fs.readFileSync(resolved, "utf-8")) as unknown;
+      const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as unknown;
       entries.push(...parseCatalogEntries(payload));
     } catch {
       // Ignore invalid catalog files.
@@ -115,12 +138,43 @@ function loadExternalCatalogEntries(options: CatalogOptions): ExternalCatalogEnt
   return entries;
 }
 
+function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
+  if (options.officialCatalogPaths && options.officialCatalogPaths.length > 0) {
+    return options.officialCatalogPaths.map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  const packageRoots = [
+    resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+  ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
+
+  const candidates = packageRoots.map((packageRoot) =>
+    path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH),
+  );
+
+  if (process.execPath) {
+    const execDir = path.dirname(process.execPath);
+    candidates.push(path.join(execDir, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH));
+    candidates.push(path.join(execDir, "channel-catalog.json"));
+  }
+
+  return candidates.filter((entry, index, all) => entry && all.indexOf(entry) === index);
+}
+
+function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
+  return loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options))
+    .map((entry) => buildExternalCatalogEntry(entry))
+    .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
+}
+
 function toChannelMeta(params: {
-  channel: NonNullable<MoltbotPackageManifest["channel"]>;
+  channel: NonNullable<OpenClawPackageManifest["channel"]>;
   id: string;
 }): ChannelMeta | null {
   const label = params.channel.label?.trim();
-  if (!label) return null;
+  if (!label) {
+    return null;
+  }
   const selectionLabel = params.channel.selectionLabel?.trim() || label;
   const detailLabel = params.channel.detailLabel?.trim();
   const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
@@ -164,13 +218,15 @@ function toChannelMeta(params: {
 }
 
 function resolveInstallInfo(params: {
-  manifest: MoltbotPackageManifest;
+  manifest: OpenClawPackageManifest;
   packageName?: string;
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
   const npmSpec = params.manifest.install?.npmSpec?.trim() ?? params.packageName?.trim();
-  if (!npmSpec) return null;
+  if (!npmSpec) {
+    return null;
+  }
   let localPath = params.manifest.install?.localPath?.trim() || undefined;
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
@@ -183,34 +239,109 @@ function resolveInstallInfo(params: {
   };
 }
 
+function resolveCatalogPluginId(params: {
+  packageDir?: string;
+  rootDir?: string;
+  origin?: PluginOrigin;
+}): string | undefined {
+  const manifestDir = params.packageDir ?? params.rootDir;
+  if (manifestDir) {
+    const manifest = loadPluginManifest(manifestDir, params.origin !== "bundled");
+    if (manifest.ok) {
+      return manifest.manifest.id;
+    }
+  }
+  return undefined;
+}
+
 function buildCatalogEntry(candidate: {
   packageName?: string;
   packageDir?: string;
+  rootDir?: string;
+  origin?: PluginOrigin;
   workspaceDir?: string;
-  packageMoltbot?: MoltbotPackageManifest;
+  packageManifest?: OpenClawPackageManifest;
 }): ChannelPluginCatalogEntry | null {
-  const manifest = candidate.packageMoltbot;
-  if (!manifest?.channel) return null;
+  const manifest = candidate.packageManifest;
+  if (!manifest?.channel) {
+    return null;
+  }
   const id = manifest.channel.id?.trim();
-  if (!id) return null;
+  if (!id) {
+    return null;
+  }
   const meta = toChannelMeta({ channel: manifest.channel, id });
-  if (!meta) return null;
+  if (!meta) {
+    return null;
+  }
   const install = resolveInstallInfo({
     manifest,
     packageName: candidate.packageName,
     packageDir: candidate.packageDir,
     workspaceDir: candidate.workspaceDir,
   });
-  if (!install) return null;
-  return { id, meta, install };
+  if (!install) {
+    return null;
+  }
+  const pluginId = resolveCatalogPluginId({
+    packageDir: candidate.packageDir,
+    rootDir: candidate.rootDir,
+    origin: candidate.origin,
+  });
+  return {
+    id,
+    ...(pluginId ? { pluginId } : {}),
+    meta,
+    install,
+  };
 }
 
 function buildExternalCatalogEntry(entry: ExternalCatalogEntry): ChannelPluginCatalogEntry | null {
-  const manifest = entry.moltbot ?? entry[LEGACY_MANIFEST_KEY];
+  const manifest = entry[MANIFEST_KEY];
   return buildCatalogEntry({
     packageName: entry.name,
-    packageMoltbot: manifest,
+    packageManifest: manifest,
   });
+}
+
+function loadBundledMetadataCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
+  const bundledDir = resolveBundledPluginsDir(options.env ?? process.env);
+  if (!bundledDir || !fs.existsSync(bundledDir)) {
+    return [];
+  }
+
+  const entries: ChannelPluginCatalogEntry[] = [];
+  for (const dirent of fs.readdirSync(bundledDir, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) {
+      continue;
+    }
+    const pluginDir = path.join(bundledDir, dirent.name);
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    let packageJson: PluginPackageManifest;
+    try {
+      packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PluginPackageManifest;
+    } catch {
+      continue;
+    }
+
+    const entry = buildCatalogEntry({
+      packageName: packageJson.name,
+      packageDir: pluginDir,
+      rootDir: pluginDir,
+      origin: "bundled",
+      workspaceDir: options.workspaceDir,
+      packageManifest: packageJson.openclaw,
+    });
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+
+  return entries;
 }
 
 export function buildChannelUiCatalog(
@@ -244,13 +375,34 @@ export function buildChannelUiCatalog(
 export function listChannelPluginCatalogEntries(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry[] {
-  const discovery = discoverMoltbotPlugins({ workspaceDir: options.workspaceDir });
+  const discovery = discoverOpenClawPlugins({
+    workspaceDir: options.workspaceDir,
+    env: options.env,
+  });
   const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
 
   for (const candidate of discovery.candidates) {
     const entry = buildCatalogEntry(candidate);
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  for (const entry of loadBundledMetadataCatalogEntries(options)) {
+    const priority = FALLBACK_CATALOG_PRIORITY;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  for (const entry of loadOfficialCatalogEntries(options)) {
+    const priority = FALLBACK_CATALOG_PRIORITY;
     const existing = resolved.get(entry.id);
     if (!existing || priority < existing.priority) {
       resolved.set(entry.id, { entry, priority });
@@ -261,17 +413,23 @@ export function listChannelPluginCatalogEntries(
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
   for (const entry of externalEntries) {
-    if (!resolved.has(entry.id)) {
-      resolved.set(entry.id, { entry, priority: 99 });
+    // External catalogs are the supported override seam for shipped fallback
+    // metadata, but discovered plugins should still win when they are present.
+    const priority = EXTERNAL_CATALOG_PRIORITY;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
     }
   }
 
   return Array.from(resolved.values())
     .map(({ entry }) => entry)
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       const orderA = a.meta.order ?? 999;
       const orderB = b.meta.order ?? 999;
-      if (orderA !== orderB) return orderA - orderB;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
       return a.meta.label.localeCompare(b.meta.label);
     });
 }
@@ -281,6 +439,8 @@ export function getChannelPluginCatalogEntry(
   options: CatalogOptions = {},
 ): ChannelPluginCatalogEntry | undefined {
   const trimmed = id.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
 }

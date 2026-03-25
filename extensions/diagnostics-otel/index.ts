@@ -1,16 +1,11 @@
-import type { MoltbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createDiagnosticsOtelService } from "./src/service.js";
 
-const plugin = {
+export default definePluginEntry({
   id: "diagnostics-otel",
   name: "Diagnostics OpenTelemetry",
   description: "Export diagnostics events to OpenTelemetry",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: MoltbotPluginApi) {
+  register(api) {
     api.registerService(createDiagnosticsOtelService());
   },
-};
-
-export default plugin;
+});

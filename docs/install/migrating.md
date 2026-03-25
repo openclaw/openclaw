@@ -1,190 +1,110 @@
 ---
-summary: "Move (migrate) a Moltbot install from one machine to another"
+summary: "Move (migrate) an OpenClaw install from one machine to another"
 read_when:
-  - You are moving Moltbot to a new laptop/server
+  - You are moving OpenClaw to a new laptop/server
   - You want to preserve sessions, auth, and channel logins (WhatsApp, etc.)
+title: "Migration Guide"
 ---
-# Migrating Moltbot to a new machine
 
-This guide migrates a Moltbot Gateway from one machine to another **without redoing onboarding**.
+# Migrating OpenClaw to a New Machine
 
-The migration is simple conceptually:
+This guide moves an OpenClaw gateway to a new machine without redoing onboarding.
 
-- Copy the **state directory** (`$CLAWDBOT_STATE_DIR`, default: `~/.clawdbot/`) — this includes config, auth, sessions, and channel state.
-- Copy your **workspace** (`~/clawd/` by default) — this includes your agent files (memory, prompts, etc.).
+## What Gets Migrated
 
-But there are common footguns around **profiles**, **permissions**, and **partial copies**.
+When you copy the **state directory** (`~/.openclaw/` by default) and your **workspace**, you preserve:
 
-## Before you start (what you are migrating)
+- **Config** -- `openclaw.json` and all gateway settings
+- **Auth** -- API keys, OAuth tokens, credential profiles
+- **Sessions** -- conversation history and agent state
+- **Channel state** -- WhatsApp login, Telegram session, etc.
+- **Workspace files** -- `MEMORY.md`, `USER.md`, skills, and prompts
 
-### 1) Identify your state directory
+<Tip>
+Run `openclaw status` on the old machine to confirm your state directory path.
+Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_DIR`.
+</Tip>
 
-Most installs use the default:
+## Migration Steps
 
-- **State dir:** `~/.clawdbot/`
+<Steps>
+  <Step title="Stop the gateway and back up">
+    On the **old** machine, stop the gateway so files are not changing mid-copy, then archive:
 
-But it may be different if you use:
+    ```bash
+    openclaw gateway stop
+    cd ~
+    tar -czf openclaw-state.tgz .openclaw
+    ```
 
-- `--profile <name>` (often becomes `~/.clawdbot-<profile>/`)
-- `CLAWDBOT_STATE_DIR=/some/path`
+    If you use multiple profiles (e.g. `~/.openclaw-work`), archive each separately.
 
-If you’re not sure, run on the **old** machine:
+  </Step>
 
-```bash
-moltbot status
-```
+  <Step title="Install OpenClaw on the new machine">
+    [Install](/install) the CLI (and Node if needed) on the new machine.
+    It is fine if onboarding creates a fresh `~/.openclaw/` -- you will overwrite it next.
+  </Step>
 
-Look for mentions of `CLAWDBOT_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
+  <Step title="Copy state directory and workspace">
+    Transfer the archive via `scp`, `rsync -a`, or an external drive, then extract:
 
-### 2) Identify your workspace
+    ```bash
+    cd ~
+    tar -xzf openclaw-state.tgz
+    ```
 
-Common defaults:
+    Ensure hidden directories were included and file ownership matches the user that will run the gateway.
 
-- `~/clawd/` (recommended workspace)
-- a custom folder you created
+  </Step>
 
-Your workspace is where files like `MEMORY.md`, `USER.md`, and `memory/*.md` live.
+  <Step title="Run doctor and verify">
+    On the new machine, run [Doctor](/gateway/doctor) to apply config migrations and repair services:
 
-### 3) Understand what you will preserve
+    ```bash
+    openclaw doctor
+    openclaw gateway restart
+    openclaw status
+    ```
 
-If you copy **both** the state dir and workspace, you keep:
+  </Step>
+</Steps>
 
-- Gateway configuration (`moltbot.json`)
-- Auth profiles / API keys / OAuth tokens
-- Session history + agent state
-- Channel state (e.g. WhatsApp login/session)
-- Your workspace files (memory, skills notes, etc.)
+## Common Pitfalls
 
-If you copy **only** the workspace (e.g., via Git), you do **not** preserve:
+<AccordionGroup>
+  <Accordion title="Profile or state-dir mismatch">
+    If the old gateway used `--profile` or `OPENCLAW_STATE_DIR` and the new one does not,
+    channels will appear logged out and sessions will be empty.
+    Launch the gateway with the **same** profile or state-dir you migrated, then rerun `openclaw doctor`.
+  </Accordion>
 
-- sessions
-- credentials
-- channel logins
+  <Accordion title="Copying only openclaw.json">
+    The config file alone is not enough. Credentials live under `credentials/`, and agent
+    state lives under `agents/`. Always migrate the **entire** state directory.
+  </Accordion>
 
-Those live under `$CLAWDBOT_STATE_DIR`.
+  <Accordion title="Permissions and ownership">
+    If you copied as root or switched users, the gateway may fail to read credentials.
+    Ensure the state directory and workspace are owned by the user running the gateway.
+  </Accordion>
 
-## Migration steps (recommended)
+  <Accordion title="Remote mode">
+    If your UI points at a **remote** gateway, the remote host owns sessions and workspace.
+    Migrate the gateway host itself, not your local laptop. See [FAQ](/help/faq#where-does-openclaw-store-its-data).
+  </Accordion>
 
-### Step 0 — Make a backup (old machine)
+  <Accordion title="Secrets in backups">
+    The state directory contains API keys, OAuth tokens, and channel credentials.
+    Store backups encrypted, avoid insecure transfer channels, and rotate keys if you suspect exposure.
+  </Accordion>
+</AccordionGroup>
 
-On the **old** machine, stop the gateway first so files aren’t changing mid-copy:
-
-```bash
-moltbot gateway stop
-```
-
-(Optional but recommended) archive the state dir and workspace:
-
-```bash
-# Adjust paths if you use a profile or custom locations
-cd ~
-tar -czf moltbot-state.tgz .clawdbot
-
-tar -czf clawd-workspace.tgz clawd
-```
-
-If you have multiple profiles/state dirs (e.g. `~/.clawdbot-main`, `~/.clawdbot-work`), archive each.
-
-### Step 1 — Install Moltbot on the new machine
-
-On the **new** machine, install the CLI (and Node if needed):
-
-- See: [Install](/install)
-
-At this stage, it’s OK if onboarding creates a fresh `~/.clawdbot/` — you will overwrite it in the next step.
-
-### Step 2 — Copy the state dir + workspace to the new machine
-
-Copy **both**:
-
-- `$CLAWDBOT_STATE_DIR` (default `~/.clawdbot/`)
-- your workspace (default `~/clawd/`)
-
-Common approaches:
-
-- `scp` the tarballs and extract
-- `rsync -a` over SSH
-- external drive
-
-After copying, ensure:
-
-- Hidden directories were included (e.g. `.clawdbot/`)
-- File ownership is correct for the user running the gateway
-
-### Step 3 — Run Doctor (migrations + service repair)
-
-On the **new** machine:
-
-```bash
-moltbot doctor
-```
-
-Doctor is the “safe boring” command. It repairs services, applies config migrations, and warns about mismatches.
-
-Then:
-
-```bash
-moltbot gateway restart
-moltbot status
-```
-
-## Common footguns (and how to avoid them)
-
-### Footgun: profile / state-dir mismatch
-
-If you ran the old gateway with a profile (or `CLAWDBOT_STATE_DIR`), and the new gateway uses a different one, you’ll see symptoms like:
-
-- config changes not taking effect
-- channels missing / logged out
-- empty session history
-
-Fix: run the gateway/service using the **same** profile/state dir you migrated, then rerun:
-
-```bash
-moltbot doctor
-```
-
-### Footgun: copying only `moltbot.json`
-
-`moltbot.json` is not enough. Many providers store state under:
-
-- `$CLAWDBOT_STATE_DIR/credentials/`
-- `$CLAWDBOT_STATE_DIR/agents/<agentId>/...`
-
-Always migrate the entire `$CLAWDBOT_STATE_DIR` folder.
-
-### Footgun: permissions / ownership
-
-If you copied as root or changed users, the gateway may fail to read credentials/sessions.
-
-Fix: ensure the state dir + workspace are owned by the user running the gateway.
-
-### Footgun: migrating between remote/local modes
-
-- If your UI (WebUI/TUI) points at a **remote** gateway, the remote host owns the session store + workspace.
-- Migrating your laptop won’t move the remote gateway’s state.
-
-If you’re in remote mode, migrate the **gateway host**.
-
-### Footgun: secrets in backups
-
-`$CLAWDBOT_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
-
-- store encrypted
-- avoid sharing over insecure channels
-- rotate keys if you suspect exposure
-
-## Verification checklist
+## Verification Checklist
 
 On the new machine, confirm:
 
-- `moltbot status` shows the gateway running
-- Your channels are still connected (e.g. WhatsApp doesn’t require re-pair)
-- The dashboard opens and shows existing sessions
-- Your workspace files (memory, configs) are present
-
-## Related
-
-- [Doctor](/gateway/doctor)
-- [Gateway troubleshooting](/gateway/troubleshooting)
-- [Where does Moltbot store its data?](/help/faq#where-does-moltbot-store-its-data)
+- [ ] `openclaw status` shows the gateway running
+- [ ] Channels are still connected (no re-pairing needed)
+- [ ] The dashboard opens and shows existing sessions
+- [ ] Workspace files (memory, configs) are present

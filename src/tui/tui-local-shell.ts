@@ -1,5 +1,5 @@
-import type { Component, SelectItem } from "@mariozechner/pi-tui";
 import { spawn } from "node:child_process";
+import type { Component, SelectItem } from "@mariozechner/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -34,8 +34,12 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   const maxChars = deps.maxOutputChars ?? 40_000;
 
   const ensureLocalExecAllowed = async (): Promise<boolean> => {
-    if (localExecAllowed) return true;
-    if (localExecAsked) return false;
+    if (localExecAllowed) {
+      return true;
+    }
+    if (localExecAsked) {
+      return false;
+    }
     localExecAsked = true;
 
     return await new Promise<boolean>((resolve) => {
@@ -78,7 +82,9 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     const cmd = line.slice(1);
     // NOTE: A lone '!' is handled by the submit handler as a normal message.
     // Keep this guard anyway in case this is called directly.
-    if (cmd === "") return;
+    if (cmd === "") {
+      return;
+    }
 
     if (localExecAsked && !localExecAllowed) {
       deps.chatLog.addSystem("local shell: not enabled for this session");
@@ -87,25 +93,34 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
     }
 
     const allowed = await ensureLocalExecAllowed();
-    if (!allowed) return;
+    if (!allowed) {
+      return;
+    }
 
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
+    const appendWithCap = (text: string, chunk: string) => {
+      const combined = text + chunk;
+      return combined.length > maxChars ? combined.slice(-maxChars) : combined;
+    };
+
     await new Promise<void>((resolve) => {
       const child = spawnCommand(cmd, {
+        // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
+        // and is gated behind an explicit in-session approval prompt.
         shell: true,
         cwd: getCwd(),
-        env,
+        env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });
 
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (buf) => {
-        stdout += buf.toString("utf8");
+        stdout = appendWithCap(stdout, buf.toString("utf8"));
       });
       child.stderr.on("data", (buf) => {
-        stderr += buf.toString("utf8");
+        stderr = appendWithCap(stderr, buf.toString("utf8"));
       });
 
       child.on("close", (code, signal) => {

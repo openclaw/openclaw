@@ -1,4 +1,9 @@
-import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
+import {
+  buildImageResizeSideGrid,
+  getImageMetadata,
+  IMAGE_REDUCE_QUALITY_STEPS,
+  resizeToJpeg,
+} from "../media/image-ops.js";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
@@ -22,17 +27,13 @@ export async function normalizeBrowserScreenshot(
     return { buffer };
   }
 
-  const qualities = [85, 75, 65, 55, 45, 35];
   const sideStart = maxDim > 0 ? Math.min(maxSide, maxDim) : maxSide;
-  const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
-    .map((v) => Math.min(maxSide, v))
-    .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
-    .sort((a, b) => b - a);
+  const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
 
   for (const side of sideGrid) {
-    for (const quality of qualities) {
+    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
       const out = await resizeToJpeg({
         buffer,
         maxSide: side,

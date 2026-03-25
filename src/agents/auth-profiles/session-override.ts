@@ -1,11 +1,18 @@
-import type { MoltbotConfig } from "../../config/config.js";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { normalizeProviderId } from "../model-selection.js";
-import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
-  resolveAuthProfileOrder,
-} from "../auth-profiles.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 function isProfileForProvider(params: {
   provider: string;
@@ -13,7 +20,9 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (!entry?.provider) return false;
+  if (!entry?.provider) {
+    return false;
+  }
   return normalizeProviderId(entry.provider) === normalizeProviderId(params.provider);
 }
 
@@ -30,14 +39,16 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionEntry.updatedAt = Date.now();
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
+    await (
+      await loadSessionStoreRuntime()
+    ).updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
     });
   }
 }
 
 export async function resolveSessionAuthProfileOverride(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   provider: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
@@ -56,7 +67,9 @@ export async function resolveSessionAuthProfileOverride(params: {
     storePath,
     isNewSession,
   } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey) return sessionEntry?.authProfileOverride;
+  if (!sessionEntry || !sessionStore || !sessionKey) {
+    return sessionEntry?.authProfileOverride;
+  }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const order = resolveAuthProfileOrder({ cfg, store, provider });
@@ -77,16 +90,22 @@ export async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  if (order.length === 0) return undefined;
+  if (order.length === 0) {
+    return undefined;
+  }
 
   const pickFirstAvailable = () =>
     order.find((profileId) => !isProfileInCooldown(store, profileId)) ?? order[0];
   const pickNextAvailable = (active: string) => {
     const startIndex = order.indexOf(active);
-    if (startIndex < 0) return pickFirstAvailable();
+    if (startIndex < 0) {
+      return pickFirstAvailable();
+    }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) return candidate;
+      if (!isProfileInCooldown(store, candidate)) {
+        return candidate;
+      }
     }
     return order[startIndex] ?? order[0];
   };
@@ -117,7 +136,9 @@ export async function resolveSessionAuthProfileOverride(params: {
     next = pickFirstAvailable();
   }
 
-  if (!next) return current;
+  if (!next) {
+    return current;
+  }
   const shouldPersist =
     next !== sessionEntry.authProfileOverride ||
     sessionEntry.authProfileOverrideSource !== "auto" ||
@@ -129,7 +150,9 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await updateSessionStore(storePath, (store) => {
+      await (
+        await loadSessionStoreRuntime()
+      ).updateSessionStore(storePath, (store) => {
         store[sessionKey] = sessionEntry;
       });
     }

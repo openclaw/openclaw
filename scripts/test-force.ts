@@ -1,10 +1,9 @@
 #!/usr/bin/env -S node --import tsx
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { forceFreePort, type PortProcess } from "../src/cli/ports.js";
-
-const DEFAULT_PORT = 18789;
+import { resolveGatewayPort } from "../src/config/config.js";
 
 function killGatewayListeners(port: number): PortProcess[] {
   try {
@@ -27,13 +26,13 @@ function killGatewayListeners(port: number): PortProcess[] {
 
 function runTests() {
   const isolatedLock =
-    process.env.CLAWDBOT_GATEWAY_LOCK ??
-    path.join(os.tmpdir(), `moltbot-gateway.lock.test.${Date.now()}`);
+    process.env.OPENCLAW_GATEWAY_LOCK ??
+    path.join(os.tmpdir(), `openclaw-gateway.lock.test.${Date.now()}`);
   const result = spawnSync("pnpm", ["vitest", "run"], {
     stdio: "inherit",
     env: {
       ...process.env,
-      CLAWDBOT_GATEWAY_LOCK: isolatedLock,
+      OPENCLAW_GATEWAY_LOCK: isolatedLock,
     },
   });
   if (result.error) {
@@ -44,10 +43,7 @@ function runTests() {
 }
 
 function main() {
-  const port = Number.parseInt(
-    process.env.CLAWDBOT_GATEWAY_PORT ?? `${DEFAULT_PORT}`,
-    10,
-  );
+  const port = resolveGatewayPort(undefined, process.env);
 
   console.log(`🧹 test:force - clearing gateway on port ${port}`);
   const killed = killGatewayListeners(port);

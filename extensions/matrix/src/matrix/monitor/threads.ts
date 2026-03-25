@@ -1,25 +1,5 @@
-// Type for raw Matrix event from @vector-im/matrix-bot-sdk
-type MatrixRawEvent = {
-  event_id: string;
-  sender: string;
-  type: string;
-  origin_server_ts: number;
-  content: Record<string, unknown>;
-};
-
-type RoomMessageEventContent = {
-  msgtype: string;
-  body: string;
-  "m.relates_to"?: {
-    rel_type?: string;
-    event_id?: string;
-    "m.in_reply_to"?: { event_id?: string };
-  };
-};
-
-const RelationType = {
-  Thread: "m.thread",
-} as const;
+import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import { RelationType } from "./types.js";
 
 export function resolveMatrixThreadTarget(params: {
   threadReplies: "off" | "inbound" | "always";
@@ -28,7 +8,9 @@ export function resolveMatrixThreadTarget(params: {
   isThreadRoot?: boolean;
 }): string | undefined {
   const { threadReplies, messageId, threadRootId } = params;
-  if (threadReplies === "off") return undefined;
+  if (threadReplies === "off") {
+    return undefined;
+  }
   const isThreadRoot = params.isThreadRoot === true;
   const hasInboundThread = Boolean(threadRootId && threadRootId !== messageId && !isThreadRoot);
   if (threadReplies === "inbound") {
@@ -45,7 +27,9 @@ export function resolveMatrixThreadRootId(params: {
   content: RoomMessageEventContent;
 }): string | undefined {
   const relates = params.content["m.relates_to"];
-  if (!relates || typeof relates !== "object") return undefined;
+  if (!relates || typeof relates !== "object") {
+    return undefined;
+  }
   if ("rel_type" in relates && relates.rel_type === RelationType.Thread) {
     if ("event_id" in relates && typeof relates.event_id === "string") {
       return relates.event_id;

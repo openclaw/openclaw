@@ -1,12 +1,31 @@
 {
-  "name": "@moltbot/tlon",
-  "version": "2026.1.29",
+  "name": "@openclaw/tlon",
+  "version": "2026.3.22",
+  "description": "OpenClaw Tlon/Urbit channel plugin",
   "type": "module",
-  "description": "Moltbot Tlon/Urbit channel plugin",
-  "moltbot": {
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1014.0",
+    "@aws-sdk/s3-request-presigner": "3.1014.0",
+    "@tloncorp/tlon-skill": "0.3.0",
+    "@urbit/aura": "^3.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.22"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "tlon",
       "label": "Tlon",
@@ -18,13 +37,10 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/tlon",
+      "npmSpec": "@openclaw/tlon",
       "localPath": "extensions/tlon",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.22"
     }
-  },
-  "dependencies": {
-    "@urbit/aura": "^3.0.0",
-    "@urbit/http-api": "^3.0.0"
   }
 }

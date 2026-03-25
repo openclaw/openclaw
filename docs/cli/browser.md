@@ -1,18 +1,19 @@
 ---
-summary: "CLI reference for `moltbot browser` (profiles, tabs, actions, extension relay)"
+summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, Chrome MCP, and CDP)"
 read_when:
-  - You use `moltbot browser` and want examples for common tasks
+  - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
-  - You want to use the Chrome extension relay (attach/detach via toolbar button)
+  - You want to attach to your local signed-in Chrome via Chrome MCP
+title: "browser"
 ---
 
-# `moltbot browser`
+# `openclaw browser`
 
-Manage Moltbot’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
+Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
 
 Related:
+
 - Browser tool + API: [Browser tool](/tools/browser)
-- Chrome extension relay: [Chrome extension](/tools/chrome-extension)
 
 ## Common flags
 
@@ -25,37 +26,40 @@ Related:
 ## Quick start (local)
 
 ```bash
-moltbot browser --browser-profile chrome tabs
-moltbot browser --browser-profile clawd start
-moltbot browser --browser-profile clawd open https://example.com
-moltbot browser --browser-profile clawd snapshot
+openclaw browser profiles
+openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw open https://example.com
+openclaw browser --browser-profile openclaw snapshot
 ```
 
 ## Profiles
 
 Profiles are named browser routing configs. In practice:
-- `clawd`: launches/attaches to a dedicated Moltbot-managed Chrome instance (isolated user data dir).
-- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
+
+- `openclaw`: launches or attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
+- `user`: controls your existing signed-in Chrome session via Chrome DevTools MCP.
+- custom CDP profiles: point at a local or remote CDP endpoint.
 
 ```bash
-moltbot browser profiles
-moltbot browser create-profile --name work --color "#FF5A36"
-moltbot browser delete-profile --name work
+openclaw browser profiles
+openclaw browser create-profile --name work --color "#FF5A36"
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser delete-profile --name work
 ```
 
 Use a specific profile:
 
 ```bash
-moltbot browser --browser-profile work tabs
+openclaw browser --browser-profile work tabs
 ```
 
 ## Tabs
 
 ```bash
-moltbot browser tabs
-moltbot browser open https://docs.molt.bot
-moltbot browser focus <targetId>
-moltbot browser close <targetId>
+openclaw browser tabs
+openclaw browser open https://docs.openclaw.ai
+openclaw browser focus <targetId>
+openclaw browser close <targetId>
 ```
 
 ## Snapshot / screenshot / actions
@@ -63,37 +67,35 @@ moltbot browser close <targetId>
 Snapshot:
 
 ```bash
-moltbot browser snapshot
+openclaw browser snapshot
 ```
 
 Screenshot:
 
 ```bash
-moltbot browser screenshot
+openclaw browser screenshot
 ```
 
 Navigate/click/type (ref-based UI automation):
 
 ```bash
-moltbot browser navigate https://example.com
-moltbot browser click <ref>
-moltbot browser type <ref> "hello"
+openclaw browser navigate https://example.com
+openclaw browser click <ref>
+openclaw browser type <ref> "hello"
 ```
 
-## Chrome extension relay (attach via toolbar button)
+## Existing Chrome via MCP
 
-This mode lets the agent control an existing Chrome tab that you attach manually (it does not auto-attach).
-
-Install the unpacked extension to a stable path:
+Use the built-in `user` profile, or create your own `existing-session` profile:
 
 ```bash
-moltbot browser extension install
-moltbot browser extension path
+openclaw browser --browser-profile user tabs
+openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+openclaw browser --browser-profile chrome-live tabs
 ```
 
-Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → select the printed folder.
-
-Full guide: [Chrome extension](/tools/chrome-extension)
+This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 
 ## Remote browser control (node host proxy)
 

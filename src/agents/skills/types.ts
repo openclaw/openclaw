@@ -16,7 +16,7 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
-export type MoltbotSkillMetadata = {
+export type OpenClawSkillMetadata = {
   always?: boolean;
   skillKey?: string;
   primaryEnv?: string;
@@ -54,6 +54,10 @@ export type SkillCommandSpec = {
   description: string;
   /** Optional deterministic dispatch behavior for this command. */
   dispatch?: SkillCommandDispatchSpec;
+  /** Native prompt template used by Claude-bundle command markdown files. */
+  promptTemplate?: string;
+  /** Source markdown path for bundle-backed commands. */
+  sourceFilePath?: string;
 };
 
 export type SkillsInstallPreferences = {
@@ -66,7 +70,7 @@ export type ParsedSkillFrontmatter = Record<string, string>;
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
-  metadata?: MoltbotSkillMetadata;
+  metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
 };
 
@@ -81,7 +85,9 @@ export type SkillEligibilityContext = {
 
 export type SkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string }>;
+  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
+  /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
+  skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
 };

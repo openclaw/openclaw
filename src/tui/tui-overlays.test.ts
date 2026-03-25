@@ -1,6 +1,5 @@
 import type { Component } from "@mariozechner/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-
 import { createOverlayHandlers } from "./tui-overlays.js";
 
 class DummyComponent implements Component {
@@ -31,7 +30,10 @@ describe("createOverlayHandlers", () => {
       setFocus,
     };
 
-    const { openOverlay, closeOverlay } = createOverlayHandlers(host, new DummyComponent());
+    const { openOverlay, closeOverlay } = createOverlayHandlers(
+      host as unknown as Parameters<typeof createOverlayHandlers>[0],
+      new DummyComponent(),
+    );
     const overlay = new DummyComponent();
 
     openOverlay(overlay);

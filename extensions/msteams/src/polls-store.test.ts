@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import { createMSTeamsPollStoreFs } from "./polls.js";
 import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
+import { createMSTeamsPollStoreFs } from "./polls.js";
 
 const createFsStore = async () => {
-  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "moltbot-msteams-polls-"));
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
   return createMSTeamsPollStoreFs({ stateDir });
 };
 
@@ -35,6 +33,9 @@ describe.each([
       selections: ["0", "1"],
     });
 
-    expect(poll?.votes["user-1"]).toEqual(["0"]);
+    if (!poll) {
+      throw new Error("poll store did not return the updated poll");
+    }
+    expect(poll.votes["user-1"]).toEqual(["0"]);
   });
 });

@@ -1,9 +1,11 @@
-import MoltbotChatUI
-import MoltbotKit
-import MoltbotProtocol
+import OpenClawChatUI
+import OpenClawKit
+import OpenClawProtocol
 import Foundation
+import OSLog
 
-struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
+struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "ios.chat.transport")
     private let gateway: GatewayNodeSession
 
     init(gateway: GatewayNodeSession) {
@@ -20,7 +22,7 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
         _ = try await self.gateway.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 10)
     }
 
-    func listSessions(limit: Int?) async throws -> MoltbotChatSessionsListResponse {
+    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
         struct Params: Codable {
             var includeGlobal: Bool
             var includeUnknown: Bool
@@ -29,22 +31,34 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
         let data = try JSONEncoder().encode(Params(includeGlobal: true, includeUnknown: false, limit: limit))
         let json = String(data: data, encoding: .utf8)
         let res = try await self.gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
-        return try JSONDecoder().decode(MoltbotChatSessionsListResponse.self, from: res)
+        return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {
-        struct Subscribe: Codable { var sessionKey: String }
-        let data = try JSONEncoder().encode(Subscribe(sessionKey: sessionKey))
-        let json = String(data: data, encoding: .utf8)
-        await self.gateway.sendEvent(event: "chat.subscribe", payloadJSON: json)
+        // Operator clients receive chat events without node-style subscriptions.
+        // (chat.subscribe is a node event, not an operator RPC method.)
     }
 
-    func requestHistory(sessionKey: String) async throws -> MoltbotChatHistoryPayload {
+    func resetSession(sessionKey: String) async throws {
+        struct Params: Codable { var key: String }
+        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.reset", paramsJSON: json, timeoutSeconds: 10)
+    }
+
+    func compactSession(sessionKey: String) async throws {
+        struct Params: Codable { var key: String }
+        let data = try JSONEncoder().encode(Params(key: sessionKey))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.gateway.request(method: "sessions.compact", paramsJSON: json, timeoutSeconds: 10)
+    }
+
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         struct Params: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Params(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
         let res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
-        return try JSONDecoder().decode(MoltbotChatHistoryPayload.self, from: res)
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
     }
 
     func sendMessage(
@@ -52,13 +66,19 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
         message: String,
         thinking: String,
         idempotencyKey: String,
-        attachments: [MoltbotChatAttachmentPayload]) async throws -> MoltbotChatSendResponse
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
+        let startLogMessage =
+            "chat.send start sessionKey=\(sessionKey) "
+            + "len=\(message.count) attachments=\(attachments.count)"
+        Self.logger.info(
+            "\(startLogMessage, privacy: .public)"
+        )
         struct Params: Codable {
             var sessionKey: String
             var message: String
             var thinking: String
-            var attachments: [MoltbotChatAttachmentPayload]?
+            var attachments: [OpenClawChatAttachmentPayload]?
             var timeoutMs: Int
             var idempotencyKey: String
         }
@@ -72,17 +92,24 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
             idempotencyKey: idempotencyKey)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
-        let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
-        return try JSONDecoder().decode(MoltbotChatSendResponse.self, from: res)
+        do {
+            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
+            let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
+            Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
+            return decoded
+        } catch {
+            Self.logger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         let seconds = max(1, Int(ceil(Double(timeoutMs) / 1000.0)))
         let res = try await self.gateway.request(method: "health", paramsJSON: nil, timeoutSeconds: seconds)
-        return (try? JSONDecoder().decode(MoltbotGatewayHealthOK.self, from: res))?.ok ?? true
+        return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 
-    func events() -> AsyncStream<MoltbotChatTransportEvent> {
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
                 let stream = await self.gateway.subscribeServerEvents()
@@ -97,13 +124,13 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
                         guard let payload = evt.payload else { break }
                         let ok = (try? GatewayPayloadDecoding.decode(
                             payload,
-                            as: MoltbotGatewayHealthOK.self))?.ok ?? true
+                            as: OpenClawGatewayHealthOK.self))?.ok ?? true
                         continuation.yield(.health(ok: ok))
                     case "chat":
                         guard let payload = evt.payload else { break }
                         if let chatPayload = try? GatewayPayloadDecoding.decode(
                             payload,
-                            as: MoltbotChatEventPayload.self)
+                            as: OpenClawChatEventPayload.self)
                         {
                             continuation.yield(.chat(chatPayload))
                         }
@@ -111,7 +138,7 @@ struct IOSGatewayChatTransport: MoltbotChatTransport, Sendable {
                         guard let payload = evt.payload else { break }
                         if let agentPayload = try? GatewayPayloadDecoding.decode(
                             payload,
-                            as: MoltbotAgentEventPayload.self)
+                            as: OpenClawAgentEventPayload.self)
                         {
                             continuation.yield(.agent(agentPayload))
                         }

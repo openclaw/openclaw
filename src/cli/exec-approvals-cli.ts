@@ -1,19 +1,19 @@
 import fs from "node:fs/promises";
-import JSON5 from "json5";
 import type { Command } from "commander";
-
+import JSON5 from "json5";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { renderTable } from "../terminal/table.js";
-import { callGatewayFromCli } from "./gateway-rpc.js";
 import { describeUnknownError } from "./gateway-cli/shared.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 
@@ -32,17 +32,6 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   agent?: string;
 };
 
-function formatAge(msAgo: number) {
-  const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  return `${d}d`;
-}
-
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -52,9 +41,13 @@ async function readStdin(): Promise<string> {
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
-  if (opts.gateway) return null;
+  if (opts.gateway) {
+    return null;
+  }
   const raw = opts.node?.trim() ?? "";
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   return await resolveNodeId(opts as NodesRpcOpts, raw);
 }
 
@@ -96,6 +89,59 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   return { snapshot, nodeId, source: nodeId ? "node" : "gateway" };
 }
 
+function exitWithError(message: string): never {
+  defaultRuntime.error(message);
+  defaultRuntime.exit(1);
+  throw new Error(message);
+}
+
+function requireTrimmedNonEmpty(value: string, message: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    exitWithError(message);
+  }
+  return trimmed;
+}
+
+async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
+  snapshot: ExecApprovalsSnapshot;
+  nodeId: string | null;
+  source: "gateway" | "node" | "local";
+  targetLabel: string;
+  baseHash: string;
+}> {
+  const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
+  if (source === "local") {
+    defaultRuntime.log(theme.muted("Writing local approvals."));
+  }
+  const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
+  const baseHash = snapshot.hash;
+  if (!baseHash) {
+    exitWithError("Exec approvals hash missing; reload and retry.");
+  }
+  return { snapshot, nodeId, source, targetLabel, baseHash };
+}
+
+async function saveSnapshotTargeted(params: {
+  opts: ExecApprovalsCliOpts;
+  source: "gateway" | "node" | "local";
+  nodeId: string | null;
+  file: ExecApprovalsFile;
+  baseHash: string;
+  targetLabel: string;
+}): Promise<void> {
+  const next =
+    params.source === "local"
+      ? saveSnapshotLocal(params.file)
+      : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
+  if (params.opts.json) {
+    defaultRuntime.writeJson(next, 0);
+    return;
+  }
+  defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
+  renderApprovalsSnapshot(next, params.targetLabel);
+}
+
 function formatCliError(err: unknown): string {
   const msg = describeUnknownError(err);
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
@@ -105,7 +151,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   const rich = isRich();
   const heading = (text: string) => (rich ? theme.heading(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const tableWidth = getTerminalTableWidth();
 
   const file = snapshot.file ?? { version: 1 };
   const defaults = file.defaults ?? {};
@@ -125,13 +171,15 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
       const pattern = entry?.pattern?.trim() ?? "";
-      if (!pattern) continue;
+      if (!pattern) {
+        continue;
+      }
       const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
       allowlistRows.push({
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
-        LastUsed: lastUsedAt ? `${formatAge(Math.max(0, now - lastUsedAt))} ago` : muted("unknown"),
+        LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
     }
   }
@@ -222,6 +270,78 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
   );
 }
 
+async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
+  nodeId: string | null;
+  source: "gateway" | "node" | "local";
+  targetLabel: string;
+  baseHash: string;
+  file: ExecApprovalsFile;
+  agentKey: string;
+  agent: ExecApprovalsAgent;
+  allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
+}> {
+  const { snapshot, nodeId, source, targetLabel, baseHash } =
+    await loadWritableSnapshotTarget(opts);
+  const file = snapshot.file ?? { version: 1 };
+  file.version = 1;
+
+  const agentKey = resolveAgentKey(opts.agent);
+  const agent = ensureAgent(file, agentKey);
+  const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+
+  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+}
+
+type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
+  trimmedPattern: string;
+};
+type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
+
+async function runAllowlistMutation(
+  pattern: string,
+  opts: ExecApprovalsCliOpts,
+  mutate: AllowlistMutation,
+): Promise<void> {
+  try {
+    const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
+    const context = await loadWritableAllowlistAgent(opts);
+    const shouldSave = await mutate({ ...context, trimmedPattern });
+    if (!shouldSave) {
+      return;
+    }
+    await saveSnapshotTargeted({
+      opts,
+      source: context.source,
+      nodeId: context.nodeId,
+      file: context.file,
+      baseHash: context.baseHash,
+      targetLabel: context.targetLabel,
+    });
+  } catch (err) {
+    defaultRuntime.error(formatCliError(err));
+    defaultRuntime.exit(1);
+  }
+}
+
+function registerAllowlistMutationCommand(params: {
+  allowlist: Command;
+  name: "add" | "remove";
+  description: string;
+  mutate: AllowlistMutation;
+}): Command {
+  const command = params.allowlist
+    .command(`${params.name} <pattern>`)
+    .description(params.description)
+    .option("--node <node>", "Target node id/name/IP")
+    .option("--gateway", "Force gateway approvals", false)
+    .option("--agent <id>", 'Agent id (defaults to "*")')
+    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
+      await runAllowlistMutation(pattern, opts, params.mutate);
+    });
+  nodesCallOpts(command);
+  return command;
+}
+
 export function registerExecApprovalsCli(program: Command) {
   const formatExample = (cmd: string, desc: string) =>
     `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`;
@@ -233,7 +353,7 @@ export function registerExecApprovalsCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.molt.bot/cli/approvals")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
   const getCmd = approvals
@@ -245,7 +365,7 @@ export function registerExecApprovalsCli(program: Command) {
       try {
         const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(snapshot));
+          defaultRuntime.writeJson(snapshot, 0);
           return;
         }
 
@@ -273,45 +393,21 @@ export function registerExecApprovalsCli(program: Command) {
     .action(async (opts: ExecApprovalsCliOpts) => {
       try {
         if (!opts.file && !opts.stdin) {
-          defaultRuntime.error("Provide --file or --stdin.");
-          defaultRuntime.exit(1);
-          return;
+          exitWithError("Provide --file or --stdin.");
         }
         if (opts.file && opts.stdin) {
-          defaultRuntime.error("Use either --file or --stdin (not both).");
-          defaultRuntime.exit(1);
-          return;
+          exitWithError("Use either --file or --stdin (not both).");
         }
-        const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        if (source === "local") {
-          defaultRuntime.log(theme.muted("Writing local approvals."));
-        }
-        const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-        if (!snapshot.hash) {
-          defaultRuntime.error("Exec approvals hash missing; reload and retry.");
-          defaultRuntime.exit(1);
-          return;
-        }
+        const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
         const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
         let file: ExecApprovalsFile;
         try {
-          file = JSON5.parse(raw) as ExecApprovalsFile;
+          file = JSON5.parse(raw);
         } catch (err) {
-          defaultRuntime.error(`Failed to parse approvals JSON: ${String(err)}`);
-          defaultRuntime.exit(1);
-          return;
+          exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
         file.version = 1;
-        const next =
-          source === "local"
-            ? saveSnapshotLocal(file)
-            : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify(next));
-          return;
-        }
-        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
-        renderApprovalsSnapshot(next, targetLabel);
+        await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -326,135 +422,61 @@ export function registerExecApprovalsCli(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatExample(
-          'moltbot approvals allowlist add "~/Projects/**/bin/rg"',
+          'openclaw approvals allowlist add "~/Projects/**/bin/rg"',
           "Allowlist a local binary pattern for the main agent.",
         )}\n${formatExample(
-          'moltbot approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
+          'openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
           "Allowlist on a specific node/agent.",
         )}\n${formatExample(
-          'moltbot approvals allowlist add --agent "*" "/usr/bin/uname"',
+          'openclaw approvals allowlist add --agent "*" "/usr/bin/uname"',
           "Allowlist for all agents (wildcard).",
         )}\n${formatExample(
-          'moltbot approvals allowlist remove "~/Projects/**/bin/rg"',
+          'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
           "Remove an allowlist pattern.",
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.molt.bot/cli/approvals")}\n`,
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
-  const allowlistAdd = allowlist
-    .command("add <pattern>")
-    .description("Add a glob pattern to an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      try {
-        const trimmed = pattern.trim();
-        if (!trimmed) {
-          defaultRuntime.error("Pattern required.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        if (source === "local") {
-          defaultRuntime.log(theme.muted("Writing local approvals."));
-        }
-        const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-        if (!snapshot.hash) {
-          defaultRuntime.error("Exec approvals hash missing; reload and retry.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const file = snapshot.file ?? { version: 1 };
-        file.version = 1;
-        const agentKey = resolveAgentKey(opts.agent);
-        const agent = ensureAgent(file, agentKey);
-        const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-        if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmed)) {
-          defaultRuntime.log("Already allowlisted.");
-          return;
-        }
-        allowlistEntries.push({ pattern: trimmed, lastUsedAt: Date.now() });
-        agent.allowlist = allowlistEntries;
-        file.agents = { ...file.agents, [agentKey]: agent };
-        const next =
-          source === "local"
-            ? saveSnapshotLocal(file)
-            : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify(next));
-          return;
-        }
-        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
-        renderApprovalsSnapshot(next, targetLabel);
-      } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "add",
+    description: "Add a glob pattern to an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+        defaultRuntime.log("Already allowlisted.");
+        return false;
       }
-    });
-  nodesCallOpts(allowlistAdd);
+      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      agent.allowlist = allowlistEntries;
+      file.agents = { ...file.agents, [agentKey]: agent };
+      return true;
+    },
+  });
 
-  const allowlistRemove = allowlist
-    .command("remove <pattern>")
-    .description("Remove a glob pattern from an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      try {
-        const trimmed = pattern.trim();
-        if (!trimmed) {
-          defaultRuntime.error("Pattern required.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
-        if (source === "local") {
-          defaultRuntime.log(theme.muted("Writing local approvals."));
-        }
-        const targetLabel = source === "local" ? "local" : nodeId ? `node:${nodeId}` : "gateway";
-        if (!snapshot.hash) {
-          defaultRuntime.error("Exec approvals hash missing; reload and retry.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const file = snapshot.file ?? { version: 1 };
-        file.version = 1;
-        const agentKey = resolveAgentKey(opts.agent);
-        const agent = ensureAgent(file, agentKey);
-        const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
-        const nextEntries = allowlistEntries.filter(
-          (entry) => normalizeAllowlistEntry(entry) !== trimmed,
-        );
-        if (nextEntries.length === allowlistEntries.length) {
-          defaultRuntime.log("Pattern not found.");
-          return;
-        }
-        if (nextEntries.length === 0) {
-          delete agent.allowlist;
-        } else {
-          agent.allowlist = nextEntries;
-        }
-        if (isEmptyAgent(agent)) {
-          const agents = { ...file.agents };
-          delete agents[agentKey];
-          file.agents = Object.keys(agents).length > 0 ? agents : undefined;
-        } else {
-          file.agents = { ...file.agents, [agentKey]: agent };
-        }
-        const next =
-          source === "local"
-            ? saveSnapshotLocal(file)
-            : await saveSnapshot(opts, nodeId, file, snapshot.hash);
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify(next));
-          return;
-        }
-        defaultRuntime.log(theme.muted(`Target: ${targetLabel}`));
-        renderApprovalsSnapshot(next, targetLabel);
-      } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "remove",
+    description: "Remove a glob pattern from an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      const nextEntries = allowlistEntries.filter(
+        (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
+      );
+      if (nextEntries.length === allowlistEntries.length) {
+        defaultRuntime.log("Pattern not found.");
+        return false;
       }
-    });
-  nodesCallOpts(allowlistRemove);
+      if (nextEntries.length === 0) {
+        delete agent.allowlist;
+      } else {
+        agent.allowlist = nextEntries;
+      }
+      if (isEmptyAgent(agent)) {
+        const agents = { ...file.agents };
+        delete agents[agentKey];
+        file.agents = Object.keys(agents).length > 0 ? agents : undefined;
+      } else {
+        file.agents = { ...file.agents, [agentKey]: agent };
+      }
+      return true;
+    },
+  });
 }
