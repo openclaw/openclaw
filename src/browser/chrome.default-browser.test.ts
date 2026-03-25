@@ -130,6 +130,31 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("edge");
   });
 
+  it("falls back to Chrome when Edge LaunchServices lookup has no app path", async () => {
+    vi.mocked(execFileSync).mockImplementation((cmd, args) => {
+      const argsStr = Array.isArray(args) ? args.join(" ") : "";
+      if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
+        return JSON.stringify([
+          { LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.microsoft.edgemac" },
+        ]);
+      }
+      if (cmd === "/usr/bin/osascript" && argsStr.includes("path to application id")) {
+        return "";
+      }
+      return "";
+    });
+    mockChromeExecutableExists();
+    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "darwin",
+    );
+
+    expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+    expect(exe?.kind).toBe("chrome");
+  });
+
   it("falls back when default browser is non-Chromium on macOS", async () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
