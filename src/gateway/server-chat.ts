@@ -547,22 +547,24 @@ export function createAgentEventHandler({
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
     chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
+    // All subscribers receive monotonic full-snapshot text so non-segment-aware
+    // clients (TUI, ACP) can replace the current assistant text without losing
+    // pre-tool content.  Segment-aware clients (Web Chat UI) use the optional
+    // segmentOffset hint to render only the post-tool portion in the active
+    // streaming segment, avoiding visual duplication of already-committed text.
+    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
     const payload = {
       runId: clientRunId,
       sessionKey,
       seq,
       state: "delta" as const,
-      timestamp: now,
       message: {
         role: "assistant",
         content: [{ type: "text", text: mergedText }],
         timestamp: now,
+        ...(segmentOffset > 0 && { segmentOffset }),
       },
     };
-    // All subscribers (WS + Node/ACP) receive monotonic full-snapshot text.
-    // Non-segment-aware clients (TUI, ACP) rely on full snapshots to replace
-    // the current assistant text; sending a segment-only slice would cause
-    // pre-tool text to disappear until the final event.
     broadcast("chat", payload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", payload);
   };
@@ -610,16 +612,17 @@ export function createAgentEventHandler({
 
     const now = Date.now();
     const rawBuffer = chatRunState.buffers.get(clientRunId) ?? "";
+    const segmentOffset = chatRunState.segmentOffsets.get(clientRunId) ?? 0;
     const payload = {
       runId: clientRunId,
       sessionKey,
       seq,
       state: "delta" as const,
-      timestamp: now,
       message: {
         role: "assistant",
         content: [{ type: "text", text: rawBuffer }],
         timestamp: now,
+        ...(segmentOffset > 0 && { segmentOffset }),
       },
     };
     // All subscribers receive monotonic full-snapshot text (see emitChatDelta).
@@ -750,10 +753,11 @@ export function createAgentEventHandler({
       // render complete pre-tool text above tool cards (not truncated by delta throttle).
       if (toolPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
         flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
-        // Record the current buffer length as the segment offset so
-        // subsequent delta broadcasts only carry text produced *after*
-        // this tool boundary.  This prevents the UI from re-displaying
-        // pre-tool text that was already committed to a streaming segment.
+        // Record the current buffer length as the segment offset.  Delta
+        // payloads include this as an optional `segmentOffset` hint so
+        // segment-aware clients (Web Chat UI) can render only the post-tool
+        // portion, while non-segment-aware clients ignore it and use the
+        // full-snapshot text as-is.
         const currentBuffer = chatRunState.buffers.get(clientRunId) ?? "";
         chatRunState.segmentOffsets.set(clientRunId, currentBuffer.length);
       }
