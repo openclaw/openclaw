@@ -5,19 +5,16 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/core";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { initApiConfig } from "./api.js";
+import { qqbotChannelConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  applyQQBotAccountConfig,
   listQQBotAccountIds,
   resolveQQBotAccount,
-  applyQQBotAccountConfig,
   resolveDefaultQQBotAccountId,
 } from "./config.js";
-import {
-  saveCredentialBackup,
-  loadCredentialBackup,
-  clearCredentialBackup,
-} from "./credential-backup.js";
 import { startGateway } from "./gateway.js";
 import { sendText, sendMedia } from "./outbound.js";
 import { getQQBotRuntime } from "./runtime.js";
@@ -60,10 +57,12 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.qqbot"] },
+  configSchema: qqbotChannelConfigSchema,
 
   config: {
     listAccountIds: (cfg) => listQQBotAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveQQBotAccount(cfg, accountId),
+    resolveAccount: (cfg, accountId) =>
+      resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
     defaultAccountId: (cfg) => resolveDefaultQQBotAccountId(cfg),
     // 新增：设置账户启用状态
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
@@ -82,22 +81,28 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
       }),
-    isConfigured: (account) => {
-      if (account?.appId && account?.clientSecret) return true;
-      // 配置为空但有凭证备份时仍返回 true，让 startAccount 有机会恢复凭证
-      const backup = loadCredentialBackup(account?.accountId);
-      return backup !== null;
-    },
+    isConfigured: (account) =>
+      Boolean(
+        account?.appId &&
+        (Boolean(account?.clientSecret) ||
+          hasConfiguredSecretInput(account?.config?.clientSecret) ||
+          Boolean(account?.config?.clientSecretFile?.trim())),
+      ),
     describeAccount: (account) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
       name: account?.name,
       enabled: account?.enabled ?? false,
-      configured: Boolean(account?.appId && account?.clientSecret),
+      configured: Boolean(
+        account?.appId &&
+        (Boolean(account?.clientSecret) ||
+          hasConfiguredSecretInput(account?.config?.clientSecret) ||
+          Boolean(account?.config?.clientSecretFile?.trim())),
+      ),
       tokenSource: account?.secretSource,
     }),
     // 关键：解析 allowFrom 配置，用于命令授权
     resolveAllowFrom: ({ cfg, accountId }) => {
-      const account = resolveQQBotAccount(cfg, accountId);
+      const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
       const allowFrom = account.config?.allowFrom;
       return allowFrom;
     },
@@ -257,34 +262,8 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   gateway: {
     startAccount: async (ctx) => {
-      let { account } = ctx;
+      const { account } = ctx;
       const { abortSignal, log, cfg } = ctx;
-
-      // 凭证恢复：如果 appId/secret 为空（热更新打断可能导致配置丢失），尝试从暂存文件恢复
-      if (!account.appId || !account.clientSecret) {
-        const backup = loadCredentialBackup(account.accountId);
-        if (backup) {
-          log?.info(
-            `[qqbot:${account.accountId}] 配置中凭证为空，从暂存文件恢复 (appId=${backup.appId}, savedAt=${backup.savedAt})`,
-          );
-          try {
-            const runtime = getQQBotRuntime();
-            const restoredCfg = applyQQBotAccountConfig(cfg, account.accountId, {
-              appId: backup.appId,
-              clientSecret: backup.clientSecret,
-            });
-            const configApi = runtime.config as {
-              writeConfigFile: (cfg: unknown) => Promise<void>;
-            };
-            await configApi.writeConfigFile(restoredCfg);
-            // 重新解析 account 以获取恢复后的值
-            account = resolveQQBotAccount(restoredCfg, account.accountId);
-            log?.info(`[qqbot:${account.accountId}] 凭证已恢复`);
-          } catch (e) {
-            log?.error(`[qqbot:${account.accountId}] 凭证恢复失败: ${e}`);
-          }
-        }
-      }
 
       log?.info(
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
@@ -297,8 +276,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         log,
         onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
-          // 启动成功，保存凭证快照供后续恢复使用
-          saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
           ctx.setStatus({
             ...ctx.getStatus(),
             running: true,
@@ -351,11 +328,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
         };
         await configApi.writeConfigFile(nextCfg);
-      }
-
-      // 登出时清除凭证备份，防止 startAccount 从备份中恢复已清除的凭证
-      if (cleared) {
-        clearCredentialBackup();
       }
 
       const resolved = resolveQQBotAccount(changed ? nextCfg : cfg, accountId);

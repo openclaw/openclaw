@@ -1,11 +1,26 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
 
 export const DEFAULT_ACCOUNT_ID = "default";
 
 interface QQBotChannelConfig extends QQBotAccountConfig {
   accounts?: Record<string, QQBotAccountConfig>;
+}
+
+function normalizeQQBotAccountConfig(account: QQBotAccountConfig | undefined): QQBotAccountConfig {
+  if (!account) {
+    return {};
+  }
+  return {
+    ...account,
+    ...(account.audioFormatPolicy ? { audioFormatPolicy: { ...account.audioFormatPolicy } } : {}),
+  };
 }
 
 function normalizeAppId(raw: unknown): string {
@@ -60,6 +75,7 @@ export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
 export function resolveQQBotAccount(
   cfg: OpenClawConfig,
   accountId?: string | null,
+  opts?: { allowUnresolvedSecretRef?: boolean },
 ): ResolvedQQBotAccount {
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
@@ -71,29 +87,29 @@ export function resolveQQBotAccount(
   let secretSource: "config" | "file" | "env" | "none" = "none";
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
-    // 默认账户从顶层读取
-    accountConfig = {
-      enabled: qqbot?.enabled,
-      name: qqbot?.name,
-      appId: qqbot?.appId,
-      clientSecret: qqbot?.clientSecret,
-      clientSecretFile: qqbot?.clientSecretFile,
-      dmPolicy: qqbot?.dmPolicy,
-      allowFrom: qqbot?.allowFrom,
-      systemPrompt: qqbot?.systemPrompt,
-      markdownSupport: qqbot?.markdownSupport ?? true,
-    };
+    // 默认账户从顶层读取，同时保留顶层配置的完整字段面
+    accountConfig = normalizeQQBotAccountConfig(qqbot);
     appId = normalizeAppId(qqbot?.appId);
   } else {
     // 命名账户从 accounts 读取
     const account = qqbot?.accounts?.[resolvedAccountId];
-    accountConfig = account ?? {};
+    accountConfig = normalizeQQBotAccountConfig(account);
     appId = normalizeAppId(account?.appId);
   }
 
+  const clientSecretPath =
+    resolvedAccountId === DEFAULT_ACCOUNT_ID
+      ? "channels.qqbot.clientSecret"
+      : `channels.qqbot.accounts.${resolvedAccountId}.clientSecret`;
+
   // 解析 clientSecret
-  if (accountConfig.clientSecret) {
-    clientSecret = accountConfig.clientSecret;
+  if (hasConfiguredSecretInput(accountConfig.clientSecret)) {
+    clientSecret = opts?.allowUnresolvedSecretRef
+      ? (normalizeSecretInputString(accountConfig.clientSecret) ?? "")
+      : (normalizeResolvedSecretInputString({
+          value: accountConfig.clientSecret,
+          path: clientSecretPath,
+        }) ?? "");
     secretSource = "config";
   } else if (accountConfig.clientSecretFile) {
     try {

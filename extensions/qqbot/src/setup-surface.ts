@@ -1,5 +1,6 @@
 import {
   createStandardChannelSetupStatus,
+  hasConfiguredSecretInput,
   setSetupChannelEnabled,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
@@ -33,8 +34,13 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
     unconfiguredScore: 6,
     resolveConfigured: ({ cfg }) =>
       listQQBotAccountIds(cfg).some((accountId) => {
-        const account = resolveQQBotAccount(cfg, accountId);
-        return Boolean(account.appId && account.clientSecret);
+        const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
+        return Boolean(
+          account.appId &&
+          (Boolean(account.clientSecret) ||
+            hasConfiguredSecretInput(account.config.clientSecret) ||
+            Boolean(account.config.clientSecretFile?.trim())),
+        );
       }),
   }),
   credentials: [
@@ -50,9 +56,14 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
       inputPrompt: "Enter QQ Bot AppID",
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveQQBotAccount(cfg, accountId);
+        const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
+        const hasConfiguredValue = Boolean(
+          hasConfiguredSecretInput(resolved.config.clientSecret) ||
+          resolved.config.clientSecretFile?.trim() ||
+          resolved.clientSecret,
+        );
         return {
-          accountConfigured: Boolean(resolved.appId && resolved.clientSecret),
+          accountConfigured: Boolean(resolved.appId && hasConfiguredValue),
           hasConfiguredValue: Boolean(resolved.appId),
           resolvedValue: resolved.appId || undefined,
           envValue:
@@ -77,10 +88,15 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
       inputPrompt: "Enter QQ Bot AppSecret",
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
-        const resolved = resolveQQBotAccount(cfg, accountId);
+        const resolved = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
+        const hasConfiguredValue = Boolean(
+          hasConfiguredSecretInput(resolved.config.clientSecret) ||
+          resolved.config.clientSecretFile?.trim() ||
+          resolved.clientSecret,
+        );
         return {
-          accountConfigured: Boolean(resolved.appId && resolved.clientSecret),
-          hasConfiguredValue: Boolean(resolved.clientSecret),
+          accountConfigured: Boolean(resolved.appId && hasConfiguredValue),
+          hasConfiguredValue,
           resolvedValue: resolved.clientSecret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID

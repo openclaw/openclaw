@@ -4,6 +4,8 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/core";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { qqbotChannelConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
   listQQBotAccountIds,
@@ -37,9 +39,11 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.qqbot"] },
+  configSchema: qqbotChannelConfigSchema,
   config: {
     listAccountIds: (cfg) => listQQBotAccountIds(cfg),
-    resolveAccount: (cfg, accountId) => resolveQQBotAccount(cfg, accountId),
+    resolveAccount: (cfg, accountId) =>
+      resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
     defaultAccountId: (cfg) => resolveDefaultQQBotAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -56,14 +60,23 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         accountId,
         clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
       }),
-    isConfigured: (account) => {
-      return Boolean(account?.appId && account?.clientSecret);
-    },
+    isConfigured: (account) =>
+      Boolean(
+        account?.appId &&
+        (Boolean(account?.clientSecret) ||
+          hasConfiguredSecretInput(account?.config?.clientSecret) ||
+          Boolean(account?.config?.clientSecretFile?.trim())),
+      ),
     describeAccount: (account) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
       name: account?.name,
       enabled: account?.enabled ?? false,
-      configured: Boolean(account?.appId && account?.clientSecret),
+      configured: Boolean(
+        account?.appId &&
+        (Boolean(account?.clientSecret) ||
+          hasConfiguredSecretInput(account?.config?.clientSecret) ||
+          Boolean(account?.config?.clientSecretFile?.trim())),
+      ),
       tokenSource: account?.secretSource,
     }),
   },
