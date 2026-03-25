@@ -1,14 +1,37 @@
-// Provider onboarding config helpers exposed to plugin extensions.
+// Curated config-patch helpers for provider onboarding flows.
+
 export type { OpenClawConfig } from "../config/config.js";
+export type {
+  ModelApi,
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "../config/types.models.js";
 export {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
+  createDefaultModelPresetAppliers,
+  createDefaultModelsPresetAppliers,
+  createModelCatalogPresetAppliers,
+  applyProviderConfigWithDefaultModelPreset,
+  applyProviderConfigWithDefaultModelsPreset,
   applyProviderConfigWithDefaultModel,
   applyProviderConfigWithDefaultModels,
-  applyProviderConfigWithModelCatalog,
-} from "../commands/onboard-auth.config-shared.js";
-// applyProviderConfigWithModelCatalogPreset adds alias and primaryModelRef support
-// on top of applyProviderConfigWithModelCatalog. Implemented as a thin wrapper.
-export {
   applyProviderConfigWithModelCatalogPreset,
-} from "../commands/onboard-auth.config-preset.js";
+  applyProviderConfigWithModelCatalog,
+  withAgentModelAliases,
+} from "../plugins/provider-onboarding-config.js";
+export type {
+  AgentModelAliasEntry,
+  ProviderOnboardPresetAppliers,
+} from "../plugins/provider-onboarding-config.js";
+export { ensureModelAllowlistEntry } from "../plugins/provider-model-allowlist.js";
+export {
+  applyCloudflareAiGatewayConfig,
+  applyCloudflareAiGatewayProviderConfig,
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+} from "../../extensions/cloudflare-ai-gateway/onboard.js";
+export {
+  applyVercelAiGatewayConfig,
+  applyVercelAiGatewayProviderConfig,
+  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+} from "../../extensions/vercel-ai-gateway/onboard.js";
