@@ -129,6 +129,47 @@
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
 
+## TDD & Test Writing Standards
+
+Use TDD for all new features and bug fixes: write failing tests first, then implement minimal code to pass.
+
+**Test file placement:** colocated `*.test.ts` next to source file (e.g., `src/router/signals.ts` → `src/router/signals.test.ts`).
+
+**Test structure pattern:**
+
+```typescript
+import { describe, it, expect } from "vitest";
+import { ClassUnderTest } from "./module.js";
+
+describe("ClassUnderTest", () => {
+  // Share setup via factory function or constant for readability
+  const createFixture = (overrides?) => ({ /* base config */, ...overrides });
+
+  it("does the expected thing", () => {
+    const instance = new ClassUnderTest();
+    const result = instance.method(input);
+    expect(result).toBe(expected);
+  });
+
+  it("handles edge case", () => { /* ... */ });
+  it("returns false when disabled", () => { /* ... */ });
+});
+```
+
+**Coverage requirements per signal/path:**
+
+- Happy path (expected input → expected output)
+- Edge cases (empty, zero, max values)
+- Error/exception cases
+- Disabled/inactive state
+- Boundary conditions (e.g., `maxRetries: 2` — test at 1, 2, 3)
+
+**Assertions:** use `toBe`, `toEqual`, `toContain`, `toBeCloseTo` (for floats); avoid `toBeTruthy`/`toBeFalsy` when exact values can be checked.
+
+**Dead code rule:** never commit unused/declared-but-never-used variables (e.g., `const _router` stub). Remove dead code or wire it up properly before committing.
+
+**Reviewer signal:** automated code review (Greptile/Codex) flags dead code and incomplete integrations — fix or remove before merging.
+
 ## Commit & Pull Request Guidelines
 
 - Use `$openclaw-pr-maintainer` at `.agents/skills/openclaw-pr-maintainer/SKILL.md` for maintainer PR triage, review, close, search, and landing workflows.
