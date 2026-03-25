@@ -403,6 +403,10 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         if (string.IsNullOrEmpty(token))
             token = Domain.Config.OpenClawConfigFile.ReadGatewayAuthToken();
 
+        string? password = null;
+        if (string.IsNullOrEmpty(token))
+            password = Domain.Config.OpenClawConfigFile.GatewayPassword();
+
         // Load or create device Ed25519 keypair
         var kpResult = await _keypairStorage.LoadAsync(ct);
         Ed25519KeyPair keyPair;
@@ -463,7 +467,11 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
             ["caps"]        = caps,
             ["commands"]    = commands,
             ["permissions"] = permissions,
-            ["auth"]        = new { token },
+            ["auth"]        = !string.IsNullOrEmpty(token)
+                                ? (object)new { token }
+                                : !string.IsNullOrEmpty(password)
+                                    ? new { password }
+                                    : new { },
             ["locale"]      = "en-US",
             ["userAgent"]   = "openclaw-windows/1.0.0",
             ["device"] = new

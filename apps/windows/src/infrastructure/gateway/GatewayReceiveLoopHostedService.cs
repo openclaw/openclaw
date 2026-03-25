@@ -283,9 +283,6 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
             },
         });
 
-        // Diagnostic: dump the full connect frame so we can verify auth/scopes on the wire
-        _logger.LogInformation("Connect frame (first 500 chars): {Frame}", frame.Length > 500 ? frame[..500] : frame);
-
         var result = await _ws.SendAsync(frame, ct);
         if (result.IsError)
         {
