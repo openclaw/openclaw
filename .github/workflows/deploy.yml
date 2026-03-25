@@ -1,75 +1,75 @@
 name: Deploy OpenClaw to Azure Container Apps
 
 on:
-    push:
-        branches:
-            - main # Triggers the pipeline on every push to the main branch
-    workflow_dispatch: # Allows you to run the workflow manually from the GitHub UI
+  push:
+    branches:
+      - main # Triggers the pipeline on every push to the main branch
+  workflow_dispatch: # Allows you to run the workflow manually from the GitHub UI
 
 env:
-    REGISTRY_NAME: asireonclawacr
-    IMAGE_NAME: openclaw
-    RESOURCE_GROUP: asireon-claw
-    APP_NAME: openclaw-gateway
+  REGISTRY_NAME: asireonclawacr
+  IMAGE_NAME: openclaw
+  RESOURCE_GROUP: asireon-claw
+  APP_NAME: openclaw-gateway
 
 jobs:
-    build-and-deploy:
-        runs-on: ubuntu-latest
-        steps:
-            # 1. Pull down your forked OpenClaw code
-            - name: Checkout repository
-              uses: actions/checkout@v4
-              with:
-                  fetch-depth: 0 # Required to accurately detect changed files from previous commits
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Pull down your forked OpenClaw code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Required to accurately detect changed files from previous commits
 
-            # 2. Authenticate securely with Azure
-            - name: Log in to Azure
-              uses: azure/login@v2
-              with:
-                  creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # 2. Authenticate securely with Azure
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-            # 3. Authenticate with your Container Registry
-            - name: Log in to Azure Container Registry
-              uses: docker/login-action@v3
-              with:
-                  registry: ${{ env.REGISTRY_NAME }}.azurecr.io
-                  username: ${{ env.REGISTRY_NAME }}
-                  password: ${{ secrets.ACR_PASSWORD }}
+      # 3. Authenticate with your Container Registry
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY_NAME }}.azurecr.io
+          username: ${{ env.REGISTRY_NAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-            # 4. Build and Push Docker Image
-            - name: Build and Push Docker Image
-              run: |
-                  chmod +x ./deploy.sh
-                  ./deploy.sh
-              env:
-                  REGISTRY_NAME: ${{ env.REGISTRY_NAME }}
-                  IMAGE_NAME: ${{ env.IMAGE_NAME }}
+      # 4. Build and Push Docker Image
+      - name: Build and Push Docker Image
+        run: |
+          chmod +x ./deploy.sh
+          ./deploy.sh
+        env:
+          REGISTRY_NAME: ${{ env.REGISTRY_NAME }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
 
-            # 5. Determine the correct container image to deploy
-            - name: Get Target Image Tag
-              id: get-image
-              run: |
-                  echo "image=${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+      # 5. Determine the correct container image to deploy
+      - name: Get Target Image Tag
+        id: get-image
+        run: |
+          echo "image=${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
-            # 7. Execute the Bicep template (always runs)
-            - name: Deploy Infrastructure and App via Bicep
-              uses: azure/arm-deploy@v2
-              with:
-                  scope: resourcegroup
-                  resourceGroupName: ${{ env.RESOURCE_GROUP }}
-                  template: ./main.bicep
-                  # To restrict Slack bot access, create a SLACK_ALLOWED_MEMBERS secret
-                  # with a JSON array of member IDs (e.g., '["U12345","U67890"]') and add:
-                  #   slackAllowedMembers=${{ secrets.SLACK_ALLOWED_MEMBERS }}
-                  # to the parameters below.
-                  parameters: >
-                      containerImage=${{ steps.get-image.outputs.image }}
-                      registryServer=${{ env.REGISTRY_NAME }}.azurecr.io
-                      registryUsername=${{ env.REGISTRY_NAME }}
-                      registryPassword=${{ secrets.ACR_PASSWORD }}
-                      openclawStaticToken=${{ secrets.OPENCLAW_STATIC_TOKEN }}
-                      openAiApiKey=${{ secrets.OPENAI_API_KEY }}
-                      anthropicApiKey=${{ secrets.ANTHROPIC_API_KEY }}
-                      geminiApiKey=${{ secrets.GEMINI_API_KEY }}
-                      slackAppToken=${{ secrets.SLACK_APP_TOKEN }}
-                      slackBotToken=${{ secrets.SLACK_BOT_TOKEN }}
+      # 7. Execute the Bicep template (always runs)
+      - name: Deploy Infrastructure and App via Bicep
+        uses: azure/arm-deploy@v2
+        with:
+          scope: resourcegroup
+          resourceGroupName: ${{ env.RESOURCE_GROUP }}
+          template: ./main.bicep
+          # To restrict Slack bot access, create a SLACK_ALLOWED_MEMBERS secret
+          # with a JSON array of member IDs (e.g., '["U12345","U67890"]') and add:
+          #   slackAllowedMembers=${{ secrets.SLACK_ALLOWED_MEMBERS }}
+          # to the parameters below.
+          parameters: >
+            containerImage=${{ steps.get-image.outputs.image }}
+            registryServer=${{ env.REGISTRY_NAME }}.azurecr.io
+            registryUsername=${{ env.REGISTRY_NAME }}
+            registryPassword=${{ secrets.ACR_PASSWORD }}
+            openclawStaticToken=${{ secrets.OPENCLAW_STATIC_TOKEN }}
+            openAiApiKey=${{ secrets.OPENAI_API_KEY }}
+            anthropicApiKey=${{ secrets.ANTHROPIC_API_KEY }}
+            geminiApiKey=${{ secrets.GEMINI_API_KEY }}
+            slackAppToken=${{ secrets.SLACK_APP_TOKEN }}
+            slackBotToken=${{ secrets.SLACK_BOT_TOKEN }}

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.40.2.10011",
-      "templateHash": "8689810768792273512"
+      "templateHash": "2027798552670054650"
     }
   },
   "parameters": {
@@ -88,6 +88,13 @@
       "type": "securestring",
       "metadata": {
         "description": "Slack Bot Token (starts with xoxb-) for bot actions"
+      }
+    },
+    "slackAllowedMembers": {
+      "type": "string",
+      "defaultValue": "[[\"*\"]",
+      "metadata": {
+        "description": "JSON array of Slack member IDs allowed to interact with the bot (e.g., '[\"U12345\",\"U67890\"]')."
       }
     }
   },
@@ -235,7 +242,7 @@
               "command": ["/bin/sh"],
               "args": [
                 "-c",
-                "cat << 'EOF' > /tmp/patch.js\nconst fs = require('fs');\n['chmod', 'fchmod', 'chown', 'fchown'].forEach(f => {\n  fs[f] = (...args) => { const cb = args.pop(); if (typeof cb === 'function') cb(null); };\n  fs[f + 'Sync'] = () => {};\n  if (fs.promises && fs.promises[f]) fs.promises[f] = async () => {};\n});\nEOF\nmkdir -p /home/node/.openclaw/workspace\ncat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md\n# Agent Instructions\n\nYou are a helpful enterprise assistant.\n\n## CITATION & FORMATTING RULES\nWhen you call `web_search`, the tool result JSON contains a `citations` array with `url` and `title` fields, AND the content text ends with a numbered \"References:\" section. You MUST use these URLs as clickable links in your response. NEVER omit them.\n\n**How to format links (check the Runtime channel= line in your system prompt):**\n* If channel is **slack**: Use Slack link syntax exactly: `<URL|[1]>` — e.g. `<https://example.com|[1]>`\n* If channel is **wecom**: Use Markdown link syntax: `[[1]](URL)`\n* For **all other channels**: Use standard Markdown: `[1](URL)`\n\n**Rules:**\n1. Every factual claim from web_search MUST have at least one citation link.\n2. Place citation links inline at the end of the relevant sentence or paragraph.\n3. Prefer URLs from the `citations` array (they are resolved/clean URLs).\n4. If `citations` is empty, use URLs from the References section in the content.\nAGENTS_EOF\nnode --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '[\"0.0.0.0/0\", \"::/0\"]'\nnode --require /tmp/patch.js openclaw.mjs config set gateway.controlUi.allowedOrigins \"[\\\"$OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS\\\"]\"\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.enabled true\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '\"open\"'\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom '[\"*\"]'\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '\"open\"'\nexec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan\n            "
+                "cat << 'EOF' > /tmp/patch.js\nconst fs = require('fs');\n['chmod', 'fchmod', 'chown', 'fchown'].forEach(f => {\n  fs[f] = (...args) => { const cb = args.pop(); if (typeof cb === 'function') cb(null); };\n  fs[f + 'Sync'] = () => {};\n  if (fs.promises && fs.promises[f]) fs.promises[f] = async () => {};\n});\nEOF\nmkdir -p /home/node/.openclaw/workspace\ncat << 'AGENTS_EOF' > /home/node/.openclaw/workspace/AGENTS.md\n# Agent Instructions\n\nYou are a helpful enterprise assistant.\n\n## CITATION & FORMATTING RULES\nWhen you call `web_search`, the tool result JSON contains a `citations` array with `url` and `title` fields, AND the content text ends with a numbered \"References:\" section. You MUST use these URLs as clickable links in your response. NEVER omit them.\n\n**How to format links (check the Runtime channel= line in your system prompt):**\n* If channel is **slack**: Use Slack link syntax exactly: `<URL|[1]>` — e.g. `<https://example.com|[1]>`\n* If channel is **wecom**: Use Markdown link syntax: `[[1]](URL)`\n* For **all other channels**: Use standard Markdown: `[1](URL)`\n\n**Rules:**\n1. Every factual claim from web_search MUST have at least one citation link.\n2. Place citation links inline at the end of the relevant sentence or paragraph.\n3. Prefer URLs from the `citations` array (they are resolved/clean URLs).\n4. If `citations` is empty, use URLs from the References section in the content.\nAGENTS_EOF\nnode --require /tmp/patch.js openclaw.mjs config set gateway.trustedProxies '[\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\"]'\nnode --require /tmp/patch.js openclaw.mjs config set gateway.controlUi.allowedOrigins \"[\\\"$OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS\\\"]\"\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.enabled true\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '\"open\"'\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom \"$OPENCLAW_SLACK_ALLOWED_MEMBERS\"\nnode --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '\"open\"'\nexec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan\n            "
               ],
               "env": [
                 {
@@ -244,7 +251,7 @@
                 },
                 {
                   "name": "OPENCLAW_CONTROL_UI_ALLOW_INSECURE_AUTH",
-                  "value": "true"
+                  "value": "false"
                 },
                 {
                   "name": "SLACK_BOT_TOKEN",
@@ -277,6 +284,10 @@
                 {
                   "name": "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS",
                   "value": "[format('https://{0}.{1}', parameters('containerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', parameters('environmentName')), '2023-05-01').defaultDomain)]"
+                },
+                {
+                  "name": "OPENCLAW_SLACK_ALLOWED_MEMBERS",
+                  "value": "[parameters('slackAllowedMembers')]"
                 }
               ],
               "volumeMounts": [
