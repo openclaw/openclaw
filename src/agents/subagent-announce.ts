@@ -570,6 +570,43 @@ function dedupeLatestChildCompletionRows(
   return [...latestByChildSessionKey.values()];
 }
 
+function filterCurrentDirectChildCompletionRows(
+  children: Array<{
+    runId: string;
+    childSessionKey: string;
+    requesterSessionKey: string;
+    task: string;
+    label?: string;
+    createdAt: number;
+    endedAt?: number;
+    frozenResultText?: string | null;
+    outcome?: SubagentRunOutcome;
+  }>,
+  params: {
+    requesterSessionKey: string;
+    getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
+      | {
+          runId: string;
+          requesterSessionKey: string;
+        }
+      | null
+      | undefined;
+  },
+) {
+  if (typeof params.getLatestSubagentRunByChildSessionKey !== "function") {
+    return children;
+  }
+  return children.filter((child) => {
+    const latest = params.getLatestSubagentRunByChildSessionKey?.(child.childSessionKey);
+    if (!latest) {
+      return true;
+    }
+    return (
+      latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
+    );
+  });
+}
+
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -1418,7 +1455,13 @@ export async function runSubagentAnnounceFlow(params: {
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
           childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(directChildren),
+            dedupeLatestChildCompletionRows(
+              filterCurrentDirectChildCompletionRows(directChildren, {
+                requesterSessionKey: params.childSessionKey,
+                getLatestSubagentRunByChildSessionKey:
+                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+              }),
+            ),
           );
         }
       }
