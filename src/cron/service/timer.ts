@@ -1132,9 +1132,22 @@ export async function executeJobCore(
     return resolveAbortError();
   }
 
+  // Defensive: extract string content from message in case the payload was
+  // persisted with an object value (e.g. { text: "..." }) instead of a plain
+  // string, which would coerce to "[object Object]" in template literals.
+  const rawMessage = job.payload.message;
+  const message =
+    typeof rawMessage === "string"
+      ? rawMessage
+      : typeof rawMessage === "object" &&
+          rawMessage !== null &&
+          typeof (rawMessage as { text?: unknown }).text === "string"
+        ? (rawMessage as { text: string }).text
+        : String(rawMessage);
+
   const res = await state.deps.runIsolatedAgentJob({
     job,
-    message: job.payload.message,
+    message,
     abortSignal,
   });
 
