@@ -22,6 +22,43 @@ describe("loadVitestExperimentalConfig", () => {
     });
   });
 
+  it("disables the filesystem module cache by default on Windows", () => {
+    const originalRunnerOs = process.env.RUNNER_OS;
+    process.env.RUNNER_OS = "Windows";
+    try {
+      expect(loadVitestExperimentalConfig({ RUNNER_OS: "Windows" })).toEqual({});
+    } finally {
+      if (originalRunnerOs === undefined) {
+        delete process.env.RUNNER_OS;
+      } else {
+        process.env.RUNNER_OS = originalRunnerOs;
+      }
+    }
+  });
+
+  it("still allows enabling the filesystem module cache explicitly on Windows", () => {
+    const originalRunnerOs = process.env.RUNNER_OS;
+    process.env.RUNNER_OS = "Windows";
+    try {
+      expect(
+        loadVitestExperimentalConfig({
+          RUNNER_OS: "Windows",
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
+        }),
+      ).toEqual({
+        experimental: {
+          fsModuleCache: true,
+        },
+      });
+    } finally {
+      if (originalRunnerOs === undefined) {
+        delete process.env.RUNNER_OS;
+      } else {
+        process.env.RUNNER_OS = originalRunnerOs;
+      }
+    }
+  });
+
   it("allows disabling the filesystem module cache explicitly", () => {
     expect(
       loadVitestExperimentalConfig({
