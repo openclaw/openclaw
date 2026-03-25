@@ -482,6 +482,7 @@ export async function handleOpenResponsesHttpRequest(
   const user = payload.user;
   const agentId = resolveAgentIdForRequest({ req, model });
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
     agentId,
     model,
   });
