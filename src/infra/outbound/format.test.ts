@@ -10,7 +10,6 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn((_channel: unknown) => undef
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
 }));
-
 describe("formatOutboundDeliverySummary", () => {
   it("formats fallback and provider-specific detail variants", () => {
     const cases = [

@@ -53,7 +53,7 @@ import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { pinActivePluginChannelRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -104,7 +104,11 @@ import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { loadGatewayPlugins, setFallbackGatewayContextResolver } from "./server-plugins.js";
+import {
+  loadGatewayStartupPlugins,
+  reloadDeferredGatewayPlugins,
+} from "./server-plugin-bootstrap.js";
+import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -562,7 +566,7 @@ export async function startGatewayServer(
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
-    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayPlugins({
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
       cfg: cfgAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
@@ -1247,7 +1251,7 @@ export async function startGatewayServer(
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
-        ({ pluginRegistry } = loadGatewayPlugins({
+        ({ pluginRegistry } = reloadDeferredGatewayPlugins({
           cfg: cfgAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
@@ -1255,10 +1259,6 @@ export async function startGatewayServer(
           baseMethods,
           logDiagnostics: false,
         }));
-        // Re-pin: the deferred reload replaces setup-entry channel objects with
-        // full runtime implementations. Update the pinned channel registry so
-        // getChannelPlugin() resolves against the complete set.
-        pinActivePluginChannelRegistry(pluginRegistry);
       }
       ({ browserControl, pluginServices } = await startGatewaySidecars({
         cfg: cfgAtStart,
