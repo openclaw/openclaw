@@ -46,6 +46,7 @@ describe("agent event handler", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetAgentRunContextForTest();
   });
 
@@ -136,6 +137,21 @@ describe("agent event handler", () => {
     });
   }
 
+  function emitLifecycleError(
+    handler: ReturnType<typeof createHarness>["handler"],
+    runId: string,
+    error = "boom",
+    seq = 2,
+  ) {
+    handler({
+      runId,
+      seq,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "error", error },
+    });
+  }
+
   function emitFallbackLifecycle(params: {
     handler: ReturnType<typeof createHarness>["handler"];
     runId: string;
@@ -189,6 +205,78 @@ describe("agent event handler", () => {
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("suppresses transient lifecycle errors when the same run later ends successfully", async () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-fallback",
+    });
+    chatRunState.registry.add("run-fallback", {
+      sessionKey: "session-fallback",
+      clientRunId: "client-fallback",
+    });
+
+    emitLifecycleError(handler, "run-fallback", "temporary rate limit", 1);
+
+    const terminalBeforeRecovery = chatBroadcastCalls(broadcast).filter(([, payload]) => {
+      const typed = payload as { state?: string };
+      return typed.state === "error" || typed.state === "final";
+    });
+    expect(terminalBeforeRecovery).toHaveLength(0);
+
+    handler({
+      runId: "run-fallback",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Recovered reply" },
+    });
+    emitLifecycleEnd(handler, "run-fallback", 3);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    const errorPayloads = chatCalls.filter(([, payload]) => {
+      const typed = payload as { state?: string };
+      return typed.state === "error";
+    });
+    expect(errorPayloads).toHaveLength(0);
+    const finalPayload = chatCalls
+      .map(
+        ([, payload]) =>
+          payload as {
+            state?: string;
+            message?: { content?: Array<{ text?: string }> };
+          },
+      )
+      .find((payload) => payload.state === "final");
+    expect(finalPayload?.message?.content?.[0]?.text).toBe("Recovered reply");
+  });
+
+  it("delays terminal lifecycle errors until the retry grace window expires", async () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-error",
+    });
+    chatRunState.registry.add("run-error", {
+      sessionKey: "session-error",
+      clientRunId: "client-error",
+    });
+
+    emitLifecycleError(handler, "run-error", "boom", 1);
+
+    const errorPayloads = () =>
+      chatBroadcastCalls(broadcast).filter(([, payload]) => {
+        const typed = payload as { state?: string };
+        return typed.state === "error";
+      });
+
+    expect(errorPayloads()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(errorPayloads()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(errorPayloads()).toHaveLength(1);
   });
 
   it("strips inline directives from assistant chat events", () => {
