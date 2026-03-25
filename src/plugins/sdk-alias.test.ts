@@ -516,9 +516,8 @@ describe("plugin sdk alias helpers", () => {
     // Simulate loader.ts passing its own import.meta.url as the moduleUrl hint.
     // This covers installations where argv1 does not resolve to the openclaw root
     // (e.g. single-binary distributions or custom process launchers).
-    const loaderModuleUrl = pathToFileURL(
-      path.join(fixture.root, "dist", "plugins", "loader.js"),
-    ).href;
+    // Use openclaw.mjs which is created by createPluginSdkAliasFixture (bin+marker mode).
+    const loaderModuleUrl = pathToFileURL(path.join(fixture.root, "openclaw.mjs")).href;
 
     const aliases = withCwd(externalPluginRoot, () =>
       withEnv({ NODE_ENV: undefined }, () =>
