@@ -1509,12 +1509,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       // Guard on the truncated text so long replies (past textLimit) do not keep
       // re-patching with the same truncated content every 200 ms and hit rate limits.
       if (text === lastSentText) return;
+      // Bound flush requests so a stalled Mattermost API cannot block
+      // final delivery forever (ID=2978002394).
+      const FLUSH_TIMEOUT_MS = 8_000;
+      const flushTimeout = new Promise<"timeout">((r) =>
+        setTimeout(() => r("timeout"), FLUSH_TIMEOUT_MS),
+      );
       if (!streamMessageId) {
         try {
-          const result = await sendMessageMattermost(to, text, {
+          const sendPromise = sendMessageMattermost(to, text, {
             accountId: account.accountId,
             replyToId: effectiveReplyToId,
           });
+          const raceResult = await Promise.race([sendPromise, flushTimeout]);
+          if (raceResult === "timeout") {
+            logVerboseMessage("mattermost stream-patch flush send timed out, skipping preview");
+            return;
+          }
+          const result = raceResult;
           streamMessageId = result.messageId;
           lastSentText = text;
           runtime.log?.(`stream-patch started ${streamMessageId}`);
@@ -1523,10 +1535,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         }
       } else {
         try {
-          await patchMattermostPost(blockStreamingClient, {
+          const patchPromise = patchMattermostPost(blockStreamingClient, {
             postId: streamMessageId,
             message: text,
           });
+          const raceResult = await Promise.race([patchPromise, flushTimeout]);
+          if (raceResult === "timeout") {
+            logVerboseMessage("mattermost stream-patch flush patch timed out, skipping");
+            return;
+          }
           lastSentText = text;
           runtime.log?.(`stream-patch flushed ${streamMessageId}`);
         } catch (err) {
