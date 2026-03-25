@@ -1,44 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import { slackOutbound } from "../../../../test/channel-outbounds.js";
+import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import {
-  installSendPayloadContractSuite,
-  primeSendMock,
-} from "../../../test-utils/send-payload-contract.js";
+import { createSlackOutboundPayloadHarness } from "../contracts/suites.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
   sendResults?: Array<{ messageId: string }>;
 }) {
-  const sendSlack = vi.fn();
-  primeSendMock(
-    sendSlack,
-    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
-    params.sendResults,
-  );
-  const ctx = {
-    cfg: {},
-    to: "C12345",
-    text: "",
-    payload: params.payload,
-    deps: {
-      sendSlack,
-    },
-  };
-  return {
-    run: async () => await slackOutbound.sendPayload!(ctx),
-    sendMock: sendSlack,
-    to: ctx.to,
-  };
+  return createSlackOutboundPayloadHarness(params);
 }
 
 describe("slackOutbound sendPayload", () => {
-  installSendPayloadContractSuite({
-    channel: "slack",
-    chunking: { mode: "passthrough", longTextLength: 5000 },
-    createHarness,
-  });
-
   it("forwards Slack blocks from channelData", async () => {
     const { run, sendMock, to } = createHarness({
       payload: {

@@ -30,9 +30,9 @@ openclaw plugins install @openclaw/feishu
 
 There are two ways to add the Feishu channel:
 
-### Method 1: setup wizard (recommended)
+### Method 1: onboarding (recommended)
 
-If you just installed OpenClaw, run the setup wizard:
+If you just installed OpenClaw, run onboarding:
 
 ```bash
 openclaw onboard
@@ -185,7 +185,7 @@ Edit `~/.openclaw/openclaw.json`:
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "My AI assistant",
+          name: "My AI assistant",
         },
       },
     },
@@ -494,12 +494,12 @@ openclaw pairing list feishu
         main: {
           appId: "cli_xxx",
           appSecret: "xxx",
-          botName: "Primary bot",
+          name: "Primary bot",
         },
         backup: {
           appId: "cli_yyy",
           appSecret: "yyy",
-          botName: "Backup bot",
+          name: "Backup bot",
           enabled: false,
         },
       },

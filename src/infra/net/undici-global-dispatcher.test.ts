@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   Agent,
@@ -46,6 +46,8 @@ const {
   };
 });
 
+const mockedModuleIds = ["node:net", "undici", "./proxy-env.js"] as const;
+
 vi.mock("undici", () => ({
   Agent,
   EnvHttpProxyAgent,
@@ -62,15 +64,20 @@ vi.mock("./proxy-env.js", () => ({
 }));
 
 import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
-import {
-  DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
-  ensureGlobalUndiciEnvProxyDispatcher,
-  ensureGlobalUndiciStreamTimeouts,
-  resetGlobalUndiciStreamTimeoutsForTests,
-} from "./undici-global-dispatcher.js";
+let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
+let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
+let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      ensureGlobalUndiciEnvProxyDispatcher,
+      ensureGlobalUndiciStreamTimeouts,
+      resetGlobalUndiciStreamTimeoutsForTests,
+    } = await import("./undici-global-dispatcher.js"));
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
@@ -205,4 +212,11 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });

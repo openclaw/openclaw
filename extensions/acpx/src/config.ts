@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acpx";
+import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
@@ -9,18 +9,22 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.1.16";
+export const ACPX_PINNED_VERSION = "0.3.1";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 
-export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
+function isAcpxPluginRoot(dir: string): boolean {
+  return (
+    fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
+    fs.existsSync(path.join(dir, "package.json"))
+  );
+}
+
+function resolveNearestAcpxPluginRoot(moduleUrl: string): string {
   let cursor = path.dirname(fileURLToPath(moduleUrl));
   for (let i = 0; i < 3; i += 1) {
     // Bundled entries live at the plugin root while source files still live under src/.
-    if (
-      fs.existsSync(path.join(cursor, "openclaw.plugin.json")) &&
-      fs.existsSync(path.join(cursor, "package.json"))
-    ) {
+    if (isAcpxPluginRoot(cursor)) {
       return cursor;
     }
     const parent = path.dirname(cursor);
@@ -32,10 +36,29 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
   return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..");
 }
 
+function resolveWorkspaceAcpxPluginRoot(currentRoot: string): string | null {
+  if (
+    path.basename(currentRoot) !== "acpx" ||
+    path.basename(path.dirname(currentRoot)) !== "extensions" ||
+    path.basename(path.dirname(path.dirname(currentRoot))) !== "dist"
+  ) {
+    return null;
+  }
+  const workspaceRoot = path.resolve(currentRoot, "..", "..", "..", "extensions", "acpx");
+  return isAcpxPluginRoot(workspaceRoot) ? workspaceRoot : null;
+}
+
+export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): string {
+  const resolvedRoot = resolveNearestAcpxPluginRoot(moduleUrl);
+  // In a live repo checkout, dist/ can be rebuilt out from under the running gateway.
+  // Prefer the stable source plugin root when a built extension is running beside it.
+  return resolveWorkspaceAcpxPluginRoot(resolvedRoot) ?? resolvedRoot;
+}
+
 export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
 export const ACPX_BUNDLED_BIN = path.join(ACPX_PLUGIN_ROOT, "node_modules", ".bin", ACPX_BIN_NAME);
 export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSION): string {
-  return `npm install --omit=dev --no-save acpx@${version}`;
+  return `npm install --omit=dev --no-save --package-lock=false acpx@${version}`;
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 

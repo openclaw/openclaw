@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  __testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -10,13 +11,27 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
 
+const storeMocks = vi.hoisted(() => ({
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("./store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./store.js")>();
   return {
     ...original,
-    updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
-    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
   };
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+  authProfileUsageTesting.setDepsForTest({
+    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+  });
 });
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {

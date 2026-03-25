@@ -1,5 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { resolveBrowserExecutableForPlatform } from "./chrome.executables.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(),
@@ -7,18 +6,35 @@ vi.mock("node:child_process", () => ({
 vi.mock("node:fs", () => {
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
+  const module = { existsSync, readFileSync };
   return {
-    existsSync,
-    readFileSync,
-    default: { existsSync, readFileSync },
+    ...module,
+    default: module,
+  };
+});
+vi.mock("node:os", () => {
+  const homedir = vi.fn();
+  const module = { homedir };
+  return {
+    ...module,
+    default: module,
   };
 });
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import os from "node:os";
+
+async function loadResolveBrowserExecutableForPlatform() {
+  const mod = await import("./chrome.executables.js");
+  return mod.resolveBrowserExecutableForPlatform;
+}
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  let resolveBrowserExecutableForPlatform: Awaited<
+    ReturnType<typeof loadResolveBrowserExecutableForPlatform>
+  >;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -46,11 +62,14 @@ describe("browser default executable detection", () => {
     });
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
+    vi.mocked(os.homedir).mockReturnValue("/Users/test");
+    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
   });
 
-  it("prefers default Chromium browser on macOS", () => {
+  it("prefers default Chromium browser on macOS", async () => {
     mockMacDefaultBrowser("com.google.Chrome", "/Applications/Google Chrome.app");
     mockChromeExecutableExists();
 
@@ -63,7 +82,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("chrome");
   });
 
-  it("falls back when default browser is non-Chromium on macOS", () => {
+  it("falls back when default browser is non-Chromium on macOS", async () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import type { PluginConfigUiHint, PluginKind } from "./types.js";
 
@@ -11,6 +11,7 @@ export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
+  enabledByDefault?: boolean;
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
@@ -47,7 +48,14 @@ export type PluginManifestProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /**
+   * Interactive onboarding surfaces where this auth choice should appear.
+   * Defaults to `["text-inference"]` when omitted.
+   */
+  onboardingScopes?: PluginManifestOnboardingScope[];
 };
+
+export type PluginManifestOnboardingScope = "text-inference" | "image-generation";
 
 export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
@@ -106,6 +114,10 @@ function normalizeProviderAuthChoices(
     const cliOption = typeof entry.cliOption === "string" ? entry.cliOption.trim() : "";
     const cliDescription =
       typeof entry.cliDescription === "string" ? entry.cliDescription.trim() : "";
+    const onboardingScopes = normalizeStringList(entry.onboardingScopes).filter(
+      (scope): scope is PluginManifestOnboardingScope =>
+        scope === "text-inference" || scope === "image-generation",
+    );
     normalized.push({
       provider,
       method,
@@ -119,6 +131,7 @@ function normalizeProviderAuthChoices(
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
+      ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;
@@ -146,14 +159,18 @@ export function loadPluginManifest(
     rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "path") {
-      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
-    }
-    return {
-      ok: false,
-      error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
-      manifestPath,
-    };
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => ({
+        ok: false,
+        error: `plugin manifest not found: ${manifestPath}`,
+        manifestPath,
+      }),
+      fallback: (failure) => ({
+        ok: false,
+        error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        manifestPath,
+      }),
+    });
   }
   let raw: unknown;
   try {
@@ -180,6 +197,7 @@ export function loadPluginManifest(
   }
 
   const kind = typeof raw.kind === "string" ? (raw.kind as PluginKind) : undefined;
+  const enabledByDefault = raw.enabledByDefault === true;
   const name = typeof raw.name === "string" ? raw.name.trim() : undefined;
   const description = typeof raw.description === "string" ? raw.description.trim() : undefined;
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
@@ -199,6 +217,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(enabledByDefault ? { enabledByDefault } : {}),
       kind,
       channels,
       providers,
@@ -240,6 +259,15 @@ export type PluginPackageInstall = {
   npmSpec?: string;
   localPath?: string;
   defaultChoice?: "npm" | "local";
+  minHostVersion?: string;
+};
+
+export type OpenClawPackageStartup = {
+  /**
+   * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
+   * startup surface needed before the server starts listening.
+   */
+  deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
 export type OpenClawPackageManifest = {
@@ -247,6 +275,7 @@ export type OpenClawPackageManifest = {
   setupEntry?: string;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  startup?: OpenClawPackageStartup;
 };
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [

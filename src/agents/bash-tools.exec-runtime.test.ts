@@ -1,24 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: vi.fn(),
-}));
+const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
-}));
-
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { emitExecSystemEvent } from "./bash-tools.exec-runtime.js";
-
-const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
-const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
+let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
+let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
+let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 
 describe("emitExecSystemEvent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
+    vi.doMock("../infra/heartbeat-wake.js", () => ({
+      requestHeartbeatNow: requestHeartbeatNowMock,
+    }));
+    vi.doMock("../infra/system-events.js", () => ({
+      enqueueSystemEvent: enqueueSystemEventMock,
+    }));
+    ({ buildExecExitOutcome, emitExecSystemEvent, formatExecFailureReason } =
+      await import("./bash-tools.exec-runtime.js"));
   });
 
   it("scopes heartbeat wake to the event session key", () => {
@@ -60,5 +61,78 @@ describe("emitExecSystemEvent", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatExecFailureReason", () => {
+  it("formats timeout guidance with the configured timeout", () => {
+    expect(
+      formatExecFailureReason({
+        failureKind: "overall-timeout",
+        exitSignal: "SIGKILL",
+        timeoutSec: 45,
+      }),
+    ).toContain("45 seconds");
+  });
+
+  it("formats shell failures without timeout-specific guidance", () => {
+    expect(
+      formatExecFailureReason({
+        failureKind: "shell-command-not-found",
+        exitSignal: null,
+        timeoutSec: 45,
+      }),
+    ).toBe("Command not found");
+  });
+});
+
+describe("buildExecExitOutcome", () => {
+  it("keeps non-zero normal exits in the completed path", () => {
+    expect(
+      buildExecExitOutcome({
+        exit: {
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 123,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        },
+        aggregated: "done",
+        durationMs: 123,
+        timeoutSec: 30,
+      }),
+    ).toMatchObject({
+      status: "completed",
+      exitCode: 1,
+      aggregated: "done\n\n(Command exited with code 1)",
+    });
+  });
+
+  it("classifies timed out exits as failures with a reason", () => {
+    expect(
+      buildExecExitOutcome({
+        exit: {
+          reason: "overall-timeout",
+          exitCode: null,
+          exitSignal: "SIGKILL",
+          durationMs: 123,
+          stdout: "",
+          stderr: "",
+          timedOut: true,
+          noOutputTimedOut: false,
+        },
+        aggregated: "",
+        durationMs: 123,
+        timeoutSec: 30,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      failureKind: "overall-timeout",
+      timedOut: true,
+      reason: expect.stringContaining("30 seconds"),
+    });
   });
 });

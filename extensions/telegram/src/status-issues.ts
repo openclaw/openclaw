@@ -1,13 +1,13 @@
+import type {
+  ChannelAccountSnapshot,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
 import {
   appendMatchMetadata,
   asString,
   isRecord,
   resolveEnabledConfiguredAccountId,
-} from "../../../src/channels/plugins/status-issues/shared.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelStatusIssue,
-} from "../../../src/channels/plugins/types.js";
+} from "openclaw/plugin-sdk/status-helpers";
 
 type TelegramAccountStatus = {
   accountId?: unknown;

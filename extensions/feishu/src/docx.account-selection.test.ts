@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, test, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuDocTools } from "./docx.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 

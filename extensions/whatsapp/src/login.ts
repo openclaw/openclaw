@@ -1,9 +1,9 @@
 import { DisconnectReason } from "@whiskeysockets/baileys";
-import { formatCliCommand } from "../../../src/cli/command-format.js";
-import { loadConfig } from "../../../src/config/config.js";
-import { danger, info, success } from "../../../src/globals.js";
-import { logInfo } from "../../../src/logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../../../src/runtime.js";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
+import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import {
   createWaSocket,
@@ -13,6 +13,8 @@ import {
   waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
 } from "./session.js";
+
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
 export async function loginWeb(
   verbose: boolean,
@@ -53,7 +55,7 @@ export async function loginWeb(
         setTimeout(() => retry.ws?.close(), 500);
       }
     }
-    if (code === DisconnectReason.loggedOut) {
+    if (code === LOGGED_OUT_STATUS) {
       await logoutWeb({
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,

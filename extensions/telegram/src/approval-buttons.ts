@@ -1,4 +1,4 @@
-import type { ExecApprovalReplyDecision } from "../../../src/infra/exec-approval-reply.js";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/infra-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 
 const MAX_CALLBACK_DATA_BYTES = 64;

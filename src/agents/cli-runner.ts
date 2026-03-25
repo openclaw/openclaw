@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -15,6 +16,7 @@ import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
   buildBootstrapTruncationReportMeta,
+  prependBootstrapPromptWarning,
 } from "./bootstrap-budget.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -63,7 +65,7 @@ export async function runCliAgent(params: {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
-  streamParams?: import("../commands/agent/types.js").AgentStreamParams;
+  streamParams?: import("./command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
@@ -162,7 +164,6 @@ export async function runCliAgent(params: {
     docsPath: docsPath ?? undefined,
     tools: [],
     contextFiles,
-    bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
     modelDisplay,
     agentId: sessionAgentId,
   });
@@ -218,7 +219,9 @@ export async function runCliAgent(params: {
 
     let imagePaths: string[] | undefined;
     let cleanupImages: (() => Promise<void>) | undefined;
-    let prompt = params.prompt;
+    let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
+      preserveExactPrompt: heartbeatPrompt,
+    });
     if (params.images && params.images.length > 0) {
       const imagePayload = await writeCliImages(params.images);
       imagePaths = imagePayload.paths;
@@ -294,7 +297,11 @@ export async function runCliAgent(params: {
         }
 
         const env = (() => {
-          const next = { ...process.env, ...backend.env };
+          const next = sanitizeHostExecEnv({
+            baseEnv: process.env,
+            overrides: backend.env,
+            blockPathOverrides: true,
+          });
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
           }

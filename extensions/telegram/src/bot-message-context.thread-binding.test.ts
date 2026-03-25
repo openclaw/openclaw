@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const resolveByConversationMock = vi.fn();
@@ -9,9 +9,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../../src/infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../src/infra/outbound/session-binding-service.js")>();
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
     getSessionBindingService: () => ({
@@ -25,10 +24,15 @@ vi.mock("../../../src/infra/outbound/session-binding-service.js", async (importO
   };
 });
 
-const { buildTelegramMessageContextForTest } =
-  await import("./bot-message-context.test-harness.js");
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 describe("buildTelegramMessageContext bound conversation override", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
     hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
     hoisted.touchMock.mockReset();
