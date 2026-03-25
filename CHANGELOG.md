@@ -28,6 +28,9 @@ Docs: https://docs.openclaw.ai
 - OpenAI/apply_patch: enable `apply_patch` by default for OpenAI and OpenAI Codex models, and align its sandbox policy access with `write` permissions.
 - Docs: add `pnpm docs:check-links:anchors` for Mintlify anchor validation while keeping `scripts/docs-link-audit.mjs` as the stable link-audit entrypoint. (#55912) Thanks @velvet-shark.
 - Plugins/hooks: add async `requireApproval` to `before_tool_call` hooks, letting plugins pause tool execution and prompt the user for approval via the exec approval overlay, Telegram buttons, Discord interactions, or the `/approve` command on any channel. The `/approve` command now handles both exec and plugin approvals with automatic fallback. (#55339) Thanks @vaclavbelak and @joshavant.
+- Local Models/Tooling: add automated ReAct prompt wrapping for open-source models that lack native tool calling APIs or struggle to output valid tools natively. This enables functional tool ecosystems on generic `v1/chat/completions` endpoints.
+- Local Models/Provider Config: add `toolFallback: "react" | "none" | "auto"` to explicit model configuration block, defaulting to `auto` which discovers the capability using an API ping.
+- Local Models/React Profiles: add `reactProfile: "minimal" | "verbose"` to let operators scale the injected context window instructions based on model size and intelligence.
 
 ### Fixes
 
@@ -151,34 +154,17 @@ Docs: https://docs.openclaw.ai
 - Tests/security audit: isolate audit-test home and personal skill resolution so local `~/.agents/skills` installs no longer make maintainer prep runs fail nondeterministically. (#54473) thanks @huntharo
 - Local Models/LM Studio: add an aggressive pre-parser that strips `</think>` and `<think>...</think>` internal reasoning blocks from the model's text stream before evaluating tool calls, stopping the infamous LM Studio "recursive nested JSON" parsing bug and preventing models from acting on hallucinated thoughts.
 
-### Changes
-
-- Local Models/Tooling: add automated ReAct prompt wrapping for open-source models that lack native tool calling APIs or struggle to output valid tools natively. This enables functional tool ecosystems on generic `v1/chat/completions` endpoints.
-- Local Models/Provider Config: add `toolFallback: "react" | "none" | "auto"` to explicit model configuration block, defaulting to `auto` which discovers the capability using an API ping.
-- Local Models/React Profiles: add `reactProfile: "minimal" | "verbose"` to let operators scale the injected context window instructions based on model size and intelligence.
-- Skills/install metadata: add one-click install recipes to bundled skills (coding-agent, gh-issues, openai-whisper-api, session-logs, tmux, trello, weather) so the CLI and Control UI can offer dependency installation when requirements are missing. (#53411) Thanks @BunsDev.
-- Control UI/skills: add status-filter tabs (All / Ready / Needs Setup / Disabled) with counts, replace inline skill cards with a click-to-detail dialog showing requirements, toggle switch, install action, API key entry, source metadata, and homepage link. (#53411) Thanks @BunsDev.
-- Slack/interactive replies: restore rich reply parity for direct deliveries, auto-render simple trailing `Options:` lines as buttons/selects, improve Slack interactive setup defaults, and isolate reply controls from plugin interactive handlers. (#53389) Thanks @vincentkoc.
-- CLI/containers: add `--container` and `OPENCLAW_CONTAINER` to run `openclaw` commands inside a running Docker or Podman OpenClaw container. (#52651) Thanks @sallyom.
-- Discord/auto threads: add optional `autoThreadName: "generated"` naming so new auto-created threads can be renamed asynchronously with concise LLM-generated titles while keeping the existing message-based naming as the default. (#43366) Thanks @davidguttman.
-- Plugins/hooks: add `before_dispatch` with canonical inbound metadata and route handled replies through the normal final-delivery path, preserving TTS and routed delivery semantics. (#50444) Thanks @gfzhx.
-- Control UI/agents: convert agent workspace file rows to expandable `<details>` with lazy-loaded inline markdown preview, and add comprehensive `.sidebar-markdown` styles for headings, lists, code blocks, tables, blockquotes, and details/summary elements. (#53411) Thanks @BunsDev.
-- Control UI/markdown preview: restyle the agent workspace file preview dialog with a frosted backdrop, sized panel, and styled header, and integrate `@create-markdown/preview` v2 system theme for rich markdown rendering (headings, tables, code blocks, callouts, blockquotes) that auto-adapts to the app's light/dark design tokens. (#53411) Thanks @BunsDev.
-- macOS app/config: replace horizontal pill-based subsection navigation with a collapsible tree sidebar using disclosure chevrons and indented subsection rows. (#53411) Thanks @BunsDev.
-- CLI/skills: soften missing-requirements label from "missing" to "needs setup" and surface API key setup guidance (where to get a key, CLI save command, storage path) in `openclaw skills info` output. (#53411) Thanks @BunsDev.
-- macOS app/skills: add "Get your key" homepage link and storage-path hint to the API key editor dialog, and show the config path in save confirmation messages. (#53411) Thanks @BunsDev.
-- Control UI/agents: add a "Not set" placeholder to the default agent model selector dropdown. (#53411) Thanks @BunsDev.
-
 ### Fixes
 
-<<<<<<< HEAD
+- Runtime/install: lower the supported Node 22 floor to `22.14+` while continuing to recommend Node 24, so npm installs and self-updates do not strand Node 22.14 users on older releases.
+- CLI/update: preflight the target npm package `engines.node` before `openclaw update` runs a global package install, so outdated Node runtimes fail with a clear upgrade message instead of attempting an unsupported latest release.
+- Tests/security audit: isolate audit-test home and personal skill resolution so local `~/.agents/skills` installs no longer make maintainer prep runs fail nondeterministically. (#54473) thanks @huntharo
+- Local Models/LM Studio: add an aggressive pre-parser that strips `</think>` and `<think>...</think>` internal reasoning blocks from the model's text stream before evaluating tool calls, stopping the infamous LM Studio "recursive nested JSON" parsing bug and preventing models from acting on hallucinated thoughts.
 - Security/sandbox media dispatch: close the `mediaUrl`/`fileUrl` alias bypass so outbound tool and message actions cannot escape media-root restrictions. (#54034)
 - Gateway/restart sentinel: wake the interrupted agent session via heartbeat after restart instead of only sending a best-effort restart note, retry outbound delivery once on transient failure, and preserve explicit thread/topic routing through the wake path so replies land in the correct Telegram topic or Slack thread. (#53940) Thanks @VACInc.
 - Docker/setup: avoid the pre-start `openclaw-cli` shared-network namespace loop by routing setup-time onboard/config writes through `openclaw-gateway`, so fresh Docker installs stop failing before the gateway comes up. (#53385) Thanks @amsminn.
 - Gateway/channels: keep channel startup sequential while isolating per-channel boot failures, so one broken channel no longer blocks later channels from starting. (#54215) Thanks @JonathanJing.
 - Embedded runs/secrets: stop unresolved `SecretRef` config from crashing embedded agent runs by falling back to the resolved runtime snapshot when needed. Fixes #45838.
-=======
-- Local Models/LM Studio: add an aggressive pre-parser that strips `</think>` and `<think>...</think>` internal reasoning blocks from the model's text stream before evaluating tool calls, stopping the infamous LM Studio "recursive nested JSON" parsing bug and preventing models from acting on hallucinated thoughts.
 - ACP/direct chats: always deliver a terminal ACP result when final TTS does not yield audio, even if block text already streamed earlier, and skip redundant empty-text final synthesis. (#53692) Thanks @w-sss.
 - Doctor/image generation: seed migrated legacy Nano Banana Google provider config with the `/v1beta` API root and an empty model list so `openclaw doctor --fix` completes and the migrated native Google image path keeps hitting the correct endpoint. (#53757) Thanks @mahopan.
 - Security/skills: validate skill installer metadata against strict regex allowlists per package manager, sanitize skill metadata for terminal output, add URL protocol allowlisting in markdown preview and skill homepage links, warn on non-bundled skill install sources, and remove unsafe `file://` workspace links. (#53471) Thanks @BunsDev.
@@ -189,41 +175,30 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: recover `#General` topic `1` routing when Telegram omits forum metadata, including native commands, interactive callbacks, inbound message context, and fallback error replies. (#53699) thanks @huntharo
 - Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
 - Feishu/startup: treat unresolved `SecretRef` app credentials as not configured during account resolution so CLI startup and read-only Feishu config surfaces stop crashing before runtime-backed secret resolution is available. (#53675) Thanks @hpt.
->>>>>>> a80bc24279 (feat(local-models): standardize tool calling with ReAct fallback & think-block stripping)
 - WhatsApp/groups: track recent gateway-sent message IDs and suppress only matching group echoes, preserving owner `/status`, `/new`, and `/activation` commands from linked-account `fromMe` traffic. (#53624) Thanks @w-sss.
 - WhatsApp/reply-to-bot detection: restore implicit group reply detection by unwrapping `botInvokeMessage` payloads and reading `selfLid` from `creds.json`, so reply-based mentions reach the bot again in linked-account group chats.
-- Telegram/forum topics: recover `#General` topic `1` routing when Telegram omits forum metadata, including native commands, interactive callbacks, inbound message context, and fallback error replies. (#53699) thanks @huntharo
 - Discord/gateway supervision: centralize gateway error handling behind a lifetime-owned supervisor so early, active, and late-teardown Carbon gateway errors stay classified consistently and stop surfacing as process-killing teardown crashes.
 - Discord/timeouts: send a visible timeout reply when the inbound Discord worker times out before a final reply starts, including created auto-thread targets and queued-run ordering. (#53823) Thanks @Kimbo7870.
-- ACP/direct chats: always deliver a terminal ACP result when final TTS does not yield audio, even if block text already streamed earlier, and skip redundant empty-text final synthesis. (#53692) Thanks @w-sss.
 - Telegram/outbound errors: preserve actionable 403 membership/block/kick details and treat `bot not a member` as a permanent delivery failure so Telegram sends stop retrying doomed chats. (#53635) Thanks @w-sss.
 - Telegram/photos: preflight Telegram photo dimension and aspect-ratio rules, and fall back to document sends when image metadata is invalid or unavailable so photo uploads stop failing with `PHOTO_INVALID_DIMENSIONS`. (#52545) Thanks @hnshah.
 - Slack/runtime defaults: trim Slack DM reply overhead, restore Codex auto transport, and tighten Slack/web-search runtime defaults around DM preview threading, cache scoping, warning dedupe, and explicit web-search opt-in. (#53957) Thanks @vincentkoc.
-- Doctor/image generation: seed migrated legacy Nano Banana Google provider config with the `/v1beta` API root and an empty model list so `openclaw doctor --fix` completes and the migrated native Google image path keeps hitting the correct endpoint. (#53757) Thanks @mahopan.
 - Models/google: normalize bare Google Generative AI API roots for custom provider names, and keep built-in Google model-id rewrites working when `api` is declared only on individual models, so custom Google lanes and older configs stop missing `/v1beta` or preview-id normalization. (#44969) Thanks @Kathie-yu.
-- Feishu/startup: treat unresolved `SecretRef` app credentials as not configured during account resolution so CLI startup and read-only Feishu config surfaces stop crashing before runtime-backed secret resolution is available. (#53675) Thanks @hpt.
 - Feishu/groups: when `groupPolicy` is `open`, stop implicitly requiring @mentions for unset `requireMention`, so image, file, audio, and other non-text group messages reach the bot unless operators explicitly keep mention gating on. (#54058) Thanks @byungsker.
 - Feishu/startup: keep `requireMention` enforcement strict when bot identity startup probes fail, raise the startup bot-info timeout to 30s, and add cancellable background identity recovery so mention-gated groups recover without noisy fallback. (#43788) Thanks @lefarcen.
 - Feishu/MSTeams message tool: keep provider-native `card` payloads optional in merged tool schemas so media-only sends stop failing validation before channel runtime dispatch. (#53715) Thanks @lndyzwdxhs.
-- Feishu/docx block ordering: preserve the document tree order from `docx.document.convert` when inserting blocks, fixing heading/paragraph/list misordering in newly written Feishu documents. (#40524) Thanks @TaoXieSZ.
 - Telegram/native commands: run native slash-command execution against the resolved runtime snapshot so DM commands still reply when fresh config reads surface unresolved SecretRefs. (#53179) Thanks @nimbleenigma.
 - Gateway/ports: parse Docker Compose-style `OPENCLAW_GATEWAY_PORT` host publish values correctly without reviving the legacy `CLAWDBOT_GATEWAY_PORT` override. (#44083) Thanks @bebule.
 - Plugins/memory-lancedb: bootstrap the env-configured HTTP/HTTPS proxy dispatcher before OpenAI embeddings requests so memory capture and recall work in proxy-required environments again. (#54119) Thanks @neeravmakwana.
 - Runtime/build: stabilize long-lived lazy `dist` runtime entry paths and harden bundled plugin npm staging so local rebuilds stop breaking on missing hashed chunks or broken shell `npm` shims. (#53855) Thanks @vincentkoc.
-- Security/skills: validate skill installer metadata against strict regex allowlists per package manager, sanitize skill metadata for terminal output, add URL protocol allowlisting in markdown preview and skill homepage links, warn on non-bundled skill install sources, and remove unsafe `file://` workspace links. (#53471) Thanks @BunsDev.
 - Memory/builtin sqlite: cut redundant sync and status query churn by snapshotting file state once per source, reusing sync statements, and consolidating status aggregation reads, which reduces builtin memory overhead on sync/status/doctor-style paths. Thanks @vincentkoc.
-- TUI/chat: preserve pending user messages when a slow local run emits an empty final event, but still defer and flush the needed history reload after the newer active run finishes so silent/tool-only runs do not stay incomplete. (#53130) Thanks @joelnishanth.
 - DeepSeek/pricing: replace the zero-cost DeepSeek catalog rates with the current DeepSeek V3.2 pricing so usage totals stop showing `$0.00` for DeepSeek sessions. (#54143) Thanks @arkyu2077.
 - CLI/logging: make pretty log timestamps always include an explicit timezone offset in default UTC and `--local-time` modes, so incident triage no longer mixes ambiguous clock displays. (#38904) Thanks @sahilsatralkar.
 - Browser/default detection: recognize macOS LaunchServices Edge bundle ids so default Chromium detection stops falling back to Chrome when Edge is the system default. (#48561) Thanks @zoherghadyali.
 - CLI/Telegram topics: route `message thread create` through Telegram `topic-create` with the required topic `name` field so Telegram forum topic creation works from the CLI again. (#54336) Thanks @andyliu.
 - Telegram/pairing: render pairing codes and approval commands as Telegram-only code blocks while keeping shared pairing replies plain text for other channels. (#52784) Thanks @sumukhj1219.
-- Agents/cron: suppress the default heartbeat system prompt for cron-triggered embedded runs even when they target non-cron session keys, so cron tasks stop reading `HEARTBEAT.md` and polluting unrelated threads. (#53152) Thanks @Protocol-zero-0.
 - Agents/cron: mark best-effort announce runs as not delivered when any payload fails, and log those partial delivery failures instead of silently reporting success. (#42535) Thanks @MoerAI.
 - Plugins: enforce terminal hook decision semantics for tool/message guards (#54241) Thanks @joshavant.
 - Marketplace/agents: correct the ClawHub skill URL in agent docs and stream marketplace archive downloads to disk so installs avoid excess memory use and fail cleanly on empty responses. (#54160) Thanks @QuinnH496.
-- Discord/config types: add missing `autoArchiveDuration` to `DiscordGuildChannelConfig` so TypeScript config definitions match the existing schema and runtime support. (#43427) Thanks @davidguttman.
-- Docs/IRC: fix five `json55` code-fence typos in the IRC channel examples so Mintlify applies JSON5 syntax highlighting correctly. (#50842) Thanks @Hollychou924.
 - Discord/commands: trim overlong slash-command descriptions to Discord's 100-character limit and map rejected deploy indexes from Discord validation payloads back to command names/descriptions, so deploys stop failing on long descriptions and startup logs identify the rejected commands. (#54118) thanks @huntharo
 - Media/store: enforce the intended media file mode after writes and redirect downloads so restrictive umasks do not silently narrow saved media permissions.
 
