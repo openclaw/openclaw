@@ -156,9 +156,12 @@ export async function injectMultiAgentTranscript(
     return null;
   }
 
-  // Filter out old entries based on pruneAfterHours
-  const cutoffTime = Date.now() - config.pruneAfterHours * 60 * 60 * 1000;
-  const recentEntries = peerEntries.filter((e) => e.timestamp.getTime() > cutoffTime);
+  // Filter out old entries based on pruneAfterHours (0 = disabled)
+  let recentEntries = peerEntries;
+  if (config.pruneAfterHours > 0) {
+    const cutoffTime = Date.now() - config.pruneAfterHours * 60 * 60 * 1000;
+    recentEntries = peerEntries.filter((e) => e.timestamp.getTime() > cutoffTime);
+  }
 
   if (recentEntries.length === 0) {
     return null;
@@ -176,6 +179,12 @@ export async function pruneTranscript(
   format: "markdown" | "json",
   pruneAfterHours: number,
 ): Promise<{ removed: number; remaining: number }> {
+  // pruneAfterHours=0 means disabled
+  if (pruneAfterHours <= 0) {
+    const allEntries = await readTranscriptEntries(filePath, format, Infinity);
+    return { removed: 0, remaining: allEntries.length };
+  }
+
   const allEntries = await readTranscriptEntries(filePath, format, Infinity);
   const cutoffTime = Date.now() - pruneAfterHours * 60 * 60 * 1000;
 

@@ -188,7 +188,7 @@ describe("Multi-Agent Group Transcript", () => {
       expect(parsed.timestamp).toBe("2026-03-24T21:30:00.000Z");
     });
 
-    it("truncates long content in markdown format", () => {
+    it("preserves full content in markdown format for coordination", () => {
       const longContent = "A".repeat(300);
       const entry = {
         timestamp: new Date("2026-03-24T21:30:00Z"),
@@ -197,8 +197,8 @@ describe("Multi-Agent Group Transcript", () => {
       };
 
       const formatted = formatTranscriptEntry(entry, "markdown");
-      expect(formatted.length).toBeLessThan(longContent.length + 100);
-      expect(formatted).toContain("...");
+      expect(formatted).toContain(longContent);
+      expect(formatted).not.toContain("...");
     });
 
     it("parses hyphenated agent IDs correctly", () => {

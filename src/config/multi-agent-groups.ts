@@ -128,10 +128,7 @@ export function shouldLogResponse(content: string): boolean {
 /**
  * Format a transcript entry for writing.
  *
- * Note: Markdown format truncates content to 200 chars for readability in the
- * transcript file. Context injection reads full content from JSON format or
- * aggregates markdown entries. This is intentional — transcript file is for
- * human review, context injection needs full detail.
+ * Both formats store full content to preserve coordination context.
  */
 export function formatTranscriptEntry(
   entry: TranscriptEntry,
@@ -145,13 +142,10 @@ export function formatTranscriptEntry(
     });
   }
 
-  // Markdown format
+  // Markdown format — store full content for coordination
   const dateStr = entry.timestamp.toISOString().replace("T", " ").slice(0, 19);
-  // Summarize long content for transcript (first 200 chars)
-  const summary =
-    entry.content.length > 200 ? entry.content.slice(0, 200).trim() + "..." : entry.content;
 
-  return `### ${dateStr} - ${entry.agentId}\n${summary}`;
+  return `### ${dateStr} - ${entry.agentId}\n${entry.content}`;
 }
 
 /**
