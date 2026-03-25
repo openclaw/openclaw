@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
@@ -46,6 +47,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    setDefaultChannelPluginRegistryForTests();
   });
 
   it("resolves model fallback options from run context", () => {
@@ -175,7 +177,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
 
-  it("uses OriginatingTo for telegram native command tool context without implicit thread state", () => {
+  it("preserves telegram topic thread state for native command tool context", () => {
     const context = buildThreadingToolContext({
       sessionCtx: {
         Provider: "telegram",
@@ -193,7 +195,7 @@ describe("agent-runner-utils", () => {
       currentChannelId: "telegram:-1003841603622",
       currentMessageId: "2284",
     });
-    expect(context.currentThreadTs).toBeUndefined();
+    expect(context.currentThreadTs).toBe("928");
   });
 
   it("uses OriginatingTo for threading tool context on discord native commands", () => {

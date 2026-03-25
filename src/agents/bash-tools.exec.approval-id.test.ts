@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramPlugin } from "../../extensions/telegram/index.js";
 import { clearConfigCache } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -590,6 +593,61 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     expect(calls[0]).toBe("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("includes telegram topic ids in exec approval registrations", async () => {
+    let approvalRequestParams: Record<string, unknown> | undefined;
+
+    await writeOpenClawConfig({
+      channels: {
+        telegram: {
+          enabled: true,
+          execApprovals: { enabled: true, approvers: ["8460800771"], target: "channel" },
+        },
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
+
+    try {
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        if (method === "exec.approval.request") {
+          approvalRequestParams = params as Record<string, unknown>;
+          return { status: "accepted", id: "approval-id" };
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: null };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "always",
+        approvalRunningNoticeMs: 0,
+        messageProvider: "telegram",
+        accountId: "default",
+        currentChannelId: "-1003841603622",
+        currentThreadTs: "928",
+      });
+
+      const result = await tool.execute("call-telegram-topic", {
+        command: "npm view diver name version description",
+      });
+
+      expect(result.details.status).toBe("approval-pending");
+      expect(approvalRequestParams).toEqual(
+        expect.objectContaining({
+          turnSourceChannel: "telegram",
+          turnSourceTo: "-1003841603622",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "928",
+        }),
+      );
+    } finally {
+      setActivePluginRegistry(createTestRegistry([]));
+    }
   });
 
   it("fails fast when approval registration fails", async () => {
