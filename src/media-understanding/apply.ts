@@ -299,7 +299,9 @@ function isBinaryMediaMime(mime?: string): boolean {
     mime === "application/gzip" ||
     mime === "application/x-gzip" ||
     mime === "application/x-rar-compressed" ||
-    mime === "application/x-7z-compressed"
+    mime === "application/x-7z-compressed" ||
+    mime === "application/x-cfb" || // OLE2 Compound Binary Format (.doc, .xls, .ppt)
+    mime === "application/msword" // Word 97-2003 (.doc)
   ) {
     return true;
   }

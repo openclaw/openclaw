@@ -1187,6 +1187,39 @@ describe("applyMediaUnderstanding", () => {
     expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
+  it("skips binary OLE2 .doc attachments (application/x-cfb)", async () => {
+    // CFB magic bytes: D0 CF 11 E0 A1 B1 1A E1
+    const cfbMagic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const filePath = await createTempMediaFile({
+      fileName: "legacy.doc",
+      content: cfbMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/x-cfb",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
+  it("skips binary .doc attachments (application/msword)", async () => {
+    const cfbMagic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const filePath = await createTempMediaFile({
+      fileName: "report.doc",
+      content: cfbMagic,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: filePath,
+      mediaType: "application/msword",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
+  });
+
   it("keeps vendor +json attachments eligible for text extraction", async () => {
     const filePath = await createTempMediaFile({
       fileName: "payload.bin",
