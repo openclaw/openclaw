@@ -644,6 +644,71 @@ describe("applyAuthChoice", () => {
     expect(oauthResult.config.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
   });
 
+  it("resets a custom Basic GigaChat base URL when the active ordered profile has Basic credentials but no metadata", async () => {
+    await setupTempState();
+
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+    process.env.GIGACHAT_CREDENTIALS = "gigachat-oauth-credentials=="; // pragma: allowlist secret
+
+    await fs.writeFile(
+      authProfilePathForAgent(requireOpenClawAgentDir()),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "gigachat:work": {
+              type: "api_key",
+              provider: "gigachat",
+              key: "basic-user:basic-pass",
+            },
+            "gigachat:default": {
+              type: "api_key",
+              provider: "gigachat",
+              key: "gigachat-oauth-credentials==", // pragma: allowlist secret
+              metadata: {
+                authMode: "oauth",
+                scope: "GIGACHAT_API_PERS",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const oauthHarness = createApiKeyPromptHarness();
+    const oauthResult = await applyAuthChoice({
+      authChoice: "gigachat-personal",
+      config: {
+        auth: {
+          profiles: {
+            "gigachat:work": { provider: "gigachat", mode: "api_key" },
+            "gigachat:default": { provider: "gigachat", mode: "api_key" },
+          },
+          order: { gigachat: ["gigachat:work", "gigachat:default"] },
+        },
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      prompter: oauthHarness.prompter,
+      runtime: oauthHarness.runtime,
+      setDefaultModel: true,
+    });
+
+    expect(oauthResult.config.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
+  });
+
   it("resets a config-backed Basic GigaChat base URL when switching to OAuth", async () => {
     await setupTempState();
 

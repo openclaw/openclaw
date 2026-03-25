@@ -194,10 +194,19 @@ export async function shouldResetGigachatBaseUrlForOAuthReauth(params: {
     provider: "gigachat",
   })[0];
   const activeProfile = activeProfileId ? store.profiles[activeProfileId] : undefined;
+  const activeProfileApiKey =
+    activeProfile?.type === "api_key" && activeProfile.provider === "gigachat"
+      ? await resolveSecretInputString({
+          config: params.cfg,
+          value: activeProfile.keyRef ?? activeProfile.key,
+          env: process.env,
+        })
+      : undefined;
   if (
     activeProfile?.type === "api_key" &&
     activeProfile.provider === "gigachat" &&
-    activeProfile.metadata?.authMode === "basic"
+    (activeProfile.metadata?.authMode === "basic" ||
+      resolveGigachatAuthMode({ apiKey: activeProfileApiKey }) === "basic")
   ) {
     return true;
   }

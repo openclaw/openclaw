@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiKeyCredential, AuthProfileStore } from "../../../agents/auth-profiles.js";
+import { resolveGigachatAuthMode } from "../../../agents/gigachat-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { coerceSecretRef } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { GIGACHAT_BASE_URL } from "../../onboard-auth.models.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 
 const loadAuthProfileStoreForSecretsRuntime = vi.hoisted(() =>
-  vi.fn<() => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
+  vi.fn<(agentDir?: string) => AuthProfileStore>(() => ({ version: 1, profiles: {} })),
 );
 const resolveAuthProfileOrder = vi.hoisted(() =>
   vi.fn<
@@ -24,6 +26,47 @@ vi.mock("../../../agents/auth-profiles.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((cfg: OpenClawConfig) => cfg));
+const shouldResetGigachatBaseUrlForOAuthReauth = vi.hoisted(() =>
+  vi.fn(async ({ cfg, agentDir }: { cfg: OpenClawConfig; agentDir?: string }) => {
+    const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+    const activeProfileId = resolveAuthProfileOrder({
+      cfg,
+      store,
+      provider: "gigachat",
+    })[0];
+    const activeProfile = activeProfileId ? store.profiles[activeProfileId] : undefined;
+    const resolveStoredSecretInput = (value: unknown) => {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : undefined;
+      }
+      const ref = coerceSecretRef(value);
+      if (ref?.source === "env") {
+        const resolved = process.env[ref.id]?.trim();
+        return resolved?.length ? resolved : undefined;
+      }
+      return undefined;
+    };
+    const activeProfileApiKey =
+      activeProfile?.type === "api_key" && activeProfile.provider === "gigachat"
+        ? resolveStoredSecretInput(activeProfile.keyRef ?? activeProfile.key)
+        : undefined;
+    if (
+      activeProfile?.type === "api_key" &&
+      activeProfile.provider === "gigachat" &&
+      (activeProfile.metadata?.authMode === "basic" ||
+        resolveGigachatAuthMode({ apiKey: activeProfileApiKey }) === "basic")
+    ) {
+      return true;
+    }
+
+    const configuredProvider = cfg.models?.providers?.gigachat;
+    const configuredApiKey = resolveStoredSecretInput(configuredProvider?.apiKey);
+    return (
+      activeProfile == null && resolveGigachatAuthMode({ apiKey: configuredApiKey }) === "basic"
+    );
+  }),
+);
 vi.mock("../../../plugins/provider-auth-helpers.js", async () => {
   const actual = await vi.importActual<typeof import("../../../plugins/provider-auth-helpers.js")>(
     "../../../plugins/provider-auth-helpers.js",
@@ -31,6 +74,7 @@ vi.mock("../../../plugins/provider-auth-helpers.js", async () => {
   return {
     ...actual,
     applyAuthProfileConfig,
+    shouldResetGigachatBaseUrlForOAuthReauth,
   };
 });
 
@@ -440,6 +484,71 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
           metadata: {
             authMode: "basic",
           },
+        },
+        "gigachat:default": {
+          type: "api_key",
+          provider: "gigachat",
+          key: "gigachat-oauth-credentials",
+          metadata: {
+            authMode: "oauth",
+            scope: "GIGACHAT_API_PERS",
+          },
+        },
+      },
+    });
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "flag" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-oauth",
+      nextConfig,
+      baseConfig: {
+        auth: {
+          profiles: {
+            "gigachat:work": { provider: "gigachat", mode: "api_key" },
+            "gigachat:default": { provider: "gigachat", mode: "api_key" },
+          },
+          order: { gigachat: ["gigachat:work", "gigachat:default"] },
+        },
+        models: {
+          providers: {
+            gigachat: {
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      opts: { token: "gigachat-oauth-credentials" } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
+      baseUrl: GIGACHAT_BASE_URL,
+    });
+  });
+
+  it("resets the GigaChat provider base URL when the active ordered profile has Basic credentials but no metadata", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "gigachat:work": {
+          type: "api_key",
+          provider: "gigachat",
+          key: "basic-user:basic-pass",
         },
         "gigachat:default": {
           type: "api_key",
