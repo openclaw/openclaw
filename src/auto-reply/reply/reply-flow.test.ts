@@ -1847,6 +1847,35 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("counts legacy deliver callbacks as visible replies by default", async () => {
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendBlockReply({ text: "visible block" });
+    await dispatcher.waitForIdle();
+
+    expect(dispatcher.getDeliveredCounts()).toEqual({
+      tool: 0,
+      block: 1,
+      final: 0,
+    });
+  });
+
+  it("does not count explicitly suppressed payloads as delivered", async () => {
+    const deliver = vi.fn(async (_payload, info) => info.kind !== "block");
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    dispatcher.sendBlockReply({ text: "hidden block" });
+    dispatcher.sendFinalReply({ text: "visible final" });
+    await dispatcher.waitForIdle();
+
+    expect(dispatcher.getDeliveredCounts()).toEqual({
+      tool: 0,
+      block: 0,
+      final: 1,
+    });
+  });
+
   it("fires onIdle when the queue drains", async () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
       await Promise.resolve();

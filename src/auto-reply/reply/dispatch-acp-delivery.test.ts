@@ -113,6 +113,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredBlockReply()).toBe(true);
   });
 
+  it("keeps suppressed block replies out of visible delivery state", async () => {
+    const dispatcher = createDispatcher();
+    (dispatcher.getDeliveredCounts as ReturnType<typeof vi.fn>).mockReturnValue({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hidden block" }, { skipTts: true });
+    await coordinator.syncDispatcherDeliveryState();
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "hidden block" });
+    expect(coordinator.hasDeliveredBlockReply()).toBe(false);
+  });
+
   it("starts reply lifecycle only once when called directly and through deliver", async () => {
     const onReplyStart = vi.fn(async () => {});
     const coordinator = createCoordinator(onReplyStart);

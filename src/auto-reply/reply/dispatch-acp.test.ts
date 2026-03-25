@@ -513,6 +513,27 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("skips the final fallback when block text was visibly delivered", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hello");
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "hello" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    const { dispatcher } = createDispatcher();
+    (dispatcher.getDeliveredCounts as ReturnType<typeof vi.fn>).mockReturnValue({
+      tool: 0,
+      block: 1,
+      final: 0,
+    });
+
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+    });
+
+    expect(result?.counts.final).toBe(0);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("does not add text fallback when final TTS already delivered audio", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
