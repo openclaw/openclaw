@@ -208,12 +208,16 @@ export async function resolveMigratePlanFromDisk(params: {
   let workspaceDirs = includeWorkspace ? cleanupPlan.workspaceDirs : [];
 
   // When --agents is specified, filter workspace dirs to only include those
-  // belonging to the requested agents (from agents.list[].workspace in config).
-  if (includeWorkspace && params.agents && params.agents.length > 0 && configSnapshot.config) {
-    // Always use the scoped result when --agents is provided, even if empty.
-    // This prevents unrelated workspaces from leaking into the archive when
-    // the selected agent IDs match nothing in the config.
-    workspaceDirs = resolveAgentScopedWorkspaceDirs(configSnapshot.config, params.agents);
+  // belonging to the requested agents. Always scope when --agents is set,
+  // even if config is missing — fall back to default workspace only.
+  if (includeWorkspace && params.agents && params.agents.length > 0) {
+    if (configSnapshot.config) {
+      workspaceDirs = resolveAgentScopedWorkspaceDirs(configSnapshot.config, params.agents);
+    } else {
+      // No config available — include only the system default workspace
+      // since we can't determine per-agent workspace assignments.
+      workspaceDirs = [resolveDefaultAgentWorkspaceDir()];
+    }
   }
 
   const included: MigrateAsset[] = [];

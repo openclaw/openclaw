@@ -350,14 +350,15 @@ function remapSourceToTarget(params: {
         return target;
       }
     }
-    // Derive a unique fallback name from the source path basename to avoid
-    // multiple external workspaces colliding on a single target.
+    // Derive a unique fallback name from the source path basename.
+    // Use ".wN" suffix (not "-N") to avoid collisions with basenames
+    // that naturally end in "-<number>" (e.g. "workspace-1").
     const basename = safeFallbackName(sourcePath, "workspace");
     const normalizedSource = toPosixPath(sourcePath);
     const idx = params.sourceWorkspaceDirs.findIndex((d) => toPosixPath(d) === normalizedSource);
     const target =
       idx > 0
-        ? path.join(params.localStateDir, `${basename}-${idx}`)
+        ? path.join(params.localStateDir, `${basename}.w${idx}`)
         : path.join(params.localStateDir, basename);
     assertTargetWithinRoot(target, params.localStateDir, "workspace");
     return target;
