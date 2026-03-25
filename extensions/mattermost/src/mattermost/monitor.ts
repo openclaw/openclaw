@@ -1446,6 +1446,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Tracks the currently in-flight sendMessageMattermost / patchMattermostPost
     // promise so that onSettled can await it directly rather than busy-waiting.
     let patchInflight: Promise<unknown> | null = null;
+    // AbortController for the current in-flight preview request so timed-out
+    // requests can be cancelled before continuing (ID=2978002391).
+    let patchAbortController: AbortController | null = null;
     // Latches true after the first send/edit failure to prevent the interval
     // from being re-armed by a later onPartialReply call (ID=2964357928).
     let previewSendFailed = false;
@@ -1460,6 +1463,31 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ? createMattermostClient({ baseUrl, botToken })
         : null;
 
+    const INFLIGHT_TIMEOUT_MS = 10_000;
+
+    /** Await patchInflight with a bounded timeout; abort the underlying
+     *  request if the timeout fires so late resolves cannot create orphan
+     *  posts or overwrite authoritative text (ID=2978002391). */
+    const awaitInflightBounded = async () => {
+      const inflight = patchInflight;
+      if (!inflight) return;
+      const ac = patchAbortController;
+      let settled = false;
+      const markSettled = inflight.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, INFLIGHT_TIMEOUT_MS));
+      await Promise.race([markSettled, timeout]);
+      if (!settled) {
+        ac?.abort();
+      }
+    };
+
     const stopPatchInterval = () => {
       if (patchInterval) {
         clearInterval(patchInterval);
@@ -1470,12 +1498,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const flushPendingPatch = async () => {
       stopPatchInterval();
       if (!blockStreamingClient) return;
-      // Await the in-flight promise directly so we never miss a late-resolving
-      // POST/PATCH — the busy-wait on patchSending had a race where patchSending
-      // could clear before the network request settled (ID=2965256849).
-      if (patchInflight) {
-        await patchInflight.catch(() => {});
-      }
+      // Await the in-flight promise with a bounded timeout so we never miss a
+      // late-resolving POST/PATCH, and abort if it exceeds the limit (ID=2978002391).
+      await awaitInflightBounded();
       const rawText = pendingPatchText;
       if (!rawText) return;
       // Truncate to textLimit so intermediate patches never exceed the server limit.
@@ -1525,6 +1550,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         // re-patching with the same truncated content every 200 ms and hit rate limits.
         if (text === lastSentText) return;
         patchSending = true;
+        const ac = new AbortController();
+        patchAbortController = ac;
         const runTick = async () => {
           try {
             if (!streamMessageId) {
@@ -1537,6 +1564,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 lastSentText = text;
                 runtime.log?.(`stream-patch started ${streamMessageId}`);
               } catch (err) {
+                if (ac.signal.aborted) return;
                 logVerboseMessage(`mattermost stream-patch send failed: ${String(err)}`);
                 // Latch the failure so schedulePatch() does not re-arm the interval
                 // on subsequent onPartialReply calls (which would retry indefinitely).
@@ -1548,10 +1576,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 await patchMattermostPost(blockStreamingClient, {
                   postId: streamMessageId,
                   message: text,
+                  signal: ac.signal,
                 });
                 lastSentText = text;
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
               } catch (err) {
+                if (ac.signal.aborted) return;
                 logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
                 // Latch the failure so schedulePatch() does not re-arm the interval
                 // on subsequent onPartialReply calls.
@@ -1561,6 +1591,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             }
           } finally {
             patchSending = false;
+            if (patchAbortController === ac) patchAbortController = null;
           }
         };
         const inflightRun = runTick();
@@ -1612,9 +1643,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               // first sendMessageMattermost resolves during this window, so the orphan
               // cleanup below can capture and delete it.
               stopPatchInterval();
-              if (patchInflight) {
-                await patchInflight.catch(() => {});
-              }
+              await awaitInflightBounded();
             } else {
               // Same thread: flush pending patches normally.
               await flushPendingPatch();
@@ -1782,11 +1811,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           lastSentText = "";
           const client = blockStreamingClient;
           void (async () => {
-            // Await the in-flight promise directly so we never miss a late-resolving
-            // POST — a 3s timeout would race on slow Mattermost links (ID=2964616785).
-            if (patchInflight) {
-              await patchInflight.catch(() => {});
-            }
+            // Await the in-flight promise with a bounded timeout and abort if it
+            // exceeds the limit (ID=2978002391, ID=2964616785).
+            await awaitInflightBounded();
             patchSending = false;
             const orphanId = streamMessageId;
             streamMessageId = null;

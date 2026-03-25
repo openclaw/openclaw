@@ -587,11 +587,12 @@ export async function uploadMattermostFile(
  */
 export async function patchMattermostPost(
   client: MattermostClient,
-  params: { postId: string; message: string },
+  params: { postId: string; message: string; signal?: AbortSignal },
 ): Promise<void> {
   await client.request<void>(`/posts/${params.postId}/patch`, {
     method: "PUT",
     body: JSON.stringify({ message: params.message }),
+    signal: params.signal,
   });
 }
 
