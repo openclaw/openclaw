@@ -240,7 +240,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
         error?: { type?: string; message?: string };
       };
       expect(invalidModelJson.error?.type).toBe("invalid_request_error");
-      expect(invalidModelJson.error?.message).toBe("Invalid `model`.");
+      expect(invalidModelJson.error?.message).toBe(
+        "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+      );
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidModel);
 
@@ -261,13 +263,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
-      const resModel = await postResponses(port, { model: "openclaw:beta", input: "hi" });
+      const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
       const optsModel = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });
+      expect(resDefaultAlias.status).toBe(200);
+      const optsDefaultAlias = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsDefaultAlias as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:main:/,
+      );
+      await ensureResponseConsumed(resDefaultAlias);
 
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
@@ -283,16 +294,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
-      const resModelOverride = await postResponses(port, {
-        model: "openai/text-embedding-3-small",
-        input: "hi",
-      });
+      const resModelOverride = await postResponses(
+        port,
+        {
+          model: "openclaw",
+          input: "hi",
+        },
+        { "x-openclaw-model": "openai/gpt-5.4" },
+      );
       expect(resModelOverride.status).toBe(200);
       const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-      expect((optsModelOverride as { model?: string } | undefined)?.model).toBe(
-        "openai/text-embedding-3-small",
-      );
+      expect((optsModelOverride as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
       await ensureResponseConsumed(resModelOverride);
+
+      agentCommand.mockClear();
+      const resInvalidOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-model": "openai/" },
+      );
+      expect(resInvalidOverride.status).toBe(400);
+      const invalidOverrideJson = (await resInvalidOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidOverrideJson.error?.type).toBe("invalid_request_error");
+      expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resInvalidOverride);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {

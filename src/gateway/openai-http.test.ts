@@ -202,7 +202,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         await expectAgentSessionKeyMatch({
           body: {
-            model: "openclaw:beta",
+            model: "openclaw/beta",
             messages: [{ role: "user", content: "hi" }],
           },
           matcher: /^agent:beta:/,
@@ -212,11 +212,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         await expectAgentSessionKeyMatch({
           body: {
-            model: "openclaw:beta",
+            model: "openclaw/default",
             messages: [{ role: "user", content: "hi" }],
           },
-          headers: { "x-openclaw-agent-id": "alpha" },
-          matcher: /^agent:alpha:/,
+          matcher: /^agent:main:/,
         });
       }
 
@@ -257,10 +256,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "openai/gpt-5.4",
-          messages: [{ role: "user", content: "hi" }],
-        });
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-model": "openai/gpt-5.4",
+          },
+        );
         expect(res.status).toBe(200);
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
@@ -279,10 +284,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
         });
         mockAgentOnce([{ text: "hello" }]);
-        const res = await postChatCompletions(port, {
-          model: "gpt-5.4",
-          messages: [{ role: "user", content: "hi" }],
-        });
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-model": "gpt-5.4",
+          },
+        );
         expect(res.status).toBe(200);
         const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
         expect((opts as { model?: string } | undefined)?.model).toBe("gpt-5.4");
@@ -299,7 +310,26 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(res.status).toBe(400);
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
         expect(json.error?.type).toBe("invalid_request_error");
-        expect(json.error?.message).toBe("Invalid `model`.");
+        expect(json.error?.message).toBe(
+          "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          { "x-openclaw-model": "openai/" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Invalid `x-openclaw-model`.");
         expect(agentCommand).toHaveBeenCalledTimes(0);
       }
 
