@@ -1,17 +1,33 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "./format.js";
 
-const getChannelPluginMock = vi.hoisted(() => vi.fn((_channel: unknown) => undefined));
+const getChannelPluginMock = vi.hoisted(() =>
+  vi.fn((_: unknown): ChannelPlugin | undefined => undefined),
+);
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
 }));
+
 describe("formatOutboundDeliverySummary", () => {
+  beforeEach(() => {
+    getChannelPluginMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
   it("formats fallback and provider-specific detail variants", () => {
+    // Mock getChannelPlugin to return undefined for all channels
+    // This forces resolveChannelLabel to use normalizeChatChannelId + getChatChannelMeta
+    getChannelPluginMock.mockReturnValue(undefined);
+
     const cases = [
       {
         name: "fallback telegram",
@@ -72,6 +88,25 @@ describe("formatOutboundDeliverySummary", () => {
         testCase.expected,
       );
     }
+  });
+
+  it("uses plugin label when available", () => {
+    // Mock getChannelPlugin to return a plugin with label
+    getChannelPluginMock.mockImplementation((channel: unknown) => {
+      if (channel === "custom") {
+        return {
+          id: "custom",
+          meta: { label: "Custom Channel" },
+          capabilities: {},
+          config: {},
+        } as ChannelPlugin;
+      }
+      return undefined;
+    });
+
+    expect(formatOutboundDeliverySummary("custom", undefined)).toBe(
+      "✅ Sent via Custom Channel. Message ID: unknown",
+    );
   });
 });
 
