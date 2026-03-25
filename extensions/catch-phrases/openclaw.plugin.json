@@ -1,0 +1,38 @@
+{
+  "id": "catch-phrases",
+  "uiHints": {
+    "phrases": {
+      "label": "Catch Phrases",
+      "help": "Array of { trigger, response, matchMode } objects. matchMode: 'startsWith' (default) or 'exact'."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "phrases": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "trigger": {
+              "type": "string",
+              "description": "The phrase to match against incoming messages"
+            },
+            "response": {
+              "type": "string",
+              "description": "The auto-response text to send back"
+            },
+            "matchMode": {
+              "type": "string",
+              "enum": ["startsWith", "exact", "contains"],
+              "description": "How to match: startsWith (default), exact, or contains"
+            }
+          },
+          "required": ["trigger", "response"]
+        }
+      }
+    }
+  }
+}

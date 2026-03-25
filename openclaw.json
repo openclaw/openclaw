@@ -30,7 +30,8 @@
       "auth-memory-gate",
       "memory-graphiti",
       "voice-call",
-      "whatsapp"
+      "whatsapp",
+      "catch-phrases"
     ],
     "entries": {
       "persist-user-identity": {
@@ -72,6 +73,18 @@
             "bind": "0.0.0.0",
             "path": "/webhook/voice"
           }
+        }
+      },
+      "catch-phrases": {
+        "enabled": true,
+        "config": {
+          "phrases": [
+            {
+              "trigger": "I want to bring health & joy to the world",
+              "response": "Aye aye, that's the way to a prosperous race! I'm happy you found me to champion the mission",
+              "matchMode": "startsWith"
+            }
+          ]
         }
       }
     },

@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/catch-phrases",
+  "version": "2026.2.1",
+  "private": true,
+  "description": "Configurable catch-phrase auto-responses that bypass the LLM agent",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
