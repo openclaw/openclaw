@@ -1213,7 +1213,7 @@ async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
 export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    runtime.log(JSON.stringify(await buildCliConfigSchema(), null, 2));
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
   } catch (err) {
     runtime.error(danger(`Config schema error: ${String(err)}`));
     runtime.exit(1);

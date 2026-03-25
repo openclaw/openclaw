@@ -453,6 +453,7 @@ describe("config cli", () => {
 
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
       const raw = mockLog.mock.calls.at(-1)?.[0];
       expect(typeof raw).toBe("string");
       const payload = JSON.parse(String(raw)) as {
@@ -503,6 +504,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "schema"]);
 
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
       const payload = JSON.parse(String(mockLog.mock.calls.at(-1)?.[0])) as {
         properties?: Record<string, unknown>;
       };
