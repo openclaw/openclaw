@@ -98,6 +98,25 @@ function buildOpenAICodexAttributionPolicy(
   };
 }
 
+function buildRequestyAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "requesty",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://docs.requesty.ai",
+    reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
+    ...identity,
+    headers: {
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-Title": identity.product,
+    },
+  };
+}
+
 function buildSdkHookOnlyPolicy(
   provider: string,
   hook: ProviderAttributionHook,
@@ -119,6 +138,7 @@ export function listProviderAttributionPolicies(
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
+    buildRequestyAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildOpenAICodexAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
