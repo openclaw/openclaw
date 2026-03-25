@@ -536,6 +536,7 @@ export async function handleOpenAiHttpRequest(
         })
       : () => {};
 
+    let firstResult = null;
     try {
       let result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
 
@@ -545,11 +546,44 @@ export async function handleOpenAiHttpRequest(
         router.escalate();
         const escalatedModel = router.getCurrentModel();
         const escalatedInput = { ...commandInput, modelOverride: escalatedModel };
-        result = await agentCommandFromIngress(escalatedInput, defaultRuntime, deps);
+        try {
+          result = await agentCommandFromIngress(escalatedInput, defaultRuntime, deps);
+        } catch {
+          // Escalated attempt failed — keep first successful result
+        }
       }
 
-      const content = resolveAgentResponseText(result);
+      firstResult = result;
+    } catch (err) {
+      // Escalate on error if signals warrant it
+      if (router && router.shouldEscalate()) {
+        unsubscribe();
+        router.escalate();
+        const escalatedModel = router.getCurrentModel();
+        const escalatedInput = { ...commandInput, modelOverride: escalatedModel };
+        try {
+          firstResult = await agentCommandFromIngress(escalatedInput, defaultRuntime, deps);
+        } catch {
+          // Escalated attempt also failed — return 500
+          logWarn(`openai-compat: chat completion failed after escalation: ${String(err)}`);
+          sendJson(res, 500, {
+            error: { message: "internal error", type: "api_error" },
+          });
+          return true;
+        }
+      } else {
+        logWarn(`openai-compat: chat completion failed: ${String(err)}`);
+        sendJson(res, 500, {
+          error: { message: "internal error", type: "api_error" },
+        });
+        return true;
+      }
+    } finally {
+      unsubscribe();
+    }
 
+    if (firstResult) {
+      const content = resolveAgentResponseText(firstResult);
       sendJson(res, 200, {
         id: runId,
         object: "chat.completion",
@@ -564,13 +598,6 @@ export async function handleOpenAiHttpRequest(
         ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
-    } catch (err) {
-      logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
-    } finally {
-      unsubscribe();
     }
     return true;
   }
