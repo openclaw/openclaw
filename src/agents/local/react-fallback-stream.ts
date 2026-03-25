@@ -151,7 +151,7 @@ export function parseReActResponse(
         const parsed = JSON.parse(jsonStr);
         if (parsed.tool && parsed.args) {
           toolCalls.push({
-            id: `react_call_${Math.random().toString(36).substring(2, 9)}`,
+            id: `react_call_${Date.now().toString(36)}_${(reactCallCounter++).toString(36)}`,
             name: parsed.tool,
             arguments: parsed.args,
           });
@@ -180,6 +180,8 @@ import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { getModelCapability, updateModelCapability } from "./capabilities-cache.js";
 import { discoverLocalCapabilities, isLocalProvider } from "./capabilities-discovery.js";
 import { runBackgroundCapabilityProbe } from "./capability-prober.js";
+
+let reactCallCounter = 0;
 
 export interface DiscoveryOptions {
   modelId: string;
@@ -227,13 +229,15 @@ export function wrapStreamFnWithReActFallback(
     let shouldApplyFallback = false;
     if (config.toolFallback === "react") {
       shouldApplyFallback = true;
-    } else if (config.toolFallback === "none") {
-      shouldApplyFallback = false;
-    } else if (currentStatus === "react") {
-      shouldApplyFallback = true;
-    } else if (isLocal && currentStatus === "unknown" && capabilities.toolFormat === "none") {
-      // Heuristic fallback only if we haven't probed yet and it's a known non-tool-calling model
-      shouldApplyFallback = true;
+    } else if (config.toolFallback === "auto") {
+      if (currentStatus === "react" || (isLocal && capabilities.toolFormat === "none")) {
+        shouldApplyFallback = true;
+      }
+    } else if (config.toolFallback !== "none") {
+      // Internal override if we definitely know it's a react model
+      if (currentStatus === "react") {
+        shouldApplyFallback = true;
+      }
     }
 
     if (!shouldApplyFallback || !context.tools || context.tools.length === 0) {

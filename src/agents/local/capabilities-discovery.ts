@@ -21,9 +21,11 @@ export function discoverLocalCapabilities(options: DiscoveryOptions): Capabiliti
   // DeepSeek-R1, QwQ, and explicit reasoning variants often emit <think> blocks.
   const isReasoningModel =
     model.includes("deepseek-r1") ||
+    model.includes("deepseek-r2") ||
     model.includes("qwq") ||
-    model.includes("-reasoning") ||
-    model.includes("think");
+    /\b(r[1-2])\b/.test(model) ||
+    model.endsWith("-thinking") ||
+    model.includes("-reasoning");
 
   // 2. Determine native tool format
   let toolFormat: LocalToolFormat = "none";
