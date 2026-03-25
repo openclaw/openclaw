@@ -612,6 +612,67 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("prefers account-scoped dm candidates over higher-rank top-level sender matches", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "direct:ou-owner": {
+              toolsBySender: {
+                "id:sender-1": {
+                  allow: ["read"],
+                },
+              },
+            },
+          },
+          accounts: {
+            direct: {
+              dms: {
+                "ou-owner": {
+                  tools: { allow: ["read", "exec"] },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+        senderId: "sender-1",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
+  it("treats empty ambiguous account-scoped dms as explicit overrides over top-level dm matches", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "direct:ou-owner": {
+              tools: { allow: ["read"] },
+            },
+          },
+          accounts: {
+            direct: {
+              dms: {},
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+      }),
+    ).toBeUndefined();
+  });
+
   it("uses messageProvider or spawnedBy channel hints for per-peer direct session keys", () => {
     const cfg = {
       channels: {

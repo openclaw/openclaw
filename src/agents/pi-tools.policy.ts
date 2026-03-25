@@ -312,6 +312,7 @@ function resolveDirectToolPolicyEntries(
 type DirectPolicyResolution = {
   policy?: DirectToolPolicyConfig;
   rank: number;
+  scopePriority: number;
 };
 
 function resolveDirectToolPolicyFromConfig(params: {
@@ -324,7 +325,7 @@ function resolveDirectToolPolicyFromConfig(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-}): { policy?: DirectToolPolicyConfig; rank: number } {
+}): DirectPolicyResolution {
   const channelConfig = params.config.channels?.[params.channel] as
     | {
         accounts?: Record<string, { dms?: Record<string, DirectToolPolicyEntry> }>;
@@ -332,7 +333,7 @@ function resolveDirectToolPolicyFromConfig(params: {
       }
     | undefined;
   if (!channelConfig) {
-    return { rank: 0 };
+    return { rank: 0, scopePriority: 0 };
   }
 
   const accountEntry = resolveAccountEntry(
@@ -341,6 +342,7 @@ function resolveDirectToolPolicyFromConfig(params: {
   ) as { dms?: Record<string, DirectToolPolicyEntry> } | undefined;
   const hasAccountScopedDms =
     accountEntry !== undefined && Object.prototype.hasOwnProperty.call(accountEntry, "dms");
+  const scopePriority = hasAccountScopedDms ? 1 : 0;
   const entries = hasAccountScopedDms ? accountEntry?.dms : channelConfig.dms;
   const directIdsToTry = [
     params.directId,
@@ -407,27 +409,30 @@ function resolveDirectToolPolicyFromConfig(params: {
   }): DirectPolicyResolution => {
     const senderPolicy = resolveSenderScopedPolicy(direct?.toolsBySender);
     if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
-      return { policy: senderPolicy, rank: 4 };
+      return { policy: senderPolicy, rank: 4, scopePriority };
     }
     if (direct?.tools && pickSandboxToolPolicy(direct.tools)) {
-      return { policy: direct.tools, rank: 3 };
+      return { policy: direct.tools, rank: 3, scopePriority };
     }
     const wildcardSenderPolicy = resolveSenderScopedPolicy(wildcard?.toolsBySender);
     if (wildcardSenderPolicy && pickSandboxToolPolicy(wildcardSenderPolicy)) {
-      return { policy: wildcardSenderPolicy, rank: 2 };
+      return { policy: wildcardSenderPolicy, rank: 2, scopePriority };
     }
     if (wildcard?.tools && pickSandboxToolPolicy(wildcard.tools)) {
-      return { policy: wildcard.tools, rank: 1 };
+      return { policy: wildcard.tools, rank: 1, scopePriority };
     }
-    return { rank: 0 };
+    return { rank: 0, scopePriority };
   };
 
-  let best: DirectPolicyResolution = { rank: 0 };
+  let best: DirectPolicyResolution = { rank: 0, scopePriority };
   for (const directId of directIdsToTry) {
     const scopedEntries = resolveDirectToolPolicyEntries(entries, directId);
     const resolved = resolvePolicyFromEntries(scopedEntries);
     if (resolved.rank > best.rank) {
-      best = resolved;
+      best = {
+        ...resolved,
+        scopePriority,
+      };
       if (best.rank >= 4) {
         break;
       }
@@ -640,9 +645,9 @@ export function resolveGroupToolPolicy(params: {
   );
 
   const resolveBestDirectPolicy = () => {
-    let best: { policy?: SandboxToolPolicy; rank: number; specificity: number } = {
+    let best: { policy?: SandboxToolPolicy; rank: number; scopePriority: number } = {
       rank: 0,
-      specificity: 0,
+      scopePriority: 0,
     };
     if (params.groupId) {
       return best;
@@ -665,15 +670,16 @@ export function resolveGroupToolPolicy(params: {
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
       });
-      const specificity = candidate.accountId ? 1 : 0;
+      // Prefer candidates backed by an explicit account-scoped DM surface over top-level
+      // candidates, then compare policy rank within that scope.
       if (
-        resolved.rank > best.rank ||
-        (resolved.rank === best.rank && specificity > best.specificity)
+        resolved.scopePriority > best.scopePriority ||
+        (resolved.scopePriority === best.scopePriority && resolved.rank > best.rank)
       ) {
         best = {
           policy: pickSandboxToolPolicy(resolved.policy),
           rank: resolved.rank,
-          specificity,
+          scopePriority: resolved.scopePriority,
         };
       }
     }
