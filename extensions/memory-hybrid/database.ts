@@ -487,7 +487,9 @@ export class MemoryDB {
 
       for (const row of existingRows) {
         const id = row.id;
-        const delta = this.recallCountDeltas.get(id) ?? 0;
+        // BUG 2 FIX: Use snapshotted delta from entriesToFlush
+        const deltaTuple = entriesToFlush.find(([eid]) => eid === id);
+        const delta = deltaTuple ? deltaTuple[1] : 0;
         if (delta <= 0) continue;
 
         const updatedRow = {
@@ -510,13 +512,22 @@ export class MemoryDB {
       const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
 
       try {
+        // We delete first to facilitate "update" (LanceDB pattern for this version)
         await this.table!.delete(`id IN (${idList})`);
-        await this.safeAdd(updatedRows);
+        try {
+          await this.safeAdd(updatedRows);
+        } catch (addErr) {
+          // BUG 3 FIX: Critical failure! We deleted but couldn't add.
+          // This is a data loss state. Try to restore if possible or log fatal error.
+          this.recallCountDeltas.clear(); // Clear to prevent further corrupted flushes
+          throw new Error(
+            `CRITICAL DATA LOSS RISK: memories deleted but could not be re-added: ${idList}. ` +
+              `Error: ${String(addErr)}`,
+          );
+        }
       } catch (dbErr) {
-        throw new Error(
-          `Critical failure during recall count flush: ${String(dbErr)}. Data may be inconsistent.`,
-          { cause: dbErr },
-        );
+        // If it was the delete that failed, we haven't lost anything yet.
+        throw dbErr;
       }
 
       for (const [id, countAtStart] of entriesToFlush) {
@@ -539,10 +550,12 @@ export class MemoryDB {
 
       return updatedRows.length;
     } catch (error) {
-      console.warn(
-        `[memory-hybrid] flushRecallCounts batch failed:`,
-        error instanceof Error ? error.message : String(error),
-      );
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn(`[memory-hybrid] flushRecallCounts batch failed:`, msg);
+
+      // If it's a critical data loss risk, bubble it up
+      if (msg.includes("CRITICAL")) throw error;
+
       return 0;
     }
   }

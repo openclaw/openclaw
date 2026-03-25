@@ -159,10 +159,11 @@ export class DreamService {
       if (uniqueCats.size > 1) continue;
 
       // Entity Check (Hallucination Guard)
-      const entitySets = cluster.map((item) => {
-        const found = this.graph.findEdgesForTexts([item.text]);
-        return new Set(found.flatMap((e) => [e.source, e.target]));
-      });
+      const entitySets: Set<string>[] = [];
+      for (const item of cluster) {
+        const found = await this.graph.findEdgesForTexts([item.text]);
+        entitySets.push(new Set(found.flatMap((e) => [e.source, e.target])));
+      }
 
       const allHaveEntities = entitySets.every((set) => set.size > 0);
       if (allHaveEntities && entitySets.length > 1) {
