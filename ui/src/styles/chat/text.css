@@ -139,6 +139,55 @@
 }
 
 /* =============================================
+   LONG TEXT PROGRESSIVE DISCLOSURE
+   ============================================= */
+
+.chat-text--long {
+  position: relative;
+  max-height: 400px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+}
+
+.chat-text--expanded {
+  max-height: none;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
+
+.chat-text__show-more {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  margin-bottom: 8px;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-strong, #ddd);
+  padding: 6px 16px;
+  border-radius: var(--radius-full, 9999px);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #007aff);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.chat-text__show-more:hover {
+  background: var(--bg-hover, #f5f5f5);
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+:root[data-theme-mode="dark"] .chat-text__show-more {
+  background: var(--bg-elevated, #2a2a2a);
+  border-color: var(--border-strong, #444);
+  color: var(--accent, #4da3ff);
+}
+
+/* =============================================
    RTL (Right-to-Left) SUPPORT
    ============================================= */
 

@@ -579,7 +579,7 @@ function renderCollapsedToolCards(
  * Max characters for auto-detecting and pretty-printing JSON.
  * Prevents DoS from large JSON payloads in assistant/tool messages.
  */
-const MAX_JSON_AUTOPARSE_CHARS = 20_000;
+const MAX_JSON_AUTOPARSE_CHARS = 10_000;
 
 /**
  * Detect whether a trimmed string is a JSON object or array.
@@ -631,6 +631,50 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: string) =
     >
       <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
     </button>
+  `;
+}
+
+// Use a WeakSet to track which messages have been manually expanded by the user
+const expandedMessages = new WeakSet<object>();
+
+/** Render markdown content with progressive disclosure for long messages. */
+function renderMarkdownMessage(markdown: string, isStreaming: boolean, messageRef: unknown) {
+  const dir = detectTextDirection(markdown);
+
+  // If streaming, don't collapse yet, so user can see it being typed.
+  // We use 5000 chars as the threshold for "long" text.
+  if (isStreaming || markdown.length <= 5000) {
+    return html`<div class="chat-text" dir="${dir}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`;
+  }
+
+  const htmlContent = unsafeHTML(toSanitizedMarkdownHtml(markdown));
+  const msgObj = typeof messageRef === "object" && messageRef !== null ? messageRef : {};
+  const isExpanded = expandedMessages.has(msgObj);
+
+  return html`
+    <div class="chat-text ${isExpanded ? "chat-text--expanded" : "chat-text--long"}" dir="${dir}">
+      ${htmlContent}
+      <button
+        class="chat-text__show-more"
+        @click=${(e: Event) => {
+          const btn = e.currentTarget as HTMLElement;
+          const container = btn.closest(".chat-text");
+          if (container) {
+            if (isExpanded) {
+              expandedMessages.delete(msgObj);
+              container.classList.remove("chat-text--expanded");
+              container.classList.add("chat-text--long");
+            } else {
+              expandedMessages.add(msgObj);
+              container.classList.add("chat-text--expanded");
+              container.classList.remove("chat-text--long");
+            }
+          }
+        }}
+      >
+        ${isExpanded ? "Show less" : "Show more"}
+      </button>
+    </div>
   `;
 }
 
@@ -735,7 +779,7 @@ function renderGroupedMessage(
                         <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                       </details>`
                     : markdown
-                      ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+                      ? renderMarkdownMessage(markdown, opts.isStreaming, message)
                       : nothing
                 }
                 ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
@@ -761,7 +805,7 @@ function renderGroupedMessage(
                     <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                   </details>`
                 : markdown
-                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+                  ? renderMarkdownMessage(markdown, opts.isStreaming, message)
                   : nothing
             }
             ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
