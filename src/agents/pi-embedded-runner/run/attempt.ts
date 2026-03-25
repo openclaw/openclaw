@@ -108,7 +108,7 @@ import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-con
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent } from "../extra-params.js";
+import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
   sanitizeSessionHistory,
@@ -2287,7 +2287,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
-      applyExtraParamsToAgent(
+      const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
@@ -2300,6 +2300,17 @@ export async function runEmbeddedAttempt(
         sessionAgentId,
         effectiveWorkspace,
       );
+      const agentTransportOverride = resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams,
+      });
+      if (agentTransportOverride && activeSession.agent.transport !== agentTransportOverride) {
+        log.debug(
+          `embedded agent transport override: ${activeSession.agent.transport} -> ${agentTransportOverride} ` +
+            `(${params.provider}/${params.modelId})`,
+        );
+        activeSession.agent.setTransport(agentTransportOverride);
+      }
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {

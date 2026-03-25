@@ -17,6 +17,7 @@ export {
   MAX_SEARCH_COUNT,
   normalizeFreshness,
   normalizeToIsoDate,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,

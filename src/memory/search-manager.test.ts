@@ -195,7 +195,7 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses cached qmd managers for status-only requests", async () => {
+  it("does not cache qmd managers for status-only requests", async () => {
     const agentId = "status-agent";
     const cfg = createQmdCfg(agentId);
 
@@ -211,9 +211,43 @@ describe("getMemorySearchManager caching", () => {
       requestedProvider: "qmd",
     });
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
-    expect(second.manager).toBe(first.manager);
+
+    await first.manager?.close?.();
+    await second.manager?.close?.();
+    expect(mockPrimary.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports real qmd index counts for status-only requests", async () => {
+    const agentId = "status-counts-agent";
+    const cfg = createQmdCfg(agentId);
+    mockPrimary.status.mockReturnValueOnce({
+      ...createManagerStatus({
+        backend: "qmd",
+        provider: "qmd",
+        model: "qmd",
+        requestedProvider: "qmd",
+        withMemorySourceCounts: true,
+      }),
+      files: 10,
+      chunks: 42,
+      sourceCounts: [{ source: "memory" as const, files: 10, chunks: 42 }],
+    });
+
+    const result = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+    const manager = requireManager(result);
+
+    expect(manager.status()).toMatchObject({
+      backend: "qmd",
+      files: 10,
+      chunks: 42,
+      sourceCounts: [{ source: "memory", files: 10, chunks: 42 }],
+    });
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(createQmdManagerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId, mode: "status" }),
+    );
   });
 
   it("reuses cached full qmd manager for status-only requests", async () => {
@@ -235,7 +269,7 @@ describe("getMemorySearchManager caching", () => {
     expect(fullAgain.manager).toBe(full.manager);
   });
 
-  it("evicts closed cached status managers so later status requests get a fresh manager", async () => {
+  it("gets a fresh qmd manager for later status requests after close", async () => {
     const agentId = "status-eviction-agent";
     const cfg = createQmdCfg(agentId);
 
@@ -246,9 +280,9 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
     requireManager(second);
 
-    expect(second.manager).not.toBe(firstManager);
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(mockPrimary.close).toHaveBeenCalledTimes(1);
   });
 
   it("does not evict a newer cached wrapper when closing an older failed wrapper", async () => {

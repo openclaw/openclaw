@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ChannelMessageActionAdapter } from "../types.js";
 
@@ -194,7 +194,7 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
   expect(handleSlackAction).not.toHaveBeenCalled();
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
@@ -205,6 +205,9 @@ beforeEach(async () => {
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
   signalReactionModule = await import("../../../../extensions/signal/src/send-reactions.js");
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.spyOn(discordRuntimeModule, "handleDiscordAction").mockImplementation(
