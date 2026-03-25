@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import {
+  bumpSkillsSnapshotVersion,
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+} from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
@@ -76,10 +80,22 @@ export async function ensureSkillSnapshot(params: {
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  let snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+
+  // Determine if we need to rebuild the snapshot.
+  // When snapshotVersion is 0, skills may have been installed while OpenClaw
+  // wasn't running, so we need to rebuild. We bump the version first so the
+  // new snapshot gets the correct version and won't trigger another rebuild.
+  if (
+    snapshotVersion === 0 &&
+    (!nextEntry?.skillsSnapshot || nextEntry.skillsSnapshot.version === 0)
+  ) {
+    snapshotVersion = bumpSkillsSnapshotVersion({ workspaceDir, reason: "manual" });
+  }
+
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion || !nextEntry?.skillsSnapshot;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -107,22 +123,17 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  // Use nextEntry?.skillsSnapshot if Block 1 already built it (avoids double build on first turn)
+  const skillsSnapshot = nextEntry?.skillsSnapshot
+    ? nextEntry.skillsSnapshot
+    : shouldRefreshSnapshot
+      ? buildWorkspaceSkillSnapshot(workspaceDir, {
+          config: cfg,
+          skillFilter,
+          eligibility: { remote: remoteEligibility },
+          snapshotVersion,
+        })
+      : undefined;
   if (
     skillsSnapshot &&
     sessionStore &&
