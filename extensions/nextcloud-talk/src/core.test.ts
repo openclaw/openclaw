@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { nextcloudTalkPlugin } from "./channel.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import {
@@ -28,9 +28,30 @@ import {
 } from "./signature.js";
 import type { CoreConfig } from "./types.js";
 
+const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
+const readFileSync = vi.hoisted(() => vi.fn());
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard,
+  };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync,
+  };
+});
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  fetchWithSsrFGuard.mockReset();
+  readFileSync.mockReset();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -382,5 +403,96 @@ describe("nextcloud talk core", () => {
       outerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
       innerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
     });
+  });
+
+  it("resolves direct rooms from the room info endpoint", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: 1,
+            },
+          },
+        }),
+      },
+      release,
+    });
+
+    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
+    const kind = await resolveNextcloudTalkRoomKind({
+      account: {
+        accountId: "acct-direct",
+        baseUrl: "https://nc.example.com",
+        config: {
+          apiUser: "bot",
+          apiPassword: "secret",
+        },
+      } as never,
+      roomToken: "room-direct",
+    });
+
+    expect(kind).toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
+        auditContext: "nextcloud-talk.room-info",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the api password from a file and logs non-ok room info responses", async () => {
+    const release = vi.fn(async () => {});
+    const log = vi.fn();
+    const error = vi.fn();
+    const exit = vi.fn();
+    readFileSync.mockReturnValue("file-secret\n");
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: false,
+        status: 403,
+        json: async () => ({}),
+      },
+      release,
+    });
+
+    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
+    const kind = await resolveNextcloudTalkRoomKind({
+      account: {
+        accountId: "acct-group",
+        baseUrl: "https://nc.example.com",
+        config: {
+          apiUser: "bot",
+          apiPasswordFile: "/tmp/nextcloud-secret",
+        },
+      } as never,
+      roomToken: "room-group",
+      runtime: { log, error, exit },
+    });
+
+    expect(kind).toBeUndefined();
+    expect(readFileSync).toHaveBeenCalledWith("/tmp/nextcloud-secret", "utf-8");
+    expect(log).toHaveBeenCalledWith("nextcloud-talk: room lookup failed (403) token=room-group");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns undefined from room info without credentials or base url", async () => {
+    const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-missing",
+          baseUrl: "",
+          config: {},
+        } as never,
+        roomToken: "room-missing",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });
