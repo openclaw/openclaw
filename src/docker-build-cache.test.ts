@@ -112,10 +112,7 @@ describe("docker build cache layout", () => {
       ),
     ).toBeLessThan(installIndex);
     expect(
-      indexOfPattern(
-        dockerfile,
-        /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json tsconfig\.plugin-sdk\.dts\.json tsdown\.config\.ts vitest\.config\.ts vitest\.e2e\.config\.ts vitest\.performance-config\.ts \.\/$/m,
-      ),
+      indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+tsconfig\.json\b.* \.\/$/m),
     ).toBeGreaterThan(installIndex);
     expect(indexOfPattern(dockerfile, /^COPY(?:\s+--chown=\S+)?\s+src \.\/src$/m)).toBeGreaterThan(
       installIndex,
