@@ -189,6 +189,7 @@ describe("normalizeMessageActionInput", () => {
 
     expect(normalized.target).toBe("channel:1478210578362269758");
     expect(normalized.to).toBe("channel:1478210578362269758");
+    expect(normalized.channel).toBeUndefined();
   });
 
   it("does not promote channel to target when channel is a plain provider name", () => {
