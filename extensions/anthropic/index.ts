@@ -153,7 +153,12 @@ function createAnthropicOAuthAuthWrapper(baseStreamFn: StreamFn): StreamFn {
     }
 
     const headers = { ...(options?.headers ?? {}) };
-    delete headers["x-api-key"];
+    for (const key of Object.keys(headers)) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey === "x-api-key" || lowerKey === "authorization") {
+        delete headers[key];
+      }
+    }
     headers.Authorization = `Bearer ${apiKey}`;
     headers["anthropic-version"] = headers["anthropic-version"] ?? "2023-06-01";
 
