@@ -20,8 +20,8 @@ export type ProbeFeishuOptions = {
 type FeishuBotInfoResponse = {
   code: number;
   msg?: string;
-  bot?: { bot_name?: string; open_id?: string };
-  data?: { bot?: { bot_name?: string; open_id?: string } };
+  bot?: { bot_name?: string; app_name?: string; open_id?: string };
+  data?: { bot?: { bot_name?: string; app_name?: string; open_id?: string } };
 };
 
 function setCachedProbeResult(
@@ -132,7 +132,7 @@ export async function probeFeishu(
       {
         ok: true,
         appId: creds.appId,
-        botName: bot?.bot_name,
+        botName: bot?.app_name || bot?.bot_name,
         botOpenId: bot?.open_id,
       },
       PROBE_SUCCESS_TTL_MS,

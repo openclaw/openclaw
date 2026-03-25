@@ -447,4 +447,9 @@ export class FeishuStreamingSession {
   isActive(): boolean {
     return this.state !== null && !this.closed;
   }
+
+  /** Returns the Feishu message_id of the streaming card, or undefined if not started. */
+  getMessageId(): string | undefined {
+    return this.state?.messageId;
+  }
 }
