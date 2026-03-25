@@ -1,19 +1,12 @@
 # 🦞 EVOX.sh — Personal AI Assistant
 
 <p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.svg" alt="EVOX.sh" width="500">
-    </picture>
+  <strong>Your Personal AI Assistant — Self-Hosted, Multi-Channel, Always On</strong>
 </p>
 
 <p align="center">
-  <strong>EXFOLIATE! EXFOLIATE!</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/sonpiaz/evox-sh/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/openclaw/openclaw/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://github.com/sonpiaz/evox-sh/releases"><img src="https://img.shields.io/github/v/release/openclaw/openclaw?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://github.com/sonpiaz/evox-sh/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/sonpiaz/evox-sh/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://github.com/sonpiaz/evox-sh/releases"><img src="https://img.shields.io/github/v/release/sonpiaz/evox-sh?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
   <a href="https://discord.gg/clawd"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
