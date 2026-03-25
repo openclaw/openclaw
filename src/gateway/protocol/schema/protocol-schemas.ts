@@ -39,6 +39,10 @@ import {
   ToolCatalogProfileSchema,
   ToolsCatalogParamsSchema,
   ToolsCatalogResultSchema,
+  ToolsEffectiveEntrySchema,
+  ToolsEffectiveGroupSchema,
+  ToolsEffectiveParamsSchema,
+  ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
@@ -272,6 +276,10 @@ export const ProtocolSchemas = {
   ToolCatalogEntry: ToolCatalogEntrySchema,
   ToolCatalogGroup: ToolCatalogGroupSchema,
   ToolsCatalogResult: ToolsCatalogResultSchema,
+  ToolsEffectiveParams: ToolsEffectiveParamsSchema,
+  ToolsEffectiveEntry: ToolsEffectiveEntrySchema,
+  ToolsEffectiveGroup: ToolsEffectiveGroupSchema,
+  ToolsEffectiveResult: ToolsEffectiveResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,

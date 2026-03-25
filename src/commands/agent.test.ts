@@ -562,6 +562,35 @@ describe("agentCommand", () => {
     });
   });
 
+  it("resolves duplicate cross-agent sessionIds deterministically", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      const otherStore = path.join(home, "sessions", "other", "sessions.json");
+      const retiredStore = path.join(home, "sessions", "retired", "sessions.json");
+      writeSessionStoreSeed(otherStore, {
+        "agent:other:main": {
+          sessionId: "run-dup",
+          updatedAt: Date.now() + 1_000,
+        },
+      });
+      writeSessionStoreSeed(retiredStore, {
+        "agent:retired:acp:run-dup": {
+          sessionId: "run-dup",
+          updatedAt: Date.now(),
+        },
+      });
+      const cfg = mockConfig(home, storePattern, undefined, undefined, [
+        { id: "other" },
+        { id: "retired", default: true },
+      ]);
+
+      const resolution = resolveSession({ cfg, sessionId: "run-dup" });
+
+      expect(resolution.sessionKey).toBe("agent:retired:acp:run-dup");
+      expect(resolution.storePath).toBe(retiredStore);
+    });
+  });
+
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
     await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
       const resolution = resolveSession({ cfg, sessionId });

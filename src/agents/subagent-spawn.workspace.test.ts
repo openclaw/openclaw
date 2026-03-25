@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createDefaultSessionHelperMocks,
+  identityDeliveryContext,
+} from "./subagent-spawn.test-helpers.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 type TestAgentConfig = {
@@ -76,14 +80,10 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 vi.mock("../utils/delivery-context.js", () => ({
-  normalizeDeliveryContext: (value: unknown) => value,
+  normalizeDeliveryContext: identityDeliveryContext,
 }));
 
-vi.mock("./tools/sessions-helpers.js", () => ({
-  resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
-  resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-  resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-}));
+vi.mock("./tools/sessions-helpers.js", () => createDefaultSessionHelperMocks());
 
 vi.mock("./agent-scope.js", () => ({
   resolveAgentConfig: (cfg: TestConfig, agentId: string) =>
@@ -151,13 +151,9 @@ async function loadFreshSubagentSpawnWorkspaceModuleForTest() {
     getGlobalHookRunner: () => hoisted.hookRunner,
   }));
   vi.doMock("../utils/delivery-context.js", () => ({
-    normalizeDeliveryContext: (value: unknown) => value,
+    normalizeDeliveryContext: identityDeliveryContext,
   }));
-  vi.doMock("./tools/sessions-helpers.js", () => ({
-    resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
-    resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-    resolveDisplaySessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
-  }));
+  vi.doMock("./tools/sessions-helpers.js", () => createDefaultSessionHelperMocks());
   vi.doMock("./agent-scope.js", () => ({
     resolveAgentConfig: (cfg: TestConfig, agentId: string) =>
       cfg.agents?.list?.find((entry) => entry.id === agentId),
