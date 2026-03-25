@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,6 +12,58 @@ import {
   hasFatalTestRunOutput,
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
+
+const repoRoot = path.resolve(import.meta.dirname, "../..");
+const readWrapperCommand = (env = {}) => {
+  const result = spawnSync(
+    "node",
+    [
+      "scripts/test-parallel.mjs",
+      "test/scripts/test-update-memory-hotspots-utils.test.ts",
+      "-t",
+      "matches the exact target lane",
+    ],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_TEST_KEEP_TEMP_ARTIFACTS: "1",
+        ...env,
+      },
+      encoding: "utf8",
+    },
+  );
+  const combinedOutput = `${result.stdout}\n${result.stderr}`;
+  const tempDirs = [...combinedOutput.matchAll(/(\/[^\s]*openclaw-test-parallel-[^\s]*)/g)].map(
+    (match) => match[1],
+  );
+
+  try {
+    expect(result.status).toBe(0);
+    const tempDir = [...tempDirs].toReversed().find((dir) => {
+      if (!fs.existsSync(dir)) {
+        return false;
+      }
+      return fs.readdirSync(dir).some((entry) => entry.endsWith(".log"));
+    });
+
+    expect(tempDir).toBeDefined();
+
+    const logFile = fs.readdirSync(tempDir).find((entry) => entry.endsWith(".log"));
+
+    expect(logFile).toBeDefined();
+
+    const logContents = fs.readFileSync(path.join(tempDir, logFile), "utf8");
+    const command = logContents.match(/^\[test-parallel\] command=(.+)$/m)?.[1];
+
+    expect(command).toBeDefined();
+    return command;
+  } finally {
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+};
 
 describe("scripts/test-parallel fatal output guard", () => {
   it("fails a zero exit when V8 reports an out-of-memory fatal", () => {
@@ -113,7 +166,6 @@ describe("scripts/test-parallel memory trace parsing", () => {
 
 describe("scripts/test-parallel lane planning", () => {
   it("keeps serial profile on split unit lanes instead of one giant unit worker", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
     const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
       cwd: repoRoot,
       env: {
@@ -129,7 +181,6 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("recycles default local unit-fast runs into bounded batches", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
     const output = execFileSync("node", ["scripts/test-parallel.mjs"], {
       cwd: repoRoot,
       env: {
@@ -147,7 +198,6 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("keeps legacy base-pinned targeted reruns on dedicated forks lanes", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
     const output = execFileSync(
       "node",
       ["scripts/test-parallel.mjs", "src/auto-reply/reply/followup-runner.test.ts"],
@@ -163,5 +213,12 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(output).toContain("base-pinned-followup-runner");
     expect(output).not.toContain("base-followup-runner");
+  });
+
+  it("defaults targeted unit runs to process forks", () => {
+    const command = readWrapperCommand();
+
+    expect(command).toContain("--pool=forks");
+    expect(command).not.toContain("--pool=threads");
   });
 });
