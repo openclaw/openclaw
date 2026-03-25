@@ -25,7 +25,11 @@ describe("Anthropic OAuth authentication", () => {
     const wrappedStreamFn = wrapStreamFn!({ streamFn: mockStreamFn });
 
     const oauthToken = "sk-ant-oat01-test-token-1234567890";
-    const model = { api: "anthropic-messages", provider: "anthropic", id: "claude-sonnet-4-6" };
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    };
     const context = { messages: [] };
     const options = { apiKey: oauthToken };
 
@@ -35,7 +39,6 @@ describe("Anthropic OAuth authentication", () => {
       model,
       context,
       expect.objectContaining({
-        apiKey: undefined,
         headers: expect.objectContaining({
           Authorization: `Bearer ${oauthToken}`,
           "anthropic-version": "2023-06-01",
@@ -62,10 +65,16 @@ describe("Anthropic OAuth authentication", () => {
 
     anthropicPlugin.register(mockApi as never);
 
+    expect(wrapStreamFn).toBeDefined();
+
     const wrappedStreamFn = wrapStreamFn!({ streamFn: mockStreamFn });
 
     const apiKey = "sk-ant-api03-standard-key-1234567890";
-    const model = { api: "anthropic-messages", provider: "anthropic", id: "claude-sonnet-4-6" };
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    };
     const context = { messages: [] };
     const options = { apiKey };
 
@@ -98,10 +107,16 @@ describe("Anthropic OAuth authentication", () => {
 
     anthropicPlugin.register(mockApi as never);
 
+    expect(wrapStreamFn).toBeDefined();
+
     const wrappedStreamFn = wrapStreamFn!({ streamFn: mockStreamFn });
 
     const oauthToken = "sk-ant-oat01-test-token-1234567890";
-    const model = { api: "anthropic-messages", provider: "anthropic", id: "claude-sonnet-4-6" };
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    };
     const context = { messages: [] };
     const existingHeaders = { "x-custom-header": "custom-value" };
     const options = { apiKey: oauthToken, headers: existingHeaders };
@@ -112,7 +127,6 @@ describe("Anthropic OAuth authentication", () => {
       model,
       context,
       expect.objectContaining({
-        apiKey: undefined,
         headers: expect.objectContaining({
           Authorization: `Bearer ${oauthToken}`,
           "anthropic-version": "2023-06-01",

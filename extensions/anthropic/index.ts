@@ -153,12 +153,12 @@ function createAnthropicOAuthAuthWrapper(baseStreamFn: StreamFn): StreamFn {
     }
 
     const headers = { ...(options?.headers ?? {}) };
+    delete headers["x-api-key"];
     headers.Authorization = `Bearer ${apiKey}`;
     headers["anthropic-version"] = headers["anthropic-version"] ?? "2023-06-01";
 
     return baseStreamFn(model, context, {
       ...options,
-      apiKey: undefined,
       headers,
     });
   };
