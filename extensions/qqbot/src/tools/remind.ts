@@ -26,7 +26,7 @@ const RemindSchema = {
       type: "string",
       description:
         "投递目标地址，取自上下文中 [QQBot] to= 的值。" +
-        "私聊格式：user_openid，群聊格式：group:group_openid。action=add 时必填。",
+        "私聊格式：qqbot:c2c:user_openid，群聊格式：qqbot:group:group_openid。action=add 时必填。",
     },
     time: {
       type: "string",
