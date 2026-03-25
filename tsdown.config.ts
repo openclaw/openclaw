@@ -48,13 +48,12 @@ const pluginSdkEntrypoints = [
   "feishu",
   "diagnostics-otel",
   "diffs",
-  "llm-task",
-  "lobster",
   "memory-core",
   "memory-lancedb",
   "thread-ownership",
   "account-id",
   "device-pair",
+  "voice-call",
   "keyed-async-queue",
 ] as const;
 

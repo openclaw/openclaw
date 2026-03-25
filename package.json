@@ -63,14 +63,6 @@
       "types": "./dist/plugin-sdk/feishu.d.ts",
       "default": "./dist/plugin-sdk/feishu.js"
     },
-    "./plugin-sdk/llm-task": {
-      "types": "./dist/plugin-sdk/llm-task.d.ts",
-      "default": "./dist/plugin-sdk/llm-task.js"
-    },
-    "./plugin-sdk/lobster": {
-      "types": "./dist/plugin-sdk/lobster.d.ts",
-      "default": "./dist/plugin-sdk/lobster.js"
-    },
     "./plugin-sdk/memory-core": {
       "types": "./dist/plugin-sdk/memory-core.d.ts",
       "default": "./dist/plugin-sdk/memory-core.js"

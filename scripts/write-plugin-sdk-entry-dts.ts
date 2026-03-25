@@ -28,8 +28,6 @@ const entrypoints = [
   "google-gemini-cli-auth",
   "googlechat",
   "irc",
-  "llm-task",
-  "lobster",
   "matrix",
   "mattermost",
   "memory-core",
