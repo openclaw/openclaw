@@ -152,6 +152,8 @@ export async function dispatchReplyFromConfig(params: {
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
+  /** Optional config override passed to getReplyFromConfig (e.g. per-sender timezone). */
+  configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
@@ -641,7 +643,7 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
       },
-      cfg,
+      params.configOverride,
     );
 
     if (ctx.AcpDispatchTailAfterReset === true) {

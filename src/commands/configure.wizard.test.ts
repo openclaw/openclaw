@@ -125,6 +125,71 @@ vi.mock("./onboard-search.js", () => ({
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
+const EMPTY_CONFIG_SNAPSHOT = {
+  exists: false,
+  valid: true,
+  config: {},
+  issues: [],
+};
+
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+function createSearchProviderOption(overrides: Record<string, unknown>) {
+  return overrides;
+}
+
+function createEnabledWebSearchConfig(provider: string, pluginEntry: Record<string, unknown>) {
+  return (cfg: OpenClawConfig) => ({
+    ...cfg,
+    tools: {
+      ...cfg.tools,
+      web: {
+        ...cfg.tools?.web,
+        search: {
+          provider,
+          enabled: true,
+        },
+      },
+    },
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        [provider]: pluginEntry,
+      },
+    },
+  });
+}
+
+function setupBaseWizardState() {
+  mocks.readConfigFileSnapshot.mockResolvedValue(EMPTY_CONFIG_SNAPSHOT);
+  mocks.resolveGatewayPort.mockReturnValue(18789);
+  mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
+  mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  mocks.summarizeExistingConfig.mockReturnValue("");
+  mocks.createClackPrompter.mockReturnValue({});
+}
+
+function queueWizardPrompts(params: { select: string[]; confirm: boolean[]; text?: string }) {
+  const selectQueue = [...params.select];
+  const confirmQueue = [...params.confirm];
+  mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
+  mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
+  mocks.clackText.mockResolvedValue(params.text ?? "");
+  mocks.clackIntro.mockResolvedValue(undefined);
+  mocks.clackOutro.mockResolvedValue(undefined);
+}
+
+async function runWebConfigureWizard() {
+  await runConfigureWizard({ command: "configure", sections: ["web"] }, createRuntime());
+}
+
 describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -150,33 +215,13 @@ describe("runConfigureWizard", () => {
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local", "__continue"],
+      confirm: [false],
     });
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
 
-    const selectQueue = ["local", "__continue"];
-    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-    mocks.clackIntro.mockResolvedValue(undefined);
-    mocks.clackOutro.mockResolvedValue(undefined);
-    mocks.clackText.mockResolvedValue("");
-    mocks.clackConfirm.mockResolvedValue(false);
-
-    await runConfigureWizard(
-      { command: "configure" },
-      {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    );
+    await runConfigureWizard({ command: "configure" }, createRuntime());
 
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -186,22 +231,8 @@ describe("runConfigureWizard", () => {
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
+    const runtime = createRuntime();
+    setupBaseWizardState();
     mocks.clackSelect.mockRejectedValueOnce(new WizardCancelledError());
 
     await runConfigureWizard({ command: "configure" }, runtime);
@@ -210,62 +241,23 @@ describe("runConfigureWizard", () => {
   });
 
   it("persists provider-owned web search config changes returned by applySearchKey", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
+    setupBaseWizardState();
     mocks.resolveExistingKey.mockReturnValue(undefined);
     mocks.hasExistingKey.mockReturnValue(false);
     mocks.hasKeyInEnv.mockReturnValue(false);
-    mocks.applySearchKey.mockImplementation(
-      (cfg: OpenClawConfig, provider: string, key: string) => ({
-        ...cfg,
-        tools: {
-          ...cfg.tools,
-          web: {
-            ...cfg.tools?.web,
-            search: {
-              provider,
-              enabled: true,
-            },
-          },
-        },
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            firecrawl: {
-              enabled: true,
-              config: { webSearch: { apiKey: key } },
-            },
-          },
-        },
-      }),
+    mocks.applySearchKey.mockImplementation((cfg: OpenClawConfig, provider: string, key: string) =>
+      createEnabledWebSearchConfig(provider, {
+        enabled: true,
+        config: { webSearch: { apiKey: key } },
+      })(cfg),
     );
+    queueWizardPrompts({
+      select: ["local", "firecrawl"],
+      confirm: [true, false],
+      text: "fc-entered-key",
+    });
 
-    const selectQueue = ["local", "firecrawl"];
-    const confirmQueue = [true, false];
-    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-    mocks.clackText.mockResolvedValue("fc-entered-key");
-    mocks.clackIntro.mockResolvedValue(undefined);
-    mocks.clackOutro.mockResolvedValue(undefined);
-
-    await runConfigureWizard(
-      { command: "configure", sections: ["web"] },
-      {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    );
+    await runWebConfigureWizard();
 
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -291,67 +283,27 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.clackText).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Firecrawl API key",
+        message: "Firecrawl API key (paste it here; leave blank to use FIRECRAWL_API_KEY)",
       }),
     );
   });
 
   it("applies provider selection side effects when a key already exists via secret ref or env", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
+    setupBaseWizardState();
     mocks.resolveExistingKey.mockReturnValue(undefined);
     mocks.hasExistingKey.mockReturnValue(true);
     mocks.hasKeyInEnv.mockReturnValue(false);
-    mocks.applySearchProviderSelection.mockImplementation(
-      (cfg: OpenClawConfig, provider: string) => ({
-        ...cfg,
-        tools: {
-          ...cfg.tools,
-          web: {
-            ...cfg.tools?.web,
-            search: {
-              provider,
-              enabled: true,
-            },
-          },
-        },
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            firecrawl: {
-              enabled: true,
-            },
-          },
-        },
-      }),
+    mocks.applySearchProviderSelection.mockImplementation((cfg: OpenClawConfig, provider: string) =>
+      createEnabledWebSearchConfig(provider, {
+        enabled: true,
+      })(cfg),
     );
+    queueWizardPrompts({
+      select: ["local", "firecrawl"],
+      confirm: [true, false],
+    });
 
-    const selectQueue = ["local", "firecrawl"];
-    const confirmQueue = [true, false];
-    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-    mocks.clackText.mockResolvedValue("");
-    mocks.clackIntro.mockResolvedValue(undefined);
-    mocks.clackOutro.mockResolvedValue(undefined);
-
-    await runConfigureWizard(
-      { command: "configure", sections: ["web"] },
-      {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    );
+    await runWebConfigureWizard();
 
     expect(mocks.applySearchProviderSelection).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -372,7 +324,7 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.clackText).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Firecrawl API key (leave blank to keep current)",
+        message: "Firecrawl API key (leave blank to keep current or use FIRECRAWL_API_KEY)",
       }),
     );
   });
@@ -381,19 +333,9 @@ describe("runConfigureWizard", () => {
     const originalGeminiApiKey = process.env.GEMINI_API_KEY;
     delete process.env.GEMINI_API_KEY;
     try {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: false,
-        valid: true,
-        config: {},
-        issues: [],
-      });
-      mocks.resolveGatewayPort.mockReturnValue(18789);
-      mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-      mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-      mocks.summarizeExistingConfig.mockReturnValue("");
-      mocks.createClackPrompter.mockReturnValue({});
+      setupBaseWizardState();
       mocks.resolveSearchProviderOptions.mockReturnValue([
-        {
+        createSearchProviderOption({
           id: "gemini",
           label: "Gemini (Google Search)",
           hint: "Requires Google Gemini API key · Google Search grounding",
@@ -402,25 +344,14 @@ describe("runConfigureWizard", () => {
           placeholder: "AIza...",
           signupUrl: "https://aistudio.google.com/apikey",
           credentialPath: "plugins.entries.google.config.webSearch.apiKey",
-        },
+        }),
       ]);
+      queueWizardPrompts({
+        select: ["local", "gemini"],
+        confirm: [true, false],
+      });
 
-      const selectQueue = ["local", "gemini"];
-      const confirmQueue = [true, false];
-      mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-      mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-      mocks.clackText.mockResolvedValue("");
-      mocks.clackIntro.mockResolvedValue(undefined);
-      mocks.clackOutro.mockResolvedValue(undefined);
-
-      await runConfigureWizard(
-        { command: "configure", sections: ["web"] },
-        {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        },
-      );
+      await runWebConfigureWizard();
 
       expect(mocks.clackText).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -441,37 +372,14 @@ describe("runConfigureWizard", () => {
   });
 
   it("does not crash when web search providers are unavailable under plugin policy", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
+    setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [true, false],
+    });
 
-    const selectQueue = ["local"];
-    const confirmQueue = [true, false];
-    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-    mocks.clackText.mockResolvedValue("");
-    mocks.clackIntro.mockResolvedValue(undefined);
-    mocks.clackOutro.mockResolvedValue(undefined);
-
-    await expect(
-      runConfigureWizard(
-        { command: "configure", sections: ["web"] },
-        {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        },
-      ),
-    ).resolves.toBeUndefined();
+    await expect(runWebConfigureWizard()).resolves.toBeUndefined();
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -493,19 +401,9 @@ describe("runConfigureWizard", () => {
   });
 
   it("skips the API key prompt for keyless web search providers", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: false,
-      valid: true,
-      config: {},
-      issues: [],
-    });
-    mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-    mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
-    mocks.summarizeExistingConfig.mockReturnValue("");
-    mocks.createClackPrompter.mockReturnValue({});
+    setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([
-      {
+      createSearchProviderOption({
         id: "duckduckgo",
         label: "DuckDuckGo Search (experimental)",
         hint: "Free fallback",
@@ -515,48 +413,19 @@ describe("runConfigureWizard", () => {
         signupUrl: "https://duckduckgo.com/",
         docsUrl: "https://docs.openclaw.ai/tools/web",
         credentialPath: "",
-      },
-    ]);
-    mocks.applySearchProviderSelection.mockImplementation(
-      (cfg: OpenClawConfig, provider: string) => ({
-        ...cfg,
-        tools: {
-          ...cfg.tools,
-          web: {
-            ...cfg.tools?.web,
-            search: {
-              provider,
-              enabled: true,
-            },
-          },
-        },
-        plugins: {
-          ...cfg.plugins,
-          entries: {
-            ...cfg.plugins?.entries,
-            duckduckgo: {
-              enabled: true,
-            },
-          },
-        },
       }),
+    ]);
+    mocks.applySearchProviderSelection.mockImplementation((cfg: OpenClawConfig, provider: string) =>
+      createEnabledWebSearchConfig(provider, {
+        enabled: true,
+      })(cfg),
     );
+    queueWizardPrompts({
+      select: ["local", "duckduckgo"],
+      confirm: [true, false],
+    });
 
-    const selectQueue = ["local", "duckduckgo"];
-    const confirmQueue = [true, false];
-    mocks.clackSelect.mockImplementation(async () => selectQueue.shift());
-    mocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
-    mocks.clackIntro.mockResolvedValue(undefined);
-    mocks.clackOutro.mockResolvedValue(undefined);
-
-    await runConfigureWizard(
-      { command: "configure", sections: ["web"] },
-      {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-    );
+    await runWebConfigureWizard();
 
     expect(mocks.clackText).not.toHaveBeenCalled();
     expect(mocks.applySearchProviderSelection).toHaveBeenCalledWith(

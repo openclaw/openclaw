@@ -19,7 +19,7 @@
           "exportName": "buildGoogleImageGenerationProvider",
           "kind": "function",
           "source": {
-            "line": 95,
+            "line": 98,
             "path": "extensions/google/image-generation-provider.ts"
           }
         },
@@ -55,7 +55,7 @@
           "exportName": "onDiagnosticEvent",
           "kind": "function",
           "source": {
-            "line": 223,
+            "line": 229,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -325,7 +325,7 @@
           "exportName": "DiagnosticEventPayload",
           "kind": "type",
           "source": {
-            "line": 152,
+            "line": 150,
             "path": "src/infra/diagnostic-events.ts"
           }
         },
@@ -2359,7 +2359,7 @@
           "exportName": "buildCommandsMessage",
           "kind": "function",
           "source": {
-            "line": 847,
+            "line": 1049,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2368,7 +2368,7 @@
           "exportName": "buildCommandsMessagePaginated",
           "kind": "function",
           "source": {
-            "line": 856,
+            "line": 1058,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2377,7 +2377,7 @@
           "exportName": "buildCommandsPaginationKeyboard",
           "kind": "function",
           "source": {
-            "line": 89,
+            "line": 196,
             "path": "src/auto-reply/reply/commands-info.ts"
           }
         },
@@ -2404,7 +2404,7 @@
           "exportName": "buildHelpMessage",
           "kind": "function",
           "source": {
-            "line": 727,
+            "line": 844,
             "path": "src/auto-reply/status.ts"
           }
         },
@@ -2620,7 +2620,7 @@
           "exportName": "resolveCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 303,
+            "line": 461,
             "path": "src/auto-reply/command-auth.ts"
           }
         },
@@ -3009,7 +3009,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 162,
+            "line": 163,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3018,7 +3018,7 @@
           "exportName": "channelTargetSchema",
           "kind": "function",
           "source": {
-            "line": 33,
+            "line": 38,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3027,7 +3027,7 @@
           "exportName": "channelTargetsSchema",
           "kind": "function",
           "source": {
-            "line": 39,
+            "line": 44,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3045,7 +3045,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 436,
+            "line": 437,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 413,
+            "line": 414,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 245,
+            "line": 246,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3081,7 +3081,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 276,
+            "line": 277,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3135,7 +3135,7 @@
           "exportName": "getChatChannelMeta",
           "kind": "function",
           "source": {
-            "line": 158,
+            "line": 155,
             "path": "src/channels/registry.ts"
           }
         },
@@ -3198,7 +3198,7 @@
           "exportName": "optionalStringEnum",
           "kind": "function",
           "source": {
-            "line": 26,
+            "line": 31,
             "path": "src/agents/schema/typebox.ts"
           }
         },
@@ -3227,6 +3227,15 @@
           "source": {
             "line": 11,
             "path": "src/shared/gateway-bind-url.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveGatewayPort(cfg?: OpenClawConfig | undefined, env?: ProcessEnv): number;",
+          "exportName": "resolveGatewayPort",
+          "kind": "function",
+          "source": {
+            "line": 285,
+            "path": "src/config/paths.ts"
           }
         },
         {
@@ -3270,7 +3279,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 142,
+            "line": 143,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3279,7 +3288,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 154,
+            "line": 155,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3351,7 +3360,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 137,
+            "line": 138,
             "path": "src/plugin-sdk/core.ts"
           }
         },

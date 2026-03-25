@@ -6,6 +6,7 @@ import {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
 } from "./provider-model-kilocode.js";
+import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-model-minimax.js";
 
 const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_MODEL_ID = "kimi-code";
@@ -14,25 +15,19 @@ const KIMI_CODING_MODEL_REF = `kimi/${KIMI_CODING_MODEL_ID}`;
 const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
-const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.7";
+const MINIMAX_HOSTED_MODEL_ID = MINIMAX_DEFAULT_MODEL_ID;
 const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
 const MINIMAX_API_COST = { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 };
 const MINIMAX_HOSTED_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const MINIMAX_LM_STUDIO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-const MINIMAX_MODEL_CATALOG = {
-  "MiniMax-M2.7": { name: "MiniMax M2.7", reasoning: true },
-  "MiniMax-M2.7-highspeed": { name: "MiniMax M2.7 Highspeed", reasoning: true },
-  "MiniMax-M2.5": { name: "MiniMax M2.5", reasoning: true },
-  "MiniMax-M2.5-highspeed": { name: "MiniMax M2.5 Highspeed", reasoning: true },
-} as const;
 
 const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
 const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
 const MISTRAL_DEFAULT_CONTEXT_WINDOW = 262144;
-const MISTRAL_DEFAULT_MAX_TOKENS = 262144;
+const MISTRAL_DEFAULT_MAX_TOKENS = 16384;
 const MISTRAL_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
@@ -140,7 +135,7 @@ function buildMinimaxModelDefinition(params: {
   contextWindow: number;
   maxTokens: number;
 }): ModelDefinitionConfig {
-  const catalog = MINIMAX_MODEL_CATALOG[params.id as keyof typeof MINIMAX_MODEL_CATALOG];
+  const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as keyof typeof MINIMAX_TEXT_MODEL_CATALOG];
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,

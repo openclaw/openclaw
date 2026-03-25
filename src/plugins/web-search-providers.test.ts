@@ -2,32 +2,32 @@ import { describe, expect, it } from "vitest";
 import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.js";
 
 describe("resolveBundledPluginWebSearchProviders", () => {
-  it("returns bundled providers in auto-detect order", () => {
+  it("returns bundled providers in alphabetical order", () => {
     const providers = resolveBundledPluginWebSearchProviders({});
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
       "google:gemini",
-      "qveris:qveris",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "firecrawl:firecrawl",
-      "exa:exa",
+      "qveris:qveris",
       "tavily:tavily",
-      "duckduckgo:duckduckgo",
     ]);
     expect(providers.map((provider) => provider.credentialPath)).toEqual([
       "plugins.entries.brave.config.webSearch.apiKey",
+      "",
+      "plugins.entries.exa.config.webSearch.apiKey",
+      "plugins.entries.firecrawl.config.webSearch.apiKey",
       "plugins.entries.google.config.webSearch.apiKey",
-      "plugins.entries.qveris.config.webSearch.apiKey",
       "plugins.entries.xai.config.webSearch.apiKey",
       "plugins.entries.moonshot.config.webSearch.apiKey",
       "plugins.entries.perplexity.config.webSearch.apiKey",
-      "plugins.entries.firecrawl.config.webSearch.apiKey",
-      "plugins.entries.exa.config.webSearch.apiKey",
+      "plugins.entries.qveris.config.webSearch.apiKey",
       "plugins.entries.tavily.config.webSearch.apiKey",
-      "",
     ]);
     expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
       expect.any(Function),
@@ -49,15 +49,15 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => provider.pluginId)).toEqual([
       "brave",
+      "duckduckgo",
+      "exa",
+      "firecrawl",
       "google",
-      "qveris",
       "xai",
       "moonshot",
       "perplexity",
-      "firecrawl",
-      "exa",
+      "qveris",
       "tavily",
-      "duckduckgo",
     ]);
   });
 
@@ -106,15 +106,15 @@ describe("resolveBundledPluginWebSearchProviders", () => {
 
     expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
       "brave:brave",
+      "duckduckgo:duckduckgo",
+      "exa:exa",
+      "firecrawl:firecrawl",
       "google:gemini",
-      "qveris:qveris",
       "xai:grok",
       "moonshot:kimi",
       "perplexity:perplexity",
-      "firecrawl:firecrawl",
-      "exa:exa",
+      "qveris:qveris",
       "tavily:tavily",
-      "duckduckgo:duckduckgo",
     ]);
   });
 

@@ -34,6 +34,7 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "anthropic",
   "byteplus",
   "cloudflare-ai-gateway",
+  "deepseek",
   "device-pair",
   "github-copilot",
   "google",
@@ -72,7 +73,7 @@ const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
   "minimax-portal-auth": "minimax",
 };
 
-function normalizePluginId(id: string): string {
+export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
   return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
 }
