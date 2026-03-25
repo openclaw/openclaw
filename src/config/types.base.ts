@@ -109,6 +109,8 @@ export type SessionConfig = {
   dmScope?: DmScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
+  /** Custom text template for session reset notices (supports {model}, {modelFull}, {provider}, {defaultModel}, {defaultModelFull}, {defaultProvider}). */
+  resetNoticeText?: string;
   resetTriggers?: string[];
   idleMinutes?: number;
   reset?: SessionResetConfig;
