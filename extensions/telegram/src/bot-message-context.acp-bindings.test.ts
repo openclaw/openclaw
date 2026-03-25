@@ -2,16 +2,20 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../test/helpers/extensions/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
+const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  return await createConfiguredBindingConversationRuntimeModuleMock(
-    {
-      ensureConfiguredBindingRouteReadyMock,
-      resolveConfiguredBindingRouteMock,
-    },
-    importOriginal,
-  );
+  return {
+    ...(await createConfiguredBindingConversationRuntimeModuleMock(
+      {
+        ensureConfiguredBindingRouteReadyMock,
+        resolveConfiguredBindingRouteMock,
+      },
+      importOriginal,
+    )),
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
@@ -136,6 +140,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
 
   beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
+    recordInboundSessionMock.mockClear();
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
@@ -155,6 +160,9 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
+    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      updateLastRoute: undefined,
+    });
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
