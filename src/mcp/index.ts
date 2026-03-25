@@ -178,7 +178,90 @@ export async function connectMcpServers(
     `[mcp] connected to ${connectedCount} servers, discovered ${totalToolCount} tools (${mode})`,
   );
 
+  // If some servers failed, schedule a single retry after 30 s for those servers only.
+  const failedServers = enabledServers.filter(([key]) => {
+    const state = manager?.getServerState(key);
+    return !state || state.status !== "connected";
+  });
+
+  if (failedServers.length > 0) {
+    console.log(
+      `[mcp] ${failedServers.length} server(s) failed; scheduling retry in 30 s: ${failedServers.map(([k]) => k).join(", ")}`,
+    );
+    setTimeout(() => {
+      void retryFailedServers(failedServers, config, nativeToolNames);
+    }, 30_000);
+  }
+
   return agentTools;
+}
+
+/**
+ * Retry connecting to a set of previously-failed MCP servers and merge any
+ * newly-discovered tools into the cache.
+ */
+async function retryFailedServers(
+  failedServers: [string, McpServerConfig][],
+  config: McpConfig,
+  nativeToolNames: Set<string>,
+): Promise<void> {
+  if (!manager) {
+    // Manager was torn down (e.g. gateway shutdown); skip retry.
+    return;
+  }
+
+  console.log(`[mcp] retry: attempting ${failedServers.length} failed server(s)`);
+
+  await Promise.allSettled(failedServers.map(([key, cfg]) => manager!.connect(key, cfg)));
+
+  const newTools: AnyAgentTool[] = [];
+  let newToolCount = 0;
+  let newConnected = 0;
+
+  const globalMaxResultBytes = config.maxResultBytes ?? MCP_DEFAULTS.maxResultBytes;
+  const mcpToolNames = new Set<string>();
+
+  for (const [key, cfg] of failedServers) {
+    const state = manager.getServerState(key);
+    if (state?.status !== "connected") {
+      continue;
+    }
+    newConnected++;
+    const tools = manager.getDiscoveredTools(key);
+    if (tools.length === 0) {
+      continue;
+    }
+    newToolCount += tools.length;
+    const maxResultBytes = cfg.maxResultBytes ?? globalMaxResultBytes;
+    const mgr = manager;
+    const converted = convertMcpToolsToAgentTools({
+      serverKey: key,
+      tools,
+      config: cfg,
+      callTool: async (sKey, toolName, args) => {
+        const result = await mgr.callTool(sKey, toolName, args);
+        const content = result.content as McpResultContent[];
+        const truncated = truncateResult(content, maxResultBytes);
+        return { ...result, content: truncated };
+      },
+      nativeToolNames,
+      mcpToolNames,
+    });
+    newTools.push(...converted);
+  }
+
+  if (newTools.length > 0) {
+    // Merge into cached tools so future getOrConnectMcpTools() callers see them.
+    if (cachedMcpTools) {
+      cachedMcpTools = [...cachedMcpTools, ...newTools];
+    } else {
+      cachedMcpTools = newTools;
+    }
+  }
+
+  console.log(
+    `[mcp] retry: connected ${newConnected} additional server(s), ${newToolCount} tool(s)`,
+  );
 }
 
 /** Cached MCP tools from the last successful connection. */
@@ -187,6 +270,9 @@ let cachedMcpTools: AnyAgentTool[] | undefined;
 /**
  * Get pre-resolved MCP tools. If not yet connected, connects lazily (once).
  * Safe to call from sync contexts via `.then()` or to await from async.
+ *
+ * Only caches when at least one tool was discovered so a total startup failure
+ * does not permanently prevent subsequent retries.
  */
 export async function getOrConnectMcpTools(
   inlineConfig: McpConfig | undefined,
@@ -195,8 +281,12 @@ export async function getOrConnectMcpTools(
   if (cachedMcpTools) {
     return cachedMcpTools;
   }
-  cachedMcpTools = await connectMcpServers(inlineConfig, options);
-  return cachedMcpTools;
+  const tools = await connectMcpServers(inlineConfig, options);
+  // Only cache when at least one tool connected; otherwise a future call can retry.
+  if (tools.length > 0) {
+    cachedMcpTools = tools;
+  }
+  return tools;
 }
 
 /** Return pre-resolved MCP tools (undefined if not yet connected). Sync-safe. */

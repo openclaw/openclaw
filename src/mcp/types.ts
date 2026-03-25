@@ -131,7 +131,7 @@ export const MCP_DEFAULTS = {
   maxResultBytes: 102_400,
   toolSearchThreshold: 15,
   timeout: 30_000,
-  initTimeout: 10_000,
+  initTimeout: 30_000,
   toolSearch: "auto" as McpToolSearchMode,
   toolNames: "prefixed" as McpToolNaming,
 } as const;
