@@ -1455,6 +1455,89 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(newParent?.childSessions).toEqual(["agent:main:subagent:shared-child-store"]);
   });
 
+  test("does not return moved child sessions from stale spawnedBy filters", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+      } as SessionEntry,
+      "agent:main:subagent:old-parent-filter": {
+        sessionId: "sess-old-parent-filter",
+        updatedAt: now - 4_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:subagent:new-parent-filter": {
+        sessionId: "sess-new-parent-filter",
+        updatedAt: now - 3_000,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
+      "agent:main:subagent:shared-child-filter": {
+        sessionId: "sess-shared-child-filter",
+        updatedAt: now - 1_000,
+        spawnedBy: "agent:main:subagent:old-parent-filter",
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-old-parent-filter",
+      childSessionKey: "agent:main:subagent:old-parent-filter",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent filter task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent-filter",
+      childSessionKey: "agent:main:subagent:new-parent-filter",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent filter task",
+      cleanup: "keep",
+      createdAt: now - 8_000,
+      startedAt: now - 7_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-child-filter-stale-parent",
+      childSessionKey: "agent:main:subagent:shared-child-filter",
+      controllerSessionKey: "agent:main:subagent:old-parent-filter",
+      requesterSessionKey: "agent:main:subagent:old-parent-filter",
+      requesterDisplayKey: "old-parent-filter",
+      task: "shared child stale filter parent",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_500,
+      endedAt: now - 4_500,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-child-filter-current-parent",
+      childSessionKey: "agent:main:subagent:shared-child-filter",
+      controllerSessionKey: "agent:main:subagent:new-parent-filter",
+      requesterSessionKey: "agent:main:subagent:new-parent-filter",
+      requesterDisplayKey: "new-parent-filter",
+      task: "shared child current filter parent",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {
+        spawnedBy: "agent:main:subagent:old-parent-filter",
+      },
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual([]);
+  });
+
   test("preserves original session timing across follow-up replacement runs", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
