@@ -464,10 +464,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         channel: request.channel?.trim(),
         to: request.to?.trim(),
         accountId: request.accountId?.trim(),
-        threadId:
-          typeof request.threadId === "string" && request.threadId.trim()
-            ? request.threadId.trim()
-            : undefined,
+        // Pass threadId directly — normalizeDeliveryContext handles both
+        // string and numeric threadIds (e.g., Matrix uses integers).
+        threadId: request.threadId,
       });
       const effectiveDelivery = mergeDeliveryContext(
         deliveryFields.deliveryContext,
