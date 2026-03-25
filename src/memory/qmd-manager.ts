@@ -1014,6 +1014,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       dirty: false,
       workspaceDir: this.workspaceDir,
       dbPath: this.indexPath,
+      // All collection root directories (used by health score to find MEMORY.md / daily notes)
+      memoryRoots: Array.from(new Set([
+        this.workspaceDir,
+        ...Array.from(this.collectionRoots.values()).map((r) => r.path),
+      ])),
       sources: Array.from(this.sources),
       sourceCounts: counts.sourceCounts,
       vector: { enabled: true, available: true },

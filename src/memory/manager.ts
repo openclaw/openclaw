@@ -718,6 +718,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.path,
+      // All root paths scanned for memory content (used by health score)
+      memoryRoots: Array.from(new Set([
+        this.workspaceDir,
+        ...(this.settings.extraPaths ?? []),
+      ])),
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,

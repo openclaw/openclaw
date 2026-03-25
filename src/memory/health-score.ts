@@ -84,43 +84,71 @@ export function computeMemoryHealthScore(input: MemoryHealthInput): MemoryHealth
     issues.push("Embeddings unavailable");
   }
 
-  // Factor 3: MEMORY.md recency (0-2 points)
-  const memoryMdPath = path.join(workspaceDir, "MEMORY.md");
-  try {
-    const stat = fs.statSync(memoryMdPath);
-    const daysSince = (Date.now() - stat.mtimeMs) / (24 * 60 * 60 * 1000);
-    if (daysSince < 3) {
+  // Collect all root dirs to check for MEMORY.md and daily notes.
+  // Prefer status.memoryRoots (all collection root paths the manager actually scans),
+  // then fall back to workspaceDir + extraPaths. This ensures we check the right
+  // paths even when the configured workspace differs from the indexed paths.
+  const allWorkspaceDirs: string[] = [];
+  const addDir = (d: string) => { if (d && !allWorkspaceDirs.includes(d)) allWorkspaceDirs.push(d); };
+  if (status?.memoryRoots?.length) {
+    for (const r of status.memoryRoots) addDir(r);
+  } else {
+    if (status?.workspaceDir) addDir(status.workspaceDir);
+    for (const extra of status?.extraPaths ?? []) addDir(extra);
+  }
+  // Always include the passed-in workspaceDir as a fallback
+  addDir(workspaceDir);
+
+  // Factor 3: MEMORY.md recency (0-2 points) — check all workspace dirs, use best
+  let bestMemoryMdDaysSince: number | null = null;
+  for (const dir of allWorkspaceDirs) {
+    for (const name of ["MEMORY.md", "memory.md"]) {
+      try {
+        const stat = fs.statSync(path.join(dir, name));
+        const days = (Date.now() - stat.mtimeMs) / (24 * 60 * 60 * 1000);
+        if (bestMemoryMdDaysSince === null || days < bestMemoryMdDaysSince) {
+          bestMemoryMdDaysSince = days;
+        }
+      } catch {
+        // File not found in this dir — try next
+      }
+    }
+  }
+  if (bestMemoryMdDaysSince !== null) {
+    if (bestMemoryMdDaysSince < 3) {
       factors.memoryMdRecency = 2;
-    } else if (daysSince < 7) {
+    } else if (bestMemoryMdDaysSince < 7) {
       factors.memoryMdRecency = 1;
     } else {
       factors.memoryMdRecency = 0;
-      issues.push(`MEMORY.md not updated in ${Math.floor(daysSince)} days`);
+      issues.push(`MEMORY.md not updated in ${Math.floor(bestMemoryMdDaysSince)} days`);
     }
-  } catch {
+  } else {
     factors.memoryMdRecency = 0;
     issues.push("MEMORY.md missing");
   }
 
-  // Factor 4: Daily note activity (0-2 points)
-  const memoryDir = path.join(workspaceDir, "memory");
+  // Factor 4: Daily note activity (0-2 points) — check memory/ subdir in all workspace dirs
   let recentNotes = 0;
-  try {
-    if (fs.existsSync(memoryDir)) {
-      const entries = fs.readdirSync(memoryDir, { withFileTypes: true });
-      const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
-      for (const entry of entries) {
-        if (entry.isFile() && DAILY_NOTE_PATTERN.test(entry.name)) {
-          const dateStr = entry.name.replace(".md", "");
-          const fileDate = new Date(dateStr + "T00:00:00Z");
-          if (fileDate.getTime() >= threeDaysAgo) {
-            recentNotes++;
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  for (const dir of allWorkspaceDirs) {
+    const memoryDir = path.join(dir, "memory");
+    try {
+      if (fs.existsSync(memoryDir)) {
+        const entries = fs.readdirSync(memoryDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile() && DAILY_NOTE_PATTERN.test(entry.name)) {
+            const dateStr = entry.name.replace(".md", "");
+            const fileDate = new Date(dateStr + "T00:00:00Z");
+            if (fileDate.getTime() >= threeDaysAgo) {
+              recentNotes++;
+            }
           }
         }
       }
+    } catch {
+      // Ignore
     }
-  } catch {
-    // Ignore
   }
 
   if (recentNotes >= 2) {
