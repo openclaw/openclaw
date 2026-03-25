@@ -820,9 +820,9 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  macos-node:
-    needs: [scope]
-    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true'
+  macos-node-1:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -837,10 +837,297 @@ jobs:
         with:
           install-bun: "false"
 
-      - name: Build dist (macOS)
-        run: pnpm build
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
 
-      - name: TS tests (macOS)
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 1/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=1" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 1/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-2:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 2/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=2" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 2/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-3:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 3/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=3" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 3/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-4:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 4/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=4" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 4/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-5:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 5/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=5" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 5/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-6:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 6/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=6" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 6/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-7:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 7/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=7" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 7/8)
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm test
+
+  macos-node-8:
+    needs: [scope, build-artifacts]
+    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS 8/8)
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=8" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=8" >> "$GITHUB_ENV"
+
+      - name: TS tests (macOS 8/8)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm test
