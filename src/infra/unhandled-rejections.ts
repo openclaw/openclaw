@@ -195,6 +195,46 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+// Keep in sync with extensions/slack/src/monitor/reconnect-policy.ts (SLACK_AUTH_ERROR_RE).
+const SLACK_NON_RECOVERABLE_AUTH_MESSAGE_RE =
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
+
+/**
+ * Slack Web API / Bolt can reject with auth errors outside awaited call chains (unhandled rejections).
+ * Treat like transient network: log and continue so the gateway does not exit.
+ */
+function isSlackNonRecoverableAuthError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    if (typeof candidate === "string" && SLACK_NON_RECOVERABLE_AUTH_MESSAGE_RE.test(candidate)) {
+      return true;
+    }
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage : "";
+    if (message && SLACK_NON_RECOVERABLE_AUTH_MESSAGE_RE.test(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -246,6 +286,14 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isSlackNonRecoverableAuthError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal unhandled rejection (Slack auth; update tokens or disable Slack):",
         formatUncaughtError(reason),
       );
       return;
