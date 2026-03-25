@@ -28121,6 +28121,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.accounts.*.actions.channelList",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.accounts.*.actions.emojiList",
       "kind": "channel",
       "type": "boolean",
@@ -29463,6 +29473,16 @@
     },
     {
       "path": "channels.slack.actions.channelInfo",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.actions.channelList",
       "kind": "channel",
       "type": "boolean",
       "required": false,

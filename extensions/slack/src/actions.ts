@@ -275,18 +275,21 @@ type SlackChannelListResponse = {
 };
 
 export async function listSlackChannels(
-  opts: SlackActionClientOpts & { types?: string } = {},
+  opts: SlackActionClientOpts & { types?: string; limit?: number } = {},
 ): Promise<SlackChannelListResponse> {
   const client = await getClient(opts);
   const channels: SlackChannelListResponse["channels"] = [];
   const types = opts.types ?? "public_channel,private_channel,mpim,im";
+  // Default cap: 500 channels. Page size 200 is safely under the enforced API max of 999.
+  const totalCap = opts.limit ?? 500;
   let cursor: string | undefined;
 
   do {
+    const pageSize = Math.min(200, totalCap - channels.length);
     const res = (await client.conversations.list({
       types,
       exclude_archived: false,
-      limit: 1000,
+      limit: pageSize,
       cursor,
     })) as SlackChannelListResponse;
     if (Array.isArray(res.channels)) {
@@ -294,39 +297,72 @@ export async function listSlackChannels(
     }
     const next = res.response_metadata?.next_cursor?.trim();
     cursor = next ? next : undefined;
-  } while (cursor);
+  } while (cursor && channels.length < totalCap);
 
   return { channels };
 }
 
+type SlackSearchMessageMatch = {
+  type?: string;
+  ts?: string;
+  text?: string;
+  user?: string;
+  username?: string;
+  channel?: {
+    id?: string;
+    name?: string;
+  };
+};
+
+/** Shape returned by this module -- matches are already unwrapped from the Slack API envelope. */
 type SlackSearchMessagesResponse = {
-  ok?: boolean;
-  messages?: Array<{
-    type?: string;
-    ts?: string;
-    text?: string;
-    user?: string;
-    username?: string;
-    channel?: {
-      id?: string;
-      name?: string;
-    };
-  }>;
+  messages?: SlackSearchMessageMatch[];
   total?: number;
+};
+
+/** Raw Slack API search.messages envelope shape */
+type SlackSearchMessagesApiResponse = {
+  ok?: boolean;
+  messages?: {
+    matches?: SlackSearchMessageMatch[];
+    total?: number;
+  };
   error?: string;
 };
+
+function resolveUserToken(accountId?: string): string {
+  const cfg = loadConfig();
+  const account = resolveSlackAccount({ cfg, accountId });
+  const token = account.userToken?.trim();
+  if (!token) {
+    throw new Error(
+      "Slack search requires a user token with search:read scope. " +
+        "Configure channels.slack.userToken (or SLACK_USER_TOKEN) in your Slack account settings.",
+    );
+  }
+  return token;
+}
+
+async function getUserClient(opts: SlackActionClientOpts = {}) {
+  const token = opts.token ?? resolveUserToken(opts.accountId);
+  return opts.client ?? createSlackWebClient(token);
+}
 
 export async function searchSlackMessages(
   query: string,
   opts: SlackActionClientOpts & { limit?: number } = {},
 ): Promise<SlackSearchMessagesResponse> {
-  const client = await getClient(opts);
-  const limit = opts.limit ?? 20;
+  const client = await getUserClient(opts);
+  // Slack documents search.messages with a maximum count of 100.
+  const limit = Math.min(opts.limit ?? 20, 100);
   const result = (await client.search.messages({
     query,
     count: limit,
-  })) as SlackSearchMessagesResponse;
-  return result;
+  })) as SlackSearchMessagesApiResponse;
+  return {
+    messages: result.messages?.matches ?? [],
+    total: result.messages?.total,
+  };
 }
 
 export async function pinSlackMessage(
