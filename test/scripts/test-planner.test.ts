@@ -1,5 +1,9 @@
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
-import { createExecutionArtifacts } from "../../scripts/test-planner/executor.mjs";
+import {
+  createExecutionArtifacts,
+  resolvePnpmCommandInvocation,
+} from "../../scripts/test-planner/executor.mjs";
 import { buildExecutionPlan, explainExecutionTarget } from "../../scripts/test-planner/planner.mjs";
 
 describe("test planner", () => {
@@ -126,5 +130,53 @@ describe("test planner", () => {
 
     expect(explanation.isolate).toBe(true);
     expect(explanation.reasons).toContain("unit-memory-isolated");
+  });
+
+  it("removes planner temp artifacts when cleanup runs after planning", () => {
+    const artifacts = createExecutionArtifacts({});
+    buildExecutionPlan(
+      {
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env: {},
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const artifactDir = artifacts.ensureTempArtifactDir();
+    expect(fs.existsSync(artifactDir)).toBe(true);
+    artifacts.cleanupTempArtifacts();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+});
+
+describe("resolvePnpmCommandInvocation", () => {
+  it("prefers the parent pnpm CLI path when npm_execpath points to pnpm", () => {
+    expect(
+      resolvePnpmCommandInvocation({
+        npmExecPath: "/opt/homebrew/lib/node_modules/corepack/dist/pnpm.cjs",
+        nodeExecPath: "/usr/local/bin/node",
+        platform: "linux",
+      }),
+    ).toEqual({
+      command: "/usr/local/bin/node",
+      args: ["/opt/homebrew/lib/node_modules/corepack/dist/pnpm.cjs"],
+    });
+  });
+
+  it("falls back to cmd.exe mediation on Windows when npm_execpath is unavailable", () => {
+    expect(
+      resolvePnpmCommandInvocation({
+        npmExecPath: "",
+        platform: "win32",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm.cmd"],
+    });
   });
 });

@@ -15,8 +15,30 @@ import {
 } from "../test-parallel-utils.mjs";
 import { countExplicitEntryFilters, getExplicitEntryFilters } from "./vitest-args.mjs";
 
-const resolvePnpmCommand = (runtimeCapabilities) =>
-  runtimeCapabilities.isWindows ? "pnpm.cmd" : "pnpm";
+export function resolvePnpmCommandInvocation(options = {}) {
+  const npmExecPath = typeof options.npmExecPath === "string" ? options.npmExecPath.trim() : "";
+  if (npmExecPath && path.isAbsolute(npmExecPath)) {
+    const npmExecBase = path.basename(npmExecPath).toLowerCase();
+    if (npmExecBase.startsWith("pnpm")) {
+      return {
+        command: options.nodeExecPath || process.execPath,
+        args: [npmExecPath],
+      };
+    }
+  }
+
+  if (options.platform === "win32") {
+    return {
+      command: options.comSpec || "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm.cmd"],
+    };
+  }
+
+  return {
+    command: "pnpm",
+    args: [],
+  };
+}
 
 const sanitizeArtifactName = (value) => {
   const normalized = value
@@ -113,7 +135,12 @@ export function formatExplanation(explanation) {
 export async function executePlan(plan, options = {}) {
   const env = options.env ?? process.env;
   const artifacts = options.artifacts ?? createExecutionArtifacts(env);
-  const pnpm = resolvePnpmCommand(plan.runtimeCapabilities);
+  const pnpmInvocation = resolvePnpmCommandInvocation({
+    npmExecPath: env.npm_execpath,
+    nodeExecPath: process.execPath,
+    platform: process.platform,
+    comSpec: env.ComSpec,
+  });
   const children = new Set();
   const windowsCiArgs = plan.runtimeCapabilities.isWindowsCi
     ? ["--dangerouslyIgnoreUnhandledErrors"]
@@ -191,6 +218,7 @@ export async function executePlan(plan, options = {}) {
             ...extraArgs,
           ]
         : [...entryArgs, ...silentArgs, ...windowsCiArgs, ...extraArgs];
+      const spawnArgs = [...pnpmInvocation.args, ...args];
       const shardLabel = getShardLabel(extraArgs);
       const artifactStem = [
         sanitizeArtifactName(unit.id),
@@ -203,7 +231,9 @@ export async function executePlan(plan, options = {}) {
       const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
       laneLogStream.write(`[test-parallel] entry=${unit.id}\n`);
       laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
-      laneLogStream.write(`[test-parallel] command=${[pnpm, ...args].join(" ")}\n\n`);
+      laneLogStream.write(
+        `[test-parallel] command=${[pnpmInvocation.command, ...spawnArgs].join(" ")}\n\n`,
+      );
       console.log(
         `[test-parallel] start ${unit.id} workers=${unit.maxWorkers ?? "default"} filters=${String(
           countExplicitEntryFilters(entryArgs) ?? "all",
@@ -372,7 +402,7 @@ export async function executePlan(plan, options = {}) {
         );
       };
       try {
-        child = spawn(pnpm, args, {
+        child = spawn(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
           env: {
             ...env,
@@ -442,7 +472,7 @@ export async function executePlan(plan, options = {}) {
           const failureTail = formatCapturedOutputTail(output);
           const failureArtifactPath = artifacts.writeTempJsonArtifact(`${artifactStem}-failure`, {
             entry: unit.id,
-            command: [pnpm, ...args],
+            command: [pnpmInvocation.command, ...spawnArgs],
             elapsedMs,
             error: childError ? String(childError) : null,
             exitCode: resolvedCode,

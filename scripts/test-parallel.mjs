@@ -73,6 +73,11 @@ const parseCliArgs = (args) => {
   return wrapper;
 };
 
+const exitWithCleanup = (artifacts, code) => {
+  artifacts?.cleanupTempArtifacts?.();
+  process.exit(code);
+};
+
 let rawCli;
 try {
   rawCli = parseCliArgs(process.argv.slice(2));
@@ -97,7 +102,6 @@ if (rawCli.showHelp) {
   process.exit(0);
 }
 
-const artifacts = createExecutionArtifacts(process.env);
 const request = {
   mode: rawCli.mode,
   profile: rawCli.profile,
@@ -115,6 +119,7 @@ if (rawCli.explain) {
   process.exit(0);
 }
 
+const artifacts = createExecutionArtifacts(process.env);
 let plan;
 try {
   plan = buildExecutionPlan(request, {
@@ -123,12 +128,12 @@ try {
   });
 } catch (error) {
   console.error(`[test-parallel] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(2);
+  exitWithCleanup(artifacts, 2);
 }
 
 if (process.env.OPENCLAW_TEST_LIST_LANES === "1" || rawCli.plan) {
   console.log(formatPlanOutput(plan));
-  process.exit(0);
+  exitWithCleanup(artifacts, 0);
 }
 
 const exitCode = await executePlan(plan, { env: process.env, artifacts });
