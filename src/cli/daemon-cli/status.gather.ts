@@ -125,6 +125,7 @@ export type DaemonStatus = {
     error?: string;
     url?: string;
     authWarning?: string;
+    durationMs?: number;
   };
   health?: {
     healthy: boolean;
