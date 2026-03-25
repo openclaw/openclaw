@@ -13,6 +13,14 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
 
+// The real runtime.js stores state on globalThis via Symbol.for, which survives
+// vi.resetModules(). Mock it so tests stay isolated from other test files that
+// call setActivePluginRegistry with a cache key.
+vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: () => null,
+  getActivePluginRegistryKey: () => null,
+}));
+
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 
 function makeTool(name: string) {
