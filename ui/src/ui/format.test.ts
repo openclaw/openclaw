@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatRelativeTimestamp, stripThinkingTags } from "./format.ts";
+import { parseSessionKeyParts } from "./format.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {
@@ -63,8 +64,6 @@ describe("stripThinkingTags", () => {
   });
 
   it("handles incomplete <final tag gracefully", () => {
-    // When streaming splits mid-tag, we may see "<final" without closing ">"
-    // This should not crash and should handle gracefully
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
   });
@@ -97,5 +96,47 @@ describe("stripThinkingTags", () => {
   it("hides unfinished <relevant-memories> block tails", () => {
     const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
     expect(stripThinkingTags(input)).toBe("Hello\n");
+  });
+});
+
+describe("parseSessionKeyParts", () => {
+  it("parses a standard agent session key", () => {
+    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
+      agentId: "data-expert",
+      channel: "dingtalk",
+      accountId: "cidzg6sF43NZMy52Rnk8EN",
+    });
+  });
+
+  it("parses a key with special characters in accountId", () => {
+    expect(parseSessionKeyParts("agent:code-prince:dingtalk:cidtYWov/AQ==")).toEqual({
+      agentId: "code-prince",
+      channel: "dingtalk",
+      accountId: "cidtYWov/AQ==",
+    });
+  });
+
+  it("parses a key with colons in accountId", () => {
+    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
+      agentId: "main",
+      channel: "telegram",
+      accountId: "user:12345:extra",
+    });
+  });
+
+  it("returns null for non-agent keys", () => {
+    expect(parseSessionKeyParts("global:default")).toBeNull();
+    expect(parseSessionKeyParts("direct:some-key")).toBeNull();
+    expect(parseSessionKeyParts("")).toBeNull();
+  });
+
+  it("returns null for malformed agent keys missing channel or accountId", () => {
+    expect(parseSessionKeyParts("agent:")).toBeNull();
+    expect(parseSessionKeyParts("agent:main")).toBeNull();
+    expect(parseSessionKeyParts("agent:main:")).toBeNull();
+  });
+
+  it("returns null for agent key with only agentId and channel but no accountId", () => {
+    expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
   });
 });

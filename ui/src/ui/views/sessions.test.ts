@@ -36,6 +36,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeUnknown: false,
     basePath: "",
     searchQuery: "",
+    agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
     page: 0,
@@ -125,6 +126,86 @@ describe("sessions view", () => {
     const selects = container.querySelectorAll("select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
+  });
+
+  it("shows agent identity name and emoji when agentIdentityById matches the session key", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        agentIdentityById: {
+          "data-expert": {
+            agentId: "data-expert",
+            name: "数据处理专家",
+            avatar: "",
+            emoji: "📊",
+          },
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyCell = container.querySelector(".session-key-cell");
+    expect(keyCell?.textContent).toContain("📊 数据处理专家 (dingtalk)");
+    // Raw key should be in the title attribute for debugging.
+    expect(keyCell?.getAttribute("title")).toBe(
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+    );
+  });
+
+  it("falls back to raw key when no agent identity is available", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:unknown-agent:telegram:abc123",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyCell = container.querySelector(".session-key-cell");
+    expect(keyCell?.textContent).toContain("agent:unknown-agent:telegram:abc123");
+  });
+
+  it("shows identity name without emoji when emoji is not set", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:code-prince:discord:xyz789",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        agentIdentityById: {
+          "code-prince": {
+            agentId: "code-prince",
+            name: "代码小王子",
+            avatar: "",
+          },
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const keyCell = container.querySelector(".session-key-cell");
+    expect(keyCell?.textContent).toContain("代码小王子 (discord)");
+    expect(keyCell?.textContent).not.toContain("📊");
   });
 
   it("deselects only the current page from the header checkbox", async () => {

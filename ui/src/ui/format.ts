@@ -96,3 +96,29 @@ export function formatPercent(value: number | null | undefined, fallback = "—"
   }
   return `${(value * 100).toFixed(1)}%`;
 }
+
+/**
+ * Parse a session key like `agent:<agentId>:<channel>:<accountId>` into parts.
+ * Returns `null` if the key does not match the expected agent session format.
+ */
+export function parseSessionKeyParts(
+  key: string,
+): { agentId: string; channel: string; accountId: string } | null {
+  if (!key.startsWith("agent:")) {
+    return null;
+  }
+  const rest = key.slice("agent:".length);
+  const firstColon = rest.indexOf(":");
+  if (firstColon < 1) {
+    return null;
+  }
+  const agentId = rest.slice(0, firstColon);
+  const afterAgent = rest.slice(firstColon + 1);
+  const secondColon = afterAgent.indexOf(":");
+  if (secondColon < 1) {
+    return null;
+  }
+  const channel = afterAgent.slice(0, secondColon);
+  const accountId = afterAgent.slice(secondColon + 1);
+  return { agentId, channel, accountId };
+}

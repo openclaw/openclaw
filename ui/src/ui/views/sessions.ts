@@ -1,9 +1,9 @@
 import { html, nothing } from "lit";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
+import type { AgentIdentityResult, GatewaySessionRow, SessionsListResult } from "../types.ts";
 
 export type SessionsProps = {
   loading: boolean;
@@ -15,6 +15,8 @@ export type SessionsProps = {
   includeUnknown: boolean;
   basePath: string;
   searchQuery: string;
+  /** Agent identity map keyed by agentId, used to display friendly names in the KEY column. */
+  agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   page: number;
@@ -130,7 +132,11 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+function filterRows(
+  rows: GatewaySessionRow[],
+  query: string,
+  agentIdentityById: Record<string, AgentIdentityResult> = {},
+): GatewaySessionRow[] {
   const q = query.trim().toLowerCase();
   if (!q) {
     return rows;
@@ -140,7 +146,19 @@ function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow
     const label = (row.label ?? "").toLowerCase();
     const kind = (row.kind ?? "").toLowerCase();
     const displayName = (row.displayName ?? "").toLowerCase();
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+    if (key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q)) {
+      return true;
+    }
+    // Also match against agent identity name for friendlier searching.
+    const keyParts = parseSessionKeyParts(row.key);
+    if (keyParts) {
+      const identity = agentIdentityById[keyParts.agentId];
+      const identityName = (identity?.name ?? "").toLowerCase();
+      if (identityName.includes(q)) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 
@@ -183,7 +201,7 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
+  const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
@@ -377,6 +395,7 @@ export function renderSessions(props: SessionsProps) {
                         props.onToggleSelect,
                         props.loading,
                         props.onNavigateToChat,
+                        props.agentIdentityById,
                       ),
                     )
               }
@@ -431,6 +450,7 @@ function renderRow(
   onToggleSelect: SessionsProps["onToggleSelect"],
   disabled: boolean,
   onNavigateToChat?: (sessionKey: string) => void,
+  agentIdentityById: Record<string, AgentIdentityResult> = {},
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
@@ -452,6 +472,15 @@ function renderRow(
     displayName !== row.key &&
     displayName !== (typeof row.label === "string" ? row.label.trim() : ""),
   );
+  // Resolve agent identity for a friendlier KEY column display.
+  const keyParts = parseSessionKeyParts(row.key);
+  const agentIdentity = keyParts ? (agentIdentityById[keyParts.agentId] ?? null) : null;
+  const identityEmoji = agentIdentity?.emoji?.trim() ?? "";
+  const identityName = agentIdentity?.name?.trim() ?? "";
+  const friendlyKeyLabel =
+    identityName && keyParts
+      ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
+      : null;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
@@ -476,7 +505,7 @@ function renderRow(
         />
       </td>
       <td class="data-table-key-col">
-        <div class="mono session-key-cell">
+        <div class="${friendlyKeyLabel ? "" : "mono "}session-key-cell" title=${row.key}>
           ${
             canLink
               ? html`<a
@@ -498,8 +527,8 @@ function renderRow(
                       onNavigateToChat(row.key);
                     }
                   }}
-                >${row.key}</a>`
-              : row.key
+                >${friendlyKeyLabel ?? row.key}</a>`
+              : (friendlyKeyLabel ?? row.key)
           }
           ${
             showDisplayName
