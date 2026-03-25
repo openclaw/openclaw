@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { waitForAbortableDelay } from "./monitor.account.js";
+import { waitForAbortableDelay } from "./async.js";
 
 afterEach(() => {
   vi.useRealTimers();
