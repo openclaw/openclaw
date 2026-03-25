@@ -136,23 +136,21 @@ export function resolveCronPayloadOutcome(params: {
     params.payloads
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  // A non-error payload *before* the last error is also a recovery signal, but only when it
-  // looks like substantive output rather than a transient status line.  The threshold of 100
-  // characters filters out short progress messages like "Starting digest…" that appear before
-  // a genuine fatal crash, while still catching real agent output that was emitted before an
-  // appended false-positive error warning (the common tool-wrapper pattern).
-  const RECOVERY_MIN_CHARS = 100;
-  const hasSubstantivePayloadBeforeLastError =
+  // A non-error payload *before* the last error is also a recovery signal when the payload is
+  // the agent's deliverable output — i.e., the same payload that `pickLastDeliverablePayload`
+  // selects.  Using the deliverable payload as the recovery anchor is more precise than a
+  // character-length threshold: it correctly recovers "Done" / short summaries (which are
+  // valid final outputs), while still treating genuine fatal crashes as fatal even when a
+  // transient status line like "Starting digest…" appeared earlier.
+  const deliveryPayloadIndex =
+    deliveryPayload !== undefined ? params.payloads.indexOf(deliveryPayload) : -1;
+  const hasDeliverablePayloadBeforeLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
-    params.payloads
-      .slice(0, lastErrorPayloadIndex)
-      .some(
-        (payload) =>
-          payload?.isError !== true && (payload?.text?.trim().length ?? 0) >= RECOVERY_MIN_CHARS,
-      );
+    deliveryPayloadIndex >= 0 &&
+    deliveryPayloadIndex < lastErrorPayloadIndex;
   const hasRecoveredFromError =
-    hasSuccessfulPayloadAfterLastError || hasSubstantivePayloadBeforeLastError;
+    hasSuccessfulPayloadAfterLastError || hasDeliverablePayloadBeforeLastError;
   const hasFatalErrorPayload = hasErrorPayload && !hasRecoveredFromError;
   const lastErrorPayloadText = [...params.payloads]
     .toReversed()

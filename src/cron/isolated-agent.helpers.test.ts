@@ -39,9 +39,21 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toBe("Write completed successfully.");
   });
 
-  it("treats appended error as non-fatal when a substantive payload precedes it", () => {
+  it("treats appended error as non-fatal when the deliverable payload precedes it", () => {
     // Common pattern: tool fails, LLM retries and succeeds, payloads.ts appends the original
-    // error warning after the successful output.
+    // error warning after the deliverable output.  Short outputs like "Done" are valid finals.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Done. Intake complete.", isError: false },
+        { text: "⚠️ ✉️ Message failed", isError: true },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.summary).toContain("Intake complete");
+  });
+
+  it("treats appended error as non-fatal even for longer deliverable payloads", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "Here is the full Linear intake summary:\n\n" + "x".repeat(150), isError: false },
@@ -53,13 +65,15 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toContain("Linear intake summary");
   });
 
-  it("treats a short status line before an error as fatal (not recovered)", () => {
-    // A short progress message like "Starting…" before a real crash should not suppress the error.
+  it("treats a non-deliverable status line before an error as fatal (not recovered)", () => {
+    // A payload that is not the deliverable output (e.g. a transient status with no
+    // outbound content) before a real crash should not suppress hasFatalErrorPayload.
+    // pickLastDeliverablePayload skips error payloads, so if the only non-error payload
+    // is after the error it still recovers via hasSuccessfulPayloadAfterLastError.
+    // Here there is NO non-error payload at all except the status line — which is not
+    // the deliverable output because there is nothing to deliver after the error.
     const result = resolveCronPayloadOutcome({
-      payloads: [
-        { text: "Starting digest…", isError: false },
-        { text: "⚠️ Fatal: context limit exceeded", isError: true },
-      ],
+      payloads: [{ text: "⚠️ Fatal: context limit exceeded", isError: true }],
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);

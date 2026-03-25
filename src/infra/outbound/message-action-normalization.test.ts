@@ -202,4 +202,20 @@ describe("normalizeMessageActionInput", () => {
       }),
     ).toThrow(/requires a target/);
   });
+
+  it("does not overwrite an already-resolved target when channel also contains a colon identifier", () => {
+    // If target was already set (e.g. via legacy `to` field mapping), the promotion block
+    // must not overwrite it with the channel value.
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args: {
+        to: "channel:correct-target",
+        channel: "channel:should-not-overwrite",
+        message: "hello",
+      },
+    });
+
+    expect(normalized.target).toBe("channel:correct-target");
+    expect(normalized.channel).toBeUndefined();
+  });
 });
