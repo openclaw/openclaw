@@ -136,7 +136,7 @@ describe("entry root version fast path", () => {
     logSpy.mockRestore();
   });
 
-  it("rejects container mode for root version when gateway override env vars are set", async () => {
+  it("allows root version container mode when gateway override env vars are set", async () => {
     resolveCliContainerTargetMock.mockReturnValue("demo");
     process.env.OPENCLAW_GATEWAY_TOKEN = "demo-token";
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -144,12 +144,10 @@ describe("entry root version fast path", () => {
     await import("./entry.js");
 
     await vi.waitFor(() => {
-      expect(errorSpy).toHaveBeenCalledWith(
-        "[openclaw] --container cannot be combined with --profile/--dev or gateway override env vars",
-      );
-      expect(exitSpy).toHaveBeenCalledWith(2);
+      expect(runCliMock).toHaveBeenCalledWith(["node", "openclaw", "--version"]);
     });
-    expect(runCliMock).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
 
     errorSpy.mockRestore();
   });
