@@ -304,6 +304,7 @@ export const ToolsEffectiveEntrySchema = Type.Object(
     id: NonEmptyString,
     label: NonEmptyString,
     description: Type.String(),
+    rawDescription: Type.String(),
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
     pluginId: Type.Optional(NonEmptyString),
     channelId: Type.Optional(NonEmptyString),

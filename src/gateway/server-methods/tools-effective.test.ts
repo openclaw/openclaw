@@ -33,6 +33,7 @@ vi.mock("../../agents/tools-effective-inventory.js", () => ({
             id: "exec",
             label: "Exec",
             description: "Run shell commands",
+            rawDescription: "Run shell commands",
             source: "core",
           },
         ],
@@ -181,6 +182,7 @@ describe("tools.effective handler", () => {
     });
     expect(vi.mocked(resolveEffectiveToolInventory)).toHaveBeenCalledWith(
       expect.objectContaining({
+        senderIsOwner: false,
         currentChannelId: "channel-1",
         currentThreadTs: "thread-2",
         accountId: "acct-1",
@@ -192,6 +194,23 @@ describe("tools.effective handler", () => {
         modelProvider: "openai",
         modelId: "gpt-4.1",
       }),
+    );
+  });
+
+  it("passes senderIsOwner=true for admin-scoped callers", async () => {
+    const respond = vi.fn();
+    await toolsEffectiveHandlers["tools.effective"]({
+      params: { sessionKey: "main:abc" },
+      respond: respond as never,
+      context: {} as never,
+      client: {
+        connect: { scopes: ["operator.admin"] },
+      } as never,
+      req: { type: "req", id: "req-1", method: "tools.effective" },
+      isWebchatConnect: () => false,
+    });
+    expect(vi.mocked(resolveEffectiveToolInventory)).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
     );
   });
 

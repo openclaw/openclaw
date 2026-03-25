@@ -43,6 +43,7 @@ describe("parseSlashCommand", () => {
   it("includes shared /tools with shared arg hints", () => {
     const tools = SLASH_COMMANDS.find((entry) => entry.name === "tools");
     expect(tools).toMatchObject({
+      key: "tools",
       description: "List available runtime tools.",
       argOptions: ["compact", "verbose"],
       executeLocal: false,
@@ -50,6 +51,30 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/tools verbose")).toMatchObject({
       command: { name: "tools" },
       args: "verbose",
+    });
+  });
+
+  it("parses slash aliases through the shared registry", () => {
+    const exportCommand = SLASH_COMMANDS.find((entry) => entry.key === "export-session");
+    expect(exportCommand).toMatchObject({
+      name: "export",
+      aliases: ["export-session"],
+      executeLocal: true,
+    });
+    expect(parseSlashCommand("/export")).toMatchObject({
+      command: { key: "export-session" },
+      args: "",
+    });
+    expect(parseSlashCommand("/export-session")).toMatchObject({
+      command: { key: "export-session" },
+      args: "",
+    });
+  });
+
+  it("keeps focus as a local slash command", () => {
+    expect(parseSlashCommand("/focus")).toMatchObject({
+      command: { key: "focus", executeLocal: true },
+      args: "",
     });
   });
 });

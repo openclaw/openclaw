@@ -17,6 +17,8 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     toolsCatalogError: null,
     toolsCatalogResult: null,
     toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
   };
@@ -166,7 +168,15 @@ describe("loadToolsEffective", () => {
           id: "core",
           label: "Built-in tools",
           source: "core",
-          tools: [{ id: "read", label: "Read", description: "Read files", source: "core" }],
+          tools: [
+            {
+              id: "read",
+              label: "Read",
+              description: "Read files",
+              rawDescription: "Read files",
+              source: "core",
+            },
+          ],
         },
       ],
     };
@@ -179,6 +189,7 @@ describe("loadToolsEffective", () => {
       sessionKey: "main",
     });
     expect(state.toolsEffectiveResult).toEqual(payload);
+    expect(state.toolsEffectiveResultKey).toBe("main:main");
     expect(state.toolsEffectiveError).toBeNull();
     expect(state.toolsEffectiveLoading).toBe(false);
   });
@@ -190,6 +201,7 @@ describe("loadToolsEffective", () => {
     await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
 
     expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
     expect(state.toolsEffectiveError).toContain("gateway unavailable");
     expect(state.toolsEffectiveLoading).toBe(false);
   });

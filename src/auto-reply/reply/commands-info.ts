@@ -34,7 +34,7 @@ function extractGroupId(raw: string | undefined | null): string | undefined {
   if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
     return parts.slice(1).join(":") || undefined;
   }
-  return trimmed;
+  return undefined;
 }
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {

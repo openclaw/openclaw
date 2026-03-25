@@ -20,6 +20,7 @@ export type AgentsState = {
   toolsCatalogResult: ToolsCatalogResult | null;
   toolsEffectiveLoading: boolean;
   toolsEffectiveLoadingKey?: string | null;
+  toolsEffectiveResultKey?: string | null;
   toolsEffectiveError: string | null;
   toolsEffectiveResult: ToolsEffectiveResult | null;
 };
@@ -115,6 +116,7 @@ export async function loadToolsEffective(
   }
   state.toolsEffectiveLoading = true;
   state.toolsEffectiveLoadingKey = requestKey;
+  state.toolsEffectiveResultKey = null;
   state.toolsEffectiveError = null;
   state.toolsEffectiveResult = null;
   try {
@@ -128,6 +130,7 @@ export async function loadToolsEffective(
     if (state.agentsSelectedId && state.agentsSelectedId !== resolvedAgentId) {
       return;
     }
+    state.toolsEffectiveResultKey = requestKey;
     state.toolsEffectiveResult = res;
   } catch (err) {
     if (state.toolsEffectiveLoadingKey !== requestKey) {
@@ -137,6 +140,7 @@ export async function loadToolsEffective(
       return;
     }
     state.toolsEffectiveResult = null;
+    state.toolsEffectiveResultKey = null;
     state.toolsEffectiveError = isMissingOperatorReadScopeError(err)
       ? formatMissingOperatorReadScopeMessage("effective tools")
       : String(err);

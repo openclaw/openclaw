@@ -9,6 +9,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
@@ -910,59 +911,11 @@ function formatCompactToolEntry(tool: ToolsMessageItem): string {
   return tool.id;
 }
 
-function stripVerboseToolDocTail(raw: string): string {
-  const lines = raw.split("\n").map((line) => line.trimEnd());
-  const kept: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (kept.length > 0 && kept.at(-1) !== "") {
-        kept.push("");
-      }
-      continue;
-    }
-    const upper = trimmed.toUpperCase();
-    if (
-      upper === "ACTIONS:" ||
-      upper === "JOB SCHEMA (FOR ADD ACTION):" ||
-      upper === "JOB SCHEMA:" ||
-      upper === "SESSION TARGET OPTIONS:" ||
-      upper === "DEFAULT BEHAVIOR (UNCHANGED FOR BACKWARD COMPATIBILITY):" ||
-      upper === "SCHEDULE TYPES (SCHEDULE.KIND):" ||
-      upper === "PAYLOAD TYPES (PAYLOAD.KIND):" ||
-      upper === "DELIVERY (TOP-LEVEL):" ||
-      upper === "CRITICAL CONSTRAINTS:" ||
-      upper === "WAKE MODES (FOR WAKE ACTION):"
-    ) {
-      break;
-    }
-    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("- ")) {
-      break;
-    }
-    kept.push(trimmed);
-    if (kept.join(" ").length >= 280) {
-      break;
-    }
-  }
-  return kept.join("\n").trim();
-}
-
 function formatVerboseToolDescription(tool: ToolsMessageItem): string {
-  const raw = tool.rawDescription.trim();
-  if (!raw) {
-    return tool.description;
-  }
-  const stripped = stripVerboseToolDocTail(raw);
-  const normalized = stripped.replace(/\n{3,}/g, "\n\n").trim();
-  if (!normalized) {
-    return tool.description;
-  }
-  if (normalized.length <= 320) {
-    return normalized;
-  }
-  const sliced = normalized.slice(0, 317);
-  const boundary = sliced.lastIndexOf(" ");
-  return `${(boundary >= 160 ? sliced.slice(0, boundary) : sliced).trimEnd()}...`;
+  return describeToolForVerbose({
+    rawDescription: tool.rawDescription,
+    fallback: tool.description,
+  });
 }
 
 export function buildToolsMessage(

@@ -124,6 +124,7 @@ describe("agents tools panel (browser)", () => {
                     id: "message",
                     label: "Message Actions",
                     description: "Send and manage messages in this channel",
+                    rawDescription: "Send and manage messages in this channel",
                     source: "channel",
                     channelId: "discord",
                   },

@@ -3,6 +3,7 @@ import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inve
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { loadConfig } from "../../config/config.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -36,6 +37,7 @@ function resolveRequestedAgentIdOrRespondError(params: {
 function resolveTrustedToolsEffectiveContext(params: {
   sessionKey: string;
   requestedAgentId?: string;
+  senderIsOwner: boolean;
   respond: RespondFn;
 }) {
   const loaded = loadSessionEntry(params.sessionKey);
@@ -69,6 +71,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
+    senderIsOwner: params.senderIsOwner,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider:
@@ -100,7 +103,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }
 
 export const toolsEffectiveHandlers: GatewayRequestHandlers = {
-  "tools.effective": ({ params, respond }) => {
+  "tools.effective": ({ params, respond, client }) => {
     if (!validateToolsEffectiveParams(params)) {
       respond(
         false,
@@ -124,6 +127,9 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
     const trustedContext = resolveTrustedToolsEffectiveContext({
       sessionKey: params.sessionKey,
       requestedAgentId,
+      senderIsOwner: Array.isArray(client?.connect?.scopes)
+        ? client.connect.scopes.includes(ADMIN_SCOPE)
+        : false,
       respond,
     });
     if (!trustedContext) {
@@ -138,6 +144,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         messageProvider: trustedContext.messageProvider,
         modelProvider: trustedContext.modelProvider,
         modelId: trustedContext.modelId,
+        senderIsOwner: trustedContext.senderIsOwner,
         currentChannelId: trustedContext.currentChannelId,
         currentThreadTs: trustedContext.currentThreadTs,
         accountId: trustedContext.accountId,

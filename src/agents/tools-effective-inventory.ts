@@ -5,6 +5,7 @@ import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
 import { listCoreToolSections } from "./tool-catalog.js";
+import { summarizeToolDescriptionText } from "./tool-description-summary.js";
 import { resolveToolDisplay } from "./tool-display.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -73,94 +74,11 @@ function resolveRawToolDescription(tool: AnyAgentTool): string {
   return typeof tool.description === "string" ? tool.description.trim() : "";
 }
 
-function normalizeSummaryWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function truncateSummary(value: string, maxLen = 120): string {
-  if (value.length <= maxLen) {
-    return value;
-  }
-  const sliced = value.slice(0, maxLen - 3);
-  const boundary = sliced.lastIndexOf(" ");
-  const trimmed = (boundary >= 48 ? sliced.slice(0, boundary) : sliced).trimEnd();
-  return `${trimmed}...`;
-}
-
-function isDocBlockStart(line: string): boolean {
-  const normalized = line.trim().toUpperCase();
-  if (!normalized) {
-    return false;
-  }
-  if (
-    normalized === "ACTIONS:" ||
-    normalized === "JOB SCHEMA (FOR ADD ACTION):" ||
-    normalized === "JOB SCHEMA:" ||
-    normalized === "SESSION TARGET OPTIONS:" ||
-    normalized === "DEFAULT BEHAVIOR (UNCHANGED FOR BACKWARD COMPATIBILITY):" ||
-    normalized === "SCHEDULE TYPES (SCHEDULE.KIND):" ||
-    normalized === "PAYLOAD TYPES (PAYLOAD.KIND):" ||
-    normalized === "DELIVERY (TOP-LEVEL):" ||
-    normalized === "CRITICAL CONSTRAINTS:" ||
-    normalized === "WAKE MODES (FOR WAKE ACTION):"
-  ) {
-    return true;
-  }
-  if (
-    normalized.endsWith(":") &&
-    normalized === normalized.toUpperCase() &&
-    normalized.length > 12
-  ) {
-    return true;
-  }
-  return false;
-}
-
 function summarizeToolDescription(tool: AnyAgentTool): string {
-  const explicit = typeof tool.displaySummary === "string" ? tool.displaySummary.trim() : "";
-  if (explicit) {
-    return truncateSummary(normalizeSummaryWhitespace(explicit));
-  }
-
-  const raw = resolveRawToolDescription(tool);
-  if (!raw) {
-    return "Tool";
-  }
-
-  const paragraphs = raw
-    .split(/\n\s*\n/g)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  for (const paragraph of paragraphs) {
-    const lines = paragraph
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length === 0) {
-      continue;
-    }
-    const first = lines[0] ?? "";
-    if (!first || isDocBlockStart(first)) {
-      continue;
-    }
-    if (first.startsWith("{") || first.startsWith("[") || first.startsWith("- ")) {
-      continue;
-    }
-    return truncateSummary(normalizeSummaryWhitespace(first));
-  }
-
-  const firstLine = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .find(
-      (line) =>
-        line.length > 0 &&
-        !isDocBlockStart(line) &&
-        !line.startsWith("{") &&
-        !line.startsWith("[") &&
-        !line.startsWith("- "),
-    );
-  return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine)) : "Tool";
+  return summarizeToolDescriptionText({
+    rawDescription: resolveRawToolDescription(tool),
+    displaySummary: tool.displaySummary,
+  });
 }
 
 function resolveEffectiveToolSource(tool: AnyAgentTool): {
@@ -269,6 +187,7 @@ export function resolveEffectiveToolInventory(
     groupChannel: params.groupChannel ?? undefined,
     groupSpace: params.groupSpace ?? undefined,
     replyToMode: params.replyToMode,
+    allowGatewaySubagentBinding: true,
     modelHasVision: params.modelHasVision,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     disableMessageTool: params.disableMessageTool,

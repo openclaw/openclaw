@@ -263,6 +263,8 @@ export class OpenClawApp extends LitElement {
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
   @state() toolsEffectiveLoading = false;
+  @state() toolsEffectiveLoadingKey: string | null = null;
+  @state() toolsEffectiveResultKey: string | null = null;
   @state() toolsEffectiveError: string | null = null;
   @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
   @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" = "files";
@@ -514,8 +516,10 @@ export class OpenClawApp extends LitElement {
       return;
     }
     this.toolsEffectiveResult = null;
+    this.toolsEffectiveResultKey = null;
     this.toolsEffectiveError = null;
     this.toolsEffectiveLoading = false;
+    this.toolsEffectiveLoadingKey = null;
   }
 
   connect() {

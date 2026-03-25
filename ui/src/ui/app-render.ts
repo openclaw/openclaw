@@ -1035,8 +1035,10 @@ export function renderApp(state: AppViewState) {
                     state.toolsCatalogError = null;
                     state.toolsCatalogLoading = false;
                     state.toolsEffectiveResult = null;
+                    state.toolsEffectiveResultKey = null;
                     state.toolsEffectiveError = null;
                     state.toolsEffectiveLoading = false;
+                    state.toolsEffectiveLoadingKey = null;
                     void loadAgentIdentity(state, agentId);
                     if (state.agentsPanel === "files") {
                       void loadAgentFiles(state, agentId);
@@ -1079,8 +1081,9 @@ export function renderApp(state: AppViewState) {
                         void loadToolsCatalog(state, resolvedAgentId);
                       }
                       if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        const toolsRequestKey = `${resolvedAgentId}:${state.sessionKey}`;
                         if (
-                          state.toolsEffectiveResult?.agentId !== resolvedAgentId ||
+                          state.toolsEffectiveResultKey !== toolsRequestKey ||
                           state.toolsEffectiveError
                         ) {
                           void loadToolsEffective(state, {
@@ -1090,8 +1093,10 @@ export function renderApp(state: AppViewState) {
                         }
                       } else {
                         state.toolsEffectiveResult = null;
+                        state.toolsEffectiveResultKey = null;
                         state.toolsEffectiveError = null;
                         state.toolsEffectiveLoading = false;
+                        state.toolsEffectiveLoadingKey = null;
                       }
                     }
                     if (panel === "channels") {

@@ -8,7 +8,9 @@ import type { IconName } from "../icons.ts";
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 export type SlashCommandDef = {
+  key: string;
   name: string;
+  aliases?: string[];
   description: string;
   args?: string;
   icon?: IconName;
@@ -55,6 +57,7 @@ const LOCAL_COMMANDS = new Set([
   "reset",
   "stop",
   "compact",
+  "focus",
   "model",
   "think",
   "fast",
@@ -67,6 +70,7 @@ const LOCAL_COMMANDS = new Set([
 
 const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   {
+    key: "clear",
     name: "clear",
     description: "Clear chat history",
     icon: "trash",
@@ -109,12 +113,19 @@ function normalizeUiKey(command: ChatCommandDefinition): string {
   return command.key.replace(/[:.-]/g, "_");
 }
 
+function getSlashAliases(command: ChatCommandDefinition): string[] {
+  return command.textAliases
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.startsWith("/"))
+    .map((alias) => alias.slice(1));
+}
+
 function getPrimarySlashName(command: ChatCommandDefinition): string | null {
-  const alias = command.textAliases[0]?.trim();
-  if (!alias?.startsWith("/")) {
+  const aliases = getSlashAliases(command);
+  if (aliases.length === 0) {
     return null;
   }
-  return alias.slice(1);
+  return aliases.toSorted((a, b) => a.length - b.length || a.localeCompare(b))[0] ?? null;
 }
 
 function formatArgs(command: ChatCommandDefinition): string | undefined {
@@ -156,7 +167,9 @@ function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null 
     return null;
   }
   return {
+    key: command.key,
     name,
+    aliases: getSlashAliases(command).filter((alias) => alias !== name),
     description: command.description,
     args: formatArgs(command),
     icon: mapIcon(command),
@@ -186,7 +199,10 @@ export function getSlashCommandCompletions(filter: string): SlashCommandDef[] {
   const lower = filter.toLowerCase();
   const commands = lower
     ? SLASH_COMMANDS.filter(
-        (cmd) => cmd.name.startsWith(lower) || cmd.description.toLowerCase().includes(lower),
+        (cmd) =>
+          cmd.name.startsWith(lower) ||
+          cmd.aliases?.some((alias) => alias.toLowerCase().startsWith(lower)) ||
+          cmd.description.toLowerCase().includes(lower),
       )
     : SLASH_COMMANDS;
   return commands.toSorted((a, b) => {
@@ -230,7 +246,12 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
     return null;
   }
 
-  const command = SLASH_COMMANDS.find((cmd) => cmd.name === name.toLowerCase());
+  const normalizedName = name.toLowerCase();
+  const command = SLASH_COMMANDS.find(
+    (cmd) =>
+      cmd.name === normalizedName ||
+      cmd.aliases?.some((alias) => alias.toLowerCase() === normalizedName),
+  );
   if (!command) {
     return null;
   }

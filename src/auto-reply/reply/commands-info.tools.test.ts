@@ -161,6 +161,24 @@ describe("handleToolsCommand", () => {
     });
   });
 
+  it("does not synthesize group ids for direct-chat sender ids", async () => {
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.ctx = {
+      ...params.ctx,
+      From: "telegram:8231046597",
+      Provider: "telegram",
+      ChatType: "dm",
+    };
+
+    await handleToolsCommand(params, true);
+
+    expect(resolveToolsMock).toHaveBeenCalledWith(expect.objectContaining({ groupId: undefined }));
+  });
+
   it("renders the detailed tool list in verbose mode", async () => {
     const { buildCommandTestParams, handleToolsCommand } = await loadToolsHarness();
     const result = await handleToolsCommand(
