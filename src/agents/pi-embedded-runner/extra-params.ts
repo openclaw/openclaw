@@ -372,6 +372,42 @@ function resolveAliasedParamValue(
   return seen ? resolved : undefined;
 }
 
+function shouldApplyCodexMinimalThinkingCompat(params: {
+  provider: string;
+  thinkingLevel?: ThinkLevel;
+}): boolean {
+  return params.provider === "openai-codex" && params.thinkingLevel === "minimal";
+}
+
+/**
+ * openai-codex gpt-5.4+ rejects reasoning.effort="minimal" (only
+ * none/low/medium/high/xhigh accepted). Intercept and remap to "low".
+ */
+function createCodexMinimalThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const reasoning = payloadObj.reasoning;
+          if (
+            reasoning &&
+            typeof reasoning === "object" &&
+            !Array.isArray(reasoning) &&
+            (reasoning as Record<string, unknown>).effort === "minimal"
+          ) {
+            (reasoning as Record<string, unknown>).effort = "low";
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 function createParallelToolCallsWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
@@ -499,6 +535,13 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
       `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
     );
     ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
+  }
+
+  if (shouldApplyCodexMinimalThinkingCompat({ provider: ctx.provider, thinkingLevel: ctx.thinkingLevel })) {
+    log.debug(
+      `normalizing reasoning.effort=minimal to low for openai-codex compatibility (${ctx.provider}/${ctx.modelId})`,
+    );
+    ctx.agent.streamFn = createCodexMinimalThinkingWrapper(ctx.agent.streamFn);
   }
 }
 

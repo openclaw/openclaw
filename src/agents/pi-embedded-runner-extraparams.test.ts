@@ -3717,3 +3717,53 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.prompt_cache_retention).toBe("24h");
   });
 });
+
+describe("applyExtraParamsToAgent — openai-codex minimal→low reasoning remapping", () => {
+  it("remaps reasoning.effort=minimal to low for openai-codex", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning: { effort: "minimal" } };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4", undefined, "minimal");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect((payloads[0]?.reasoning as Record<string, unknown>)?.effort).toBe("low");
+  });
+
+  it("passes non-minimal reasoning.effort values through unchanged for openai-codex", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning: { effort: "medium" } };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4", undefined, "medium");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect((payloads[0]?.reasoning as Record<string, unknown>)?.effort).toBe("medium");
+  });
+});
