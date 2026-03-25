@@ -233,15 +233,16 @@ export async function processDiscordMessage(
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
-  const { groupSystemPrompt, channelModelOverride, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig,
-    guildInfo,
-    sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
-    isGuild: isGuildMessage,
-    channelTopic: channelInfo?.topic,
-    messageBody: text,
-  });
+  const { groupSystemPrompt, channelModelOverride, ownerAllowFrom, untrustedContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig,
+      guildInfo,
+      sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
+      isGuild: isGuildMessage,
+      channelTopic: channelInfo?.topic,
+      messageBody: text,
+    });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
   });
