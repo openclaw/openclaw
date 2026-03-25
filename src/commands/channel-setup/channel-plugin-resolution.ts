@@ -7,6 +7,7 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -26,10 +27,45 @@ type ResolveInstallableChannelPluginResult = {
   plugin?: ChannelPlugin;
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
+  installDeclined: boolean;
 };
 
 function resolveWorkspaceDir(cfg: OpenClawConfig) {
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+}
+
+function resolveManifestInstalledChannel(params: {
+  cfg: OpenClawConfig;
+  rawChannel?: string | null;
+  channelId?: ChannelId;
+}): { channelId: ChannelId; pluginId: string } | undefined {
+  const requested =
+    params.channelId ??
+    (typeof params.rawChannel === "string" && params.rawChannel.trim()
+      ? (params.rawChannel.trim().toLowerCase() as ChannelId)
+      : undefined);
+  if (!requested) {
+    return undefined;
+  }
+  let match;
+  try {
+    match = loadPluginManifestRegistry({
+      config: params.cfg,
+      workspaceDir: resolveWorkspaceDir(params.cfg),
+      env: process.env,
+    }).plugins.find((plugin) =>
+      plugin.channels.some((channel) => channel.trim().toLowerCase() === requested),
+    );
+  } catch {
+    return undefined;
+  }
+  if (!match) {
+    return undefined;
+  }
+  return {
+    channelId: requested,
+    pluginId: match.id,
+  };
 }
 
 function resolveResolvedChannelId(params: {
@@ -106,19 +142,30 @@ export async function resolveInstallableChannelPlugin(params: {
           workspaceDir,
         })
       : undefined);
-  const channelId =
+  let channelId =
     params.channelId ??
     resolveResolvedChannelId({
       rawChannel: params.rawChannel,
       catalogEntry,
     });
+  let manifestInstalled: ReturnType<typeof resolveManifestInstalledChannel>;
+  if (!channelId) {
+    manifestInstalled = resolveManifestInstalledChannel({
+      cfg: nextCfg,
+      rawChannel: params.rawChannel,
+    });
+    channelId = manifestInstalled?.channelId;
+  }
   if (!channelId) {
     return {
       cfg: nextCfg,
       catalogEntry,
       configChanged: false,
+      installDeclined: false,
     };
   }
+
+  manifestInstalled ??= resolveManifestInstalledChannel({ cfg: nextCfg, channelId });
 
   const existing = getChannelPlugin(channelId);
   if (existing && supports(existing)) {
@@ -128,11 +175,12 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: existing,
       catalogEntry,
       configChanged: false,
+      installDeclined: false,
     };
   }
 
-  const resolvedPluginId = catalogEntry?.pluginId;
-  if (catalogEntry) {
+  const resolvedPluginId = manifestInstalled?.pluginId ?? catalogEntry?.pluginId;
+  if (resolvedPluginId ?? catalogEntry) {
     const scoped = loadScopedChannelPlugin({
       cfg: nextCfg,
       runtime: params.runtime,
@@ -147,9 +195,12 @@ export async function resolveInstallableChannelPlugin(params: {
         plugin: scoped,
         catalogEntry,
         configChanged: false,
+        installDeclined: false,
       };
     }
+  }
 
+  if (catalogEntry) {
     if (params.allowInstall !== false) {
       const installResult = await ensureChannelSetupPluginInstalled({
         cfg: nextCfg,
@@ -178,6 +229,7 @@ export async function resolveInstallableChannelPlugin(params: {
             ? { ...catalogEntry, pluginId: installedPluginId }
             : catalogEntry,
         configChanged: nextCfg !== params.cfg,
+        installDeclined: !installResult.installed,
       };
     }
   }
@@ -188,5 +240,6 @@ export async function resolveInstallableChannelPlugin(params: {
     plugin: existing,
     catalogEntry,
     configChanged: false,
+    installDeclined: false,
   };
 }

@@ -284,7 +284,7 @@ describe("channelsAddCommand", () => {
     expect(offsetMocks.deleteTelegramUpdateOffset).not.toHaveBeenCalled();
   });
 
-  it("falls back to a scoped snapshot after installing an external channel plugin", async () => {
+  it("uses a scoped snapshot before reinstalling an external channel plugin", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());
     const catalogEntry = createMSTeamsCatalogEntry();
@@ -301,9 +301,7 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: catalogEntry }),
-    );
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "msteams",
@@ -392,32 +390,37 @@ describe("channelsAddCommand", () => {
       installed: true,
       pluginId: "@vendor/teams-runtime",
     }));
-    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
-      createTestRegistry([
-        {
-          pluginId: "@vendor/teams-runtime",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "msteams",
-              label: "Microsoft Teams",
-              docsPath: "/channels/msteams",
-            }),
-            setup: {
-              applyAccountConfig: vi.fn(({ cfg, input }) => ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  msteams: {
-                    enabled: true,
-                    tenantId: input.token,
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
+      ({ pluginId }) => {
+        if (pluginId !== "@vendor/teams-runtime") {
+          return createTestRegistry();
+        }
+        return createTestRegistry([
+          {
+            pluginId: "@vendor/teams-runtime",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "msteams",
+                label: "Microsoft Teams",
+                docsPath: "/channels/msteams",
+              }),
+              setup: {
+                applyAccountConfig: vi.fn(({ cfg, input }) => ({
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    msteams: {
+                      enabled: true,
+                      tenantId: input.token,
+                    },
                   },
-                },
-              })),
+                })),
+              },
             },
+            source: "test",
           },
-          source: "test",
-        },
-      ]),
+        ]);
+      },
     );
 
     await channelsAddCommand(
@@ -430,10 +433,121 @@ describe("channelsAddCommand", () => {
       { hasFlags: true },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         channel: "msteams",
         pluginId: "@vendor/teams-runtime",
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("returns cleanly when external plugin install is skipped", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "qqbot",
+      pluginId: "openclaw-qqbot",
+      meta: {
+        id: "qqbot",
+        label: "Tencent QQ Bot",
+        selectionLabel: "Tencent QQ Bot",
+        docsPath: "/channels/qqbot",
+        blurb: "Tencent channel",
+      },
+      install: {
+        npmSpec: "openclaw-qqbot",
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg,
+      installed: false,
+    }));
+
+    await channelsAddCommand(
+      {
+        channel: "qqbot",
+        account: "default",
+        token: "appid:secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: catalogEntry }),
+    );
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("uses plugin manifest fallback when an installed external channel is missing from the catalog", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openclaw-qqbot",
+          channels: ["qqbot"],
+        } as never,
+      ],
+      diagnostics: [],
+    });
+    const scopedQqbotPlugin = {
+      ...createChannelTestPluginBase({
+        id: "qqbot",
+        label: "QQ Bot",
+        docsPath: "/channels/qqbot",
+      }),
+      setup: {
+        applyAccountConfig: vi.fn(({ cfg, input }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            qqbot: {
+              enabled: true,
+              token: input.token,
+            },
+          },
+        })),
+      },
+    };
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        { pluginId: "openclaw-qqbot", plugin: scopedQqbotPlugin, source: "test" },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "qqbot",
+        account: "default",
+        token: "appid:secret",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "qqbot",
+        pluginId: "openclaw-qqbot",
+      }),
+    );
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: {
+          qqbot: {
+            enabled: true,
+            token: "appid:secret",
+          },
+        },
       }),
     );
     expect(runtime.error).not.toHaveBeenCalled();
