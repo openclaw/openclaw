@@ -54,6 +54,7 @@ vi.mock("../../onboard-auth.config-litellm.js", () => ({
 describe("applySimpleNonInteractiveApiKeyChoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.GIGACHAT_CREDENTIALS;
     loadAuthProfileStoreForSecretsRuntime.mockReturnValue({ version: 1, profiles: {} });
     resolveAuthProfileOrder.mockImplementation(({ cfg, store, provider }) => {
       const configuredOrder =
@@ -532,5 +533,51 @@ describe("applySimpleNonInteractiveApiKeyChoice", () => {
     expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
       baseUrl: GIGACHAT_BASE_URL,
     });
+  });
+
+  it("resets the GigaChat provider base URL when replacing SecretRef-backed Basic auth", async () => {
+    const agentDir = "/tmp/openclaw-agents/work/agent";
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret
+    const resolveApiKey = vi.fn(async () => ({
+      key: "gigachat-oauth-credentials",
+      source: "flag" as const,
+    }));
+    const maybeSetResolvedApiKey = vi.fn(async (resolved, setter) => {
+      await setter(resolved.key);
+      return true;
+    });
+
+    await applySimpleNonInteractiveApiKeyChoice({
+      authChoice: "gigachat-oauth",
+      nextConfig,
+      baseConfig: {
+        models: {
+          providers: {
+            gigachat: {
+              api: "openai-completions",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "GIGACHAT_CREDENTIALS",
+              },
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      opts: { token: "gigachat-oauth-credentials" } as never,
+      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() } as never,
+      agentDir,
+      apiKeyStorageOptions: undefined,
+      resolveApiKey,
+      maybeSetResolvedApiKey,
+    });
+
+    expect(applyGigachatConfig).toHaveBeenCalledWith(expect.any(Object), {
+      baseUrl: GIGACHAT_BASE_URL,
+    });
+    delete process.env.GIGACHAT_CREDENTIALS;
   });
 });

@@ -45,7 +45,7 @@ async function applyGigachatNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null> {
-  const resetGigachatBaseUrl = shouldResetGigachatBaseUrlForOAuthReauth({
+  const resetGigachatBaseUrl = await shouldResetGigachatBaseUrlForOAuthReauth({
     cfg: params.baseConfig,
     agentDir: params.agentDir,
   });

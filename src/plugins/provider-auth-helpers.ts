@@ -18,6 +18,7 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { resolveSecretInputString } from "../secrets/resolve-secret-input-string.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -177,10 +178,10 @@ export function applyAuthProfileConfig(
   };
 }
 
-export function shouldResetGigachatBaseUrlForOAuthReauth(params: {
+export async function shouldResetGigachatBaseUrlForOAuthReauth(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
-}): boolean {
+}): Promise<boolean> {
   const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
   const activeProfileId = resolveAuthProfileOrder({
     cfg: params.cfg,
@@ -199,8 +200,13 @@ export function shouldResetGigachatBaseUrlForOAuthReauth(params: {
   // When no GigaChat auth profile is active, onboarding can still be replacing a
   // manual config-backed Basic setup (`models.providers.gigachat.apiKey/baseUrl`).
   const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, "gigachat");
-  const configuredApiKey =
-    typeof configuredProvider?.apiKey === "string" ? configuredProvider.apiKey.trim() : undefined;
+  const configuredApiKey = configuredProvider?.apiKey
+    ? await resolveSecretInputString({
+        config: params.cfg,
+        value: configuredProvider.apiKey,
+        env: process.env,
+      })
+    : undefined;
   return activeProfile == null && resolveGigachatAuthMode({ apiKey: configuredApiKey }) === "basic";
 }
 

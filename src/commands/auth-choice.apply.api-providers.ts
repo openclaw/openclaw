@@ -129,7 +129,7 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "gigachat-basic";
       gigachatBasicScope = gigachatScope;
     } else {
-      const resetGigachatBaseUrl = shouldResetGigachatBaseUrlForOAuthReauth({
+      const resetGigachatBaseUrl = await shouldResetGigachatBaseUrlForOAuthReauth({
         cfg: nextConfig,
         agentDir: params.agentDir,
       });

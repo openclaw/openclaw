@@ -683,6 +683,41 @@ describe("applyAuthChoice", () => {
     });
   });
 
+  it("resets a SecretRef-backed Basic GigaChat base URL when switching to OAuth", async () => {
+    await setupTempState();
+
+    delete process.env.GIGACHAT_USER;
+    delete process.env.GIGACHAT_PASSWORD;
+    delete process.env.GIGACHAT_BASE_URL;
+    process.env.GIGACHAT_CREDENTIALS = "basic-user:basic-pass"; // pragma: allowlist secret
+
+    const oauthHarness = createApiKeyPromptHarness();
+    const oauthResult = await applyAuthChoice({
+      authChoice: "gigachat-personal",
+      config: {
+        models: {
+          providers: {
+            gigachat: {
+              api: "openai-completions",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "GIGACHAT_CREDENTIALS",
+              },
+              baseUrl: "https://preview-basic.gigachat.example/api/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      prompter: oauthHarness.prompter,
+      runtime: oauthHarness.runtime,
+      setDefaultModel: true,
+    });
+
+    expect(oauthResult.config.models?.providers?.gigachat?.baseUrl).toBe(GIGACHAT_BASE_URL);
+  });
+
   it("prompts and writes provider API key for common providers", async () => {
     const scenarios: Array<{
       authChoice:
