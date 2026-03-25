@@ -29,3 +29,6 @@ export {
   formatSetExplicitDefaultInstruction,
   formatSetExplicitDefaultToConfiguredInstruction,
 } from "../routing/default-account-warnings.js";
+export { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+export { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
+export { normalizeMessageChannel, resolveGatewayMessageChannel } from "../utils/message-channel.js";

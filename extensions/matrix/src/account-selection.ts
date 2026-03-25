@@ -3,6 +3,12 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
+import {
+  listCombinedAccountIds,
+  listConfiguredAccountIds,
+  resolveListedDefaultAccountId,
+  resolveNormalizedAccountEntry,
+} from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { listMatrixEnvAccountIds } from "./env-vars.js";
 
@@ -27,15 +33,8 @@ export function findMatrixAccountEntry(
   if (!accounts) {
     return null;
   }
-
-  const normalizedAccountId = normalizeAccountId(accountId);
-  for (const [rawAccountId, value] of Object.entries(accounts)) {
-    if (normalizeAccountId(rawAccountId) === normalizedAccountId && isRecord(value)) {
-      return value;
-    }
-  }
-
-  return null;
+  const entry = resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
+  return isRecord(entry) ? entry : null;
 }
 
 export function resolveConfiguredMatrixAccountIds(
@@ -43,22 +42,14 @@ export function resolveConfiguredMatrixAccountIds(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const channel = resolveMatrixChannelConfig(cfg);
-  const ids = new Set<string>(listMatrixEnvAccountIds(env));
-
-  const accounts = channel && isRecord(channel.accounts) ? channel.accounts : null;
-  if (accounts) {
-    for (const [accountId, value] of Object.entries(accounts)) {
-      if (isRecord(value)) {
-        ids.add(normalizeAccountId(accountId));
-      }
-    }
-  }
-
-  if (ids.size === 0 && channel) {
-    ids.add(DEFAULT_ACCOUNT_ID);
-  }
-
-  return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
+  return listCombinedAccountIds({
+    configuredAccountIds: listConfiguredAccountIds({
+      accounts: channel && isRecord(channel.accounts) ? channel.accounts : undefined,
+      normalizeAccountId,
+    }),
+    additionalAccountIds: listMatrixEnvAccountIds(env),
+    fallbackAccountIdWhenEmpty: channel ? DEFAULT_ACCOUNT_ID : undefined,
+  });
 }
 
 export function resolveMatrixDefaultOrOnlyAccountId(
@@ -74,17 +65,11 @@ export function resolveMatrixDefaultOrOnlyAccountId(
     typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
   );
   const configuredAccountIds = resolveConfiguredMatrixAccountIds(cfg, env);
-  if (configuredDefault && configuredAccountIds.includes(configuredDefault)) {
-    return configuredDefault;
-  }
-  if (configuredAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-
-  if (configuredAccountIds.length === 1) {
-    return configuredAccountIds[0] ?? DEFAULT_ACCOUNT_ID;
-  }
-  return DEFAULT_ACCOUNT_ID;
+  return resolveListedDefaultAccountId({
+    accountIds: configuredAccountIds,
+    configuredDefaultAccountId: configuredDefault,
+    ambiguousFallbackAccountId: DEFAULT_ACCOUNT_ID,
+  });
 }
 
 export function requiresExplicitMatrixDefaultAccount(

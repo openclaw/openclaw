@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
-  getActivePluginRegistryVersion: vi.fn(() => 1),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
 beforeEach(async () => {
@@ -25,14 +25,14 @@ beforeEach(async () => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReturnValue(1);
+  mocks.getActivePluginChannelRegistryVersion.mockReset();
+  mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   vi.doMock("../../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
     normalizeChannelId: (value: string) => value,
   }));
   vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginRegistryVersion: () => mocks.getActivePluginRegistryVersion(),
+    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
   }));
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
     await import("./target-resolver.js"));

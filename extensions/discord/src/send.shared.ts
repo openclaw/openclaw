@@ -12,6 +12,7 @@ import { Routes, type APIChannel, type APIEmbed } from "discord-api-types/v10";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizePollDurationHours,
   normalizePollInput,
@@ -416,6 +417,7 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
+  filename: string | undefined,
   mediaLocalRoots: readonly string[] | undefined,
   maxBytes: number | undefined,
   replyTo: string | undefined,
@@ -430,6 +432,12 @@ async function sendDiscordMedia(
     mediaUrl,
     buildOutboundMediaLoadOptions({ maxBytes, mediaLocalRoots }),
   );
+  const requestedFileName = filename?.trim();
+  const resolvedFileName =
+    requestedFileName ||
+    media.fileName ||
+    (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
+    "upload";
   const chunks = text ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode }) : [];
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
@@ -449,7 +457,7 @@ async function sendDiscordMedia(
     files: [
       {
         data: fileData,
-        name: media.fileName ?? "upload",
+        name: resolvedFileName,
       },
     ],
   });

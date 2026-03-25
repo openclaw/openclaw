@@ -1,14 +1,15 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import {
   type ChannelMessageActionAdapter,
   type ChannelMessageToolDiscovery,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-contract";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction } from "./action-runtime.js";
+import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend, listSlackMessageActions } from "./message-actions.js";
 import { createSlackMessageToolBlocksSchema } from "./message-tool-schema.js";
-import { isSlackInteractiveRepliesEnabled } from "./runtime-api.js";
 import { resolveSlackChannelId } from "./targets.js";
 
 type SlackActionInvoke = (
@@ -40,7 +41,7 @@ export function createSlackActions(
       schema: actions.includes("send")
         ? {
             properties: {
-              blocks: createSlackMessageToolBlocksSchema(),
+              blocks: Type.Optional(createSlackMessageToolBlocksSchema()),
             },
           }
         : null,

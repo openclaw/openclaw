@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   isMatrixLegacyCryptoInspectorAvailable,
   loadMatrixLegacyCryptoInspector,
 } from "./matrix-plugin-helper.js";
+
+vi.unmock("../version.js");
 
 function writeMatrixPluginFixture(rootDir: string, helperBody: string): void {
   fs.mkdirSync(rootDir, { recursive: true });
@@ -24,7 +27,34 @@ function writeMatrixPluginFixture(rootDir: string, helperBody: string): void {
   fs.writeFileSync(path.join(rootDir, "legacy-crypto-inspector.js"), helperBody, "utf8");
 }
 
+function writeMatrixPluginManifest(rootDir: string): void {
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "matrix",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
+}
+
 describe("matrix plugin helper resolution", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const helperEnv = {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: (home: string) => path.join(home, "bundled"),
+    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    OPENCLAW_VERSION: undefined,
+    VITEST: "true",
+  } as const;
+
   it("loads the legacy crypto inspector from the bundled matrix plugin", async () => {
     await withTempHome(
       async (home) => {
@@ -59,11 +89,7 @@ describe("matrix plugin helper resolution", () => {
           decryptionKeyBase64: "YWJjZA==",
         });
       },
-      {
-        env: {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: (home) => path.join(home, "bundled"),
-        },
-      },
+      { env: helperEnv },
     );
   });
 
@@ -89,13 +115,13 @@ describe("matrix plugin helper resolution", () => {
           ].join("\n"),
         );
 
-        const cfg = {
+        const cfg: OpenClawConfig = {
           plugins: {
             load: {
               paths: [customRoot],
             },
           },
-        } as const;
+        };
 
         expect(isMatrixLegacyCryptoInspectorAvailable({ cfg, env: process.env })).toBe(true);
         const inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
@@ -116,9 +142,61 @@ describe("matrix plugin helper resolution", () => {
           decryptionKeyBase64: null,
         });
       },
+      { env: helperEnv },
+    );
+  });
+
+  it("keeps source-style root helper shims on the Jiti fallback path", async () => {
+    await withTempHome(
+      async (home) => {
+        const customRoot = path.join(home, "plugins", "matrix-local");
+        writeMatrixPluginManifest(customRoot);
+        fs.mkdirSync(path.join(customRoot, "src", "matrix"), { recursive: true });
+        fs.writeFileSync(
+          path.join(customRoot, "legacy-crypto-inspector.js"),
+          'export { inspectLegacyMatrixCryptoStore } from "./src/matrix/legacy-crypto-inspector.js";\n',
+          "utf8",
+        );
+        fs.writeFileSync(
+          path.join(customRoot, "src", "matrix", "legacy-crypto-inspector.ts"),
+          [
+            "export async function inspectLegacyMatrixCryptoStore() {",
+            '  return { deviceId: "SRCJS", roomKeyCounts: null, backupVersion: null, decryptionKeyBase64: null };',
+            "}",
+          ].join("\n"),
+          "utf8",
+        );
+
+        const cfg: OpenClawConfig = {
+          plugins: {
+            load: {
+              paths: [customRoot],
+            },
+          },
+        };
+
+        expect(isMatrixLegacyCryptoInspectorAvailable({ cfg, env: process.env })).toBe(true);
+        const inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
+          cfg,
+          env: process.env,
+        });
+
+        await expect(
+          inspectLegacyStore({
+            cryptoRootDir: "/tmp/legacy",
+            userId: "@bot:example.org",
+            deviceId: "DEVICE123",
+          }),
+        ).resolves.toEqual({
+          deviceId: "SRCJS",
+          roomKeyCounts: null,
+          backupVersion: null,
+          decryptionKeyBase64: null,
+        });
+      },
       {
         env: {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: (home) => path.join(home, "bundled"),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: (home) => path.join(home, "empty-bundled"),
         },
       },
     );
@@ -160,13 +238,13 @@ describe("matrix plugin helper resolution", () => {
           return;
         }
 
-        const cfg = {
+        const cfg: OpenClawConfig = {
           plugins: {
             load: {
               paths: [customRoot],
             },
           },
-        } as const;
+        };
 
         expect(isMatrixLegacyCryptoInspectorAvailable({ cfg, env: process.env })).toBe(false);
         await expect(

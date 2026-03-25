@@ -12,7 +12,9 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
     rooms: {
       join: {
         "!room:example.org": {
-          summary: {},
+          summary: {
+            "m.heroes": [],
+          },
           state: { events: [] },
           timeline: {
             events: [
@@ -34,6 +36,9 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
           unread_notifications: {},
         },
       },
+      invite: {},
+      leave: {},
+      knock: {},
     },
     account_data: {
       events: [
@@ -57,6 +62,12 @@ function createDeferred() {
 describe("FileBackedMatrixSyncStore", () => {
   const tempDirs: string[] = [];
 
+  function createStoragePath(): string {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
+    tempDirs.push(tempDir);
+    return path.join(tempDir, "bot-storage.json");
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -66,9 +77,7 @@ describe("FileBackedMatrixSyncStore", () => {
   });
 
   it("persists sync data so restart resumes from the saved cursor", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    const storagePath = path.join(tempDir, "bot-storage.json");
+    const storagePath = createStoragePath();
 
     const firstStore = new FileBackedMatrixSyncStore(storagePath);
     expect(firstStore.hasSavedSync()).toBe(false);
@@ -88,13 +97,51 @@ describe("FileBackedMatrixSyncStore", () => {
       },
     ]);
     expect(savedSync?.roomsData.join?.["!room:example.org"]).toBeTruthy();
+    expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
+  });
+
+  it("only treats sync state as restart-safe after a clean shutdown persist", async () => {
+    const storagePath = createStoragePath();
+
+    const firstStore = new FileBackedMatrixSyncStore(storagePath);
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.flush();
+
+    const afterDirtyPersist = new FileBackedMatrixSyncStore(storagePath);
+    expect(afterDirtyPersist.hasSavedSync()).toBe(true);
+    expect(afterDirtyPersist.hasSavedSyncFromCleanShutdown()).toBe(false);
+
+    firstStore.markCleanShutdown();
+    await firstStore.flush();
+
+    const afterCleanShutdown = new FileBackedMatrixSyncStore(storagePath);
+    expect(afterCleanShutdown.hasSavedSync()).toBe(true);
+    expect(afterCleanShutdown.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("clears the clean-shutdown marker once fresh sync data arrives", async () => {
+    const storagePath = createStoragePath();
+
+    const firstStore = new FileBackedMatrixSyncStore(storagePath);
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    firstStore.markCleanShutdown();
+    await firstStore.flush();
+
+    const restartedStore = new FileBackedMatrixSyncStore(storagePath);
+    expect(restartedStore.hasSavedSyncFromCleanShutdown()).toBe(true);
+
+    await restartedStore.setSyncData(createSyncResponse("s456"));
+    await restartedStore.flush();
+
+    const afterNewSync = new FileBackedMatrixSyncStore(storagePath);
+    expect(afterNewSync.hasSavedSync()).toBe(true);
+    expect(afterNewSync.hasSavedSyncFromCleanShutdown()).toBe(false);
+    await expect(afterNewSync.getSavedSyncToken()).resolves.toBe("s456");
   });
 
   it("coalesces background persistence until the debounce window elapses", async () => {
     vi.useFakeTimers();
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    const storagePath = path.join(tempDir, "bot-storage.json");
+    const storagePath = createStoragePath();
     const writeSpy = vi.spyOn(jsonFiles, "writeJsonAtomic").mockResolvedValue();
 
     const store = new FileBackedMatrixSyncStore(storagePath);
@@ -125,9 +172,7 @@ describe("FileBackedMatrixSyncStore", () => {
 
   it("waits for an in-flight persist when shutdown flush runs", async () => {
     vi.useFakeTimers();
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    const storagePath = path.join(tempDir, "bot-storage.json");
+    const storagePath = createStoragePath();
     const writeDeferred = createDeferred();
     const writeSpy = vi
       .spyOn(jsonFiles, "writeJsonAtomic")
@@ -152,9 +197,7 @@ describe("FileBackedMatrixSyncStore", () => {
   });
 
   it("persists client options alongside sync state", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    const storagePath = path.join(tempDir, "bot-storage.json");
+    const storagePath = createStoragePath();
 
     const firstStore = new FileBackedMatrixSyncStore(storagePath);
     await firstStore.storeClientOptions({ lazyLoadMembers: true });
@@ -165,9 +208,7 @@ describe("FileBackedMatrixSyncStore", () => {
   });
 
   it("loads legacy raw sync payloads from bot-storage.json", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-store-"));
-    tempDirs.push(tempDir);
-    const storagePath = path.join(tempDir, "bot-storage.json");
+    const storagePath = createStoragePath();
 
     fs.writeFileSync(
       storagePath,

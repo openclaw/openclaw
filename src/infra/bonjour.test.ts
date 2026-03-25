@@ -241,6 +241,39 @@ describe("gateway bonjour advertiser", () => {
     expect(order).toEqual(["shutdown", "cleanup"]);
   });
 
+  it("logs ciao handler classifications at the bonjour caller", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler).toBeTypeOf("function");
+
+    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
+    expect(logDebug).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring unhandled ciao rejection"),
+    );
+
+    logDebug.mockClear();
+    expect(
+      handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
+    ).toBe(true);
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao interface assertion"),
+    );
+
+    await started.stop();
+  });
+
   it("logs advertise failures and retries via watchdog", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();

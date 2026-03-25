@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand } from "./backup-verify.js";
@@ -97,11 +97,25 @@ async function withBrokenArchiveFixture(
 describe("backupVerifyCommand", () => {
   let tempHome: TempHomeEnv;
 
-  beforeEach(async () => {
+  async function resetTempHome() {
+    await fs.rm(tempHome.home, { recursive: true, force: true });
+    await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  }
+
+  beforeAll(async () => {
     tempHome = await createTempHomeEnv("openclaw-backup-verify-test-");
   });
 
+  beforeEach(async () => {
+    await resetTempHome();
+  });
+
   afterEach(async () => {
+    vi.restoreAllMocks();
+  });
+
+  afterAll(async () => {
     await tempHome.restore();
   });
 

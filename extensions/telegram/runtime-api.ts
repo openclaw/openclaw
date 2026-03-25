@@ -8,6 +8,7 @@ export type {
   TelegramActionConfig,
   TelegramNetworkConfig,
 } from "openclaw/plugin-sdk/telegram";
+export type { TelegramApiOverride } from "./src/send.js";
 export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,

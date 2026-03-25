@@ -1,5 +1,5 @@
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +11,8 @@ vi.mock("./tool-actions.js", () => ({
 }));
 
 const { matrixMessageActions } = await import("./actions.js");
+
+const profileAction = "set-profile" as ChannelMessageActionContext["action"];
 
 function createContext(
   overrides: Partial<ChannelMessageActionContext>,
@@ -88,7 +90,7 @@ describe("matrixMessageActions account propagation", () => {
   it("forwards accountId for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
-        action: "set-profile",
+        action: profileAction,
         accountId: "ops",
         params: {
           displayName: "Ops Bot",
@@ -112,7 +114,7 @@ describe("matrixMessageActions account propagation", () => {
   it("forwards local avatar paths for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
-        action: "set-profile",
+        action: profileAction,
         accountId: "ops",
         params: {
           path: "/tmp/avatar.jpg",
@@ -174,6 +176,32 @@ describe("matrixMessageActions account propagation", () => {
         accountId: "ops",
         content: undefined,
         mediaUrl: "file:///tmp/photo.png",
+      }),
+      expect.any(Object),
+      { mediaLocalRoots: undefined },
+    );
+  });
+
+  it("accepts shared media aliases and forwards voice-send intent", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "send",
+        accountId: "ops",
+        params: {
+          to: "room:!room:example",
+          filePath: "/tmp/clip.mp3",
+          asVoice: true,
+        },
+      }),
+    );
+
+    expect(mocks.handleMatrixAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        accountId: "ops",
+        content: undefined,
+        mediaUrl: "/tmp/clip.mp3",
+        audioAsVoice: true,
       }),
       expect.any(Object),
       { mediaLocalRoots: undefined },

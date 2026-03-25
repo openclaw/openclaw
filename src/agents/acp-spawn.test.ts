@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
+import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,6 +13,8 @@ import * as heartbeatWake from "../infra/heartbeat-wake.js";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
+  type SessionBindingAdapterCapabilities,
+  type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
@@ -89,6 +92,14 @@ const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
 );
 
 const { spawnAcpDirect } = await import("./acp-spawn.js");
+type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
+type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
+type AgentCallParams = {
+  deliver?: boolean;
+  channel?: string;
+  to?: string;
+  threadId?: string;
+};
 
 function replaceSpawnConfig(next: OpenClawConfig): void {
   const current = hoisted.state.cfg as Record<string, unknown>;
@@ -99,12 +110,11 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(hoisted.state.cfg);
 }
 
-function createSessionBindingCapabilities() {
+function createSessionBindingCapabilities(): SessionBindingAdapterCapabilities {
   return {
-    adapterAvailable: true,
     bindSupported: true,
     unbindSupported: true,
-    placements: ["current", "child"] as const,
+    placements: ["current", "child"] satisfies SessionBindingPlacement[],
   };
 }
 
@@ -151,6 +161,64 @@ function expectResolvedIntroTextInBindMetadata(): void {
   expect(introText.includes("session ids: pending (available after the first reply)")).toBe(false);
 }
 
+function createSpawnRequest(overrides?: Partial<SpawnRequest>): SpawnRequest {
+  return {
+    task: "Investigate flaky tests",
+    agentId: "codex",
+    mode: "run",
+    ...overrides,
+  };
+}
+
+function createRequesterContext(overrides?: Partial<SpawnContext>): SpawnContext {
+  return {
+    agentSessionKey: "agent:main:telegram:direct:6098642967",
+    agentChannel: "telegram",
+    agentAccountId: "default",
+    agentTo: "telegram:6098642967",
+    agentThreadId: "1",
+    ...overrides,
+  };
+}
+
+function findAgentGatewayCall(): { method?: string; params?: Record<string, unknown> } | undefined {
+  return hoisted.callGatewayMock.mock.calls
+    .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+    .find((request) => request.method === "agent");
+}
+
+function expectAgentGatewayCall(overrides: AgentCallParams): void {
+  const agentCall = findAgentGatewayCall();
+  expect(agentCall?.params?.deliver).toBe(overrides.deliver);
+  expect(agentCall?.params?.channel).toBe(overrides.channel);
+  expect(agentCall?.params?.to).toBe(overrides.to);
+  expect(agentCall?.params?.threadId).toBe(overrides.threadId);
+}
+
+function enableMatrixAcpThreadBindings(): void {
+  replaceSpawnConfig({
+    ...hoisted.state.cfg,
+    channels: {
+      ...hoisted.state.cfg.channels,
+      matrix: {
+        threadBindings: {
+          enabled: true,
+          spawnAcpSessions: true,
+        },
+      },
+    },
+  });
+  registerSessionBindingAdapter({
+    channel: "matrix",
+    accountId: "default",
+    capabilities: createSessionBindingCapabilities(),
+    bind: async (input) => await hoisted.sessionBindingBindMock(input),
+    listBySession: (targetSessionKey) => hoisted.sessionBindingListBySessionMock(targetSessionKey),
+    resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+    unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+  });
+}
+
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
@@ -179,16 +247,19 @@ describe("spawnAcpDirect", () => {
       metaCleared: false,
     });
     getAcpSessionManagerSpy.mockReset().mockReturnValue({
-      initializeSession: async (params) => await hoisted.initializeSessionMock(params),
-      closeSession: async (params) => await hoisted.closeSessionMock(params),
+      initializeSession: async (
+        params: Parameters<
+          ReturnType<typeof acpSessionManager.getAcpSessionManager>["initializeSession"]
+        >[0],
+      ) => await hoisted.initializeSessionMock(params),
+      closeSession: async (
+        params: Parameters<
+          ReturnType<typeof acpSessionManager.getAcpSessionManager>["closeSession"]
+        >[0],
+      ) => await hoisted.closeSessionMock(params),
     } as unknown as ReturnType<typeof acpSessionManager.getAcpSessionManager>);
     hoisted.initializeSessionMock.mockReset().mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as {
-        sessionKey: string;
-        agent: string;
-        mode: "persistent" | "oneshot";
-        cwd?: string;
-      };
+      const args = argsUnknown as AcpInitializeSessionInput;
       const runtimeSessionName = `${args.sessionKey}:runtime`;
       const cwd = typeof args.cwd === "string" ? args.cwd : undefined;
       return {
@@ -378,28 +449,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("spawns Matrix thread-bound ACP sessions from top-level room targets", async () => {
-    replaceSpawnConfig({
-      ...hoisted.state.cfg,
-      channels: {
-        ...hoisted.state.cfg.channels,
-        matrix: {
-          threadBindings: {
-            enabled: true,
-            spawnAcpSessions: true,
-          },
-        },
-      },
-    });
-    registerSessionBindingAdapter({
-      channel: "matrix",
-      accountId: "default",
-      capabilities: createSessionBindingCapabilities(),
-      bind: async (input) => await hoisted.sessionBindingBindMock(input),
-      listBySession: (targetSessionKey) =>
-        hoisted.sessionBindingListBySessionMock(targetSessionKey),
-      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
-      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
-    });
+    enableMatrixAcpThreadBindings();
     hoisted.sessionBindingBindMock.mockImplementationOnce(
       async (input: {
         targetSessionKey: string;
@@ -448,48 +498,57 @@ describe("spawnAcpDirect", () => {
         }),
       }),
     );
-    const agentCall = hoisted.callGatewayMock.mock.calls
-      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find((request) => request.method === "agent");
-    expect(agentCall?.params?.channel).toBe("matrix");
-    expect(agentCall?.params?.to).toBe("room:!room:example");
-    expect(agentCall?.params?.threadId).toBe("child-thread");
+    expectAgentGatewayCall({
+      deliver: true,
+      channel: "matrix",
+      to: "room:!room:example",
+      threadId: "child-thread",
+    });
   });
 
-  it("does not inline delivery for fresh oneshot ACP runs", async () => {
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "run",
-      },
-      {
-        agentSessionKey: "agent:main:telegram:direct:6098642967",
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "telegram:6098642967",
-        agentThreadId: "1",
-      },
-    );
+  it.each([
+    {
+      name: "inlines delivery for run-mode spawns from non-subagent requester sessions",
+      ctx: createRequesterContext(),
+      expectedAgentCall: {
+        deliver: true,
+        channel: "telegram",
+        to: "telegram:6098642967",
+        threadId: "1",
+      } satisfies AgentCallParams,
+      expectTranscriptPersistence: true,
+    },
+    {
+      name: "does not inline delivery for run-mode spawns from subagent requester sessions",
+      ctx: createRequesterContext({
+        agentSessionKey: "agent:main:subagent:orchestrator",
+        agentThreadId: undefined,
+      }),
+      expectedAgentCall: {
+        deliver: false,
+        channel: undefined,
+        to: undefined,
+        threadId: undefined,
+      } satisfies AgentCallParams,
+      expectTranscriptPersistence: false,
+    },
+  ])("$name", async ({ ctx, expectedAgentCall, expectTranscriptPersistence }) => {
+    const result = await spawnAcpDirect(createSpawnRequest(), ctx);
 
     expect(result.status).toBe("accepted");
     expect(result.mode).toBe("run");
     expect(result.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
-    expect(hoisted.resolveSessionTranscriptFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "sess-123",
-        storePath: "/tmp/codex-sessions.json",
-        agentId: "codex",
-      }),
-    );
-    const agentCall = hoisted.callGatewayMock.mock.calls
-      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find((request) => request.method === "agent");
-    expect(agentCall?.params?.deliver).toBe(false);
-    expect(agentCall?.params?.channel).toBeUndefined();
-    expect(agentCall?.params?.to).toBeUndefined();
-    expect(agentCall?.params?.threadId).toBeUndefined();
+    if (expectTranscriptPersistence) {
+      expect(hoisted.resolveSessionTranscriptFileMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "sess-123",
+          storePath: "/tmp/codex-sessions.json",
+          agentId: "codex",
+        }),
+      );
+    }
+    expectAgentGatewayCall(expectedAgentCall);
   });
 
   it("keeps ACP spawn running when session-file persistence fails", async () => {
@@ -1039,7 +1098,7 @@ describe("spawnAcpDirect", () => {
         ...hoisted.state.cfg.channels,
         telegram: {
           threadBindings: {
-            spawnAcpSessions: true,
+            enabled: true,
           },
         },
       },

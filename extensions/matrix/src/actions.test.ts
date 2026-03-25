@@ -1,8 +1,10 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import { setMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
+
+const profileAction = "set-profile" as const;
 
 const runtimeStub = {
   config: {
@@ -52,7 +54,7 @@ describe("matrixMessageActions", () => {
 
   it("exposes poll create but only handles poll votes inside the plugin", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
-    const supportsAction = matrixMessageActions.supportsAction;
+    const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
     expect(describeMessageTool).toBeTypeOf("function");
     expect(supportsAction).toBeTypeOf("function");
@@ -60,34 +62,42 @@ describe("matrixMessageActions", () => {
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
     } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
     const actions = discovery.actions;
-
     expect(actions).toContain("poll");
     expect(actions).toContain("poll-vote");
-    expect(supportsAction!({ action: "poll" } as never)).toBe(false);
-    expect(supportsAction!({ action: "poll-vote" } as never)).toBe(true);
+    expect(supportsAction({ action: "poll" } as never)).toBe(false);
+    expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
 
   it("exposes and describes self-profile updates", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
-    const supportsAction = matrixMessageActions.supportsAction;
+    const supportsAction = matrixMessageActions.supportsAction ?? (() => false);
 
     const discovery = describeMessageTool!({
       cfg: createConfiguredMatrixConfig(),
     } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
     const actions = discovery.actions;
-    const properties =
-      (discovery.schema as { properties?: Record<string, unknown> } | null)?.properties ?? {};
+    const schema = discovery.schema;
+    if (!schema) {
+      throw new Error("matrix schema missing");
+    }
+    const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
 
-    expect(actions).toContain("set-profile");
-    expect(supportsAction!({ action: "set-profile" } as never)).toBe(true);
+    expect(actions).toContain(profileAction);
+    expect(supportsAction({ action: profileAction } as never)).toBe(true);
     expect(properties.displayName).toBeDefined();
     expect(properties.avatarUrl).toBeDefined();
     expect(properties.avatarPath).toBeDefined();
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
-    const actions = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool!({
       cfg: {
         channels: {
           matrix: {
@@ -121,13 +131,17 @@ describe("matrixMessageActions", () => {
           },
         },
       } as CoreConfig,
-    } as never).actions;
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+    const actions = discovery.actions;
 
     expect(actions).toEqual(["poll", "poll-vote"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
-    const actions = matrixMessageActions.describeMessageTool!({
+    const discovery = matrixMessageActions.describeMessageTool!({
       cfg: {
         channels: {
           matrix: {
@@ -144,7 +158,11 @@ describe("matrixMessageActions", () => {
           },
         },
       } as CoreConfig,
-    } as never).actions;
+    } as never);
+    if (!discovery) {
+      throw new Error("describeMessageTool returned null");
+    }
+    const actions = discovery.actions;
 
     expect(actions).toEqual([]);
   });

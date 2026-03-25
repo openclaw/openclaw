@@ -12,6 +12,7 @@ import { routeReply } from "./route-reply.js";
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
   allowEdit?: boolean;
+  skipTts?: boolean;
 };
 
 type ToolMessageHandle = {
@@ -26,6 +27,7 @@ type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
   blockCount: number;
+  deliveredFinalReply: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -39,6 +41,7 @@ export type AcpDispatchDeliveryCoordinator = {
   ) => Promise<boolean>;
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
+  hasDeliveredFinalReply: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -59,6 +62,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     startedReplyLifecycle: false,
     accumulatedBlockText: "",
     blockCount: 0,
+    deliveredFinalReply: false,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -132,14 +136,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       await startReplyLifecycleOnce();
     }
 
-    const ttsPayload = await maybeApplyTtsToPayload({
-      payload,
-      cfg: params.cfg,
-      channel: params.ttsChannel,
-      kind,
-      inboundAudio: params.inboundAudio,
-      ttsAuto: params.sessionTtsAuto,
-    });
+    const ttsPayload = meta?.skipTts
+      ? payload
+      : await maybeApplyTtsToPayload({
+          payload,
+          cfg: params.cfg,
+          channel: params.ttsChannel,
+          kind,
+          inboundAudio: params.inboundAudio,
+          ttsAuto: params.sessionTtsAuto,
+        });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
       const toolCallId = meta?.toolCallId?.trim();
@@ -174,17 +180,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           messageId: result.messageId,
         });
       }
+      if (kind === "final") {
+        state.deliveredFinalReply = true;
+      }
       state.routedCounts[kind] += 1;
       return true;
     }
 
-    if (kind === "tool") {
-      return params.dispatcher.sendToolResult(ttsPayload);
+    const delivered =
+      kind === "tool"
+        ? params.dispatcher.sendToolResult(ttsPayload)
+        : kind === "block"
+          ? params.dispatcher.sendBlockReply(ttsPayload)
+          : params.dispatcher.sendFinalReply(ttsPayload);
+    if (kind === "final" && delivered) {
+      state.deliveredFinalReply = true;
     }
-    if (kind === "block") {
-      return params.dispatcher.sendBlockReply(ttsPayload);
-    }
-    return params.dispatcher.sendFinalReply(ttsPayload);
+    return delivered;
   };
 
   return {
@@ -192,6 +204,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
+    hasDeliveredFinalReply: () => state.deliveredFinalReply,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
