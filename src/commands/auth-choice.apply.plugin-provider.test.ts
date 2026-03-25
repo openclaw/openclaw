@@ -13,7 +13,7 @@ const resolveProviderPluginChoice = vi.hoisted(() =>
   vi.fn<() => { provider: ProviderPlugin; method: ProviderAuthMethod } | null>(),
 );
 const runProviderModelSelectedHook = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./auth-choice.apply.plugin-provider.runtime.js", () => ({
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders,
   resolveProviderPluginChoice,
   runProviderModelSelectedHook,
@@ -44,23 +44,20 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("./onboard-auth.js", () => ({
+vi.mock("../plugins/provider-auth-helpers.js", () => ({
   applyAuthProfileConfig,
 }));
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
-vi.mock("./oauth-env.js", () => ({
+const openUrl = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../plugins/setup-browser.js", () => ({
   isRemoteEnvironment,
+  openUrl,
 }));
 
 const createVpsAwareOAuthHandlers = vi.hoisted(() => vi.fn());
-vi.mock("./oauth-flow.js", () => ({
+vi.mock("../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers,
-}));
-
-const openUrl = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("./onboard-helpers.js", () => ({
-  openUrl,
 }));
 
 function buildProvider(): ProviderPlugin {

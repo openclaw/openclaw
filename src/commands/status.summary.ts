@@ -1,27 +1,21 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveFreshSessionTotalTokens,
-  resolveMainSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
+import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
-let statusSummaryRuntimeModulePromise:
-  | Promise<typeof import("./status.summary.runtime.js")>
-  | undefined;
+let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -33,9 +27,14 @@ function loadLinkChannelModule() {
   return linkChannelModulePromise;
 }
 
-function loadStatusSummaryRuntimeModule() {
-  statusSummaryRuntimeModulePromise ??= import("./status.summary.runtime.js");
-  return statusSummaryRuntimeModulePromise;
+const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
+  () => import("./status.summary.runtime.js"),
+  ({ statusSummaryRuntime }) => statusSummaryRuntime,
+);
+
+function loadConfigIoModule() {
+  configIoModulePromise ??= import("../config/io.js");
+  return configIoModulePromise;
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -103,9 +102,13 @@ export async function getStatusSummary(
   } = {},
 ): Promise<StatusSummary> {
   const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
-    await loadStatusSummaryRuntimeModule();
-  const cfg = options.config ?? loadConfig();
+  const {
+    classifySessionKey,
+    resolveConfiguredStatusModelRef,
+    resolveContextTokensForModel,
+    resolveSessionModelRef,
+  } = await loadStatusSummaryRuntimeModule();
+  const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
   const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
@@ -134,7 +137,7 @@ export async function getStatusSummary(
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
 
-  const resolved = resolveConfiguredModelRef({
+  const resolved = resolveConfiguredStatusModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
@@ -147,6 +150,9 @@ export async function getStatusSummary(
       model: configModel,
       contextTokensOverride: cfg.agents?.defaults?.contextTokens,
       fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      // Keep `status`/`status --json` startup read-only. These summary lookups
+      // should not kick off background provider discovery or plugin scans.
+      allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
@@ -156,7 +162,7 @@ export async function getStatusSummary(
     if (cached) {
       return cached;
     }
-    const store = loadSessionStore(storePath);
+    const store = readSessionStoreReadOnly(storePath);
     storeCache.set(storePath, store);
     return store;
   };
@@ -178,6 +184,7 @@ export async function getStatusSummary(
             model,
             contextTokensOverride: entry?.contextTokens,
             fallbackContextTokens: configContextTokens ?? undefined,
+            allowAsyncLoad: false,
           }) ?? null;
         const total = resolveFreshSessionTotalTokens(entry);
         const totalTokensFresh =

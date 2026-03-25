@@ -1,74 +1,65 @@
-import { normalizeProviderId } from "../../src/agents/provider-id.js";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
+import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildXaiProvider } from "./provider-catalog.js";
+import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import {
-  createPluginBackedWebSearchProvider,
-  getScopedCredentialValue,
-  setScopedCredentialValue,
-} from "../../src/agents/tools/web-search-plugin-factory.js";
-import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "../../src/commands/onboard-auth.js";
-import { emptyPluginConfigSchema } from "../../src/plugins/config-schema.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
-import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+  createXaiToolCallArgumentDecodingWrapper,
+  createXaiToolPayloadCompatibilityWrapper,
+} from "./stream.js";
+import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
-const XAI_MODERN_MODEL_PREFIXES = ["grok-4"] as const;
 
-function matchesModernXaiModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return XAI_MODERN_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-const xaiPlugin = {
+export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "xAI",
-      docsPath: "/providers/models",
-      envVars: ["XAI_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "xAI API key",
-          hint: "API key",
-          optionKey: "xaiApiKey",
-          flagName: "--xai-api-key",
-          envVar: "XAI_API_KEY",
-          promptMessage: "Enter xAI API key",
-          defaultModel: XAI_DEFAULT_MODEL_REF,
-          expectedProviders: ["xai"],
-          applyConfig: (cfg) => applyXaiConfig(cfg),
-          wizard: {
-            choiceId: "xai-api-key",
-            choiceLabel: "xAI API key",
-            groupId: "xai",
-            groupLabel: "xAI (Grok)",
-            groupHint: "API key",
-          },
-        }),
-      ],
-      isModernModelRef: ({ provider, modelId }) =>
-        normalizeProviderId(provider) === "xai" ? matchesModernXaiModel(modelId) : undefined,
-    });
-    api.registerWebSearchProvider(
-      createPluginBackedWebSearchProvider({
-        id: "grok",
-        label: "Grok (xAI)",
-        hint: "xAI web-grounded responses",
-        envVars: ["XAI_API_KEY"],
-        placeholder: "xai-...",
-        signupUrl: "https://console.x.ai/",
-        docsUrl: "https://docs.openclaw.ai/tools/web",
-        autoDetectOrder: 30,
-        getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "grok"),
-        setCredentialValue: (searchConfigTarget, value) =>
-          setScopedCredentialValue(searchConfigTarget, "grok", value),
-      }),
-    );
+  provider: {
+    label: "xAI",
+    aliases: ["x-ai"],
+    docsPath: "/providers/xai",
+    auth: [
+      {
+        methodId: "api-key",
+        label: "xAI API key",
+        hint: "API key",
+        optionKey: "xaiApiKey",
+        flagName: "--xai-api-key",
+        envVar: "XAI_API_KEY",
+        promptMessage: "Enter xAI API key",
+        defaultModel: XAI_DEFAULT_MODEL_REF,
+        applyConfig: (cfg) => applyXaiConfig(cfg),
+        wizard: {
+          groupLabel: "xAI (Grok)",
+        },
+      },
+    ],
+    catalog: {
+      buildProvider: buildXaiProvider,
+    },
+    prepareExtraParams: (ctx) => {
+      if (ctx.extraParams?.tool_stream !== undefined) {
+        return ctx.extraParams;
+      }
+      return {
+        ...ctx.extraParams,
+        tool_stream: true,
+      };
+    },
+    wrapStreamFn: (ctx) =>
+      createToolStreamWrapper(
+        createXaiToolCallArgumentDecodingWrapper(
+          createXaiToolPayloadCompatibilityWrapper(ctx.streamFn),
+        ),
+        ctx.extraParams?.tool_stream !== false,
+      ),
+    normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
+    resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+    isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },
-};
-
-export default xaiPlugin;
+  register(api) {
+    api.registerWebSearchProvider(createXaiWebSearchProvider());
+  },
+});

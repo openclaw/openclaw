@@ -1,25 +1,23 @@
 import path from "node:path";
-import "./reply.directive.directive-behavior.e2e-mocks.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getReplyFromConfig } from "./reply.js";
+import {
+  createReplyRuntimeMocks,
+  installReplyRuntimeMocks,
+  makeEmbeddedTextResult,
+  resetReplyRuntimeMocks,
+} from "./reply.test-harness.js";
 
-function makeResult(text: string) {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
-}
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+const agentMocks = createReplyRuntimeMocks();
+
+installReplyRuntimeMocks(agentMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockClear();
+      agentMocks.runEmbeddedPiAgent.mockClear();
       return await fn(home);
     },
     {
@@ -45,12 +43,22 @@ function makeCfg(home: string) {
 }
 
 describe("getReplyFromConfig media note plumbing", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    resetReplyRuntimeMocks(agentMocks);
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("includes all MediaPaths in the agent prompt", async () => {
     await withTempHome(async (home) => {
       let seenPrompt: string | undefined;
-      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
+      agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
         seenPrompt = params.prompt;
-        return makeResult("ok");
+        return makeEmbeddedTextResult("ok");
       });
 
       const cfg = makeCfg(home);

@@ -1,6 +1,6 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
 import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
-import { logVerbose } from "../../../../src/globals.js";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { createWaSocket } from "../session.js";
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {

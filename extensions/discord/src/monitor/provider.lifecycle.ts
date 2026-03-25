@@ -1,19 +1,51 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { createArmableStallWatchdog } from "../../../../src/channels/transport/stall-watchdog.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { danger } from "../../../../src/globals.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import type { DiscordGatewayEvent, DiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type ExecApprovalsHandler = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
 };
+
+const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
+const DISCORD_GATEWAY_READY_POLL_MS = 250;
+
+type GatewayReadyWaitResult = "ready" | "timeout" | "stopped";
+
+async function waitForDiscordGatewayReady(params: {
+  gateway?: Pick<GatewayPlugin, "isConnected">;
+  abortSignal?: AbortSignal;
+  timeoutMs: number;
+  beforePoll?: () => Promise<"continue" | "stop"> | "continue" | "stop";
+}): Promise<GatewayReadyWaitResult> {
+  const deadlineAt = Date.now() + params.timeoutMs;
+  while (!params.abortSignal?.aborted) {
+    const pollDecision = await params.beforePoll?.();
+    if (pollDecision === "stop") {
+      return "stopped";
+    }
+    if (params.gateway?.isConnected) {
+      return "ready";
+    }
+    if (Date.now() >= deadlineAt) {
+      return "timeout";
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(resolve, DISCORD_GATEWAY_READY_POLL_MS);
+      timeout.unref?.();
+    });
+  }
+  return "stopped";
+}
 
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
@@ -25,8 +57,7 @@ export async function runDiscordGatewayLifecycle(params: {
   voiceManagerRef: { current: DiscordVoiceManager | null };
   execApprovalsHandler: ExecApprovalsHandler | null;
   threadBindings: { stop: () => void };
-  pendingGatewayErrors?: unknown[];
-  releaseEarlyGatewayErrorGuard?: () => void;
+  gatewaySupervisor: DiscordGatewaySupervisor;
   statusSink?: DiscordMonitorStatusSink;
 }) {
   const HELLO_TIMEOUT_MS = 30000;
@@ -37,7 +68,7 @@ export async function runDiscordGatewayLifecycle(params: {
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
-  const gatewayEmitter = getDiscordGatewayEmitter(gateway);
+  const gatewayEmitter = params.gatewaySupervisor.emitter ?? getDiscordGatewayEmitter(gateway);
   const stopGatewayLogging = attachDiscordGatewayLogging({
     emitter: gatewayEmitter,
     runtime: params.runtime,
@@ -97,7 +128,6 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
-    gatewayEmitter?.once("error", () => {});
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
@@ -242,73 +272,126 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
-  // If the gateway is already connected when the lifecycle starts (the
-  // "WebSocket connection opened" debug event was emitted before we
-  // registered the listener above), push the initial connected status now.
-  // Guard against lifecycleStopping: if the abortSignal was already aborted,
-  // onAbort() ran synchronously above and pushed connected: false — don't
-  // contradict it with a spurious connected: true.
-  if (gateway?.isConnected && !lifecycleStopping) {
-    const at = Date.now();
-    pushStatus({
-      ...createConnectedChannelStatusPatch(at),
-      lastDisconnect: null,
-    });
-  }
-
   let sawDisallowedIntents = false;
-  const logGatewayError = (err: unknown) => {
-    if (params.isDisallowedIntentsError(err)) {
+  const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
+    if (event.type === "disallowed-intents") {
       sawDisallowedIntents = true;
       params.runtime.error?.(
         danger(
           "discord: gateway closed with code 4014 (missing privileged gateway intents). Enable the required intents in the Discord Developer Portal or disable them in config.",
         ),
       );
-      return;
+      return "stop";
     }
-    params.runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+    params.runtime.error?.(danger(`discord gateway error: ${event.message}`));
+    return event.shouldStopLifecycle ? "stop" : "continue";
   };
-  const shouldStopOnGatewayError = (err: unknown) => {
-    const message = String(err);
-    return (
-      message.includes("Max reconnect attempts") ||
-      message.includes("Fatal Gateway error") ||
-      params.isDisallowedIntentsError(err)
-    );
-  };
+  const drainPendingGatewayErrors = (): "continue" | "stop" =>
+    params.gatewaySupervisor.drainPending((event) => {
+      const decision = handleGatewayEvent(event);
+      if (decision !== "stop") {
+        return "continue";
+      }
+      if (event.type === "disallowed-intents") {
+        return "stop";
+      }
+      throw event.err;
+    });
   try {
     if (params.execApprovalsHandler) {
       await params.execApprovalsHandler.start();
     }
 
     // Drain gateway errors emitted before lifecycle listeners were attached.
-    const pendingGatewayErrors = params.pendingGatewayErrors ?? [];
-    if (pendingGatewayErrors.length > 0) {
-      const queuedErrors = [...pendingGatewayErrors];
-      pendingGatewayErrors.length = 0;
-      for (const err of queuedErrors) {
-        logGatewayError(err);
-        if (!shouldStopOnGatewayError(err)) {
-          continue;
-        }
-        if (params.isDisallowedIntentsError(err)) {
+    if (drainPendingGatewayErrors() === "stop") {
+      return;
+    }
+
+    // Carbon starts the gateway during client construction, before OpenClaw can
+    // attach lifecycle listeners. Require a READY/RESUMED-connected gateway
+    // before continuing so the monitor does not look healthy while silently
+    // missing inbound events.
+    if (gateway && !gateway.isConnected && !lifecycleStopping) {
+      const initialReady = await waitForDiscordGatewayReady({
+        gateway,
+        abortSignal: params.abortSignal,
+        timeoutMs: DISCORD_GATEWAY_READY_TIMEOUT_MS,
+        beforePoll: drainPendingGatewayErrors,
+      });
+      if (initialReady === "stopped" || lifecycleStopping) {
+        return;
+      }
+      if (initialReady === "timeout" && !lifecycleStopping) {
+        params.runtime.error?.(
+          danger(
+            `discord: gateway was not ready after ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms; forcing a fresh reconnect`,
+          ),
+        );
+        const startupRetryAt = Date.now();
+        pushStatus({
+          connected: false,
+          lastEventAt: startupRetryAt,
+          lastDisconnect: {
+            at: startupRetryAt,
+            error: "startup-not-ready",
+          },
+        });
+        gateway?.disconnect();
+        gateway?.connect(false);
+        const reconnected = await waitForDiscordGatewayReady({
+          gateway,
+          abortSignal: params.abortSignal,
+          timeoutMs: DISCORD_GATEWAY_READY_TIMEOUT_MS,
+          beforePoll: drainPendingGatewayErrors,
+        });
+        if (reconnected === "stopped" || lifecycleStopping) {
           return;
         }
-        throw err;
+        if (reconnected === "timeout" && !lifecycleStopping) {
+          const error = new Error(
+            `discord gateway did not reach READY within ${DISCORD_GATEWAY_READY_TIMEOUT_MS}ms after a forced reconnect`,
+          );
+          const startupFailureAt = Date.now();
+          pushStatus({
+            connected: false,
+            lastEventAt: startupFailureAt,
+            lastDisconnect: {
+              at: startupFailureAt,
+              error: "startup-reconnect-timeout",
+            },
+            lastError: error.message,
+          });
+          throw error;
+        }
       }
+    }
+
+    // If the gateway is already connected when the lifecycle starts (or becomes
+    // connected during the startup readiness guard), push the initial connected
+    // status now. Guard against lifecycleStopping: if the abortSignal was
+    // already aborted, onAbort() ran synchronously above and pushed connected:
+    // false, so don't contradict it with a spurious connected: true.
+    if (gateway?.isConnected && !lifecycleStopping) {
+      const at = Date.now();
+      pushStatus({
+        ...createConnectedChannelStatusPatch(at),
+        lastDisconnect: null,
+      });
+    }
+
+    if (drainPendingGatewayErrors() === "stop") {
+      return;
     }
 
     await waitForDiscordGatewayStop({
       gateway: gateway
         ? {
-            emitter: gatewayEmitter,
             disconnect: () => gateway.disconnect(),
           }
         : undefined,
       abortSignal: params.abortSignal,
-      onGatewayError: logGatewayError,
-      shouldStopOnError: shouldStopOnGatewayError,
+      gatewaySupervisor: params.gatewaySupervisor,
+      onGatewayEvent: handleGatewayEvent,
       registerForceStop: (forceStop) => {
         forceStopHandler = forceStop;
         if (queuedForceStopError !== undefined) {
@@ -324,7 +407,7 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
-    params.releaseEarlyGatewayErrorGuard?.();
+    params.gatewaySupervisor.detachLifecycle();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
     reconnectStallWatchdog.stop();

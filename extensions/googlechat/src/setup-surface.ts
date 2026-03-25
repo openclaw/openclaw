@@ -1,19 +1,17 @@
 import {
   applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
-} from "../../../src/channels/plugins/setup-helpers.js";
-import {
-  addWildcardAllowFrom,
+  createNestedChannelParsedAllowFromPrompt,
+  createNestedChannelDmPolicy,
+  createStandardChannelSetupStatus,
+  DEFAULT_ACCOUNT_ID,
+  formatDocsLink,
   mergeAllowFromEntries,
-  setTopLevelChannelDmPolicyWithAllowFrom,
+  migrateBaseNameToDefaultAccount,
   splitSetupEntries,
-} from "../../../src/channels/plugins/setup-wizard-helpers.js";
-import type { ChannelSetupDmPolicy } from "../../../src/channels/plugins/setup-wizard-types.js";
-import type { ChannelSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { DmPolicy } from "../../../src/config/types.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
-import { formatDocsLink } from "../../../src/terminal/links.js";
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -27,85 +25,45 @@ const ENV_SERVICE_ACCOUNT_FILE = "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE";
 const USE_ENV_FLAG = "__googlechatUseEnv";
 const AUTH_METHOD_FLAG = "__googlechatAuthMethod";
 
-function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
-  const allowFrom =
-    policy === "open" ? addWildcardAllowFrom(cfg.channels?.googlechat?.dm?.allowFrom) : undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      googlechat: {
-        ...cfg.channels?.googlechat,
-        dm: {
-          ...cfg.channels?.googlechat?.dm,
-          policy,
-          ...(allowFrom ? { allowFrom } : {}),
-        },
-      },
-    },
-  };
-}
+const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
+  channel,
+  section: "dm",
+  defaultAccountId: DEFAULT_ACCOUNT_ID,
+  enabled: true,
+  message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
+  placeholder: "users/123456789, name@example.com",
+  parseEntries: (raw) => ({
+    entries: mergeAllowFromEntries(undefined, splitSetupEntries(raw)),
+  }),
+});
 
-async function promptAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0]["prompter"];
-}): Promise<OpenClawConfig> {
-  const current = params.cfg.channels?.googlechat?.dm?.allowFrom ?? [];
-  const entry = await params.prompter.text({
-    message: "Google Chat allowFrom (users/<id> or raw email; avoid users/<email>)",
-    placeholder: "users/123456789, name@example.com",
-    initialValue: current[0] ? String(current[0]) : undefined,
-    validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-  });
-  const parts = splitSetupEntries(String(entry));
-  const unique = mergeAllowFromEntries(undefined, parts);
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      googlechat: {
-        ...params.cfg.channels?.googlechat,
-        enabled: true,
-        dm: {
-          ...params.cfg.channels?.googlechat?.dm,
-          policy: "allowlist",
-          allowFrom: unique,
-        },
-      },
-    },
-  };
-}
-
-const googlechatDmPolicy: ChannelSetupDmPolicy = {
+const googlechatDmPolicy: ChannelSetupDmPolicy = createNestedChannelDmPolicy({
   label: "Google Chat",
   channel,
+  section: "dm",
   policyKey: "channels.googlechat.dm.policy",
   allowFromKey: "channels.googlechat.dm.allowFrom",
   getCurrent: (cfg) => cfg.channels?.googlechat?.dm?.policy ?? "pairing",
-  setPolicy: (cfg, policy) => setGoogleChatDmPolicy(cfg, policy),
   promptAllowFrom,
-};
+  enabled: true,
+});
 
 export { googlechatSetupAdapter } from "./setup-core.js";
 
 export const googlechatSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Google Chat",
     configuredLabel: "configured",
     unconfiguredLabel: "needs service account",
     configuredHint: "configured",
     unconfiguredHint: "needs auth",
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listGoogleChatAccountIds(cfg).some(
         (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
       ),
-    resolveStatusLines: ({ cfg }) => {
-      const configured = listGoogleChatAccountIds(cfg).some(
-        (accountId) => resolveGoogleChatAccount({ cfg, accountId }).credentialSource !== "none",
-      );
-      return [`Google Chat: ${configured ? "configured" : "needs service account"}`];
-    },
-  },
+  }),
   introNote: {
     title: "Google Chat setup",
     lines: [

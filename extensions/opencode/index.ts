@@ -1,25 +1,26 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { applyOpencodeZenConfig } from "../../src/commands/onboard-auth.config-opencode.js";
-import { OPENCODE_ZEN_DEFAULT_MODEL } from "../../src/commands/opencode-zen-model-default.js";
-import { createProviderApiKeyAuthMethod } from "../../src/plugins/provider-api-key-auth.js";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isMiniMaxModernModelId,
+  OPENCODE_ZEN_DEFAULT_MODEL,
+} from "openclaw/plugin-sdk/provider-models";
+import { applyOpencodeZenConfig } from "./onboard.js";
 
 const PROVIDER_ID = "opencode";
-const MINIMAX_PREFIX = "minimax-m2.5";
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   if (lower.endsWith("-free") || lower === "alpha-glm-4.7") {
     return false;
   }
-  return !lower.startsWith(MINIMAX_PREFIX);
+  return !isMiniMaxModernModelId(lower);
 }
 
-const opencodePlugin = {
+export default definePluginEntry({
   id: PROVIDER_ID,
   name: "OpenCode Zen Provider",
   description: "Bundled OpenCode Zen provider plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "OpenCode Zen",
@@ -63,6 +64,4 @@ const opencodePlugin = {
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     });
   },
-};
-
-export default opencodePlugin;
+});

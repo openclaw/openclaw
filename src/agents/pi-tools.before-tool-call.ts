@@ -2,7 +2,10 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -23,14 +26,11 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
-let beforeToolCallRuntimePromise: Promise<
-  typeof import("./pi-tools.before-tool-call.runtime.js")
-> | null = null;
 
-function loadBeforeToolCallRuntime() {
-  beforeToolCallRuntimePromise ??= import("./pi-tools.before-tool-call.runtime.js");
-  return beforeToolCallRuntimePromise;
-}
+const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
+  () => import("./pi-tools.before-tool-call.runtime.js"),
+  ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
+);
 
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -247,6 +247,8 @@ export function wrapToolWithBeforeToolCallHook(
       }
     },
   };
+  copyPluginToolMeta(tool, wrappedTool);
+  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,

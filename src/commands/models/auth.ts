@@ -23,7 +23,8 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import { resolvePluginProviders } from "../../plugins/providers.js";
+import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthResult,
@@ -34,7 +35,6 @@ import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { openUrl } from "../onboard-helpers.js";
 import {
   applyDefaultModel,
@@ -359,6 +359,7 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const { agentDir } = await resolveModelsAuthContext();
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
     throw new Error("Missing --provider.");
@@ -385,6 +386,7 @@ export async function modelsAuthPasteTokenCommand(
       token,
       ...(expires ? { expires } : {}),
     },
+    agentDir,
   });
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));

@@ -1,19 +1,84 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+1999" })),
+  resolveSessionDeliveryTarget: vi.fn(
+    (params: {
+      entry?: {
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+        lastChannel?: string;
+        lastTo?: string;
+        lastAccountId?: string;
+        lastThreadId?: string | number;
+      };
+      requestedChannel?: string;
+      explicitTo?: string;
+      explicitThreadId?: string | number;
+      turnSourceChannel?: string;
+      turnSourceTo?: string;
+      turnSourceAccountId?: string;
+      turnSourceThreadId?: string | number;
+    }) => {
+      const sessionContext = params.entry?.deliveryContext ?? {
+        channel: params.entry?.lastChannel,
+        to: params.entry?.lastTo,
+        accountId: params.entry?.lastAccountId,
+        threadId: params.entry?.lastThreadId,
+      };
+      const lastChannel = params.turnSourceChannel ?? sessionContext.channel;
+      const lastTo = params.turnSourceChannel ? params.turnSourceTo : sessionContext.to;
+      const lastAccountId = params.turnSourceChannel
+        ? params.turnSourceAccountId
+        : sessionContext.accountId;
+      const lastThreadId = params.turnSourceChannel
+        ? params.turnSourceThreadId
+        : sessionContext.threadId;
+      const channel =
+        params.requestedChannel === "last" || params.requestedChannel == null
+          ? lastChannel
+          : params.requestedChannel;
+      const mode = params.explicitTo ? "explicit" : "implicit";
+      const resolvedTo =
+        params.explicitTo ?? (channel && channel === lastChannel ? lastTo : undefined);
+
+      return {
+        channel,
+        to: resolvedTo,
+        accountId: channel && channel === lastChannel ? lastAccountId : undefined,
+        threadId:
+          params.explicitThreadId ??
+          (channel && channel === lastChannel ? lastThreadId : undefined),
+        threadIdExplicit: params.explicitThreadId != null,
+        mode,
+        lastChannel,
+        lastTo,
+        lastAccountId,
+        lastThreadId,
+      };
+    },
+  ),
 }));
 
-vi.mock("./targets.js", async () => {
-  const actual = await vi.importActual<typeof import("./targets.js")>("./targets.js");
-  return {
-    ...actual,
-    resolveOutboundTarget: mocks.resolveOutboundTarget,
-  };
-});
+vi.mock("./targets.js", () => ({
+  resolveOutboundTarget: mocks.resolveOutboundTarget,
+  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+}));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentDeliveryPlan, resolveAgentOutboundTarget } from "./agent-delivery.js";
+let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
+let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ resolveAgentDeliveryPlan, resolveAgentOutboundTarget } = await import("./agent-delivery.js"));
+  mocks.resolveOutboundTarget.mockClear();
+  mocks.resolveSessionDeliveryTarget.mockClear();
+});
 
 describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {

@@ -1,17 +1,18 @@
+import { createRequire } from "node:module";
 import type { ConnectionOptions } from "node:tls";
-import { Gaxios } from "gaxios";
+import { pathToFileURL } from "node:url";
 import type { Dispatcher } from "undici";
-import { Agent as UndiciAgent, ProxyAgent } from "undici";
 
 type ProxyRule = RegExp | URL | string;
 type TlsCert = ConnectionOptions["cert"];
 type TlsKey = ConnectionOptions["key"];
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type GaxiosFetchRequestInit = RequestInit & {
   agent?: unknown;
   cert?: TlsCert;
   dispatcher?: Dispatcher;
-  fetchImplementation?: typeof fetch;
+  fetchImplementation?: FetchLike;
   key?: TlsKey;
   noProxy?: ProxyRule[];
   proxy?: string | URL;
@@ -27,10 +28,21 @@ type TlsAgentLike = {
 };
 
 type GaxiosPrototype = {
-  _defaultAdapter: (this: Gaxios, config: GaxiosFetchRequestInit) => Promise<unknown>;
+  _defaultAdapter: (this: unknown, config: GaxiosFetchRequestInit) => Promise<unknown>;
 };
 
-let installState: "not-installed" | "installed" = "not-installed";
+type GaxiosConstructor = {
+  prototype: GaxiosPrototype;
+};
+
+const TEST_GAXIOS_CONSTRUCTOR_OVERRIDE = "__OPENCLAW_TEST_GAXIOS_CONSTRUCTOR__";
+
+let installState: "not-installed" | "installing" | "shimmed" | "installed" = "not-installed";
+
+type UndiciRuntimeDeps = {
+  UndiciAgent: typeof import("undici").Agent;
+  ProxyAgent: typeof import("undici").ProxyAgent;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -132,6 +144,15 @@ function resolveProxyUri(init: GaxiosFetchRequestInit, url: URL): string | undef
   return urlMayUseProxy(url, init.noProxy) ? envProxy : undefined;
 }
 
+function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
+  const require = createRequire(import.meta.url);
+  const undici = require("undici") as typeof import("undici");
+  return {
+    ProxyAgent: undici.ProxyAgent,
+    UndiciAgent: undici.Agent,
+  };
+}
+
 function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | undefined {
   if (init.dispatcher) {
     return init.dispatcher;
@@ -146,6 +167,7 @@ function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | u
   const proxyUri =
     resolveProxyUri(init, url) ?? (hasProxyAgentShape(agent) ? String(agent.proxy) : undefined);
   if (proxyUri) {
+    const { ProxyAgent } = loadUndiciRuntimeDeps();
     return new ProxyAgent({
       requestTls: cert !== undefined || key !== undefined ? { cert, key } : undefined,
       uri: proxyUri,
@@ -153,6 +175,7 @@ function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | u
   }
 
   if (cert !== undefined || key !== undefined) {
+    const { UndiciAgent } = loadUndiciRuntimeDeps();
     return new UndiciAgent({
       connect: { cert, key },
     });
@@ -161,7 +184,81 @@ function buildDispatcher(init: GaxiosFetchRequestInit, url: URL): Dispatcher | u
   return undefined;
 }
 
-export function createGaxiosCompatFetch(baseFetch: typeof fetch = globalThis.fetch): typeof fetch {
+function isModuleNotFoundError(err: unknown): err is NodeJS.ErrnoException {
+  return isRecord(err) && (err.code === "ERR_MODULE_NOT_FOUND" || err.code === "MODULE_NOT_FOUND");
+}
+
+function hasGaxiosConstructorShape(value: unknown): value is GaxiosConstructor {
+  return (
+    typeof value === "function" &&
+    "prototype" in value &&
+    isRecord(value.prototype) &&
+    typeof value.prototype._defaultAdapter === "function"
+  );
+}
+
+function getTestGaxiosConstructorOverride(): GaxiosConstructor | null | undefined {
+  const testGlobal = globalThis as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(testGlobal, TEST_GAXIOS_CONSTRUCTOR_OVERRIDE)) {
+    return undefined;
+  }
+  const override = testGlobal[TEST_GAXIOS_CONSTRUCTOR_OVERRIDE];
+  if (override === null) {
+    return null;
+  }
+  if (hasGaxiosConstructorShape(override)) {
+    return override;
+  }
+  throw new Error("invalid gaxios test constructor override");
+}
+
+function isDirectGaxiosImportMiss(err: unknown): boolean {
+  if (!isModuleNotFoundError(err)) {
+    return false;
+  }
+  return (
+    typeof err.message === "string" &&
+    (err.message.includes("Cannot find package 'gaxios'") ||
+      err.message.includes("Cannot find module 'gaxios'"))
+  );
+}
+
+async function loadGaxiosConstructor(): Promise<GaxiosConstructor | null> {
+  const testOverride = getTestGaxiosConstructorOverride();
+  if (testOverride !== undefined) {
+    return testOverride;
+  }
+
+  try {
+    const require = createRequire(import.meta.url);
+    const resolvedPath = require.resolve("gaxios");
+    const mod = await import(pathToFileURL(resolvedPath).href);
+    const candidate = isRecord(mod) ? mod.Gaxios : undefined;
+    if (!hasGaxiosConstructorShape(candidate)) {
+      throw new Error("gaxios: missing Gaxios export");
+    }
+    return candidate;
+  } catch (err) {
+    if (isDirectGaxiosImportMiss(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function installLegacyWindowFetchShim(): void {
+  if (
+    typeof globalThis.fetch !== "function" ||
+    typeof (globalThis as Record<string, unknown>).window !== "undefined"
+  ) {
+    return;
+  }
+  (globalThis as Record<string, unknown>).window = { fetch: globalThis.fetch };
+}
+
+export function createGaxiosCompatFetch(
+  baseFetch: FetchLike = globalThis.fetch.bind(globalThis),
+): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const gaxiosInit = (init ?? {}) as GaxiosFetchRequestInit;
     const requestUrl =
@@ -186,27 +283,47 @@ export function createGaxiosCompatFetch(baseFetch: typeof fetch = globalThis.fet
   };
 }
 
-export function installGaxiosFetchCompat(): void {
-  if (installState === "installed" || typeof globalThis.fetch !== "function") {
+export async function installGaxiosFetchCompat(): Promise<void> {
+  if (installState !== "not-installed" || typeof globalThis.fetch !== "function") {
     return;
   }
 
-  const prototype = Gaxios.prototype as unknown as GaxiosPrototype;
-  const originalDefaultAdapter = prototype._defaultAdapter;
-  const compatFetch = createGaxiosCompatFetch();
+  installState = "installing";
 
-  prototype._defaultAdapter = function patchedDefaultAdapter(
-    this: Gaxios,
-    config: GaxiosFetchRequestInit,
-  ): Promise<unknown> {
-    if (config.fetchImplementation) {
-      return originalDefaultAdapter.call(this, config);
+  try {
+    const Gaxios = await loadGaxiosConstructor();
+    if (!Gaxios) {
+      installLegacyWindowFetchShim();
+      installState = "shimmed";
+      return;
     }
-    return originalDefaultAdapter.call(this, {
-      ...config,
-      fetchImplementation: compatFetch,
-    });
-  };
 
-  installState = "installed";
+    const prototype = Gaxios.prototype;
+    const originalDefaultAdapter = prototype._defaultAdapter;
+    const compatFetch = createGaxiosCompatFetch();
+
+    prototype._defaultAdapter = function patchedDefaultAdapter(
+      this: unknown,
+      config: GaxiosFetchRequestInit,
+    ): Promise<unknown> {
+      if (config.fetchImplementation) {
+        return originalDefaultAdapter.call(this, config);
+      }
+      return originalDefaultAdapter.call(this, {
+        ...config,
+        fetchImplementation: compatFetch,
+      });
+    };
+
+    installState = "installed";
+  } catch (err) {
+    installState = "not-installed";
+    throw err;
+  }
 }
+
+export const __testing = {
+  resetGaxiosFetchCompatForTests(): void {
+    installState = "not-installed";
+  },
+};

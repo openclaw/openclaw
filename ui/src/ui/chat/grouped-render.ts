@@ -395,7 +395,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
 function renderTtsButton(group: MessageGroup) {
   return html`
     <button
-      class="chat-tts-btn"
+      class="btn btn--xs chat-tts-btn"
       type="button"
       title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
       aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
@@ -620,6 +620,20 @@ function jsonSummaryLabel(parsed: unknown): string {
   return "JSON";
 }
 
+function renderExpandButton(markdown: string, onOpenSidebar: (content: string) => void) {
+  return html`
+    <button
+      class="btn btn--xs chat-expand-btn"
+      type="button"
+      title="Open in canvas"
+      aria-label="Open in canvas"
+      @click=${() => onOpenSidebar(markdown)}
+    >
+      <span class="chat-expand-btn__icon" aria-hidden="true">${icons.panelRightOpen}</span>
+    </button>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean; showToolCalls?: boolean },
@@ -647,6 +661,7 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
+  const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -674,9 +689,18 @@ function renderGroupedMessage(
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
 
+  const hasActions = canCopyMarkdown || canExpand;
+
   return html`
     <div class="${bubbleClasses}">
-      ${canCopyMarkdown ? html`<div class="chat-bubble-actions">${renderCopyAsMarkdownButton(markdown!)}</div>` : nothing}
+      ${
+        hasActions
+          ? html`<div class="chat-bubble-actions">
+              ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
+              ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+            </div>`
+          : nothing
+      }
       ${
         isToolMessage
           ? html`

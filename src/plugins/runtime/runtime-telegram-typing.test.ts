@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTelegramTypingLease } from "./runtime-telegram-typing.js";
+import {
+  expectBackgroundTypingPulseFailuresAreSwallowed,
+  expectIndependentTypingLeases,
+} from "./typing-lease.test-support.js";
 
 describe("createTelegramTypingLease", () => {
   afterEach(() => {
@@ -7,37 +11,17 @@ describe("createTelegramTypingLease", () => {
   });
 
   it("pulses immediately and keeps leases independent", async () => {
-    vi.useFakeTimers();
-    const pulse = vi.fn(async () => undefined);
-
-    const leaseA = await createTelegramTypingLease({
-      to: "telegram:123",
-      intervalMs: 2_000,
-      pulse,
+    await expectIndependentTypingLeases({
+      createLease: createTelegramTypingLease,
+      buildParams: (pulse) => ({
+        to: "telegram:123",
+        intervalMs: 2_000,
+        pulse,
+      }),
     });
-    const leaseB = await createTelegramTypingLease({
-      to: "telegram:123",
-      intervalMs: 2_000,
-      pulse,
-    });
-
-    expect(pulse).toHaveBeenCalledTimes(2);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(pulse).toHaveBeenCalledTimes(4);
-
-    leaseA.stop();
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(pulse).toHaveBeenCalledTimes(5);
-
-    await leaseB.refresh();
-    expect(pulse).toHaveBeenCalledTimes(6);
-
-    leaseB.stop();
   });
 
   it("swallows background pulse failures", async () => {
-    vi.useFakeTimers();
     const pulse = vi
       .fn<
         (params: {
@@ -50,16 +34,15 @@ describe("createTelegramTypingLease", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("boom"));
 
-    const lease = await createTelegramTypingLease({
-      to: "telegram:123",
-      intervalMs: 2_000,
+    await expectBackgroundTypingPulseFailuresAreSwallowed({
+      createLease: createTelegramTypingLease,
       pulse,
+      buildParams: (pulse) => ({
+        to: "telegram:123",
+        intervalMs: 2_000,
+        pulse,
+      }),
     });
-
-    await expect(vi.advanceTimersByTimeAsync(2_000)).resolves.toBe(vi);
-    expect(pulse).toHaveBeenCalledTimes(2);
-
-    lease.stop();
   });
 
   it("falls back to the default interval for non-finite values", async () => {

@@ -1,12 +1,12 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
-} from "../../../../../src/plugins/conversation-binding.js";
-import { dispatchPluginInteractiveHandler } from "../../../../../src/plugins/interactive.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -342,10 +342,24 @@ function buildSlackPluginInteractionData(params: {
     params.summary.value?.trim() ||
     params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
     "";
-  if (actionId === SLACK_REPLY_BUTTON_ACTION_ID || actionId === SLACK_REPLY_SELECT_ACTION_ID) {
+  if (
+    actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
+    actionId === SLACK_REPLY_SELECT_ACTION_ID ||
+    actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
+    actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
+  ) {
     return payload || null;
   }
   return payload ? `${actionId}:${payload}` : actionId;
+}
+
+function isSlackReplyActionId(actionId: string): boolean {
+  return (
+    actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
+    actionId === SLACK_REPLY_SELECT_ACTION_ID ||
+    actionId.startsWith(`${SLACK_REPLY_BUTTON_ACTION_ID}:`) ||
+    actionId.startsWith(`${SLACK_REPLY_SELECT_ACTION_ID}:`)
+  );
 }
 
 function buildSlackPluginInteractionId(params: {
@@ -729,7 +743,17 @@ async function handleSlackBlockAction(params: {
     actionId: parsed.actionId,
     summary: parsed.actionSummary,
   });
-  if (pluginInteractionData) {
+  if (pluginInteractionData && isSlackReplyActionId(parsed.actionId)) {
+    const handledBindingApproval = await handleSlackPluginBindingApproval({
+      ctx: params.ctx,
+      parsed,
+      pluginInteractionData,
+      respond,
+    });
+    if (handledBindingApproval) {
+      return;
+    }
+  } else if (pluginInteractionData) {
     const handled = await dispatchSlackPluginInteraction({
       ctx: params.ctx,
       parsed,
