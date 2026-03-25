@@ -900,11 +900,11 @@ const THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", icon: "📊" },
 ];
 
-type ThemeModeOption = { id: ThemeMode; label: string; short: string };
+type ThemeModeOption = { id: ThemeMode; label: () => string; short: string };
 const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", label: "System", short: "SYS" },
-  { id: "light", label: "Light", short: "LIGHT" },
-  { id: "dark", label: "Dark", short: "DARK" },
+  { id: "system", label: () => t("common.themeModeSystem"), short: "SYS" },
+  { id: "light", label: () => t("common.themeModeLight"), short: "LIGHT" },
+  { id: "dark", label: () => t("common.themeModeDark"), short: "DARK" },
 ];
 
 function currentThemeIcon(theme: ThemeName): string {
@@ -936,8 +936,8 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode ? "topbar-theme-mode__btn--active" : ""}"
-            title=${opt.label}
-            aria-label="Color mode: ${opt.label}"
+            title=${opt.label()}
+            aria-label="Color mode: ${opt.label()}"
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

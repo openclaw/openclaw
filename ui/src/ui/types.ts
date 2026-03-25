@@ -681,8 +681,8 @@ export type AttentionSeverity = "error" | "warning" | "info";
 export type AttentionItem = {
   severity: AttentionSeverity;
   icon: string;
-  title: string;
-  description: string;
+  title: string | (() => string);
+  description: string | (() => string);
   href?: string;
   external?: boolean;
 };
