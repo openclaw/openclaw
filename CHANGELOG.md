@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents: add compaction modes (`warn`, `error`, `none`) with a proactive context guard that stops execution before reaching the model's limit, preventing cryptic provider errors and preserving control during long-running sessions.
+
 ### Fixes
 
 - Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.

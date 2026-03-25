@@ -2922,6 +2922,27 @@ export async function runEmbeddedAttempt(
                   { cause: err },
                 );
               }
+              if (currentCompactionMode === "warn") {
+                // Fallback warning if estimation fails in warn mode
+                return {
+                  aborted: false,
+                  timedOut: false,
+                  timedOutDuringCompaction: false,
+                  promptError: null,
+                  sessionIdUsed: activeSession.sessionId,
+                  messagesSnapshot: activeSession.messages.slice(),
+                  assistantTexts: [
+                    "🧹 Context limit check failed (estimation error), but mode is 'warn'. Please use /compact to be safe.",
+                  ],
+                  toolMetas: [],
+                  lastAssistant: undefined,
+                  didSendViaMessagingTool: false,
+                  messagingToolSentTexts: [],
+                  messagingToolSentMediaUrls: [],
+                  messagingToolSentTargets: [],
+                  cloudCodeAssistFormatError: false,
+                };
+              }
             }
 
             const reserveTokens = settingsManager.getCompactionReserveTokens();
