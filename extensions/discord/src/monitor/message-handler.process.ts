@@ -233,7 +233,7 @@ export async function processDiscordMessage(
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
   const senderTag = sender.tag;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
+  const { groupSystemPrompt, channelModelOverride, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
@@ -384,6 +384,7 @@ export async function processDiscordMessage(
     GroupChannel: groupChannel,
     UntrustedContext: untrustedContext,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
+    ChannelModelOverride: isGuildMessage ? channelModelOverride : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     OwnerAllowFrom: ownerAllowFrom,
     Provider: "discord" as const,

@@ -116,6 +116,7 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  ChannelModelOverride?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
   /** System-attached provenance for the current inbound message. */

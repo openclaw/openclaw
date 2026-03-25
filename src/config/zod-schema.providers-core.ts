@@ -80,6 +80,7 @@ export const TelegramTopicSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
     agentId: z.string().optional(),
   })
   .strict();
@@ -95,6 +96,7 @@ export const TelegramGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   })
   .strict();
@@ -120,6 +122,7 @@ export const TelegramDirectSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
@@ -413,6 +416,7 @@ export const DiscordGuildChannelSchema = z
     users: DiscordIdListSchema.optional(),
     roles: DiscordIdListSchema.optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
     includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
     /** Naming strategy for auto-created threads. "message" uses message text; "generated" creates an LLM title after thread creation. */
@@ -762,6 +766,7 @@ export const GoogleChatGroupSchema = z
     requireMention: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
   })
   .strict();
 
@@ -840,6 +845,7 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
   })
   .strict();
 
@@ -1126,6 +1132,7 @@ export const IrcGroupSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    model: z.string().optional(),
   })
   .strict();
 

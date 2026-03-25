@@ -63,6 +63,7 @@ export function buildDiscordInboundAccessContext(params: {
       channelTopic: params.channelTopic,
       messageBody: params.messageBody,
     }),
+    channelModelOverride: params.channelConfig?.model,
     ownerAllowFrom: resolveDiscordOwnerAllowFrom({
       channelConfig: params.channelConfig,
       guildInfo: params.guildInfo,

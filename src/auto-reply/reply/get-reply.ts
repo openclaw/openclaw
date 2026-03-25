@@ -256,9 +256,10 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  const rawChannelModelOverride = channelModelOverride?.model ?? finalized.ChannelModelOverride;
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && rawChannelModelOverride) {
     const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
+      raw: rawChannelModelOverride,
       defaultProvider,
       aliasIndex,
     });
