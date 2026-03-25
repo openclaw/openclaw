@@ -1,5 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  sanitizeToolCallId,
+} from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
@@ -413,6 +417,15 @@ export function repairToolUseResultPairing(
     }
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
+    // Build a sanitized-ID → original-ID map so we can match tool results whose
+    // IDs were normalized by the provider serializer (e.g. Anthropic strips underscores).
+    const sanitizedToOriginalId = new Map<string, string>();
+    for (const t of toolCalls) {
+      const sanitized = sanitizeToolCallId(t.id);
+      if (sanitized !== t.id) {
+        sanitizedToOriginalId.set(sanitized, t.id);
+      }
+    }
     const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
@@ -433,22 +446,30 @@ export function repairToolUseResultPairing(
 
       if (nextRole === "toolResult") {
         const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
-        const id = extractToolResultId(toolResult);
-        if (id && toolCallIds.has(id)) {
-          if (seenToolResultIds.has(id)) {
+        const rawId = extractToolResultId(toolResult);
+        // Match against original IDs first; fall back to sanitized-ID lookup so
+        // tool results whose IDs were normalized by the provider serializer
+        // (e.g. Anthropic strips underscores) can still pair correctly.
+        const matchedOriginalId = rawId
+          ? toolCallIds.has(rawId)
+            ? rawId
+            : sanitizedToOriginalId.get(sanitizeToolCallId(rawId))
+          : undefined;
+        if (matchedOriginalId) {
+          if (seenToolResultIds.has(matchedOriginalId)) {
             droppedDuplicateCount += 1;
             changed = true;
             continue;
           }
           const normalizedToolResult = normalizeToolResultName(
             toolResult,
-            toolCallNamesById.get(id),
+            toolCallNamesById.get(matchedOriginalId),
           );
           if (normalizedToolResult !== toolResult) {
             changed = true;
           }
-          if (!spanResultsById.has(id)) {
-            spanResultsById.set(id, normalizedToolResult);
+          if (!spanResultsById.has(matchedOriginalId)) {
+            spanResultsById.set(matchedOriginalId, normalizedToolResult);
           }
           continue;
         }

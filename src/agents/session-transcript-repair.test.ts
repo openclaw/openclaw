@@ -263,6 +263,39 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages[1]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
+
+  it("pairs tool results whose IDs were sanitized (underscores stripped) by the provider serializer (#52604)", () => {
+    // MiniMax generates IDs like "call_function_0mtm97w4iryj_1" which the Anthropic
+    // serializer sanitizes to "callfunction0mtm97w4iryj1". The repair function must
+    // match these sanitized IDs back to the original tool call IDs.
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_function_0mtm97w4iryj_1",
+            name: "read",
+            arguments: { path: "/tmp/test" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "callfunction0mtm97w4iryj1",
+        toolName: "read",
+        content: [{ type: "text", text: "file content" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("toolResult");
+  });
 });
 
 describe("sanitizeToolCallInputs", () => {
