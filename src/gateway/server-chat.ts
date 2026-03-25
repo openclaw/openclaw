@@ -563,7 +563,11 @@ export function createAgentEventHandler({
       "chat",
       {
         ...basePayload,
-        message: { role: "assistant", content: [{ type: "text", text: displayText }], timestamp: now },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: displayText }],
+          timestamp: now,
+        },
       },
       { dropIfSlow: true },
     );
@@ -634,7 +638,11 @@ export function createAgentEventHandler({
       "chat",
       {
         ...baseFlushPayload,
-        message: { role: "assistant", content: [{ type: "text", text: displayText }], timestamp: now },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: displayText }],
+          timestamp: now,
+        },
       },
       { dropIfSlow: true },
     );
