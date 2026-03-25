@@ -58,10 +58,11 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
   if (!text) {
     return { text, changed: false };
   }
-  const stripped = text.replace(INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, " ").trim();
+  const stripped = text.replace(INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, " ");
+  const changed = stripped !== text;
   return {
-    text: stripped,
-    changed: stripped !== text,
+    text: changed ? stripped.trim() : text,
+    changed,
   };
 }
 

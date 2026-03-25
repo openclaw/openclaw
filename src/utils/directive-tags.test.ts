@@ -42,6 +42,13 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     expect(result.changed).toBe(true);
     expect(result.text).toBe("a  b c   d");
   });
+
+  test("does not trim plain text when no directive tags are present", () => {
+    const input = "  keep leading and trailing whitespace  ";
+    const result = stripInlineDirectiveTagsForDelivery(input);
+    expect(result.changed).toBe(false);
+    expect(result.text).toBe(input);
+  });
 });
 
 describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
