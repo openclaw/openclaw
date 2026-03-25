@@ -550,6 +550,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const envelopeOptions = pluginRuntime.channel.reply.resolveEnvelopeFormatOptions(cfg);
 
         // 组装消息体
+        // 静态系统提示已移至 skills/qqbot-remind/SKILL.md 和 skills/qqbot-media/SKILL.md
         // BodyForAgent 只保留必要的动态上下文信息
 
         // ============ 用户标识信息 ============
@@ -718,9 +719,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         // --- 静态指引（仅注入框架信封未覆盖的 QQBot 特有信息） ---
         // 框架 formatInboundEnvelope 已提供：平台标识、发送者、时间戳
-        // 这里只补充 QQBot 独有的：投递地址
+        // 这里只补充 QQBot 独有的：投递地址（cron skill 需要）
         const staticParts: string[] = [`[QQBot] to=${qualifiedTarget}`];
-        // TTS 能力声明：仅在启用时告知 AI 可以发语音
+        // TTS 能力声明：仅在启用时告知 AI 可以发语音（媒体标签用法由 qqbot-media SKILL.md 提供）
         // STT 无需声明：转写结果已在动态上下文的 ASR 行中，AI 自然可见
         if (hasTTS) staticParts.push("语音合成已启用");
         const staticInstruction = staticParts.join(" | ");

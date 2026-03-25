@@ -1,35 +1,42 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveQQBotLocalMediaPath } from "./platform.js";
+import { getHomeDir, resolveQQBotLocalMediaPath } from "./platform.js";
 
 describe("qqbot local media path remapping", () => {
+  const createdPaths: string[] = [];
+
   afterEach(() => {
     vi.restoreAllMocks();
+    for (const target of createdPaths.splice(0)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
   });
 
   it("remaps missing workspace media paths to the real media directory", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-home-"));
-    vi.spyOn(os, "homedir").mockReturnValue(tempHome);
+    const actualHome = getHomeDir();
+    const testRoot = fs.mkdtempSync(path.join(actualHome, ".openclaw", "qqbot-platform-test-"));
+    createdPaths.push(testRoot);
 
     const mediaFile = path.join(
-      tempHome,
+      actualHome,
       ".openclaw",
       "media",
       "qqbot",
       "downloads",
+      path.basename(testRoot),
       "example.png",
     );
     fs.mkdirSync(path.dirname(mediaFile), { recursive: true });
     fs.writeFileSync(mediaFile, "image", "utf8");
 
     const missingWorkspacePath = path.join(
-      tempHome,
+      actualHome,
       ".openclaw",
       "workspace",
       "qqbot",
       "downloads",
+      path.basename(testRoot),
       "example.png",
     );
 
@@ -37,15 +44,17 @@ describe("qqbot local media path remapping", () => {
   });
 
   it("leaves existing media paths unchanged", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-home-"));
-    vi.spyOn(os, "homedir").mockReturnValue(tempHome);
+    const actualHome = getHomeDir();
+    const testRoot = fs.mkdtempSync(path.join(actualHome, ".openclaw", "qqbot-platform-test-"));
+    createdPaths.push(testRoot);
 
     const mediaFile = path.join(
-      tempHome,
+      actualHome,
       ".openclaw",
       "media",
       "qqbot",
       "downloads",
+      path.basename(testRoot),
       "existing.png",
     );
     fs.mkdirSync(path.dirname(mediaFile), { recursive: true });

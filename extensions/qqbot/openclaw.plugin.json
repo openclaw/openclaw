@@ -1,6 +1,7 @@
 {
   "id": "qqbot",
   "channels": ["qqbot"],
+  "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
