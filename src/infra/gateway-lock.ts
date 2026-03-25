@@ -5,6 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -32,6 +33,9 @@ export type GatewayLockOptions = {
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
   port?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  lockDir?: string;
 };
 
 export class GatewayLockError extends Error {
@@ -45,38 +49,6 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-
-function normalizeProcArg(arg: string): string {
-  return arg.replaceAll("\\", "/").toLowerCase();
-}
-
-function parseProcCmdline(raw: string): string[] {
-  return raw
-    .split("\0")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function isGatewayArgv(args: string[]): boolean {
-  const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) {
-    return false;
-  }
-
-  const entryCandidates = [
-    "dist/index.js",
-    "dist/entry.js",
-    "openclaw.mjs",
-    "scripts/run-node.mjs",
-    "src/index.ts",
-  ];
-  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
-    return true;
-  }
-
-  const exe = normalized[0] ?? "";
-  return exe.endsWith("/openclaw") || exe === "openclaw";
-}
 
 function readLinuxCmdline(pid: number): string[] | null {
   try {
@@ -192,11 +164,10 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   }
 }
 
-function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
+function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
-  const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
 }
@@ -218,19 +189,22 @@ export async function acquireGatewayLock(
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
   const platform = opts.platform ?? process.platform;
   const port = opts.port;
-  const { lockPath, configPath } = resolveGatewayLockPath(env);
+  const now = opts.now ?? Date.now;
+  const sleep =
+    opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+  const { lockPath, configPath } = resolveGatewayLockPath(env, opts.lockDir);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
-  const startedAt = Date.now();
+  const startedAt = now();
   let lastPayload: LockPayload | null = null;
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(now()).toISOString(),
         configPath,
       };
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
@@ -264,12 +238,12 @@ export async function acquireGatewayLock(
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
-          stale = Number.isFinite(createdAt) ? Date.now() - createdAt > staleMs : false;
+          stale = Number.isFinite(createdAt) ? now() - createdAt > staleMs : false;
         }
         if (!stale) {
           try {
             const st = await fs.stat(lockPath);
-            stale = Date.now() - st.mtimeMs > staleMs;
+            stale = now() - st.mtimeMs > staleMs;
           } catch {
             // On Windows or locked filesystems we may be unable to stat the
             // lock file even though the existing gateway is still healthy.
@@ -284,7 +258,7 @@ export async function acquireGatewayLock(
         }
       }
 
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      await sleep(pollIntervalMs);
     }
   }
 

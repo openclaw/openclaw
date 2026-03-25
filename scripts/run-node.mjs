@@ -4,11 +4,69 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
+import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
-const compiler = "tsdown";
-const compilerArgs = ["exec", compiler, "--no-clean"];
+const buildScript = "scripts/tsdown-build.mjs";
+const compilerArgs = [buildScript, "--no-clean"];
 
-export const runNodeWatchedPaths = ["src", "tsconfig.json", "package.json"];
+const runNodeSourceRoots = ["src", "extensions"];
+const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
+export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
+const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
+
+const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
+
+const isIgnoredSourcePath = (relativePath) => {
+  const normalizedPath = normalizePath(relativePath);
+  return (
+    normalizedPath.endsWith(".test.ts") ||
+    normalizedPath.endsWith(".test.tsx") ||
+    normalizedPath.endsWith("test-helpers.ts")
+  );
+};
+
+const isBuildRelevantSourcePath = (relativePath) => {
+  const normalizedPath = normalizePath(relativePath);
+  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
+};
+
+export const isBuildRelevantRunNodePath = (repoPath) => {
+  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (runNodeConfigFiles.includes(normalizedPath)) {
+    return true;
+  }
+  if (normalizedPath.startsWith("src/")) {
+    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+  }
+  if (normalizedPath.startsWith("extensions/")) {
+    return isBuildRelevantSourcePath(normalizedPath.slice("extensions/".length));
+  }
+  return false;
+};
+
+const isRestartRelevantExtensionPath = (relativePath) => {
+  const normalizedPath = normalizePath(relativePath);
+  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
+    return true;
+  }
+  return isBuildRelevantSourcePath(normalizedPath);
+};
+
+export const isRestartRelevantRunNodePath = (repoPath) => {
+  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
+  if (runNodeConfigFiles.includes(normalizedPath)) {
+    return true;
+  }
+  if (normalizedPath.startsWith("src/")) {
+    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+  }
+  if (normalizedPath.startsWith("extensions/")) {
+    return isRestartRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  }
+  return false;
+};
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -18,16 +76,12 @@ const statMtime = (filePath, fsImpl = fs) => {
   }
 };
 
-const isExcludedSource = (filePath, srcRoot) => {
-  const relativePath = path.relative(srcRoot, filePath);
+const isExcludedSource = (filePath, sourceRoot, sourceRootName) => {
+  const relativePath = normalizePath(path.relative(sourceRoot, filePath));
   if (relativePath.startsWith("..")) {
     return false;
   }
-  return (
-    relativePath.endsWith(".test.ts") ||
-    relativePath.endsWith(".test.tsx") ||
-    relativePath.endsWith(`test-helpers.ts`)
-  );
+  return !isBuildRelevantRunNodePath(path.posix.join(sourceRootName, relativePath));
 };
 
 const findLatestMtime = (dirPath, shouldSkip, deps) => {
@@ -68,36 +122,39 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
   return latest;
 };
 
-const runGit = (gitArgs, deps) => {
+const readGitStatus = (deps) => {
   try {
-    const result = deps.spawnSync("git", gitArgs, {
-      cwd: deps.cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const result = deps.spawnSync(
+      "git",
+      ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
+      {
+        cwd: deps.cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     if (result.status !== 0) {
       return null;
     }
-    return (result.stdout ?? "").trim();
+    return result.stdout ?? "";
   } catch {
     return null;
   }
 };
 
-const resolveGitHead = (deps) => {
-  const head = runGit(["rev-parse", "HEAD"], deps);
-  return head || null;
-};
+const parseGitStatusPaths = (output) =>
+  output
+    .split("\n")
+    .flatMap((line) => line.slice(3).split(" -> "))
+    .map((entry) => normalizePath(entry.trim()))
+    .filter(Boolean);
 
 const hasDirtySourceTree = (deps) => {
-  const output = runGit(
-    ["status", "--porcelain", "--untracked-files=normal", "--", ...runNodeWatchedPaths],
-    deps,
-  );
+  const output = readGitStatus(deps);
   if (output === null) {
     return null;
   }
-  return output.length > 0;
+  return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
 };
 
 const readBuildStamp = (deps) => {
@@ -119,12 +176,18 @@ const readBuildStamp = (deps) => {
 };
 
 const hasSourceMtimeChanged = (stampMtime, deps) => {
-  const srcMtime = findLatestMtime(
-    deps.srcRoot,
-    (candidate) => isExcludedSource(candidate, deps.srcRoot),
-    deps,
-  );
-  return srcMtime != null && srcMtime > stampMtime;
+  let latestSourceMtime = null;
+  for (const sourceRoot of deps.sourceRoots) {
+    const sourceMtime = findLatestMtime(
+      sourceRoot.path,
+      (candidate) => isExcludedSource(candidate, sourceRoot.path, sourceRoot.name),
+      deps,
+    );
+    if (sourceMtime != null && (latestSourceMtime == null || sourceMtime > latestSourceMtime)) {
+      latestSourceMtime = sourceMtime;
+    }
+  }
+  return latestSourceMtime != null && latestSourceMtime > stampMtime;
 };
 
 const shouldBuild = (deps) => {
@@ -193,14 +256,26 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+const syncRuntimeArtifacts = (deps) => {
+  try {
+    runRuntimePostBuild({ cwd: deps.cwd });
+  } catch (error) {
+    logRunner(
+      `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
+      deps,
+    );
+    return false;
+  }
+  return true;
+};
+
 const writeBuildStamp = (deps) => {
   try {
-    deps.fs.mkdirSync(deps.distRoot, { recursive: true });
-    const stamp = {
-      builtAt: Date.now(),
-      head: resolveGitHead(deps),
-    };
-    deps.fs.writeFileSync(deps.buildStampPath, `${JSON.stringify(stamp)}\n`);
+    writeDistBuildStamp({
+      cwd: deps.cwd,
+      fs: deps.fs,
+      spawnSync: deps.spawnSync,
+    });
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.
     logRunner(`Failed to write build stamp: ${error?.message ?? "unknown error"}`, deps);
@@ -217,23 +292,27 @@ export async function runNodeMain(params = {}) {
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
-    platform: params.platform ?? process.platform,
   };
 
   deps.distRoot = path.join(deps.cwd, "dist");
   deps.distEntry = path.join(deps.distRoot, "/entry.js");
   deps.buildStampPath = path.join(deps.distRoot, ".buildstamp");
-  deps.srcRoot = path.join(deps.cwd, "src");
-  deps.configFiles = [path.join(deps.cwd, "tsconfig.json"), path.join(deps.cwd, "package.json")];
+  deps.sourceRoots = runNodeSourceRoots.map((sourceRoot) => ({
+    name: sourceRoot,
+    path: path.join(deps.cwd, sourceRoot),
+  }));
+  deps.configFiles = runNodeConfigFiles.map((filePath) => path.join(deps.cwd, filePath));
 
   if (!shouldBuild(deps)) {
+    if (!syncRuntimeArtifacts(deps)) {
+      return 1;
+    }
     return await runOpenClaw(deps);
   }
 
   logRunner("Building TypeScript (dist is stale).", deps);
-  const buildCmd = deps.platform === "win32" ? "cmd.exe" : "pnpm";
-  const buildArgs =
-    deps.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
+  const buildCmd = deps.execPath;
+  const buildArgs = compilerArgs;
   const build = deps.spawn(buildCmd, buildArgs, {
     cwd: deps.cwd,
     env: deps.env,
@@ -248,6 +327,9 @@ export async function runNodeMain(params = {}) {
   }
   if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
     return buildRes.exitCode;
+  }
+  if (!syncRuntimeArtifacts(deps)) {
+    return 1;
   }
   writeBuildStamp(deps);
   return await runOpenClaw(deps);

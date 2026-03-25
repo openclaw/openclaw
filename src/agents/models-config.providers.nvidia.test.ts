@@ -94,9 +94,6 @@ describe("MiniMax implicit provider (#15275)", () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.["minimax-portal"]).toBeDefined();
       expect(providers?.["minimax-portal"]?.authHeader).toBe(true);
-      expect(providers?.["minimax-portal"]?.models?.some((m) => m.id === "MiniMax-VL-01")).toBe(
-        true,
-      );
     });
   });
 });

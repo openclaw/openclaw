@@ -1,9 +1,14 @@
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
-import { afterEach, describe, expect, test } from "vitest";
-import { WebSocketServer } from "ws";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
-import { GatewayClient } from "./client.js";
+import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
+import {
+  DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
+  MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
+} from "./handshake-timeouts.js";
 
 // Find a free localhost port for ad-hoc WS servers.
 async function getFreePort(): Promise<number> {
@@ -34,6 +39,24 @@ describe("GatewayClient", () => {
       await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
       httpsServer = null;
     }
+  });
+
+  test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
+      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+    );
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 0 })).toBe(
+      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 20_000 })).toBe(
+      MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        connectDelayMs: 2_000,
+        connectChallengeTimeoutMs: 5_000,
+      }),
+    ).toBe(5_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -69,7 +92,7 @@ describe("GatewayClient", () => {
     const closed = new Promise<{ code: number; reason: string }>((resolve) => {
       const client = new GatewayClient({
         url: `ws://127.0.0.1:${port}`,
-        connectDelayMs: 0,
+        connectChallengeTimeoutMs: 0,
         tickWatchMinIntervalMs: 5,
         onClose: (code, reason) => resolve({ code, reason }),
       });
@@ -84,6 +107,160 @@ describe("GatewayClient", () => {
       expect(res.reason).toContain("tick timeout");
     }
   }, 4000);
+
+  test("times out unresolved requests and clears pending state", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 25,
+      });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+        close: vi.fn(),
+      };
+
+      const requestPromise = client.request("status");
+      const requestExpectation = expect(requestPromise).rejects.toThrow(
+        "gateway request timeout for status",
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await requestExpectation;
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not auto-timeout expectFinal requests", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 25,
+      });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+        close: vi.fn(),
+      };
+
+      let settled = false;
+      const requestPromise = client.request("chat.send", undefined, { expectFinal: true });
+      void requestPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(settled).toBe(false);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      client.stop();
+      await expect(requestPromise).rejects.toThrow("gateway client stopped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized explicit request timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 25,
+      });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+        close: vi.fn(),
+      };
+
+      let settled = false;
+      const requestPromise = client.request("status", undefined, { timeoutMs: 2_592_010_000 });
+      void requestPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(settled).toBe(false);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      client.stop();
+      await expect(requestPromise).rejects.toThrow("gateway client stopped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized default request timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 2_592_010_000,
+      });
+      const send = vi.fn();
+      (
+        client as unknown as {
+          ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+        }
+      ).ws = {
+        readyState: WebSocket.OPEN,
+        send,
+        close: vi.fn(),
+      };
+
+      let settled = false;
+      const requestPromise = client.request("status");
+      void requestPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(settled).toBe(false);
+      expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+      client.stop();
+      await expect(requestPromise).rejects.toThrow("gateway client stopped");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   test("rejects mismatched tls fingerprint", async () => {
     const key = [
@@ -166,7 +343,7 @@ r1USnb+wUdA7Zoj/mQ==
       }, 2000);
       client = new GatewayClient({
         url: `wss://127.0.0.1:${port}`,
-        connectDelayMs: 0,
+        connectChallengeTimeoutMs: 0,
         tlsFingerprint: "deadbeef",
         onConnectError: (err) => {
           clearTimeout(timeout);

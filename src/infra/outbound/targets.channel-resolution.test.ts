@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -46,9 +46,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   },
 }));
 
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveOutboundTarget } from "./targets.js";
+let setActivePluginRegistry: typeof import("../../plugins/runtime.js").setActivePluginRegistry;
+let createTestRegistry: typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
+let resolveOutboundTarget: typeof import("./targets.js").resolveOutboundTarget;
 
 describe("resolveOutboundTarget channel resolution", () => {
   let registrySeq = 0;
@@ -60,8 +61,17 @@ describe("resolveOutboundTarget channel resolution", () => {
       mode: "explicit",
     });
 
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+    ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
+    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
+    ({ resolveOutboundTarget } = await import("./targets.js"));
+  });
+
   beforeEach(() => {
     registrySeq += 1;
+    resetOutboundChannelResolutionStateForTest();
     setActivePluginRegistry(createTestRegistry([]), `targets-test-${registrySeq}`);
     mocks.getChannelPlugin.mockReset();
     mocks.loadOpenClawPlugins.mockReset();

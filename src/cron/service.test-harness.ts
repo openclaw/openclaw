@@ -73,6 +73,10 @@ export function installCronTestHooks(options: {
 }) {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Shared unit-thread workers run with isolate disabled, so leaked cron
+    // timers from a previous file can still sit in the fake-timer queue.
+    // Clear them before advancing time in the next test file.
+    vi.clearAllTimers();
     vi.setSystemTime(new Date(options.baseTimeIso ?? "2025-12-13T00:00:00.000Z"));
     options.logger.debug.mockClear();
     options.logger.info.mockClear();
@@ -81,6 +85,7 @@ export function installCronTestHooks(options: {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 }
@@ -197,6 +202,24 @@ export function createRunningCronServiceState(params: {
     jobs: params.jobs,
   };
   return state;
+}
+
+export function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+}
+
+export async function withCronServiceStateForTest<T>(
+  state: { timer: NodeJS.Timeout | null },
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    disposeCronServiceState(state);
+  }
 }
 
 export function createDeferred<T>() {

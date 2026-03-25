@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -30,15 +30,34 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-import { createSessionsListTool } from "./sessions-list-tool.js";
-import { createSessionsSendTool } from "./sessions-send-tool.js";
-
+let createSessionsListTool: typeof import("./sessions-list-tool.js").createSessionsListTool;
+let createSessionsSendTool: typeof import("./sessions-send-tool.js").createSessionsSendTool;
 let resolveAnnounceTarget: (typeof import("./sessions-announce-target.js"))["resolveAnnounceTarget"];
 let setActivePluginRegistry: (typeof import("../../plugins/runtime.js"))["setActivePluginRegistry"];
 const MAIN_AGENT_SESSION_KEY = "agent:main:main";
 const MAIN_AGENT_CHANNEL = "whatsapp";
 
-type SessionsListResult = Awaited<ReturnType<ReturnType<typeof createSessionsListTool>["execute"]>>;
+type SessionsListResult = Awaited<
+  ReturnType<ReturnType<typeof import("./sessions-list-tool.js").createSessionsListTool>["execute"]>
+>;
+
+async function loadFreshSessionsToolModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../../gateway/call.js", () => ({
+    callGateway: (opts: unknown) => callGatewayMock(opts),
+  }));
+  vi.doMock("../../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: () => loadConfigMock() as never,
+    };
+  });
+  ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
+  ({ createSessionsSendTool } = await import("./sessions-send-tool.js"));
+  ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
+  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+}
 
 const installRegistry = async () => {
   setActivePluginRegistry(
@@ -150,17 +169,13 @@ describe("sanitizeTextContent", () => {
   });
 });
 
-beforeAll(async () => {
-  ({ resolveAnnounceTarget } = await import("./sessions-announce-target.js"));
-  ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
-});
-
-beforeEach(() => {
+beforeEach(async () => {
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
   });
+  await loadFreshSessionsToolModulesForTest();
 });
 
 describe("extractAssistantText", () => {
@@ -199,6 +214,16 @@ describe("extractAssistantText", () => {
       "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
     );
   });
+
+  it("preserves successful turns with stale background errorMessage", () => {
+    const message = {
+      role: "assistant",
+      stopReason: "end_turn",
+      errorMessage: "insufficient credits for embedding model",
+      content: [{ type: "text", text: "Handle payment required errors in your API." }],
+    };
+    expect(extractAssistantText(message)).toBe("Handle payment required errors in your API.");
+  });
 });
 
 describe("resolveAnnounceTarget", () => {
@@ -212,7 +237,7 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "channel:dev" });
+    expect(target).toEqual({ channel: "discord", to: "group:dev" });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -264,6 +289,24 @@ describe("sessions_list gating", () => {
     expect(result.details).toMatchObject({
       count: 1,
       sessions: [{ key: MAIN_AGENT_SESSION_KEY }],
+    });
+  });
+
+  it("keeps literal current keys for message previews", async () => {
+    callGatewayMock.mockReset();
+    callGatewayMock
+      .mockResolvedValueOnce({
+        path: "/tmp/sessions.json",
+        sessions: [{ key: "current", kind: "direct" }],
+      })
+      .mockResolvedValueOnce({ sessions: [{ key: "current" }] })
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
+
+    await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
+
+    expect(callGatewayMock).toHaveBeenLastCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "current", limit: 1 },
     });
   });
 });

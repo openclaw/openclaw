@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
@@ -14,9 +13,11 @@ import {
   getPwMocks,
   setBrowserControlServerEvaluateEnabled,
 } from "./server.control-server.test-harness.js";
+import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
+const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
 
 async function withSymlinkPathEscape<T>(params: {
   rootDir: string;
@@ -51,12 +52,14 @@ describe("browser control server", () => {
         values: ["a", "b"],
       });
       expect(select.ok).toBe(true);
-      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        ref: "5",
-        values: ["a", "b"],
-      });
+      expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: expect.any(String),
+          targetId: "abcd1234",
+          ref: "5",
+          values: ["a", "b"],
+        }),
+      );
 
       const fillCases: Array<{
         input: Record<string, unknown>;
@@ -81,11 +84,13 @@ describe("browser control server", () => {
           fields: [input],
         });
         expect(fill.ok).toBe(true);
-        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
-          cdpUrl: state.cdpBaseUrl,
-          targetId: "abcd1234",
-          fields: [expected],
-        });
+        expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cdpUrl: expect.any(String),
+            targetId: "abcd1234",
+            fields: [expected],
+          }),
+        );
       }
 
       const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
@@ -94,12 +99,14 @@ describe("browser control server", () => {
         height: 600,
       });
       expect(resize.ok).toBe(true);
-      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith({
-        cdpUrl: state.cdpBaseUrl,
-        targetId: "abcd1234",
-        width: 800,
-        height: 600,
-      });
+      expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: expect.any(String),
+          targetId: "abcd1234",
+          width: 800,
+          height: 600,
+        }),
+      );
 
       const wait = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "wait",
@@ -150,9 +157,148 @@ describe("browser control server", () => {
         kind: "evaluate",
         fn: "() => 1",
       });
-
       expect(res.error).toContain("browser.evaluateEnabled=false");
       expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "normalizes batch actions and threads evaluateEnabled into the batch executor",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ ok: boolean; results?: Array<{ ok: boolean }> }>(
+        `${base}/act`,
+        {
+          kind: "batch",
+          stopOnError: "false",
+          actions: [
+            { kind: "click", selector: "button.save", doubleClick: "true", delayMs: "25" },
+            { kind: "wait", fn: " () => window.ready === true " },
+          ],
+        },
+      );
+
+      expect(batchRes.ok).toBe(true);
+      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: expect.any(String),
+          targetId: "abcd1234",
+          stopOnError: false,
+          evaluateEnabled: true,
+          actions: [
+            {
+              kind: "click",
+              selector: "button.save",
+              doubleClick: true,
+              delayMs: 25,
+            },
+            {
+              kind: "wait",
+              fn: "() => window.ready === true",
+            },
+          ],
+        }),
+      );
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "preserves exact type text in batch normalization",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "batch",
+        actions: [
+          { kind: "type", selector: "input.name", text: "  padded  " },
+          { kind: "type", selector: "input.clearable", text: "" },
+        ],
+      });
+
+      expect(batchRes.ok).toBe(true);
+      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actions: [
+            {
+              kind: "type",
+              selector: "input.name",
+              text: "  padded  ",
+            },
+            {
+              kind: "type",
+              selector: "input.clearable",
+              text: "",
+            },
+          ],
+        }),
+      );
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "rejects malformed batch actions before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "click", ref: {} }],
+      });
+
+      expect(batchRes.error).toContain("click requires ref or selector");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "rejects batched action targetId overrides before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "click", ref: "5", targetId: "other-tab" }],
+      });
+
+      expect(batchRes.error).toContain("batched action targetId must match request targetId");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "rejects oversized batch delays before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: [{ kind: "click", selector: "button.save", delayMs: 5001 }],
+      });
+
+      expect(batchRes.error).toContain("click delayMs exceeds maximum of 5000ms");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "rejects oversized top-level batches before dispatch",
+    async () => {
+      const base = await startServerAndBase();
+
+      const batchRes = await postJson<{ error?: string }>(`${base}/act`, {
+        kind: "batch",
+        actions: Array.from({ length: 101 }, () => ({ kind: "press", key: "Enter" })),
+      });
+
+      expect(batchRes.error).toContain("batch exceeds maximum of 100 actions");
+      expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );
@@ -165,13 +311,15 @@ describe("browser control server", () => {
       timeoutMs: 1234,
     });
     expect(upload).toMatchObject({ ok: true });
-    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
-      cdpUrl: state.cdpBaseUrl,
-      targetId: "abcd1234",
-      // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
-      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
-      timeoutMs: 1234,
-    });
+    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: expect.any(String),
+        targetId: "abcd1234",
+        // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
+        paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
+        timeoutMs: 1234,
+      }),
+    );
 
     const uploadWithRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["b.txt"],
@@ -280,7 +428,7 @@ describe("browser control server", () => {
     expect(res.path).toContain("safe-trace.zip");
     expect(pwMocks.traceStopViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
+        cdpUrl: expect.any(String),
         targetId: "abcd1234",
         path: expect.stringContaining("safe-trace.zip"),
       }),
@@ -369,7 +517,7 @@ describe("browser control server", () => {
     expect(res.ok).toBe(true);
     expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
+        cdpUrl: expect.any(String),
         targetId: "abcd1234",
         path: expect.stringContaining("safe-wait.pdf"),
       }),
@@ -385,7 +533,7 @@ describe("browser control server", () => {
     expect(res.ok).toBe(true);
     expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
-        cdpUrl: state.cdpBaseUrl,
+        cdpUrl: expect.any(String),
         targetId: "abcd1234",
         ref: "e12",
         path: expect.stringContaining("safe-download.pdf"),

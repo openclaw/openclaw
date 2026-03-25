@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -30,9 +30,13 @@ const SessionsListToolSchema = Type.Object({
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+type GatewayCaller = typeof callGateway;
+
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -41,7 +45,7 @@ export function createSessionsListTool(opts?: {
     parameters: SessionsListToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
@@ -75,8 +79,9 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const gatewayCall = opts?.callGateway ?? callGateway;
 
-      const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -203,6 +208,23 @@ export function createSessionsListTool(opts?: {
           model: typeof entry.model === "string" ? entry.model : undefined,
           contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
           totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
+          estimatedCostUsd:
+            typeof entry.estimatedCostUsd === "number" ? entry.estimatedCostUsd : undefined,
+          status: typeof entry.status === "string" ? entry.status : undefined,
+          startedAt: typeof entry.startedAt === "number" ? entry.startedAt : undefined,
+          endedAt: typeof entry.endedAt === "number" ? entry.endedAt : undefined,
+          runtimeMs: typeof entry.runtimeMs === "number" ? entry.runtimeMs : undefined,
+          childSessions: Array.isArray(entry.childSessions)
+            ? entry.childSessions
+                .filter((value): value is string => typeof value === "string")
+                .map((value) =>
+                  resolveDisplaySessionKey({
+                    key: value,
+                    alias,
+                    mainKey,
+                  }),
+                )
+            : undefined,
           thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
           verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
           systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
@@ -216,7 +238,7 @@ export function createSessionsListTool(opts?: {
         };
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
-            key: displayKey,
+            key,
             alias,
             mainKey,
           });
@@ -236,7 +258,7 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = historyTargets[next];
-            const history = await callGateway<{ messages: Array<unknown> }>({
+            const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });

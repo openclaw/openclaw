@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
   decorateOpenClawProfile,
@@ -112,6 +112,10 @@ describe("browser chrome profile decoration", () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-suite-"));
   });
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterAll(async () => {
     if (fixtureRoot) {
       await fsp.rm(fixtureRoot, { recursive: true, force: true });
@@ -205,6 +209,10 @@ describe("browser chrome helpers", () => {
   function mockExistsSync(match: (pathValue: string) => boolean) {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
+
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -300,6 +308,24 @@ describe("browser chrome helpers", () => {
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
     await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
+  });
+
+  it("blocks private CDP probes when strict SSRF policy is enabled", async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      isChromeReachable("http://127.0.0.1:12345", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      isChromeReachable("ws://127.0.0.1:19999", 50, {
+        dangerouslyAllowPrivateNetwork: false,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("reports cdpReady only when Browser.getVersion command succeeds", async () => {

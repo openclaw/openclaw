@@ -7,12 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { writeFileWithinRoot } from "../infra/fs-safe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import {
-  isWindowsCommandShimEinval,
-  resolveCliSpawnInvocation,
-  runCliCommand,
-} from "./qmd-process.js";
+import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
 import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
   listSessionFilesForAgent,
@@ -48,8 +45,21 @@ const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
+const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
+
+type McporterState = {
+  coldStartWarned: boolean;
+  daemonStart: Promise<void> | null;
+};
 
 let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+
+function getMcporterState(): McporterState {
+  return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
+    coldStartWarned: false,
+    daemonStart: null,
+  }));
+}
 
 function hasHanScript(value: string): boolean {
   return HAN_SCRIPT_RE.test(value);
@@ -867,8 +877,12 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: {
     reason?: string;
     force?: boolean;
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+      log.debug("qmd sync ignoring targeted sessionFiles hint; running regular update");
+    }
     if (params?.progress) {
       params.progress({ completed: 0, total: 1, label: "Updating QMD index…" });
     }
@@ -1209,85 +1223,49 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
+    const state = getMcporterState();
     if (!mcporter.startDaemon) {
-      type McporterWarnGlobal = typeof globalThis & {
-        __openclawMcporterColdStartWarned?: boolean;
-      };
-      const g: McporterWarnGlobal = globalThis;
-      if (!g.__openclawMcporterColdStartWarned) {
-        g.__openclawMcporterColdStartWarned = true;
+      if (!state.coldStartWarned) {
+        state.coldStartWarned = true;
         log.warn(
           "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
         );
       }
       return;
     }
-    type McporterGlobal = typeof globalThis & {
-      __openclawMcporterDaemonStart?: Promise<void>;
-    };
-    const g: McporterGlobal = globalThis;
-    if (!g.__openclawMcporterDaemonStart) {
-      g.__openclawMcporterDaemonStart = (async () => {
+    if (!state.daemonStart) {
+      state.daemonStart = (async () => {
         try {
           await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
+          state.daemonStart = null;
         }
       })();
     }
-    await g.__openclawMcporterDaemonStart;
+    await state.daemonStart;
   }
 
   private async runMcporter(
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const runWithInvocation = async (spawnInvocation: {
-      command: string;
-      argv: string[];
-      shell?: boolean;
-      windowsHide?: boolean;
-    }): Promise<{ stdout: string; stderr: string }> =>
-      await runCliCommand({
-        commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-        spawnInvocation,
-        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-        env: this.env,
-        cwd: this.workspaceDir,
-        timeoutMs: opts?.timeoutMs,
-        maxOutputChars: this.maxQmdOutputChars,
-      });
-
-    const primaryInvocation = resolveCliSpawnInvocation({
+    const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args,
       env: this.env,
       packageName: "mcporter",
     });
-    try {
-      return await runWithInvocation(primaryInvocation);
-    } catch (err) {
-      if (
-        !isWindowsCommandShimEinval({
-          err,
-          command: primaryInvocation.command,
-          commandBase: "mcporter",
-        })
-      ) {
-        throw err;
-      }
-      // Some Windows npm cmd shims can still throw EINVAL on spawn; retry through
-      // shell command resolution so PATH/PATHEXT can select a runnable entrypoint.
-      log.warn("mcporter.cmd spawn returned EINVAL on Windows; retrying with bare mcporter");
-      return await runWithInvocation({
-        command: "mcporter",
-        argv: args,
-        shell: true,
-        windowsHide: true,
-      });
-    }
+    return await runCliCommand({
+      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
+      spawnInvocation,
+      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
+      env: this.env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+    });
   }
 
   private async runQmdSearchViaMcporter(params: {

@@ -1,10 +1,43 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { browserAct, browserConsoleMessages } from "../../browser/client-actions.js";
 import { browserSnapshot, browserTabs } from "../../browser/client.js";
+import { resolveBrowserConfig, resolveProfile } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import { getBrowserProfileCapabilities } from "../../browser/profile-capabilities.js";
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { imageResultFromFile, jsonResult } from "./common.js";
+
+const browserToolActionDeps = {
+  browserAct,
+  browserConsoleMessages,
+  browserSnapshot,
+  browserTabs,
+  imageResultFromFile,
+  loadConfig,
+};
+
+export const __testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      browserAct: typeof browserAct;
+      browserConsoleMessages: typeof browserConsoleMessages;
+      browserSnapshot: typeof browserSnapshot;
+      browserTabs: typeof browserTabs;
+      imageResultFromFile: typeof imageResultFromFile;
+      loadConfig: typeof loadConfig;
+    }> | null,
+  ) {
+    browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
+    browserToolActionDeps.browserConsoleMessages =
+      overrides?.browserConsoleMessages ?? browserConsoleMessages;
+    browserToolActionDeps.browserSnapshot = overrides?.browserSnapshot ?? browserSnapshot;
+    browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
+    browserToolActionDeps.imageResultFromFile =
+      overrides?.imageResultFromFile ?? imageResultFromFile;
+    browserToolActionDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
+  },
+};
 
 type BrowserProxyRequest = (opts: {
   method: string;
@@ -54,8 +87,37 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
   };
 }
 
+function formatConsoleToolResult(result: {
+  targetId?: string;
+  messages?: unknown[];
+}): AgentToolResult<unknown> {
+  const wrapped = wrapBrowserExternalJson({
+    kind: "console",
+    payload: result,
+    includeWarning: false,
+  });
+  return {
+    content: [{ type: "text" as const, text: wrapped.wrappedText }],
+    details: {
+      ...wrapped.safeDetails,
+      targetId: typeof result.targetId === "string" ? result.targetId : undefined,
+      messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+    },
+  };
+}
+
 function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
-  if (profile !== "chrome") {
+  if (!profile) {
+    return false;
+  }
+  if (profile === "user") {
+    const msg = String(err);
+    return msg.includes("404:") && msg.includes("tab not found");
+  }
+  const cfg = browserToolActionDeps.loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const browserProfile = resolveProfile(resolved, profile);
+  if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
     return false;
   }
   const msg = String(err);
@@ -100,7 +162,7 @@ export async function executeTabsAction(params: {
     const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
     return formatTabsToolResult(tabs);
   }
-  const tabs = await browserTabs(baseUrl, { profile });
+  const tabs = await browserToolActionDeps.browserTabs(baseUrl, { profile });
   return formatTabsToolResult(tabs);
 }
 
@@ -111,17 +173,20 @@ export async function executeSnapshotAction(params: {
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
-  const format =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria" ? input.snapshotFormat : "ai";
-  const mode =
+  const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
+  const format: "ai" | "aria" | undefined =
+    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
+      ? input.snapshotFormat
+      : undefined;
+  const mode: "efficient" | undefined =
     input.mode === "efficient"
       ? "efficient"
-      : format === "ai" && snapshotDefaults?.mode === "efficient"
+      : format !== "aria" && snapshotDefaults?.mode === "efficient"
         ? "efficient"
         : undefined;
   const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const refs = input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
+  const refs: "aria" | "role" | undefined =
+    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
   const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
   const limit =
@@ -130,6 +195,12 @@ export async function executeSnapshotAction(params: {
     typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
       ? Math.floor(input.maxChars)
       : undefined;
+  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
+  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
+  const depth =
+    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
+  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
+  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
   const resolvedMaxChars =
     format === "ai"
       ? hasMaxChars
@@ -137,46 +208,32 @@ export async function executeSnapshotAction(params: {
         : mode === "efficient"
           ? undefined
           : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
-  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
-  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
+      : hasMaxChars
+        ? maxChars
+        : undefined;
+  const snapshotQuery = {
+    ...(format ? { format } : {}),
+    targetId,
+    limit,
+    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+    refs,
+    interactive,
+    compact,
+    depth,
+    selector,
+    frame,
+    labels,
+    mode,
+  };
   const snapshot = proxyRequest
     ? ((await proxyRequest({
         method: "GET",
         path: "/snapshot",
         profile,
-        query: {
-          format,
-          targetId,
-          limit,
-          ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-          refs,
-          interactive,
-          compact,
-          depth,
-          selector,
-          frame,
-          labels,
-          mode,
-        },
+        query: snapshotQuery,
       })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserSnapshot(baseUrl, {
-        format,
-        targetId,
-        limit,
-        ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-        refs,
-        interactive,
-        compact,
-        depth,
-        selector,
-        frame,
-        labels,
-        mode,
+    : await browserToolActionDeps.browserSnapshot(baseUrl, {
+        ...snapshotQuery,
         profile,
       });
   if (snapshot.format === "ai") {
@@ -207,7 +264,7 @@ export async function executeSnapshotAction(params: {
       },
     };
     if (labels && snapshot.imagePath) {
-      return await imageResultFromFile({
+      return await browserToolActionDeps.imageResultFromFile({
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
@@ -263,34 +320,14 @@ export async function executeConsoleAction(params: {
         targetId,
       },
     })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
-    const wrapped = wrapBrowserExternalJson({
-      kind: "console",
-      payload: result,
-      includeWarning: false,
-    });
-    return {
-      content: [{ type: "text" as const, text: wrapped.wrappedText }],
-      details: {
-        ...wrapped.safeDetails,
-        targetId: typeof result.targetId === "string" ? result.targetId : undefined,
-        messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
-      },
-    };
+    return formatConsoleToolResult(result);
   }
-  const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
-  const wrapped = wrapBrowserExternalJson({
-    kind: "console",
-    payload: result,
-    includeWarning: false,
+  const result = await browserToolActionDeps.browserConsoleMessages(baseUrl, {
+    level,
+    targetId,
+    profile,
   });
-  return {
-    content: [{ type: "text" as const, text: wrapped.wrappedText }],
-    details: {
-      ...wrapped.safeDetails,
-      targetId: result.targetId,
-      messageCount: result.messages.length,
-    },
-  };
+  return formatConsoleToolResult(result);
 }
 
 export async function executeActAction(params: {
@@ -308,7 +345,7 @@ export async function executeActAction(params: {
           profile,
           body: request,
         })
-      : await browserAct(baseUrl, request, {
+      : await browserToolActionDeps.browserAct(baseUrl, request, {
           profile,
         });
     return jsonResult(result);
@@ -323,8 +360,8 @@ export async function executeActAction(params: {
               profile,
             })) as { tabs?: unknown[] }
           ).tabs ?? [])
-        : await browserTabs(baseUrl, { profile }).catch(() => []);
-      // Some Chrome relay targetIds can go stale between snapshots and actions.
+        : await browserToolActionDeps.browserTabs(baseUrl, { profile }).catch(() => []);
+      // Some user-browser targetIds can go stale between snapshots and actions.
       // Only retry safe read-only actions, and only when exactly one tab remains attached.
       if (retryRequest && canRetryChromeActWithoutTargetId(request) && tabs.length === 1) {
         try {
@@ -335,7 +372,7 @@ export async function executeActAction(params: {
                 profile,
                 body: retryRequest,
               })
-            : await browserAct(baseUrl, retryRequest, {
+            : await browserToolActionDeps.browserAct(baseUrl, retryRequest, {
                 profile,
               });
           return jsonResult(retryResult);
@@ -345,12 +382,12 @@ export async function executeActAction(params: {
       }
       if (!tabs.length) {
         throw new Error(
-          "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+          `No browser tabs found for profile="${profile}". Make sure the configured Chromium-based browser (v144+) is running and has open tabs, then retry.`,
           { cause: err },
         );
       }
       throw new Error(
-        `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+        `Chrome tab not found (stale targetId?). Run action=tabs profile="${profile}" and use one of the returned targetIds.`,
         { cause: err },
       );
     }

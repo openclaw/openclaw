@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
   markAuthProfileFailure,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -48,6 +50,73 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 }
 
 describe("markAuthProfileFailure", () => {
+  it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-expired-old",
+            },
+          },
+        }),
+      );
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: ensureAuthProfileStore(agentDir),
+        },
+      ]);
+
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-fresh-new",
+            },
+          },
+        }),
+      );
+
+      const staleRuntimeStore = ensureAuthProfileStore(agentDir);
+      const staleCredential = staleRuntimeStore.profiles["openai:default"];
+      expect(staleCredential?.type).toBe("api_key");
+      expect(staleCredential && "key" in staleCredential ? staleCredential.key : undefined).toBe(
+        "sk-expired-old",
+      );
+
+      await markAuthProfileFailure({
+        store: staleRuntimeStore,
+        profileId: "openai:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloaded = ensureAuthProfileStore(agentDir);
+      const reloadedCredential = reloaded.profiles["openai:default"];
+      expect(reloadedCredential?.type).toBe("api_key");
+      expect(
+        reloadedCredential && "key" in reloadedCredential ? reloadedCredential.key : undefined,
+      ).toBe("sk-fresh-new");
+      expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("disables billing failures for ~5 hours by default", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
@@ -185,6 +254,58 @@ describe("markAuthProfileFailure", () => {
 
       expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
       expect(store.usageStats?.["anthropic:default"]?.failureCounts?.billing).toBe(1);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resets error count when previous cooldown has expired to prevent escalation", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const now = Date.now();
+      // Simulate state left on disk after 3 rapid failures within a 1-min cooldown
+      // window. The cooldown has since expired, but clearExpiredCooldowns() only
+      // ran in-memory and never persisted — so disk still carries errorCount: 3.
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-default",
+            },
+          },
+          usageStats: {
+            "anthropic:default": {
+              errorCount: 3,
+              failureCounts: { rate_limit: 3 },
+              lastFailureAt: now - 120_000, // 2 minutes ago
+              cooldownUntil: now - 60_000, // expired 1 minute ago
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      // Error count should reset to 1 (not escalate to 4) because the
+      // previous cooldown expired. Cooldown should be ~1 min, not ~60 min.
+      expect(stats?.errorCount).toBe(1);
+      expect(stats?.failureCounts?.rate_limit).toBe(1);
+      const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
+      // calculateAuthProfileCooldownMs(1) = 60_000 (1 minute)
+      expect(cooldownMs).toBeLessThan(120_000);
+      expect(cooldownMs).toBeGreaterThan(0);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

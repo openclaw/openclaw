@@ -6,15 +6,15 @@ import {
   type RuntimeEnv,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
   WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-} from "openclaw/plugin-sdk/feishu";
+} from "../runtime-api.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
 export const botOpenIds = new Map<string, string>();
 export const botNames = new Map<string, string>();
 
-export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
-export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+export const FEISHU_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+export const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 
 type WebhookRateLimitDefaults = {
   windowMs: number;
@@ -104,6 +104,15 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
+function closeWsClient(client: Lark.WSClient | undefined): void {
+  if (!client) return;
+  try {
+    client.close();
+  } catch {
+    /* Best-effort cleanup */
+  }
+}
+
 export function clearFeishuWebhookRateLimitStateForTest(): void {
   feishuWebhookRateLimiter.clear();
   feishuWebhookAnomalyTracker.clear();
@@ -134,6 +143,7 @@ export function recordWebhookStatus(
 
 export function stopFeishuMonitorState(accountId?: string): void {
   if (accountId) {
+    closeWsClient(wsClients.get(accountId));
     wsClients.delete(accountId);
     const server = httpServers.get(accountId);
     if (server) {
@@ -145,6 +155,9 @@ export function stopFeishuMonitorState(accountId?: string): void {
     return;
   }
 
+  for (const client of wsClients.values()) {
+    closeWsClient(client);
+  }
   wsClients.clear();
   for (const server of httpServers.values()) {
     server.close();
