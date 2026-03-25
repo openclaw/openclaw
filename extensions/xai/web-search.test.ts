@@ -7,7 +7,7 @@ import { withEnv } from "../../test/helpers/extensions/env.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { __testing as grokProviderTesting } from "./src/grok-web-search-provider.js";
-import { __testing } from "./web-search.js";
+import { __testing, createXaiWebSearchProvider } from "./web-search.js";
 
 const { extractXaiWebSearchContent, resolveXaiInlineCitations, resolveXaiWebSearchModel } =
   __testing;
@@ -24,7 +24,7 @@ describe("xai web search config resolution", () => {
     expect(
       resolveWebSearchProviderCredential({
         credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-        path: "tools.web.search.grok.apiKey",
+        path: "plugins.entries.xai.config.webSearch.apiKey",
         envVars: ["XAI_API_KEY"],
       }),
     ).toBe("xai-test-key");
@@ -35,11 +35,44 @@ describe("xai web search config resolution", () => {
       expect(
         resolveWebSearchProviderCredential({
           credentialValue: getScopedCredentialValue({}, "grok"),
-          path: "tools.web.search.grok.apiKey",
+          path: "plugins.entries.xai.config.webSearch.apiKey",
           envVars: ["XAI_API_KEY"],
         }),
       ).toBeUndefined();
     });
+  });
+
+  it("uses plugin web search config when the scoped search config has no api key", async () => {
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: {
+        provider: "grok",
+        grok: {
+          model: "grok-4-1-fast",
+        },
+      },
+    });
+
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("Expected xAI web search tool definition");
+    }
+
+    await expect(tool.execute({})).rejects.toThrow("query");
   });
 
   it("uses default model when not specified", () => {
