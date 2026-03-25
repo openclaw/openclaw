@@ -470,13 +470,11 @@ describe("plugin resetSession", () => {
       sessionId: "session-live-config",
     });
     expect(deps.loadConfig).toHaveBeenCalledTimes(2);
-    expect(deps.resolveGatewaySessionStoreTarget).toHaveBeenNthCalledWith(1, {
-      cfg: liveConfig,
+    expect(deps.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    expect(deps.performGatewaySessionReset).toHaveBeenCalledWith({
       key: "agent:ops:MAIN",
-    });
-    expect(deps.resolveGatewaySessionStoreTarget).toHaveBeenNthCalledWith(2, {
-      cfg: liveConfig,
-      key: "agent:ops:work",
+      reason: "new",
+      commandSource: "plugin:demo-plugin",
     });
   });
 
