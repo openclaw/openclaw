@@ -128,6 +128,7 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unknown channel/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
