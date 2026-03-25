@@ -43,8 +43,10 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     expect(json.object).toBe("list");
     expect(Array.isArray(json.data)).toBe(true);
     expect((json.data?.length ?? 0) > 0).toBe(true);
+    expect(json.data?.map((entry) => entry.id)).toContain("openclaw");
+    expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
     expect(
-      json.data?.every((entry) => typeof entry.id === "string" && entry.id?.includes("/")),
+      json.data?.every((entry) => typeof entry.id === "string" && entry.id?.startsWith("openclaw")),
     ).toBe(true);
   });
 

@@ -14,7 +14,12 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveAgentIdFromHeader } from "./http-utils.js";
+import {
+  OPENCLAW_MODEL_ID,
+  getHeader,
+  resolveAgentIdForRequest,
+  resolveAgentIdFromModel,
+} from "./http-utils.js";
 
 type OpenAiEmbeddingsHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -148,6 +153,17 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
+  const cfg = loadConfig();
+  if (requestModel !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(requestModel, cfg)) {
+    sendJson(res, 400, {
+      error: {
+        message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
+
   const texts = resolveInputTexts(payload.input);
   if (!texts) {
     sendJson(res, 400, {
@@ -166,15 +182,12 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
-  const agentId = resolveAgentIdFromHeader(req) ?? "main";
+  const agentId = resolveAgentIdForRequest({ req, model: requestModel });
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = (memorySearch?.provider ?? "openai") as EmbeddingProviderRequest;
-  const target = resolveEmbeddingsTarget({
-    requestModel,
-    configuredProvider,
-  });
+  const overrideModel = getHeader(req, "x-openclaw-model")?.trim() || memorySearch?.model || "";
+  const target = resolveEmbeddingsTarget({ requestModel: overrideModel, configuredProvider });
   if ("errorMessage" in target) {
     sendJson(res, 400, {
       error: {
@@ -229,10 +242,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         index,
         embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
       })),
-      model:
-        requestModel.includes("/") || target.provider === "auto"
-          ? requestModel
-          : `${target.provider}/${target.model}`,
+      model: requestModel,
       usage: {
         prompt_tokens: 0,
         total_tokens: 0,

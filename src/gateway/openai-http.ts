@@ -443,6 +443,7 @@ export async function handleOpenAiHttpRequest(
     useMessageChannelHeader: true,
   });
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
     agentId,
     model,
   });
