@@ -28,7 +28,7 @@
 
 /* User messages align content right */
 .chat-group.user .chat-group-messages {
-  align-items: stretch;
+  align-items: flex-end;
 }
 
 @media (max-width: 600px) {
@@ -186,19 +186,15 @@ img.chat-avatar {
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
-  display: block;
   border: 1px solid var(--border);
   background: var(--card);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
-  box-shadow: none;
   transition:
     background var(--duration-fast) ease-out,
     border-color var(--duration-fast) ease-out;
-  width: 100%;
+  width: fit-content;
   max-width: 100%;
-  box-sizing: border-box;
-  word-wrap: break-word;
 }
 
 .chat-bubble.has-copy {
