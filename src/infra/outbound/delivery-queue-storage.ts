@@ -26,6 +26,8 @@ export type QueuedDeliveryPayload = {
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
+  gatewayClientScopes?: readonly string[];
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
