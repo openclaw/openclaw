@@ -9,7 +9,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/acpx",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw ACP runtime backend via acpx",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -133,7 +133,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/amazon-bedrock-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Amazon Bedrock provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -156,7 +156,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/anthropic-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Anthropic provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -211,7 +211,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/bluebubbles",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw BlueBubbles channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -254,7 +254,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/brave-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Brave plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -305,7 +305,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/byteplus-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw BytePlus provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -346,7 +346,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/chutes-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Chutes.ai provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -399,7 +399,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/cloudflare-ai-gateway-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Cloudflare AI Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -441,7 +441,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/copilot-proxy",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Copilot Proxy provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -476,7 +476,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/deepgram-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Deepgram media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -498,7 +498,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/deepseek-provider",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw DeepSeek provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -539,7 +539,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/diagnostics-otel",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw diagnostics OpenTelemetry exporter",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -561,7 +561,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/diffs",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw diff viewer plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -761,7 +761,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/discord",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Discord channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -801,7 +801,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/duckduckgo-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw DuckDuckGo plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -847,7 +847,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/elevenlabs-speech",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw ElevenLabs speech plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -869,7 +869,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/exa-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Exa plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -912,7 +912,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/fal-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw fal provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -958,7 +958,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/feishu",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1000,7 +1000,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/firecrawl-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Firecrawl plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1050,7 +1050,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/github-copilot-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw GitHub Copilot provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1088,7 +1088,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/google-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Google plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1168,7 +1168,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/googlechat",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Google Chat channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1209,7 +1209,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/groq-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Groq media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1231,7 +1231,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/huggingface-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Hugging Face provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1277,7 +1277,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/imessage",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw iMessage channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1316,7 +1316,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/irc",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw IRC channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1353,7 +1353,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/kilocode-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Kilo Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1395,7 +1395,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/kimi-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Kimi provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1441,7 +1441,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/line",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw LINE channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1481,7 +1481,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/llm-task",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw JSON-only LLM task plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1528,7 +1528,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/lobster",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1556,7 +1556,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/matrix",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Matrix channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1600,7 +1600,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/mattermost",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Mattermost channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1639,7 +1639,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/memory-core",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw core memory search plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1662,7 +1662,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/memory-lancedb",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1770,7 +1770,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/microsoft-speech",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Microsoft speech plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1792,7 +1792,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/minimax-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw MiniMax provider and OAuth plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1869,7 +1869,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/mistral-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Mistral provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1910,7 +1910,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/modelstudio-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Model Studio provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1994,7 +1994,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/moonshot-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Moonshot provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2083,7 +2083,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/msteams",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Microsoft Teams channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2127,7 +2127,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/nextcloud-talk",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Nextcloud Talk channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2172,7 +2172,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/nostr",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2212,7 +2212,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/nvidia-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw NVIDIA provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2238,7 +2238,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/ollama-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Ollama provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2276,7 +2276,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/open-prose",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenProse VM skill pack plugin (slash command + telemetry).",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2301,7 +2301,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openai-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw OpenAI provider plugins",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2352,7 +2352,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/opencode-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw OpenCode Zen provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2393,7 +2393,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/opencode-go-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw OpenCode Go provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2434,7 +2434,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openrouter-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw OpenRouter provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2475,7 +2475,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openshell-sandbox",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw OpenShell sandbox backend",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2589,7 +2589,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/perplexity-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Perplexity plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2646,7 +2646,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/qianfan-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Qianfan provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2687,7 +2687,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/qveris",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "QVeris web search plugin for QVerisBot",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2736,7 +2736,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/sglang-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw SGLang provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2778,7 +2778,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/signal",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Signal channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2816,7 +2816,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/slack",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Slack channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2854,7 +2854,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/synology-chat",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "Synology Chat channel plugin for OpenClaw",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2893,7 +2893,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/synthetic-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Synthetic provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2934,7 +2934,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/tavily-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Tavily plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2989,7 +2989,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/telegram",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Telegram channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3027,7 +3027,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/tlon",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Tlon/Urbit channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3068,7 +3068,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/together-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Together provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3109,7 +3109,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/twitch",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Twitch channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3143,7 +3143,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/venice-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Venice provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3184,7 +3184,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/vercel-ai-gateway-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Vercel AI Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3225,7 +3225,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/vllm-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw vLLM provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3263,7 +3263,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/voice-call",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw voice-call plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3890,7 +3890,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/volcengine-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Volcengine provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3935,7 +3935,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/whatsapp",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw WhatsApp channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3975,7 +3975,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/x",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw X (Twitter) channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4014,7 +4014,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/xai-plugin",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw xAI plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4086,7 +4086,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/xiaomi-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Xiaomi provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4127,7 +4127,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/zai-provider",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Z.AI provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4228,7 +4228,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/zalo",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Zalo channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4273,7 +4273,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "setup-entry.js",
     },
     packageName: "@openclaw/zalouser",
-    packageVersion: "2026.3.23",
+    packageVersion: "2026.3.25",
     packageDescription: "OpenClaw Zalo Personal Account plugin via native zca-js integration",
     packageManifest: {
       extensions: ["./index.ts"],
