@@ -7,8 +7,11 @@ import {
   whatsappOutbound,
 } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { STATE_DIR } from "../../config/paths.js";
+import { createHookRunner } from "../../plugins/hooks.js";
+import { addTestHook } from "../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginHookRegistration } from "../../plugins/types.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
@@ -20,8 +23,11 @@ const mocks = vi.hoisted(() => ({
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn(() => false),
-    runMessageSent: vi.fn(async () => {}),
+    hasHooks: vi.fn<(_hookName?: string) => boolean>(() => false),
+    runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async () => undefined,
+    ),
+    runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({
@@ -202,6 +208,7 @@ function expectSuccessfulWhatsAppInternalHookPayload(
 
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js"));
   });
 
@@ -210,6 +217,8 @@ describe("deliverOutboundPayloads", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -454,14 +463,19 @@ describe("deliverOutboundPayloads", () => {
       payload: { text: "hi", mediaUrl: "file:///tmp/f.png" },
     });
 
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
     expect(sendTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
       expect.objectContaining({
         mediaUrl: "file:///tmp/f.png",
-        mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
       }),
     );
+    expect(
+      sendOpts?.mediaLocalRoots?.some((root) =>
+        root.endsWith(path.join(".openclaw", "workspace-work")),
+      ),
+    ).toBe(true);
   });
 
   it("includes OpenClaw tmp root in telegram mediaLocalRoots", async () => {
@@ -497,6 +511,49 @@ describe("deliverOutboundPayloads", () => {
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("forwards audioAsVoice through generic plugin media delivery", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-1",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "matrix",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
+    });
+
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "room:!room:example",
+        text: "voice caption",
+        mediaUrl: "file:///tmp/clip.mp3",
+        audioAsVoice: true,
       }),
     );
   });
@@ -981,6 +1038,48 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({ to: "+1555", content: "hello", success: true }),
       expect.objectContaining({ channelId: "whatsapp" }),
     );
+  });
+
+  it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {
+    const hookRegistry = createEmptyPluginRegistry();
+    const high = vi.fn().mockResolvedValue({ cancel: true, content: "blocked" });
+    const low = vi.fn().mockResolvedValue({ cancel: false, content: "override" });
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "high",
+      hookName: "message_sending",
+      handler: high as PluginHookRegistration["handler"],
+      priority: 100,
+    });
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "low",
+      hookName: "message_sending",
+      handler: low as PluginHookRegistration["handler"],
+      priority: 0,
+    });
+    const realRunner = createHookRunner(hookRegistry);
+    hookMocks.runner.hasHooks.mockImplementation((hookName?: string) =>
+      realRunner.hasHooks((hookName ?? "") as never),
+    );
+    hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
+      realRunner.runMessageSending(event as never, ctx as never),
+    );
+
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {

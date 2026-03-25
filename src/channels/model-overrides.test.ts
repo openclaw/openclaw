@@ -11,7 +11,7 @@ describe("resolveChannelModelOverride", () => {
           channels: {
             modelByChannel: {
               telegram: {
-                "-100123": "openai/gpt-4.1",
+                "-100123": "openai/gpt-5.4",
               },
             },
           },
@@ -19,7 +19,7 @@ describe("resolveChannelModelOverride", () => {
         channel: "telegram",
         groupId: "-100123:topic:99",
       },
-      expected: { model: "openai/gpt-4.1", matchKey: "-100123" },
+      expected: { model: "openai/gpt-5.4", matchKey: "-100123" },
     },
     {
       name: "prefers topic-specific match over parent group id",
@@ -28,7 +28,7 @@ describe("resolveChannelModelOverride", () => {
           channels: {
             modelByChannel: {
               telegram: {
-                "-100123": "openai/gpt-4.1",
+                "-100123": "openai/gpt-5.4",
                 "-100123:topic:99": "anthropic/claude-sonnet-4-6",
               },
             },
@@ -46,7 +46,7 @@ describe("resolveChannelModelOverride", () => {
           channels: {
             modelByChannel: {
               discord: {
-                "123": "openai/gpt-4.1",
+                "123": "openai/gpt-5.4",
               },
             },
           },
@@ -55,7 +55,7 @@ describe("resolveChannelModelOverride", () => {
         groupId: "999",
         parentSessionKey: "agent:main:discord:channel:123:thread:456",
       },
-      expected: { model: "openai/gpt-4.1", matchKey: "123" },
+      expected: { model: "openai/gpt-5.4", matchKey: "123" },
     },
   ] as const;
 

@@ -1,6 +1,6 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-runtime";
+import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -420,6 +420,13 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
+    // attach a safety listener before releasing other listeners so that late
+    // "error" events emitted by Carbon during teardown do not become uncaught
+    // exceptions and crash the entire gateway process.
+    const suppressLateError = (err: unknown) => {
+      params.runtime.error?.(danger(`discord: suppressed late gateway error: ${String(err)}`));
+    };
+    gatewayEmitter?.on("error", suppressLateError);
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
@@ -435,5 +442,6 @@ export async function runDiscordGatewayLifecycle(params: {
       await params.execApprovalsHandler.stop();
     }
     params.threadBindings.stop();
+    gatewayEmitter?.removeListener("error", suppressLateError);
   }
 }

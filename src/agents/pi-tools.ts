@@ -143,6 +143,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
     safeBinProfiles: resolveMergedSafeBinProfileFixtures({
       global: globalExec,
@@ -420,6 +421,7 @@ export function createOpenClawCodingTools(options?: {
     node: options?.exec?.node ?? execConfig.node,
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+    strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
     safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
     safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
     agentId,

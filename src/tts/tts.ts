@@ -24,7 +24,11 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
+import {
+  OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
+} from "../plugins/provider-model-defaults.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -54,8 +58,6 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
-const DEFAULT_OPENAI_VOICE = "alloy";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -68,10 +70,10 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   speed: 1.0,
 };
 
-const TELEGRAM_OUTPUT = {
+const OPUS_OUTPUT = {
   openai: "opus" as const,
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
+  // Opus @ 48kHz/64kbps is a good voice message tradeoff.
   elevenlabs: "opus_48000_64",
   extension: ".opus",
   voiceCompatible: true,
@@ -162,14 +164,20 @@ export type TtsDirectiveOverrides = {
   openai?: {
     voice?: string;
     model?: string;
+    speed?: number;
   };
   elevenlabs?: {
     voiceId?: string;
     modelId?: string;
+    outputFormat?: string;
     seed?: number;
     applyTextNormalization?: "auto" | "on" | "off";
     languageCode?: string;
     voiceSettings?: Partial<ResolvedTtsConfig["elevenlabs"]["voiceSettings"]>;
+  };
+  microsoft?: {
+    voice?: string;
+    outputFormat?: string;
   };
 };
 
@@ -189,6 +197,17 @@ export type TtsResult = {
   provider?: string;
   outputFormat?: string;
   voiceCompatible?: boolean;
+};
+
+export type TtsSynthesisResult = {
+  success: boolean;
+  audioBuffer?: Buffer;
+  error?: string;
+  latencyMs?: number;
+  provider?: string;
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
 };
 
 export type TtsTelephonyResult = {
@@ -498,12 +517,12 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
+/** Channels that require opus audio */
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
-    return TELEGRAM_OUTPUT;
+  if (channelId && OPUS_CHANNELS.has(channelId)) {
+    return OPUS_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
@@ -601,6 +620,7 @@ function resolveTtsRequestSetup(params: {
   cfg: OpenClawConfig;
   prefsPath?: string;
   providerOverride?: TtsProvider;
+  disableFallback?: boolean;
 }):
   | {
       config: ResolvedTtsConfig;
@@ -621,7 +641,7 @@ function resolveTtsRequestSetup(params: {
   const provider = normalizeSpeechProviderId(params.providerOverride) ?? userProvider;
   return {
     config,
-    providers: resolveTtsProviderOrder(provider, params.cfg),
+    providers: params.disableFallback ? [provider] : resolveTtsProviderOrder(provider, params.cfg),
   };
 }
 
@@ -631,12 +651,44 @@ export async function textToSpeech(params: {
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
 }): Promise<TtsResult> {
+  const synthesis = await synthesizeSpeech(params);
+  if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
+    return buildTtsFailureResult([synthesis.error ?? "TTS conversion failed"]);
+  }
+
+  const tempRoot = resolvePreferredOpenClawTmpDir();
+  mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+  const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+  const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
+  writeFileSync(audioPath, synthesis.audioBuffer);
+  scheduleCleanup(tempDir);
+
+  return {
+    success: true,
+    audioPath,
+    latencyMs: synthesis.latencyMs,
+    provider: synthesis.provider,
+    outputFormat: synthesis.outputFormat,
+    voiceCompatible: synthesis.voiceCompatible,
+  };
+}
+
+export async function synthesizeSpeech(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  channel?: string;
+  overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
+}): Promise<TtsSynthesisResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
     providerOverride: params.overrides?.provider,
+    disableFallback: params.disableFallback,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -644,7 +696,7 @@ export async function textToSpeech(params: {
 
   const { config, providers } = setup;
   const channelId = resolveChannelId(params.channel);
-  const target = channelId && VOICE_BUBBLE_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
 
@@ -667,22 +719,14 @@ export async function textToSpeech(params: {
         target,
         overrides: params.overrides,
       });
-      const latencyMs = Date.now() - providerStart;
-
-      const tempRoot = resolvePreferredOpenClawTmpDir();
-      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-      const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
-      writeFileSync(audioPath, synthesis.audioBuffer);
-      scheduleCleanup(tempDir);
-
       return {
         success: true,
-        audioPath,
-        latencyMs,
+        audioBuffer: synthesis.audioBuffer,
+        latencyMs: Date.now() - providerStart,
         provider,
         outputFormat: synthesis.outputFormat,
         voiceCompatible: synthesis.voiceCompatible,
+        fileExtension: synthesis.fileExtension,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
@@ -783,6 +827,10 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
+  // Compaction notices are informational UI signals — never synthesise them as speech.
+  if (params.payload.isCompactionNotice) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
@@ -900,7 +948,7 @@ export async function maybeApplyTtsToPayload(params: {
 
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
-      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
+      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,

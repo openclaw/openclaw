@@ -9,16 +9,17 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@create-markdown/preview": "^2.0.0",
     "@noble/ed25519": "3.0.1",
     "dompurify": "^3.3.3",
     "lit": "^3.3.2",
-    "marked": "^17.0.4"
+    "marked": "^17.0.5"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.1.0",
-    "jsdom": "^29.0.0",
+    "jsdom": "^29.0.1",
     "playwright": "^1.58.2",
-    "vite": "8.0.0",
+    "vite": "8.0.1",
     "vitest": "4.1.0"
   }
 }

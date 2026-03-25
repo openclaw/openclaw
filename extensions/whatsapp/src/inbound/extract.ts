@@ -4,13 +4,111 @@ import {
   getContentType,
   normalizeMessageContent,
 } from "@whiskeysockets/baileys";
-import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-runtime";
+import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { jidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { parseVcard } from "../vcard.js";
 
+const MESSAGE_WRAPPER_KEYS = [
+  "ephemeralMessage",
+  "viewOnceMessage",
+  "viewOnceMessageV2",
+  "viewOnceMessageV2Extension",
+  "documentWithCaptionMessage",
+] as const;
+
+const MESSAGE_CONTENT_KEYS = [
+  "conversation",
+  "extendedTextMessage",
+  "imageMessage",
+  "videoMessage",
+  "audioMessage",
+  "documentMessage",
+  "stickerMessage",
+  "locationMessage",
+  "liveLocationMessage",
+  "contactMessage",
+  "contactsArrayMessage",
+  "buttonsResponseMessage",
+  "listResponseMessage",
+  "templateButtonReplyMessage",
+  "interactiveResponseMessage",
+  "buttonsMessage",
+  "listMessage",
+] as const;
+
+function fallbackNormalizeMessageContent(
+  message: proto.IMessage | undefined,
+): proto.IMessage | undefined {
+  let current = message as unknown;
+  while (current && typeof current === "object") {
+    let unwrapped = false;
+    for (const key of MESSAGE_WRAPPER_KEYS) {
+      const candidate = (current as Record<string, unknown>)[key];
+      if (
+        candidate &&
+        typeof candidate === "object" &&
+        "message" in (candidate as Record<string, unknown>) &&
+        (candidate as { message?: unknown }).message
+      ) {
+        current = (candidate as { message: unknown }).message;
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) {
+      break;
+    }
+  }
+  return current as proto.IMessage | undefined;
+}
+
+function normalizeMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  if (typeof normalizeMessageContent === "function") {
+    return normalizeMessageContent(message);
+  }
+  return fallbackNormalizeMessageContent(message);
+}
+
+function fallbackGetContentType(
+  message: proto.IMessage | undefined,
+): keyof proto.IMessage | undefined {
+  const normalized = fallbackNormalizeMessageContent(message);
+  if (!normalized || typeof normalized !== "object") {
+    return undefined;
+  }
+  for (const key of MESSAGE_CONTENT_KEYS) {
+    if ((normalized as Record<string, unknown>)[key] != null) {
+      return key as keyof proto.IMessage;
+    }
+  }
+  return undefined;
+}
+
+function getMessageContentType(
+  message: proto.IMessage | undefined,
+): keyof proto.IMessage | undefined {
+  if (typeof getContentType === "function") {
+    return getContentType(message);
+  }
+  return fallbackGetContentType(message);
+}
+
+function extractMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  if (typeof extractMessageContent === "function") {
+    return extractMessageContent(message) as proto.IMessage | undefined;
+  }
+  const normalized = fallbackNormalizeMessageContent(message);
+  const contentType = fallbackGetContentType(normalized);
+  if (!normalized || !contentType || contentType === "conversation") {
+    return normalized;
+  }
+  const candidate = (normalized as Record<string, unknown>)[contentType];
+  return candidate && typeof candidate === "object" ? (candidate as proto.IMessage) : normalized;
+}
+
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message);
+  const normalized = normalizeMessage(message);
   return normalized;
 }
 
@@ -18,7 +116,7 @@ function extractContextInfo(message: proto.IMessage | undefined): proto.IContext
   if (!message) {
     return undefined;
   }
-  const contentType = getContentType(message);
+  const contentType = getMessageContentType(message);
   const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   const contextInfo =
     candidate && typeof candidate === "object" && "contextInfo" in candidate
@@ -89,7 +187,7 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
   if (!message) {
     return undefined;
   }
-  const extracted = extractMessageContent(message);
+  const extracted = extractMessage(message);
   const candidates = [message, extracted && extracted !== message ? extracted : undefined];
   for (const candidate of candidates) {
     if (!candidate) {
@@ -300,7 +398,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     return null;
   }
   const contextInfo = extractContextInfo(message);
-  const quoted = normalizeMessageContent(contextInfo?.quotedMessage as proto.IMessage | undefined);
+  const quoted = normalizeMessage(contextInfo?.quotedMessage as proto.IMessage | undefined);
   if (!quoted) {
     return null;
   }
@@ -312,7 +410,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     body = extractMediaPlaceholder(quoted);
   }
   if (!body) {
-    const quotedType = quoted ? getContentType(quoted) : undefined;
+    const quotedType = quoted ? getMessageContentType(quoted) : undefined;
     logVerbose(
       `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
     );

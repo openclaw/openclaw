@@ -1,31 +1,32 @@
 import { ChannelType, type RequestClient } from "@buape/carbon";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { shouldAckReaction as shouldAckReactionGate } from "openclaw/plugin-sdk/channel-runtime";
-import { logTypingFailure, logAckFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
+  logAckFailure,
+  logTypingFailure,
+  shouldAckReaction as shouldAckReactionGate,
   type StatusReactionAdapter,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-feedback";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -68,7 +69,16 @@ function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
-export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
+type DiscordMessageProcessObserver = {
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
+  onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
+};
+
+export async function processDiscordMessage(
+  ctx: DiscordMessagePreflightContext,
+  observer?: DiscordMessageProcessObserver,
+) {
   const {
     cfg,
     discordConfig,
@@ -230,6 +240,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     isGuild: isGuildMessage,
     channelTopic: channelInfo?.topic,
+    messageBody: text,
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
@@ -319,11 +330,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
+    channelName: channelInfo?.name,
+    channelDescription: channelInfo?.topic,
     baseText: baseText ?? "",
     combinedBody,
     replyToMode,
     agentId: route.agentId,
     channel: route.channel,
+    cfg,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;
@@ -392,6 +406,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
+  observer?.onReplyPlanResolved?.({
+    createdThreadId: replyPlan.createdThreadId,
+    sessionKey: persistedSessionKey,
+  });
 
   await recordInboundSession({
     storePath,
@@ -592,6 +610,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   // When draft streaming is active, suppress block streaming to avoid double-streaming.
   const disableBlockStreamingForDraft = draftStream ? true : undefined;
+  let finalReplyStartNotified = false;
+  const notifyFinalReplyStart = () => {
+    if (finalReplyStartNotified) {
+      return;
+    }
+    finalReplyStartNotified = true;
+    observer?.onFinalReplyStart?.();
+  };
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
@@ -628,6 +654,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               return;
             }
             try {
+              notifyFinalReplyStart();
               await editMessageDiscord(
                 deliverChannelId,
                 previewMessageId,
@@ -636,6 +663,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               );
               finalizedViaPreviewMessage = true;
               replyReference.markSent();
+              observer?.onFinalReplyDelivered?.();
               return;
             } catch (err) {
               logVerbose(
@@ -658,6 +686,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
               !payload.isError
             ) {
               try {
+                notifyFinalReplyStart();
                 await editMessageDiscord(
                   deliverChannelId,
                   messageIdAfterStop,
@@ -666,6 +695,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
                 );
                 finalizedViaPreviewMessage = true;
                 replyReference.markSent();
+                observer?.onFinalReplyDelivered?.();
                 return;
               } catch (err) {
                 logVerbose(
@@ -685,6 +715,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }
 
         const replyToId = replyReference.use();
+        if (isFinal) {
+          notifyFinalReplyStart();
+        }
         await deliverDiscordReply({
           cfg,
           replies: [payload],
@@ -704,6 +737,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           mediaLocalRoots,
         });
         replyReference.markSent();
+        if (isFinal) {
+          observer?.onFinalReplyDelivered?.();
+        }
       },
       onError: (err, info) => {
         runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
