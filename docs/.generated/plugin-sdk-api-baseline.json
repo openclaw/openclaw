@@ -253,7 +253,7 @@
           "exportName": "ClawdbotConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
@@ -406,7 +406,7 @@
           "exportName": "OpenClawConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
@@ -3405,7 +3405,7 @@
           "exportName": "OpenClawConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
@@ -3911,7 +3911,7 @@
           "exportName": "OpenClawConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
@@ -4471,7 +4471,7 @@
           "exportName": "OpenClawConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
@@ -4902,7 +4902,7 @@
           "exportName": "OpenClawConfig",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 33,
             "path": "src/config/types.openclaw.ts"
           }
         },
