@@ -45,7 +45,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordAccount } from "../accounts.js";
-import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -63,8 +62,8 @@ import {
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
-import { attachEarlyGatewayErrorGuard } from "./gateway-error-guard.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
+import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -649,10 +648,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   }
   let lifecycleStarted = false;
-  let releaseEarlyGatewayErrorGuard = () => {};
+  let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
-  let earlyGatewayEmitter: ReturnType<typeof getDiscordGatewayEmitter> | undefined;
+  let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
@@ -798,11 +797,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
-    const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
-    releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
+    gatewaySupervisor = createDiscordGatewaySupervisor({
+      client,
+      isDisallowedIntentsError: isDiscordDisallowedIntentsError,
+      runtime,
+    });
 
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
-    earlyGatewayEmitter = getDiscordGatewayEmitter(lifecycleGateway);
+    earlyGatewayEmitter = gatewaySupervisor.emitter;
     onEarlyGatewayDebug = (msg: unknown) => {
       if (!isVerbose()) {
         return;
@@ -1019,8 +1021,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef,
       execApprovalsHandler,
       threadBindings,
-      pendingGatewayErrors: earlyGatewayErrorGuard.pendingErrors,
-      releaseEarlyGatewayErrorGuard,
+      gatewaySupervisor,
     });
   } finally {
     deactivateMessageHandler?.();
@@ -1029,7 +1030,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (onEarlyGatewayDebug) {
       earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
     }
-    releaseEarlyGatewayErrorGuard();
+    gatewaySupervisor?.dispose();
     if (!lifecycleStarted) {
       threadBindings.stop();
     }
