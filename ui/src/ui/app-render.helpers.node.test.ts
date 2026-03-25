@@ -115,8 +115,8 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("main")).toBe("Main Session");
   });
 
-  it("returns 'Subagent:' for subagent key without row", () => {
-    expect(resolveSessionDisplayName("agent:main:subagent:abc-123")).toBe("Subagent:");
+  it("returns 'Subagent: <short-id>' for subagent key without row", () => {
+    expect(resolveSessionDisplayName("agent:main:subagent:abc-123")).toBe("Subagent: abc-123");
   });
 
   it("returns 'Cron Job:' for cron key without row", () => {
@@ -267,6 +267,53 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+
+  // ── Auto-generated group displayName filtering ────
+
+  it("ignores auto-generated webchat group displayName for main session", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:main",
+        row({
+          key: "agent:main:main",
+          displayName: "webchat:g-agent-main-4f2146de-887b-4176-9abe-91140082959b",
+        }),
+      ),
+    ).toBe("Main Session");
+  });
+
+  it("ignores auto-generated group displayName for subagent and shows short ID", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+        row({
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          displayName: "webchat:g-agent-main-subagent-4f2146de-887b-4176-9abe-91140082959b",
+        }),
+      ),
+    ).toBe("Subagent: 4f2146de");
+  });
+
+  it("shows short ID for subagent with no label and no displayName", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+        row({ key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b" }),
+      ),
+    ).toBe("Subagent: 4f2146de");
+  });
+
+  it("still shows a non-auto-generated displayName for subagent", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+        row({
+          key: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",
+          displayName: "Task Runner",
+        }),
+      ),
+    ).toBe("Subagent: Task Runner");
   });
 });
 
