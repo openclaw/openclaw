@@ -1,4 +1,3 @@
-import { buildGoogleImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -7,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-models";
 import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { googleMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";

@@ -5,10 +5,12 @@ import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import {
   applyConfigEnvVars,
+  collectDurableServiceEnvVars,
   collectConfigRuntimeEnvVars,
   createConfigRuntimeEnv,
+  readStateDirDotEnvVars,
 } from "./env-vars.js";
-import { withEnvOverride, withTempHome } from "./test-helpers.js";
+import { withEnvOverride, withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config env vars", () => {
@@ -128,6 +130,69 @@ describe("config env vars", () => {
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
         expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
       });
+    });
+  });
+
+  it("reads key-value pairs from the state-dir .env file", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("BRAVE_API_KEY=BSA-test-key\nDISCORD_BOT_TOKEN=discord-tok\n", {
+        env: process.env,
+      });
+      const vars = readStateDirDotEnvVars(process.env);
+      expect(vars.BRAVE_API_KEY).toBe("BSA-test-key");
+      expect(vars.DISCORD_BOT_TOKEN).toBe("discord-tok");
+    });
+  });
+
+  it("returns empty record when the state-dir .env file is missing", async () => {
+    await withTempHome(async (_home) => {
+      expect(readStateDirDotEnvVars(process.env)).toEqual({});
+    });
+  });
+
+  it("drops dangerous and empty values from the state-dir .env file", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("NODE_OPTIONS=--require /tmp/evil.js\nEMPTY=\nVALID=ok\n", {
+        env: process.env,
+      });
+      const vars = readStateDirDotEnvVars(process.env);
+      expect(vars.NODE_OPTIONS).toBeUndefined();
+      expect(vars.EMPTY).toBeUndefined();
+      expect(vars.VALID).toBe("ok");
+    });
+  });
+
+  it("respects OPENCLAW_STATE_DIR when reading state-dir .env vars", async () => {
+    await withTempHome(async (_home) => {
+      const customStateDir = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "custom-state");
+      await writeStateDirDotEnv("CUSTOM_KEY=from-override\n", {
+        stateDir: customStateDir,
+      });
+      expect(
+        readStateDirDotEnvVars({
+          OPENCLAW_STATE_DIR: customStateDir,
+        }).CUSTOM_KEY,
+      ).toBe("from-override");
+    });
+  });
+
+  it("lets config service env vars override state-dir .env vars", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("MY_KEY=from-dotenv\n", {
+        env: process.env,
+      });
+      expect(
+        collectDurableServiceEnvVars({
+          env: process.env,
+          config: {
+            env: {
+              vars: {
+                MY_KEY: "from-config",
+              },
+            },
+          } as OpenClawConfig,
+        }).MY_KEY,
+      ).toBe("from-config");
     });
   });
 });

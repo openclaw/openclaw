@@ -1,42 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../../src/channels/plugins/setup-wizard.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import { createTestWizardPrompter } from "../../../test/helpers/extensions/setup-wizard.js";
+import {
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+} from "../../../test/helpers/extensions/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
-
-vi.mock("./zalo-js.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./zalo-js.js")>();
-  return {
-    ...actual,
-    checkZaloAuthenticated: vi.fn(async () => false),
-    logoutZaloProfile: vi.fn(async () => {}),
-    startZaloQrLogin: vi.fn(async () => ({
-      message: "qr pending",
-      qrDataUrl: undefined,
-    })),
-    waitForZaloQrLogin: vi.fn(async () => ({
-      connected: false,
-      message: "login pending",
-    })),
-    resolveZaloAllowFromEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-    ),
-    resolveZaloGroupsByEntries: vi.fn(async ({ entries }: { entries: string[] }) =>
-      entries.map((entry) => ({ input: entry, resolved: true, id: entry, note: undefined })),
-    ),
-  };
-});
-
+import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";
 
-const zalouserConfigureAdapter = buildChannelSetupWizardAdapterFromSetupWizard({
-  plugin: zalouserPlugin,
-  wizard: zalouserPlugin.setupWizard!,
-});
+const zalouserConfigure = createPluginSetupWizardConfigure(zalouserPlugin);
+
+async function runSetup(params: {
+  cfg?: OpenClawConfig;
+  prompter: ReturnType<typeof createTestWizardPrompter>;
+  options?: Record<string, unknown>;
+  forceAllowFrom?: boolean;
+}) {
+  return await runSetupWizardConfigure({
+    configure: zalouserConfigure,
+    cfg: params.cfg as OpenClawConfig | undefined,
+    prompter: params.prompter,
+    options: params.options,
+    forceAllowFrom: params.forceAllowFrom,
+  });
+}
 
 describe("zalouser setup wizard", () => {
   it("enables the account without forcing QR login", async () => {
-    const runtime = createRuntimeEnv();
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Login via QR code now?") {
@@ -49,15 +39,7 @@ describe("zalouser setup wizard", () => {
       }),
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
-      prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
-    });
+    const result = await runSetup({ prompter });
 
     expect(result.accountId).toBe("default");
     expect(result.cfg.channels?.zalouser?.enabled).toBe(true);
@@ -65,7 +47,6 @@ describe("zalouser setup wizard", () => {
   });
 
   it("prompts DM policy before group access in quickstart", async () => {
-    const runtime = createRuntimeEnv();
     const seen: string[] = [];
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async ({ message }: { message: string }) => {
@@ -93,14 +74,9 @@ describe("zalouser setup wizard", () => {
       ) as ReturnType<typeof createTestWizardPrompter>["select"],
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
+    const result = await runSetup({
       prompter,
       options: { quickstartDefaults: true },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");
@@ -115,7 +91,6 @@ describe("zalouser setup wizard", () => {
   });
 
   it("allows an empty quickstart DM allowlist with a warning", async () => {
-    const runtime = createRuntimeEnv();
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = createTestWizardPrompter({
       note,
@@ -148,14 +123,9 @@ describe("zalouser setup wizard", () => {
       }) as ReturnType<typeof createTestWizardPrompter>["text"],
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
+    const result = await runSetup({
       prompter,
       options: { quickstartDefaults: true },
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.accountId).toBe("default");
@@ -171,7 +141,6 @@ describe("zalouser setup wizard", () => {
   });
 
   it("allows an empty group allowlist with a warning", async () => {
-    const runtime = createRuntimeEnv();
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const prompter = createTestWizardPrompter({
       note,
@@ -204,15 +173,7 @@ describe("zalouser setup wizard", () => {
       }) as ReturnType<typeof createTestWizardPrompter>["text"],
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
-      prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
-    });
+    const result = await runSetup({ prompter });
 
     expect(result.cfg.channels?.zalouser?.groupPolicy).toBe("allowlist");
     expect(result.cfg.channels?.zalouser?.groups).toEqual({});
@@ -224,7 +185,6 @@ describe("zalouser setup wizard", () => {
   });
 
   it("preserves non-quickstart forceAllowFrom behavior", async () => {
-    const runtime = createRuntimeEnv();
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const seen: string[] = [];
     const prompter = createTestWizardPrompter({
@@ -248,15 +208,7 @@ describe("zalouser setup wizard", () => {
       }) as ReturnType<typeof createTestWizardPrompter>["text"],
     });
 
-    const result = await zalouserConfigureAdapter.configure({
-      cfg: {} as OpenClawConfig,
-      runtime,
-      prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: true,
-    });
+    const result = await runSetup({ prompter, forceAllowFrom: true });
 
     expect(result.cfg.channels?.zalouser?.dmPolicy).toBe("allowlist");
     expect(result.cfg.channels?.zalouser?.allowFrom).toEqual([]);
@@ -270,7 +222,6 @@ describe("zalouser setup wizard", () => {
   });
 
   it("allowlists the plugin when a plugin allowlist already exists", async () => {
-    const runtime = createRuntimeEnv();
     const prompter = createTestWizardPrompter({
       confirm: vi.fn(async ({ message }: { message: string }) => {
         if (message === "Login via QR code now?") {
@@ -283,18 +234,13 @@ describe("zalouser setup wizard", () => {
       }),
     });
 
-    const result = await zalouserConfigureAdapter.configure({
+    const result = await runSetup({
       cfg: {
         plugins: {
           allow: ["telegram"],
         },
       } as OpenClawConfig,
-      runtime,
       prompter,
-      options: {},
-      accountOverrides: {},
-      shouldPromptAccountIds: false,
-      forceAllowFrom: false,
     });
 
     expect(result.cfg.plugins?.entries?.zalouser?.enabled).toBe(true);

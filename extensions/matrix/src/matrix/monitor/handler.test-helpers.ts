@@ -24,6 +24,8 @@ type MatrixHandlerTestHarnessOptions = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   roomsConfig?: Record<string, MatrixRoomConfig>;
+  accountAllowBots?: boolean | "mentions";
+  configuredBotUserIds?: Set<string>;
   mentionRegexes?: MatrixMonitorHandlerParams["mentionRegexes"];
   groupPolicy?: "open" | "allowlist" | "disabled";
   replyToMode?: ReplyToMode;
@@ -35,6 +37,7 @@ type MatrixHandlerTestHarnessOptions = {
   startupMs?: number;
   startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
+  needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
@@ -49,16 +52,28 @@ type MatrixHandlerTestHarnessOptions = {
   resolveEnvelopeFormatOptions?: () => Record<string, never>;
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
   finalizeInboundContext?: (ctx: unknown) => unknown;
-  createReplyDispatcherWithTyping?: () => {
+  createReplyDispatcherWithTyping?: (params?: {
+    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+  }) => {
     dispatcher: Record<string, unknown>;
     replyOptions: Record<string, unknown>;
     markDispatchIdle: () => void;
+    markRunComplete: () => void;
   };
   resolveHumanDelayConfig?: () => undefined;
   dispatchReplyFromConfig?: () => Promise<{
     queuedFinal: boolean;
     counts: { final: number; block: number; tool: number };
   }>;
+  withReplyDispatcher?: <T>(params: {
+    dispatcher: {
+      markComplete?: () => void;
+      waitForIdle?: () => Promise<void>;
+    };
+    run: () => Promise<T>;
+    onSettled?: () => void | Promise<void>;
+  }) => Promise<T>;
+  inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
   enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
@@ -119,6 +134,9 @@ export function createMatrixHandlerTestHarness(
         routing: {
           resolveAgentRoute,
         },
+        mentions: {
+          buildMentionRegexes: () => options.mentionRegexes ?? [],
+        },
         session: {
           resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
           readSessionUpdatedAt: options.readSessionUpdatedAt ?? (() => undefined),
@@ -135,9 +153,32 @@ export function createMatrixHandlerTestHarness(
               dispatcher: {},
               replyOptions: {},
               markDispatchIdle: () => {},
+              markRunComplete: () => {},
             })),
           resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
           dispatchReplyFromConfig,
+          withReplyDispatcher:
+            options.withReplyDispatcher ??
+            (async <T>(params: {
+              dispatcher: {
+                markComplete?: () => void;
+                waitForIdle?: () => Promise<void>;
+              };
+              run: () => Promise<T>;
+              onSettled?: () => void | Promise<void>;
+            }) => {
+              const { dispatcher, run, onSettled } = params;
+              try {
+                return await run();
+              } finally {
+                dispatcher.markComplete?.();
+                try {
+                  await dispatcher.waitForIdle?.();
+                } finally {
+                  await onSettled?.();
+                }
+              }
+            }),
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
@@ -163,6 +204,8 @@ export function createMatrixHandlerTestHarness(
     allowFrom: options.allowFrom ?? [],
     groupAllowFrom: options.groupAllowFrom ?? [],
     roomsConfig: options.roomsConfig,
+    accountAllowBots: options.accountAllowBots,
+    configuredBotUserIds: options.configuredBotUserIds,
     mentionRegexes: options.mentionRegexes ?? [],
     groupPolicy: options.groupPolicy ?? "open",
     replyToMode: options.replyToMode ?? "off",
@@ -174,12 +217,13 @@ export function createMatrixHandlerTestHarness(
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
+    inboundDeduper: options.inboundDeduper,
     directTracker: {
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
-    needsRoomAliasesForConfig: false,
+    needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
   });
 
   return {
@@ -202,17 +246,31 @@ export function createMatrixTextMessageEvent(params: {
   relatesTo?: RoomMessageEventContent["m.relates_to"];
   mentions?: RoomMessageEventContent["m.mentions"];
 }): MatrixRawEvent {
-  return {
-    type: EventType.RoomMessage,
-    sender: params.sender ?? "@user:example.org",
-    event_id: params.eventId,
-    origin_server_ts: params.originServerTs ?? Date.now(),
+  return createMatrixRoomMessageEvent({
+    eventId: params.eventId,
+    sender: params.sender,
+    originServerTs: params.originServerTs,
     content: {
       msgtype: "m.text",
       body: params.body,
       ...(params.relatesTo ? { "m.relates_to": params.relatesTo } : {}),
       ...(params.mentions ? { "m.mentions": params.mentions } : {}),
     },
+  });
+}
+
+export function createMatrixRoomMessageEvent(params: {
+  eventId: string;
+  sender?: string;
+  originServerTs?: number;
+  content: RoomMessageEventContent;
+}): MatrixRawEvent {
+  return {
+    type: EventType.RoomMessage,
+    sender: params.sender ?? "@user:example.org",
+    event_id: params.eventId,
+    origin_server_ts: params.originServerTs ?? Date.now(),
+    content: params.content,
   } as MatrixRawEvent;
 }
 

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
@@ -71,5 +72,116 @@ describe("msteams conversation store (fs)", () => {
       "19:legacy@thread.tacv2",
       "19:new@thread.tacv2",
     ]);
+  });
+
+  it("stores and retrieves timezone from conversation reference", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    const ref: StoredConversationReference = {
+      conversation: { id: "19:tz-test@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1", aadObjectId: "aad1" },
+      timezone: "America/Los_Angeles",
+    };
+
+    await store.upsert("19:tz-test@thread.tacv2", ref);
+
+    const retrieved = await store.get("19:tz-test@thread.tacv2");
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.timezone).toBe("America/Los_Angeles");
+  });
+
+  it("preserves existing timezone when upsert omits timezone", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreFs({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      ttlMs: 60_000,
+    });
+
+    await store.upsert("19:tz-keep@thread.tacv2", {
+      conversation: { id: "19:tz-keep@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      timezone: "Europe/London",
+    });
+
+    // Second upsert without timezone field
+    await store.upsert("19:tz-keep@thread.tacv2", {
+      conversation: { id: "19:tz-keep@thread.tacv2" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+    });
+
+    const retrieved = await store.get("19:tz-keep@thread.tacv2");
+    expect(retrieved).not.toBeNull();
+    expect(retrieved!.timezone).toBe("Europe/London");
+  });
+});
+
+describe("msteams conversation store (memory)", () => {
+  it("upserts, lists, removes, and resolves users by both AAD and Bot Framework ids", async () => {
+    const store = createMSTeamsConversationStoreMemory([
+      {
+        conversationId: "conv-a",
+        reference: {
+          conversation: { id: "conv-a" },
+          user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+        },
+      },
+    ]);
+
+    await store.upsert("conv-b", {
+      conversation: { id: "conv-b" },
+      user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
+    });
+
+    await expect(store.get("conv-a")).resolves.toEqual({
+      conversation: { id: "conv-a" },
+      user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+    });
+
+    await expect(store.list()).resolves.toEqual([
+      {
+        conversationId: "conv-a",
+        reference: {
+          conversation: { id: "conv-a" },
+          user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+        },
+      },
+      {
+        conversationId: "conv-b",
+        reference: {
+          conversation: { id: "conv-b" },
+          user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
+        },
+      },
+    ]);
+
+    await expect(store.findByUserId("  aad-b  ")).resolves.toEqual({
+      conversationId: "conv-b",
+      reference: {
+        conversation: { id: "conv-b" },
+        user: { id: "user-b", aadObjectId: "aad-b", name: "Bob" },
+      },
+    });
+    await expect(store.findByUserId("user-a")).resolves.toEqual({
+      conversationId: "conv-a",
+      reference: {
+        conversation: { id: "conv-a" },
+        user: { id: "user-a", aadObjectId: "aad-a", name: "Alice" },
+      },
+    });
+    await expect(store.findByUserId("   ")).resolves.toBeNull();
+
+    await expect(store.remove("conv-a")).resolves.toBe(true);
+    await expect(store.get("conv-a")).resolves.toBeNull();
+    await expect(store.remove("missing")).resolves.toBe(false);
   });
 });
