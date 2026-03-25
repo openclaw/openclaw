@@ -517,9 +517,11 @@ describe("plugin sdk alias helpers", () => {
     // This covers installations where argv1 does not resolve to the openclaw root
     // (e.g. single-binary distributions or custom process launchers).
     // Use openclaw.mjs which is created by createPluginSdkAliasFixture (bin+marker mode).
+    // Use fixture.root as cwd so process.cwd() fallback also resolves to fixture, not the
+    // real openclaw repo root in the test runner environment.
     const loaderModuleUrl = pathToFileURL(path.join(fixture.root, "openclaw.mjs")).href;
 
-    const aliases = withCwd(externalPluginRoot, () =>
+    const aliases = withCwd(fixture.root, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
           externalPluginEntry,
