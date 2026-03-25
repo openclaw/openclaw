@@ -25,6 +25,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { resolveWhatsAppRetryConfig, withWhatsAppSendRetry } from "./outbound-retry.js";
 import { resolveWhatsAppReactionLevel } from "./reaction-level.js";
 import {
   createActionGate,
@@ -124,9 +125,19 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     },
     outbound: {
       ...createWhatsAppOutboundBase({
-        chunker: chunkText,
-        sendMessageWhatsApp,
-        sendPollWhatsApp,
+        chunker: (text, limit) => getWhatsAppRuntime().channel.text.chunkText(text, limit),
+        sendMessageWhatsApp: async (to, text, opts) =>
+          withWhatsAppSendRetry(
+            () => getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp(to, text, opts),
+            "sendMessage",
+            resolveWhatsAppRetryConfig(opts.cfg, opts.accountId),
+          ),
+        sendPollWhatsApp: async (to, poll, opts) =>
+          withWhatsAppSendRetry(
+            () => getWhatsAppRuntime().channel.whatsapp.sendPollWhatsApp(to, poll, opts),
+            "sendPoll",
+            resolveWhatsAppRetryConfig(opts.cfg, opts.accountId),
+          ),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
