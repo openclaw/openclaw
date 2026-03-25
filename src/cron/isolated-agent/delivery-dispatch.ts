@@ -287,26 +287,32 @@ async function persistCronAwarenessMirror(params: {
     return;
   }
 
-  const target = resolveCronAwarenessMainTarget({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  const appended = await appendAssistantMessageToSessionTranscript({
-    agentId: target.storeAgentId,
-    storePath: resolveStorePath(params.cfg.session?.store, {
+  try {
+    const target = resolveCronAwarenessMainTarget({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    });
+    const appended = await appendAssistantMessageToSessionTranscript({
       agentId: target.storeAgentId,
-    }),
-    sessionKey: target.sessionKey,
-    text,
-    mediaUrls,
-    idempotencyKey: buildCronAwarenessIdempotencyKey({
-      deliveryIdempotencyKey: params.deliveryIdempotencyKey,
+      storePath: resolveStorePath(params.cfg.session?.store, {
+        agentId: target.storeAgentId,
+      }),
       sessionKey: target.sessionKey,
-    }),
-  });
-  if (!appended.ok) {
+      text,
+      mediaUrls,
+      idempotencyKey: buildCronAwarenessIdempotencyKey({
+        deliveryIdempotencyKey: params.deliveryIdempotencyKey,
+        sessionKey: target.sessionKey,
+      }),
+    });
+    if (!appended.ok) {
+      logWarn(
+        `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${appended.reason}`,
+      );
+    }
+  } catch (err) {
     logWarn(
-      `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${appended.reason}`,
+      `[cron:${params.jobId}] failed to mirror delivered output into the main transcript: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }

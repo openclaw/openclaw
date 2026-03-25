@@ -61,6 +61,7 @@ vi.mock("./subagent-followup.js", () => ({
 
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
@@ -268,6 +269,20 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("keeps the cron run successful when awareness mirroring throws after delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(appendAssistantMessageToSessionTranscript).mockRejectedValue(new Error("disk full"));
+
+    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 
   it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
