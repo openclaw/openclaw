@@ -1211,7 +1211,7 @@ export class AcpSessionManager {
           code: (err as AcpRuntimeError).code ?? "UNKNOWN",
           message: (err as Error).message ?? "Unknown error",
         };
-        throw err;
+        // Don't rethrow - the inner try-catch handles error propagation
       } finally {
         // Audit log (both success and failure)
         await this.auditLogger.log({
