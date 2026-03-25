@@ -5,10 +5,10 @@ import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/
  *
  * These functions analyze config-based security properties without I/O.
  */
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
-import { resolveEffectiveSandboxToolPolicyForAgent } from "../agents/tool-policy-sandbox.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -318,10 +318,7 @@ function resolveToolPolicies(params: {
   }
 
   if (params.sandboxMode === "all") {
-    const sandboxPolicy = resolveEffectiveSandboxToolPolicyForAgent(
-      params.cfg,
-      params.agentId ?? undefined,
-    );
+    const sandboxPolicy = resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined);
     policies.push(sandboxPolicy);
   }
 

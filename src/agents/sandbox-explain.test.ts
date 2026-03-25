@@ -112,6 +112,6 @@ describe("sandbox explain helpers", () => {
     expect(msg).toContain("mode=non-main");
     expect(msg).toContain("tools.sandbox.tools.deny");
     expect(msg).toContain("agents.defaults.sandbox.mode=off");
-    expect(msg).toContain("Use main session key (direct): agent:main:main");
+    expect(msg).toContain("Use the agent main session instead of a non-main session.");
   });
 });
