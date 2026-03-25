@@ -108,9 +108,10 @@ describe("deliverReplies identity passthrough", () => {
     };
     getGlobalHookRunnerMock.mockReturnValue(hookRunner);
 
-    await deliverReplies(baseParams({ replyThreadTs: "1111.2222" }));
+    const deliveredCount = await deliverReplies(baseParams({ replyThreadTs: "1111.2222" }));
 
     expect(sendMock).not.toHaveBeenCalled();
+    expect(deliveredCount).toBe(0);
   });
 
   it("passes bare Slack channel ids to hooks when the target has a channel prefix", async () => {
@@ -136,5 +137,36 @@ describe("deliverReplies identity passthrough", () => {
       },
       { channelId: "slack", accountId: undefined },
     );
+  });
+
+  it("returns zero when the payload resolves to an exact silent token", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    const deliveredCount = await deliverReplies(
+      baseParams({
+        replies: [{ text: "NO_REPLY" }],
+      }),
+    );
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(deliveredCount).toBe(0);
+  });
+
+  it("blanks silent token captions for media replies", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    const deliveredCount = await deliverReplies(
+      baseParams({
+        replies: [{ text: "NO_REPLY", mediaUrls: ["https://example.com/report.png"] }],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    expect(sendMock).toHaveBeenCalledWith(
+      "C123",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/report.png" }),
+    );
+    expect(deliveredCount).toBe(1);
   });
 });

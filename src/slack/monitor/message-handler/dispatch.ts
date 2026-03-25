@@ -1,7 +1,11 @@
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
-import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
+import {
+  createReplyDispatcherWithTyping,
+  type ReplyDispatchKind,
+} from "../../../auto-reply/reply/reply-dispatcher.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../../../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../../../channels/logging.js";
@@ -14,7 +18,7 @@ import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
-import { createSlackDraftStream } from "../../draft-stream.js";
+import { createSlackDraftStream, type SlackDraftStream } from "../../draft-stream.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import { sendMessageSlack } from "../../send.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -28,14 +32,122 @@ import { appendSlackStream, startSlackStream, stopSlackStream } from "../../stre
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
-import {
-  enforceSlackDirectEitherOrAnswer,
-  enforceSlackDisprovedTheoryRetraction,
-} from "./final-answer-guard.js";
+import { applySlackFinalReplyGuards } from "./final-answer-guard.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+}
+
+export function isSlackSuppressedReplyPayload(payload: ReplyPayload): boolean {
+  const trimmed = payload.text?.trim();
+  // This Slack path only renders text/media. Flags like isError/channelData do
+  // not create a user-visible send on their own, so blank or silent no-media
+  // payloads stay intentionally suppressible here.
+  return !hasMedia(payload) && (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN));
+}
+
+export function shouldApplySlackFinalReplyGuards(kind: ReplyDispatchKind): boolean {
+  // Tool/block updates still flow through the shared dispatcher for other
+  // channels/observers. Only the final Slack delivery should hit the final-only
+  // guard chain so intermediate progress remains intact elsewhere.
+  return kind === "final";
+}
+
+export function didSlackDispatchDeliverAnyReply(params: {
+  deliveredReplyCount: number;
+  queuedFinal: boolean;
+  counts: { block?: number; final?: number };
+}): boolean {
+  // queuedFinal/counts reflect dispatcher intent, not proof that Slack accepted
+  // a message. Suppressed finals can queue successfully while intentionally
+  // delivering nothing, so only actual sends/edits/stream starts count here.
+  return params.deliveredReplyCount > 0;
+}
+
+export function formatSlackSuppressedReplyPreview(text?: string): string {
+  return (text ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+}
+
+export function requireSlackDispatchResult<T>(result: T | undefined, error: unknown): T {
+  if (error !== undefined) {
+    throw error;
+  }
+  if (result === undefined) {
+    throw new Error("Slack dispatch finished without a result.");
+  }
+  return result;
+}
+
+export function applySlackFinalReplyGuardsSafely(
+  params: Parameters<typeof applySlackFinalReplyGuards>[0] & {
+    onError?: (err: unknown) => void;
+  },
+): ReplyPayload {
+  try {
+    return applySlackFinalReplyGuards(params);
+  } catch (err) {
+    let textLength = 0;
+    let hasMedia = false;
+    let hasChannelData = false;
+    let isError = false;
+    try {
+      textLength = typeof params.payload.text === "string" ? params.payload.text.length : 0;
+    } catch {}
+    try {
+      hasMedia = Boolean(params.payload.mediaUrl || (params.payload.mediaUrls?.length ?? 0) > 0);
+    } catch {}
+    try {
+      hasChannelData = params.payload.channelData != null;
+    } catch {}
+    try {
+      isError = params.payload.isError === true;
+    } catch {}
+    const payloadSummary = [
+      `textLength=${textLength}`,
+      `hasMedia=${hasMedia}`,
+      `hasChannelData=${hasChannelData}`,
+      `isError=${isError}`,
+    ].join(",");
+    const causeMessage =
+      err instanceof Error
+        ? err.message
+        : typeof err === "string"
+          ? err
+          : err == null
+            ? "unknown guard error"
+            : "non-Error guard throw";
+    const cause = err instanceof Error ? err : new Error(causeMessage);
+    params.onError?.(
+      new Error(
+        `Final reply guard failed (incidentRootOnly=${params.incidentRootOnly === true}, isThreadReply=${params.isThreadReply === true}, ${payloadSummary}): ${causeMessage}`,
+        { cause },
+      ),
+    );
+    return params.payload;
+  }
+}
+
+export async function settleSlackDispatchAfterRun(params: {
+  draftStream: Pick<SlackDraftStream, "stop">;
+  markDispatchIdle: () => void;
+  streamSession: SlackStreamSession | null;
+  stopStream?: typeof stopSlackStream;
+  onStopStreamError?: (err: unknown) => void;
+  onRemoveAckReaction?: () => void;
+}): Promise<void> {
+  params.draftStream.stop();
+  params.markDispatchIdle();
+  params.onRemoveAckReaction?.();
+  const finalStream = params.streamSession;
+  if (!finalStream || finalStream.stopped) {
+    return;
+  }
+  try {
+    await (params.stopStream ?? stopSlackStream)({ session: finalStream });
+  } catch (err) {
+    params.onStopStreamError?.(err);
+  }
 }
 
 const REASONING_PROGRESS_MAX_CHARS = 1200;
@@ -372,7 +484,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
-    await deliverReplies({
+    const deliveredCount = await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
       token: ctx.botToken,
@@ -384,11 +496,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
+    if (deliveredCount === 0) {
+      return;
+    }
     // Record the thread ts only after confirmed delivery success.
     if (replyThreadTs) {
       usedReplyThreadTs ??= replyThreadTs;
     }
     replyPlan.markSent();
+    deliveredReplyCount += deliveredCount;
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
@@ -422,6 +538,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         });
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
+        deliveredReplyCount += 1;
         return;
       }
 
@@ -443,20 +560,32 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (incomingPayload, info) => {
-      const payload =
-        info.kind === "final"
-          ? enforceSlackDisprovedTheoryRetraction({
-              inboundText:
-                message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
-              incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
-              isThreadReply,
-              payload: enforceSlackDirectEitherOrAnswer({
-                questionText:
-                  message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody,
-                payload: incomingPayload,
-              }),
-            })
-          : incomingPayload;
+      const inboundText =
+        message.text ?? prepared.ctxPayload.CommandBody ?? prepared.ctxPayload.RawBody;
+      const shouldGuardFinalReply = shouldApplySlackFinalReplyGuards(info.kind);
+      const payload = shouldGuardFinalReply
+        ? applySlackFinalReplyGuardsSafely({
+            questionText: inboundText,
+            inboundText,
+            incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
+            isThreadReply,
+            payload: incomingPayload,
+            onError: (err) => {
+              runtime.error?.(danger(`slack-guard: final reply guard failed: ${String(err)}`));
+            },
+          })
+        : incomingPayload;
+      if (shouldGuardFinalReply && isSlackSuppressedReplyPayload(payload)) {
+        if (shouldLogVerbose()) {
+          const suppressedPreview = formatSlackSuppressedReplyPreview(incomingPayload.text);
+          logVerbose(
+            `slack: suppressed progress-only final reply${suppressedPreview ? ` (${suppressedPreview})` : ""}`,
+          );
+        }
+        // This only skips the Slack send. Outer post-dispatch cleanup still
+        // runs after dispatchInboundMessage resolves and sees no delivery.
+        return;
+      }
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
@@ -485,6 +614,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             ts: draftMessageId,
             text: normalizeSlackOutboundText(finalText.trim()),
           });
+          deliveredReplyCount += 1;
           return;
         } catch (err) {
           logVerbose(
@@ -538,6 +668,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let appendSourceText = "";
   let statusUpdateCount = 0;
   let lastReasoningProgressText = "";
+  let deliveredReplyCount = 0;
   const updateDraftFromPartial = (text?: string) => {
     const trimmed = text?.trimEnd();
     if (!trimmed) {
@@ -609,57 +740,87 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }
         };
 
-  const { queuedFinal, counts } = await dispatchInboundMessage({
-    ctx: prepared.ctxPayload,
-    cfg,
-    dispatcher,
-    replyOptions: {
-      ...replyOptions,
-      skillFilter: prepared.channelConfig?.skills,
-      finalOnlyReplies,
-      typingTtlMs: disableTypingTtl ? 0 : undefined,
-      hasRepliedRef,
-      disableBlockStreaming: useStreaming
-        ? true
-        : typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
-      onModelSelected,
-      onPartialReply: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
+  let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | undefined;
+  let dispatchError: unknown;
+  try {
+    dispatchResult = await dispatchInboundMessage({
+      ctx: prepared.ctxPayload,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        ...replyOptions,
+        skillFilter: prepared.channelConfig?.skills,
+        finalOnlyReplies,
+        typingTtlMs: disableTypingTtl ? 0 : undefined,
+        hasRepliedRef,
+        disableBlockStreaming: useStreaming
+          ? true
+          : typeof account.config.blockStreaming === "boolean"
+            ? !account.config.blockStreaming
+            : undefined,
+        onModelSelected,
+        onPartialReply: useStreaming
           ? undefined
-          : async (payload) => {
-              updateDraftFromPartial(payload.text);
-            },
-      onReasoningStream: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
+          : !previewStreamingEnabled
+            ? undefined
+            : async (payload) => {
+                updateDraftFromPartial(payload.text);
+              },
+        onReasoningStream: useStreaming
           ? undefined
-          : async (payload) => {
-              updateDraftFromReasoning(payload.text);
-            },
-      onAssistantMessageStart: onDraftBoundary,
-      onReasoningEnd: onDraftBoundary,
-    },
-  });
-  await draftStream.flush();
-  draftStream.stop();
-  markDispatchIdle();
-
-  // -----------------------------------------------------------------------
-  // Finalize the stream if one was started
-  // -----------------------------------------------------------------------
-  const finalStream = streamSession as SlackStreamSession | null;
-  if (finalStream && !finalStream.stopped) {
-    try {
-      await stopSlackStream({ session: finalStream });
-    } catch (err) {
-      runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
-    }
+          : !previewStreamingEnabled
+            ? undefined
+            : async (payload) => {
+                updateDraftFromReasoning(payload.text);
+              },
+        onAssistantMessageStart: onDraftBoundary,
+        onReasoningEnd: onDraftBoundary,
+      },
+    });
+    await draftStream.flush();
+  } catch (err) {
+    dispatchError = err;
+  } finally {
+    await settleSlackDispatchAfterRun({
+      draftStream,
+      markDispatchIdle,
+      streamSession,
+      onRemoveAckReaction: () =>
+        removeAckReactionAfterReply({
+          removeAfterReply: ctx.removeAckAfterReply,
+          ackReactionPromise: prepared.ackReactionPromise,
+          ackReactionValue: prepared.ackReactionValue,
+          remove: () =>
+            removeSlackReaction(
+              message.channel,
+              prepared.ackReactionMessageTs ?? "",
+              prepared.ackReactionValue,
+              {
+                token: ctx.botToken,
+                client: ctx.app.client,
+              },
+            ),
+          onError: (err) => {
+            logAckFailure({
+              log: logVerbose,
+              channel: "slack",
+              target: `${message.channel}/${message.ts}`,
+              error: err,
+            });
+          },
+        }),
+      onStopStreamError: (err) => {
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
+      },
+    });
   }
+  const { queuedFinal, counts } = requireSlackDispatchResult(dispatchResult, dispatchError);
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const anyReplyDelivered = didSlackDispatchDeliverAnyReply({
+    deliveredReplyCount,
+    queuedFinal,
+    counts,
+  });
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
@@ -682,35 +843,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (shouldLogVerbose()) {
-    const finalCount = counts.final;
+    const finalCount = deliveredReplyCount;
     logVerbose(
-      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
+      `slack: delivered ${finalCount} message${finalCount === 1 ? "" : "s"} to ${prepared.replyTarget}`,
     );
   }
-
-  removeAckReactionAfterReply({
-    removeAfterReply: ctx.removeAckAfterReply,
-    ackReactionPromise: prepared.ackReactionPromise,
-    ackReactionValue: prepared.ackReactionValue,
-    remove: () =>
-      removeSlackReaction(
-        message.channel,
-        prepared.ackReactionMessageTs ?? "",
-        prepared.ackReactionValue,
-        {
-          token: ctx.botToken,
-          client: ctx.app.client,
-        },
-      ),
-    onError: (err) => {
-      logAckFailure({
-        log: logVerbose,
-        channel: "slack",
-        target: `${message.channel}/${message.ts}`,
-        error: err,
-      });
-    },
-  });
 
   if (prepared.isRoomish) {
     clearHistoryEntriesIfEnabled({

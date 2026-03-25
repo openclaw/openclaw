@@ -374,11 +374,19 @@ bool_from_env() {
 
 monitoring_prompt="$(build_monitoring_incident_prompt)"
 monitoring_prompt_marker="$(monitoring_incident_prompt_marker)"
+progress_only_reply_rule="$(build_progress_only_reply_rule)"
+progress_only_reply_rule_marker="$(progress_only_reply_rule_marker)"
+progress_only_reply_any_slack_rule="$(build_progress_only_reply_rule ' in any Slack context.')"
+progress_only_reply_any_slack_rule_marker="$(progress_only_reply_any_slack_rule_marker)"
 
 jq \
   --arg heartbeat_target "${OPENCLAW_HEARTBEAT_ROUTE_TARGET:-}" \
   --arg monitoring_prompt "$monitoring_prompt" \
   --arg monitoring_prompt_marker "$monitoring_prompt_marker" \
+  --arg progress_only_reply_rule "$progress_only_reply_rule" \
+  --arg progress_only_reply_rule_marker "$progress_only_reply_rule_marker" \
+  --arg progress_only_reply_any_slack_rule "$progress_only_reply_any_slack_rule" \
+  --arg progress_only_reply_any_slack_rule_marker "$progress_only_reply_any_slack_rule_marker" \
   --arg graph_dir "${OPENCLAW_SRE_GRAPH_DIR:-/home/node/.openclaw/state/sre-graph}" \
   --arg dossiers_dir "${OPENCLAW_SRE_DOSSIERS_DIR:-/home/node/.openclaw/state/sre-dossiers}" \
   --arg index_dir "${OPENCLAW_SRE_INDEX_DIR:-/home/node/.openclaw/state/sre-index}" \
@@ -409,6 +417,13 @@ jq \
             . + [$item]
           end
         );
+    def replace_prompt_markers:
+      if type != "string" then
+        .
+      else
+        gsub($progress_only_reply_rule_marker; $progress_only_reply_rule)
+        | gsub($progress_only_reply_any_slack_rule_marker; $progress_only_reply_any_slack_rule)
+      end;
     .tools = (.tools // {})
     | .tools.exec = (
         if ((.tools.exec // null) | type) == "object" then
@@ -465,6 +480,16 @@ jq \
                     | if type == "array" then . else [] end
                   )
                 )
+            else
+              .
+            end
+          )
+      )
+    | .channels.slack.channels = (
+        (.channels.slack.channels // {})
+        | with_entries(
+            if ((.value.systemPrompt // null) | type) == "string" then
+              .value.systemPrompt |= replace_prompt_markers
             else
               .
             end

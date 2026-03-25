@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
+  applySlackFinalReplyGuardsSafely,
+  didSlackDispatchDeliverAnyReply,
+  formatSlackSuppressedReplyPreview,
   isSlackStreamingEnabled,
+  isSlackSuppressedReplyPayload,
+  requireSlackDispatchResult,
   resolveSlackReplyStreamingPolicy,
   resolveSlackStreamingThreadHint,
+  settleSlackDispatchAfterRun,
+  shouldApplySlackFinalReplyGuards,
   shouldForceSlackDraftBoundary,
 } from "./dispatch.js";
 
@@ -124,5 +132,122 @@ describe("slack draft boundary rotation", () => {
         draftMode: "append",
       }),
     ).toBe(true);
+  });
+});
+
+describe("slack suppressed final delivery accounting", () => {
+  it("always settles draft, typing, ack cleanup, and stream stop after dispatch", async () => {
+    const draftStream = { stop: vi.fn() };
+    const markDispatchIdle = vi.fn();
+    const onRemoveAckReaction = vi.fn();
+    const stopStream = vi.fn().mockResolvedValue(undefined);
+    const streamSession = { stopped: false } as never;
+
+    await settleSlackDispatchAfterRun({
+      draftStream,
+      markDispatchIdle,
+      streamSession,
+      stopStream,
+      onRemoveAckReaction,
+    });
+
+    expect(draftStream.stop).toHaveBeenCalledOnce();
+    expect(markDispatchIdle).toHaveBeenCalledOnce();
+    expect(onRemoveAckReaction).toHaveBeenCalledOnce();
+    expect(stopStream).toHaveBeenCalledWith({ session: streamSession });
+  });
+
+  it("still settles local cleanup when stream stop fails", async () => {
+    const draftStream = { stop: vi.fn() };
+    const markDispatchIdle = vi.fn();
+    const onRemoveAckReaction = vi.fn();
+    const onStopStreamError = vi.fn();
+    const stopStream = vi.fn().mockRejectedValue(new Error("stop failed"));
+    const streamSession = { stopped: false } as never;
+
+    await settleSlackDispatchAfterRun({
+      draftStream,
+      markDispatchIdle,
+      streamSession,
+      stopStream,
+      onRemoveAckReaction,
+      onStopStreamError,
+    });
+
+    expect(draftStream.stop).toHaveBeenCalledOnce();
+    expect(markDispatchIdle).toHaveBeenCalledOnce();
+    expect(onRemoveAckReaction).toHaveBeenCalledOnce();
+    expect(onStopStreamError).toHaveBeenCalledOnce();
+  });
+
+  it("applies final-reply guards only to final deliveries", () => {
+    expect(shouldApplySlackFinalReplyGuards("tool")).toBe(false);
+    expect(shouldApplySlackFinalReplyGuards("block")).toBe(false);
+    expect(shouldApplySlackFinalReplyGuards("final")).toBe(true);
+  });
+
+  it("treats empty non-media finals as suppressed", () => {
+    expect(isSlackSuppressedReplyPayload({ text: "" })).toBe(true);
+    expect(isSlackSuppressedReplyPayload({ text: "   " })).toBe(true);
+    expect(isSlackSuppressedReplyPayload({ text: SILENT_REPLY_TOKEN })).toBe(true);
+    expect(isSlackSuppressedReplyPayload({ text: "", isError: true })).toBe(true);
+    expect(isSlackSuppressedReplyPayload({ text: "", channelData: { kind: "noop" } })).toBe(true);
+    expect(isSlackSuppressedReplyPayload({ text: "PR #123 is green." })).toBe(false);
+    expect(isSlackSuppressedReplyPayload({ mediaUrl: "https://example.com/file.png" })).toBe(false);
+  });
+
+  it("uses actual Slack delivery instead of queued final counts", () => {
+    expect(
+      didSlackDispatchDeliverAnyReply({
+        deliveredReplyCount: 0,
+        queuedFinal: true,
+        counts: { final: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      didSlackDispatchDeliverAnyReply({
+        deliveredReplyCount: 1,
+        queuedFinal: true,
+        counts: { final: 1 },
+      }),
+    ).toBe(true);
+  });
+
+  it("builds suppressed previews without crashing on empty text", () => {
+    expect(formatSlackSuppressedReplyPreview(undefined)).toBe("");
+    expect(formatSlackSuppressedReplyPreview("  hello\nthere  ")).toBe("hello there");
+  });
+
+  it("rethrows the original dispatch error after cleanup", () => {
+    const err = new Error("dispatch failed");
+    expect(() => requireSlackDispatchResult(undefined, err)).toThrow(err);
+    expect(requireSlackDispatchResult({ queuedFinal: false }, undefined)).toEqual({
+      queuedFinal: false,
+    });
+  });
+
+  it("falls back to the original payload when final guard evaluation throws", () => {
+    const payload = {} as { text?: string };
+    Object.defineProperty(payload, "text", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    const onError = vi.fn();
+
+    expect(
+      applySlackFinalReplyGuardsSafely({
+        questionText: "question",
+        inboundText: "question",
+        incidentRootOnly: true,
+        isThreadReply: true,
+        payload,
+        onError,
+      }),
+    ).toBe(payload);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(String(onError.mock.calls[0]?.[0])).toContain("incidentRootOnly=true");
+    expect(String(onError.mock.calls[0]?.[0])).toContain("textLength=0");
+    expect(String(onError.mock.calls[0]?.[0])).toContain("boom");
   });
 });

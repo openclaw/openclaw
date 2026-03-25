@@ -5,6 +5,27 @@ monitoring_incident_prompt_marker() {
   printf '%s\n' '__START_GATEWAY_MONITORING_PROMPT__'
 }
 
+# Seeded JSON keeps these marker tokens literally. Gateway startup/test jq
+# pipelines replace them with the shared rule text so channel prompts stay
+# reviewable without duplicating the full sentence in every config entry.
+progress_only_reply_rule_marker() {
+  printf '%s\n' '__PROGRESS_ONLY_REPLY_RULE__'
+}
+
+progress_only_reply_any_slack_rule_marker() {
+  printf '%s\n' '__PROGRESS_ONLY_REPLY_ANY_SLACK_RULE__'
+}
+
+build_progress_only_reply_rule() {
+  local scope_suffix="${1:-}"
+  # Reuse the same banned-phrase sentence across seeded prompts. Pass a
+  # suffix like " in any Slack context." when the caller needs a wider scope
+  # than the default thread-local wording.
+  cat <<EOF
+- Never send progress-only replies (\`On it\`, \`Found it\`, \`Let me verify\`, \`Checking...\`, \`Now let me...\`, \`I need to...\`, \`Good —...\`, \`The script...\`, \`Let me check...\`, \`Let me compose...\`, \`There are stale changes...\`, \`The commit was created...\`, \`PR is created. Let me...\`, \`Now I see some issues...\`, \`Honest answer:...\`)${scope_suffix} Wait for the final reply.
+EOF
+}
+
 build_monitoring_incident_prompt() {
   local skill_dir
   skill_dir="${OPENCLAW_SRE_SKILL_DIR:-/home/node/.openclaw/skills/morpho-sre}"

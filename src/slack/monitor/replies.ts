@@ -61,6 +61,7 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all";
   identity?: SlackSendIdentity;
 }) {
+  let deliveredCount = 0;
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
@@ -82,10 +83,11 @@ export async function deliverReplies(params: {
       continue;
     }
     const text = hookResult.text;
+    const trimmed = text.trim();
+    const isSilentText = isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
 
     if (mediaList.length === 0) {
-      const trimmed = text.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+      if (!trimmed || isSilentText) {
         continue;
       }
       await sendMessageSlack(params.target, trimmed, {
@@ -95,10 +97,11 @@ export async function deliverReplies(params: {
         mediaLocalRoots: params.mediaLocalRoots,
         ...(params.identity ? { identity: params.identity } : {}),
       });
+      deliveredCount += 1;
     } else {
       let first = true;
       for (const mediaUrl of mediaList) {
-        const caption = first ? text : "";
+        const caption = first && !isSilentText ? text : "";
         first = false;
         await sendMessageSlack(params.target, caption, {
           token: params.token,
@@ -108,10 +111,12 @@ export async function deliverReplies(params: {
           mediaLocalRoots: params.mediaLocalRoots,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        deliveredCount += 1;
       }
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);
   }
+  return deliveredCount;
 }
 
 export type SlackRespondFn = (payload: {

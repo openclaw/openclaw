@@ -27,11 +27,11 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("Never send progress-only replies")
+  .channels.slack.channels["#bug-report"].systemPrompt | contains("__PROGRESS_ONLY_REPLY_ANY_SLACK_RULE__")
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  .channels.slack.channels["#bug-report"].systemPrompt | contains("in any Slack context. Wait for the final reply")
+  .channels.slack.channels["#sdks"].systemPrompt | contains("__PROGRESS_ONLY_REPLY_RULE__")
 ' "$CONFIG" >/dev/null
 
 jq -e '
@@ -97,6 +97,8 @@ rg -Fq '["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime
 rg -Fq 'prepend_unique($entry; $existing)' "$START_GATEWAY"
 rg -Fq '. "${SCRIPT_DIR}/lib-prompts.sh"' "$START_GATEWAY"
 rg -Fq '__START_GATEWAY_MONITORING_PROMPT__' "$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
+rg -Fq '__PROGRESS_ONLY_REPLY_RULE__' "$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
+rg -Fq '__PROGRESS_ONLY_REPLY_ANY_SLACK_RULE__' "$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
 rg -q '\.channels\.slack\.channels\["#staging-infra-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 rg -q '\.channels\.slack\.channels\["#public-api-monitoring"\]\.systemPrompt =' "$START_GATEWAY"
 test -f "$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
@@ -147,14 +149,39 @@ jq -e '.agents.list[] | select(.id=="main") | (.tools.exec.pathPrepend | not)' "
 
 # Integration test: monitoring prompt resolution via jq pipeline
 PROMPT_LIB="$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
-TEST_PROMPT="$(OPENCLAW_SRE_SKILL_DIR="/test/skills" bash -lc 'source "$1"; build_monitoring_incident_prompt' _ "$PROMPT_LIB")"
-TEST_MARKER="$(bash -lc 'source "$1"; monitoring_incident_prompt_marker' _ "$PROMPT_LIB")"
+# shellcheck source=../../scripts/sre-runtime/lib-prompts.sh
+. "$PROMPT_LIB"
+TEST_PROMPT="$(OPENCLAW_SRE_SKILL_DIR="/test/skills" build_monitoring_incident_prompt)"
+TEST_MARKER="$(monitoring_incident_prompt_marker)"
+TEST_PROGRESS_ONLY_RULE="$(build_progress_only_reply_rule)"
+TEST_PROGRESS_ONLY_RULE_MARKER="$(progress_only_reply_rule_marker)"
+TEST_PROGRESS_ONLY_ANY_SLACK_RULE="$(build_progress_only_reply_rule ' in any Slack context.')"
+TEST_PROGRESS_ONLY_ANY_SLACK_RULE_MARKER="$(progress_only_reply_any_slack_rule_marker)"
 
 TMP_PROMPT_CONFIG="$(mktemp)"
 trap 'rm -f "$TMP_CONFIG" "$TMP_PROMPT_CONFIG"' EXIT
 
 jq --arg monitoring_prompt "$TEST_PROMPT" \
-   --arg monitoring_prompt_marker "$TEST_MARKER" '
+   --arg monitoring_prompt_marker "$TEST_MARKER" \
+   --arg progress_only_reply_rule "$TEST_PROGRESS_ONLY_RULE" \
+   --arg progress_only_reply_rule_marker "$TEST_PROGRESS_ONLY_RULE_MARKER" \
+   --arg progress_only_reply_any_slack_rule "$TEST_PROGRESS_ONLY_ANY_SLACK_RULE" \
+   --arg progress_only_reply_any_slack_rule_marker "$TEST_PROGRESS_ONLY_ANY_SLACK_RULE_MARKER" '
+  def replace_prompt_markers:
+    if type != "string" then
+      .
+    else
+      gsub($progress_only_reply_rule_marker; $progress_only_reply_rule)
+      | gsub($progress_only_reply_any_slack_rule_marker; $progress_only_reply_any_slack_rule)
+    end;
+  .channels.slack.channels |= with_entries(
+    if ((.value.systemPrompt // null) | type) == "string" then
+      .value.systemPrompt |= replace_prompt_markers
+    else
+      .
+    end
+  )
+  | 
   if .channels.slack.channels["#platform-monitoring"] != null then
     .channels.slack.channels["#platform-monitoring"].systemPrompt =
       (if (.channels.slack.channels["#platform-monitoring"].systemPrompt == $monitoring_prompt_marker) or (.channels.slack.channels["#platform-monitoring"].systemPrompt == null) then
@@ -181,6 +208,11 @@ jq -e '.channels.slack.channels["#staging-infra-monitoring"].systemPrompt | star
 jq -e '.channels.slack.channels["#public-api-monitoring"].systemPrompt | startswith("Public API monitoring incident intake mode:")' "$TMP_PROMPT_CONFIG" >/dev/null
 # Verify non-monitoring channel was NOT affected
 jq -e '.channels.slack.channels["#bug-report"].systemPrompt | startswith("Monitoring") | not' "$TMP_PROMPT_CONFIG" >/dev/null
+jq -e '.channels.slack.channels["#bug-report"].systemPrompt | contains("Never send progress-only replies")' "$TMP_PROMPT_CONFIG" >/dev/null
+jq -e '.channels.slack.channels["#bug-report"].systemPrompt | contains("in any Slack context. Wait for the final reply.")' "$TMP_PROMPT_CONFIG" >/dev/null
+jq -e '.channels.slack.channels["#sdks"].systemPrompt | contains("Never send progress-only replies")' "$TMP_PROMPT_CONFIG" >/dev/null
+jq -e '.channels.slack.channels["#sdks"].systemPrompt | contains("Wait for the final reply.")' "$TMP_PROMPT_CONFIG" >/dev/null
+jq -e '.channels.slack.channels["#sdks"].systemPrompt | contains("__PROGRESS_ONLY_REPLY_RULE__") | not' "$TMP_PROMPT_CONFIG" >/dev/null
 
 jq -r '.channels.slack.channels["#platform-monitoring"].systemPrompt' "$TMP_PROMPT_CONFIG" | rg -F 'use the ticket `branchName` as the PR branch' >/dev/null
 jq -r '.channels.slack.channels["#platform-monitoring"].systemPrompt' "$TMP_PROMPT_CONFIG" | rg -F 'prefer direct tool commands; use `bash -lc` only when the command really needs shell features' >/dev/null

@@ -1,7 +1,13 @@
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import { matchesHumanCorrection } from "../../../sre/patterns.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { findSlackIncidentHeaderLineIndex } from "../incident-format.js";
+import {
+  hasSlackProgressOnlyPrefix,
+  SLACK_SUBSTANTIVE_SIGNAL_RE,
+  SLACK_SUMMARY_SECTION_RE,
+} from "./progress-patterns.js";
 
 type SlackEitherOrQuestion = {
   leftOption: string;
@@ -12,6 +18,13 @@ const BOTH_OR_NEITHER_RE = /\b(both|neither)\b/i;
 const DEPENDS_RE = /\b(?:it\s+)?depends\b/i;
 const DISPROVED_THEORY_RE = /^disproved theory:/im;
 const STATUS_LABEL_RE = /^(?:\*Status:\*|_Status:_)/i;
+// 12 KB covers typical incident/PR summaries while letting large evidence blobs
+// (logs, traces, pasted transcripts) bypass suppression. Replies at or under
+// the cutoff still go through the guard; oversized replies deliberately bypass
+// suppression so the runtime favors delivery over a risky false positive. Keep
+// the cutoff ahead of the regex-heavy path so giant inputs short-circuit early.
+const SLACK_PROGRESS_GUARD_MAX_CHARS = 12_000;
+const SLACK_EITHER_OR_MAX_OPTION_WORDS = 8;
 const DEFAULT_DISPROVED_THEORY_LINE =
   "Disproved theory: earlier thread theory was wrong; conclusions below use the latest human correction and fresh evidence.";
 
@@ -23,6 +36,19 @@ function normalizeForMatching(value: string): string {
   return normalizeWhitespace(value.toLowerCase().replace(/[^a-z0-9\s]/gi, " "));
 }
 
+function normalizeSlackGuardText(value: string): string {
+  // Repeat the size guard here in case future callers reach this helper
+  // directly instead of going through shouldSuppressSlackProgressReply().
+  if (!value || value.length > SLACK_PROGRESS_GUARD_MAX_CHARS) {
+    return "";
+  }
+  return normalizeWhitespace(
+    stripSlackMentionsForCommandDetection(
+      value.replace(/\p{Dash_Punctuation}/gu, "-").replace(/`/g, ""),
+    ),
+  );
+}
+
 function cleanOption(value: string): string {
   return normalizeWhitespace(value.replace(/^[\s"'`([{<]+|[\s"'`)>}\].,!?:;]+$/g, ""));
 }
@@ -32,7 +58,9 @@ function isLikelyOption(value: string): boolean {
     return false;
   }
   const words = value.split(/\s+/).filter(Boolean);
-  return words.length > 0 && words.length <= 8 && /[a-z0-9]/i.test(value);
+  return (
+    words.length > 0 && words.length <= SLACK_EITHER_OR_MAX_OPTION_WORDS && /[a-z0-9]/i.test(value)
+  );
 }
 
 function extractEitherOrQuestion(text?: string): SlackEitherOrQuestion | null {
@@ -100,6 +128,77 @@ function resolveDirectAnswerToken(params: {
   }
 
   return null;
+}
+
+function extractSlackLeadContentLine(replyText: string): string {
+  for (const rawLine of replyText.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || /^<@[^>]*>$/.test(trimmed) || /^\[\[[^\]]+\]\]$/.test(trimmed)) {
+      continue;
+    }
+    return normalizeSlackGuardText(trimmed);
+  }
+  return "";
+}
+
+function hasSlackSubstantiveSignal(replyText: string): boolean {
+  return (
+    SLACK_SUMMARY_SECTION_RE.test(replyText) ||
+    DISPROVED_THEORY_RE.test(replyText) ||
+    /^direct\s+answer\s*:/im.test(replyText) ||
+    SLACK_SUBSTANTIVE_SIGNAL_RE.test(replyText)
+  );
+}
+
+/**
+ * Returns true when a Slack reply is just progress chatter with no substantive
+ * incident/PR/CI signal and should therefore be suppressed in final-only
+ * incident thread contexts.
+ */
+export function shouldSuppressSlackProgressReply(replyText?: string): boolean {
+  if (!replyText) {
+    return false;
+  }
+  // Bail out before trim/regex work when the raw input is already oversized.
+  if (replyText.length > SLACK_PROGRESS_GUARD_MAX_CHARS) {
+    return false;
+  }
+  const trimmed = replyText.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (hasSlackSubstantiveSignal(trimmed)) {
+    return false;
+  }
+  const leadLine = extractSlackLeadContentLine(trimmed);
+  if (!leadLine) {
+    return false;
+  }
+  return hasSlackProgressOnlyPrefix(leadLine);
+}
+
+export function applySlackFinalReplyGuards(params: {
+  questionText?: string;
+  inboundText?: string;
+  incidentRootOnly?: boolean;
+  isThreadReply?: boolean;
+  payload: ReplyPayload;
+}): ReplyPayload {
+  const directAnswerPayload = enforceSlackDirectEitherOrAnswer({
+    questionText: params.questionText,
+    payload: params.payload,
+  });
+  const disprovedTheoryPayload = enforceSlackDisprovedTheoryRetraction({
+    inboundText: params.inboundText,
+    incidentRootOnly: params.incidentRootOnly,
+    isThreadReply: params.isThreadReply,
+    payload: directAnswerPayload,
+  });
+  return enforceSlackNoProgressOnlyReply({
+    incidentRootOnly: params.incidentRootOnly,
+    isThreadReply: params.isThreadReply,
+    payload: disprovedTheoryPayload,
+  });
 }
 
 export function enforceSlackDirectEitherOrAnswer(params: {
@@ -196,6 +295,28 @@ export function enforceSlackDisprovedTheoryRetraction(params: {
   return {
     ...params.payload,
     text: injectSlackDisprovedTheoryLine(replyText),
+  };
+}
+
+export function enforceSlackNoProgressOnlyReply(params: {
+  incidentRootOnly?: boolean;
+  isThreadReply?: boolean;
+  payload: ReplyPayload;
+}): ReplyPayload {
+  const rawText = params.payload.text;
+  const replyText = typeof rawText === "string" ? rawText.trim() : "";
+  if (!replyText || params.payload.isError) {
+    return params.payload;
+  }
+  if (!params.incidentRootOnly || !params.isThreadReply) {
+    return params.payload;
+  }
+  if (!shouldSuppressSlackProgressReply(replyText)) {
+    return params.payload;
+  }
+  return {
+    ...params.payload,
+    text: SILENT_REPLY_TOKEN,
   };
 }
 

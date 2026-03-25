@@ -216,8 +216,16 @@ apply_slack_incident_channel_override() {
   local channels_json
   local monitoring_prompt
   local monitoring_prompt_marker
+  local progress_only_reply_rule
+  local progress_only_reply_rule_marker
+  local progress_only_reply_any_slack_rule
+  local progress_only_reply_any_slack_rule_marker
   monitoring_prompt="$(build_monitoring_incident_prompt)"
   monitoring_prompt_marker="$(monitoring_incident_prompt_marker)"
+  progress_only_reply_rule="$(build_progress_only_reply_rule)"
+  progress_only_reply_rule_marker="$(progress_only_reply_rule_marker)"
+  progress_only_reply_any_slack_rule="$(build_progress_only_reply_rule ' in any Slack context.')"
+  progress_only_reply_any_slack_rule_marker="$(progress_only_reply_any_slack_rule_marker)"
   channels_json="$(normalize_slack_incident_channels_json)"
   if ! jq -e 'length > 0' >/dev/null <<<"$channels_json"; then
     echo "seed-state:error OPENCLAW_SRE_SLACK_INCIDENT_CHANNELS did not contain any channels" >&2
@@ -226,8 +234,32 @@ apply_slack_incident_channel_override() {
 
   local tmp_config
   tmp_config="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
-  jq --arg monitoring_prompt_template "$monitoring_prompt" --arg monitoring_prompt_marker "$monitoring_prompt_marker" --argjson incident_channels "$channels_json" '
-    .channels.slack.channels as $channels
+  jq \
+    --arg monitoring_prompt_template "$monitoring_prompt" \
+    --arg monitoring_prompt_marker "$monitoring_prompt_marker" \
+    --arg progress_only_reply_rule "$progress_only_reply_rule" \
+    --arg progress_only_reply_rule_marker "$progress_only_reply_rule_marker" \
+    --arg progress_only_reply_any_slack_rule "$progress_only_reply_any_slack_rule" \
+    --arg progress_only_reply_any_slack_rule_marker "$progress_only_reply_any_slack_rule_marker" \
+    --argjson incident_channels "$channels_json" '
+    def replace_prompt_markers:
+      if type != "string" then
+        .
+      else
+        gsub($progress_only_reply_rule_marker; $progress_only_reply_rule)
+        | gsub($progress_only_reply_any_slack_rule_marker; $progress_only_reply_any_slack_rule)
+      end;
+    (.channels.slack.channels = (
+      (.channels.slack.channels // {})
+      | with_entries(
+          if ((.value.systemPrompt // null) | type) == "string" then
+            .value.systemPrompt |= replace_prompt_markers
+          else
+            .
+          end
+        )
+    ))
+    | .channels.slack.channels as $channels
     | ($incident_channels | any(. == "#bug-report")) as $include_bug_report
     | ($incident_channels | map(select(. != "#bug-report"))) as $override_channels
     | ($channels["#bug-report"]) as $bug_report
