@@ -1487,6 +1487,8 @@ export type PluginHookAgentContext = {
   trigger?: string;
   /** Channel identifier (e.g. "telegram", "discord", "whatsapp"). */
   channelId?: string;
+  /** Unique identifier for this agent run. Available in before_agent_start, before_prompt_build, before_model_resolve, and agent_end hooks. */
+  runId?: string;
 };
 
 // before_model_resolve hook
