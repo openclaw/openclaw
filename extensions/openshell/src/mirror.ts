@@ -7,12 +7,15 @@ export async function replaceDirectoryContents(params: {
   /** Top-level directory names to exclude from sync (preserved in target, skipped from source). */
   excludeDirs?: string[];
 }): Promise<void> {
-  const excluded = new Set(params.excludeDirs ?? []);
+  // Case-insensitive matching: on macOS/Windows the filesystem is typically
+  // case-insensitive, so "Hooks" would resolve to the same directory as "hooks".
+  const excluded = new Set((params.excludeDirs ?? []).map((d) => d.toLowerCase()));
+  const isExcluded = (name: string) => excluded.has(name.toLowerCase());
   await fs.mkdir(params.targetDir, { recursive: true });
   const existing = await fs.readdir(params.targetDir);
   await Promise.all(
     existing
-      .filter((entry) => !excluded.has(entry))
+      .filter((entry) => !isExcluded(entry))
       .map((entry) =>
         fs.rm(path.join(params.targetDir, entry), {
           recursive: true,
@@ -22,7 +25,7 @@ export async function replaceDirectoryContents(params: {
   );
   const sourceEntries = await fs.readdir(params.sourceDir);
   for (const entry of sourceEntries) {
-    if (excluded.has(entry)) {
+    if (isExcluded(entry)) {
       continue;
     }
     await fs.cp(path.join(params.sourceDir, entry), path.join(params.targetDir, entry), {

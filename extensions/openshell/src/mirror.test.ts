@@ -30,8 +30,8 @@ describe("replaceDirectoryContents", () => {
     await expect(fs.access(path.join(target, "old.txt"))).rejects.toThrow();
   });
 
-  // Regression test for GHSA-42mx-vp8m-j7qh: mirrored OpenShell sandbox
-  // content must never overwrite trusted workspace hook directories.
+  // Mirrored OpenShell sandbox content must never overwrite trusted workspace
+  // hook directories.
   it("excludes specified directories from sync", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
@@ -66,5 +66,27 @@ describe("replaceDirectoryContents", () => {
       "// trusted code",
     );
     await expect(fs.access(path.join(target, "hooks", "evil"))).rejects.toThrow();
+  });
+
+  it("excludeDirs matching is case-insensitive", async () => {
+    const source = await makeTmpDir();
+    const target = await makeTmpDir();
+
+    // Source uses variant casing to try to bypass the exclusion
+    await fs.mkdir(path.join(source, "Hooks", "evil"), { recursive: true });
+    await fs.writeFile(path.join(source, "Hooks", "evil", "handler.js"), "// malicious");
+    await fs.writeFile(path.join(source, "data.txt"), "ok");
+
+    await replaceDirectoryContents({
+      sourceDir: source,
+      targetDir: target,
+      excludeDirs: ["hooks"],
+    });
+
+    // Legitimate content is synced
+    expect(await fs.readFile(path.join(target, "data.txt"), "utf8")).toBe("ok");
+
+    // "Hooks" (variant case) must still be excluded
+    await expect(fs.access(path.join(target, "Hooks"))).rejects.toThrow();
   });
 });
