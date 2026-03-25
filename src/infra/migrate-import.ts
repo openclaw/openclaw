@@ -564,34 +564,37 @@ export async function importMigrateArchive(
     // since self-generated archives may contain workspace symlinks.
     let entryCount = 0;
     let extractedBytes = 0;
+    // Use filter for entry counting, type blocking, and symlink skipping.
+    // filter runs before extraction — returning false prevents the entry
+    // from being written to disk. onReadEntry only fires for entries that
+    // pass filter, so we use it only for byte-size tracking.
+    let filterError: Error | undefined;
     await tar.x({
       file: archivePath,
       cwd: tempDir,
       gzip: true,
       strip: 0,
       preservePaths: false,
-      onReadEntry(entry) {
-        // Count all entries (including skipped ones) toward the limit
-        // to prevent entry-count bypass via many symlink headers.
+      filter: (_entryPath, entry) => {
         entryCount += 1;
         if (entryCount > MAX_EXTRACT_ENTRIES) {
-          const error = new Error(
+          filterError = new Error(
             `Migration archive exceeds entry count limit (${MAX_EXTRACT_ENTRIES}).`,
           );
-          const emitter = this as unknown as { abort?: (error: Error) => void };
-          emitter.abort?.(error);
-          return;
+          return false;
         }
-        if (abortEntryTypes.has(entry.type)) {
-          const error = new Error(`Blocked unsafe tar entry type "${entry.type}": ${entry.path}`);
-          const emitter = this as unknown as { abort?: (error: Error) => void };
-          emitter.abort?.(error);
-          return;
+        const entryType = "type" in entry ? (entry as { type: string }).type : "";
+        if (abortEntryTypes.has(entryType)) {
+          filterError = new Error(`Blocked unsafe tar entry type "${entryType}": ${_entryPath}`);
+          return false;
         }
-        if (entry.type === "SymbolicLink") {
-          entry.resume();
-          return;
+        // Skip symlinks — they won't be extracted to disk.
+        if (entryType === "SymbolicLink") {
+          return false;
         }
+        return true;
+      },
+      onReadEntry(entry) {
         const size = typeof entry.size === "number" ? entry.size : 0;
         extractedBytes += size;
         if (extractedBytes > MAX_EXTRACT_BYTES) {
@@ -603,6 +606,11 @@ export async function importMigrateArchive(
         }
       },
     });
+
+    // Check if filter detected a blocking error (entry count or unsafe type).
+    if (filterError) {
+      throw filterError;
+    }
 
     const resolvedTempDir = await fs.realpath(tempDir);
     const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
