@@ -90,14 +90,7 @@ requireMention? 是 -> 被提及? 否 -> 仅存储为上下文
       tools: {
         // 如果 allow 非空，其他所有工具都被阻止（deny 仍然优先）。
         allow: ["group:messaging", "group:sessions"],
-        deny: [
-          "group:runtime",
-          "group:fs",
-          "group:ui",
-          "nodes",
-          "cron",
-          "gateway",
-        ],
+        deny: ["group:runtime", "group:fs", "group:ui", "nodes", "cron", "gateway"],
       },
     },
   },

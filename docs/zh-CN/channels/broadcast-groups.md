@@ -150,11 +150,7 @@ Agents:
   },
   "broadcast": {
     "strategy": "parallel",
-    "120363403215116621@g.us": [
-      "code-reviewer",
-      "security-auditor",
-      "docs-generator"
-    ],
+    "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"],
     "120363424282127706@g.us": ["support-en", "support-de"],
     "+15555550123": ["assistant", "logger"]
   }

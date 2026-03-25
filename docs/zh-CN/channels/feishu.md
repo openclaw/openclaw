@@ -126,11 +126,7 @@ Lark（国际版）租户应使用 [https://open.larksuite.com/app](https://open
       "im:message:send_as_bot",
       "im:resource"
     ],
-    "user": [
-      "aily:file:read",
-      "aily:file:write",
-      "im:chat.access_event.bot_p2p_chat:read"
-    ]
+    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
   }
 }
 ```
