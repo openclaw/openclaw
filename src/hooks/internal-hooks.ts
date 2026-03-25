@@ -36,6 +36,21 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
   context: AgentBootstrapHookContext;
 };
 
+export type AgentLlmRequestHookContext = {
+  /** Session key for the active session */
+  sessionKey?: string;
+  /** Conversation or session ID */
+  conversationId?: string;
+  /** Channel identifier (e.g., "telegram", "whatsapp") */
+  channelId?: string;
+};
+
+export type AgentLlmRequestHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "llm-request";
+  context: AgentLlmRequestHookContext;
+};
+
 export type GatewayStartupHookContext = {
   cfg?: OpenClawConfig;
   deps?: CliDeps;
@@ -460,4 +475,10 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
   );
+}
+
+export function isAgentLlmRequestEvent(
+  event: InternalHookEvent,
+): event is AgentLlmRequestHookEvent {
+  return isHookEventTypeAndAction(event, "agent", "llm-request");
 }

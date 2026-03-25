@@ -6,7 +6,8 @@ metadata:
     "openclaw":
       {
         "emoji": "⏱️",
-        "events": ["message:sent", "message:received", "command:new", "command:reset"],
+        "events":
+          ["message:sent", "message:received", "agent:llm-request", "command:new", "command:reset"],
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
   }
