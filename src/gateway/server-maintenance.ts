@@ -155,6 +155,23 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatDeltaLastBroadcastLen.delete(runId);
       params.chatSegmentOffsets.delete(runId);
     }
+
+    // Sweep orphaned segmentOffsets entries for runs that recorded a tool-start
+    // offset but never emitted an assistant delta (so chatDeltaSentAt has no
+    // entry) and whose abort controller is already gone.  Without this, a crash
+    // between tool-start and first delta would leak the offset indefinitely.
+    for (const runId of params.chatSegmentOffsets.keys()) {
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      if (params.chatDeltaSentAt.has(runId)) {
+        continue;
+      }
+      if (params.chatRunState.abortedRuns.has(runId)) {
+        continue;
+      }
+      params.chatSegmentOffsets.delete(runId);
+    }
   }, 60_000);
 
   if (typeof params.mediaCleanupTtlMs !== "number") {
