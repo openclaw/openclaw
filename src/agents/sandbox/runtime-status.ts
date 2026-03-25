@@ -5,9 +5,11 @@ import {
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { expandToolGroups } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
+import {
+  classifyToolAgainstSandboxToolPolicy,
+  resolveSandboxToolPolicyForAgent,
+} from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
 function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
@@ -81,6 +83,21 @@ export function resolveSandboxRuntimeStatus(params: {
   };
 }
 
+function redactSessionKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "(unknown)";
+  }
+  if (trimmed.length <= 12) {
+    return "(redacted)";
+  }
+  return `${trimmed.slice(0, 6)}…${trimmed.slice(-6)}`;
+}
+
+function shellEscapeSingleArg(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -99,11 +116,10 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     return undefined;
   }
 
-  const deny = new Set(expandToolGroups(runtime.toolPolicy.deny));
-  const allow = expandToolGroups(runtime.toolPolicy.allow);
-  const allowSet = allow.length > 0 ? new Set(allow) : null;
-  const blockedByDeny = deny.has(tool);
-  const blockedByAllow = allowSet ? !allowSet.has(tool) : false;
+  const { blockedByDeny, blockedByAllow } = classifyToolAgainstSandboxToolPolicy(
+    tool,
+    runtime.toolPolicy,
+  );
   if (!blockedByDeny && !blockedByAllow) {
     return undefined;
   }
@@ -123,7 +139,7 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
 
   const lines: string[] = [];
   lines.push(`Tool "${tool}" blocked by sandbox tool policy (mode=${runtime.mode}).`);
-  lines.push(`Session: ${runtime.sessionKey || "(unknown)"}`);
+  lines.push(`Session: ${redactSessionKey(runtime.sessionKey)}`);
   lines.push(`Reason: ${reasons.join(" + ")}`);
   lines.push("Fix:");
   lines.push(`- agents.defaults.sandbox.mode=off (disable sandbox)`);
@@ -131,11 +147,12 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
     lines.push(`- ${fix}`);
   }
   if (runtime.mode === "non-main") {
-    lines.push(`- Use main session key (direct): ${runtime.mainSessionKey}`);
+    lines.push("- Use the agent main session instead of a non-main session.");
   }
-  lines.push(
-    `- See: ${formatCliCommand(`openclaw sandbox explain --session ${runtime.sessionKey}`)}`,
-  );
+  const explainCommand = runtime.sessionKey
+    ? `openclaw sandbox explain --session ${shellEscapeSingleArg(runtime.sessionKey)}`
+    : "openclaw sandbox explain";
+  lines.push(`- See: ${formatCliCommand(explainCommand)}`);
 
   return lines.join("\n");
 }

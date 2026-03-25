@@ -220,4 +220,36 @@ describe("sandbox/tool-policy", () => {
     });
     expect(messageToolMessage).toBeUndefined();
   });
+
+  it("keeps blocked-tool guidance glob-aware and shell-safe", () => {
+    const sessionKey = "agent:main:weird session;rm -rf /";
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["WEB_*"],
+          },
+        },
+      },
+    };
+
+    const message = formatSandboxToolPolicyBlockedMessage({
+      cfg,
+      sessionKey,
+      toolName: "web_fetch",
+    });
+
+    expect(message).toContain('Tool "web_fetch" blocked by sandbox tool policy');
+    expect(message).toContain("tools.sandbox.tools.deny");
+    expect(message).not.toContain(`Session: ${sessionKey}`);
+    expect(message).toContain("Session: agent:… -rf /");
+    expect(message).toContain(
+      "openclaw sandbox explain --session 'agent:main:weird session;rm -rf /'",
+    );
+  });
 });

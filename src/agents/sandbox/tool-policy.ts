@@ -174,7 +174,7 @@ function expandResolvedPolicy(policy: SandboxToolPolicy): SandboxToolPolicy {
   };
 }
 
-function classifyToolAgainstSandboxToolPolicy(name: string, policy?: SandboxToolPolicy) {
+export function classifyToolAgainstSandboxToolPolicy(name: string, policy?: SandboxToolPolicy) {
   if (!policy) {
     return {
       blockedByDeny: false,
