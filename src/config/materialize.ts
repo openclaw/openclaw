@@ -12,6 +12,7 @@ import {
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
+import { normalizeSecretInputString } from "./types.secrets.js";
 
 export type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
@@ -81,5 +82,34 @@ export function materializeRuntimeConfig(
     normalizeConfigPaths(next);
   }
   normalizeExecSafeBinProfilesInConfig(next);
+  applyAuthHeaderToProviderHeaders(next);
   return asRuntimeConfig(next);
+}
+
+/**
+ * When a provider sets `authHeader: true`, the API key should be sent as an
+ * `Authorization: Bearer` header instead of the default `x-api-key`.
+ *
+ * Expands the boolean flag into the provider's `headers` map during config
+ * materialization so that all downstream consumers see the correct header
+ * without implementing their own auth-mode switching logic.
+ */
+function applyAuthHeaderToProviderHeaders(cfg: OpenClawConfig): void {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return;
+  }
+  for (const providerConfig of Object.values(providers)) {
+    if (!providerConfig?.authHeader) {
+      continue;
+    }
+    const apiKey = normalizeSecretInputString(providerConfig.apiKey);
+    if (!apiKey) {
+      continue;
+    }
+    providerConfig.headers = {
+      ...(providerConfig.headers as Record<string, string> | undefined),
+      Authorization: `Bearer ${apiKey}`,
+    };
+  }
 }
