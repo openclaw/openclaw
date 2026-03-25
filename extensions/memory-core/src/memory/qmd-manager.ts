@@ -1255,7 +1255,9 @@ export class QmdMemoryManager implements MemorySearchManager {
    */
   private qmdMcpToolVersion: "v2" | "v1" | null = null;
 
-  private resolveQmdMcpTool(searchCommand: string): string {
+  private resolveQmdMcpTool(
+    searchCommand: string,
+  ): "query" | "search" | "vector_search" | "deep_search" {
     if (this.qmdMcpToolVersion === "v2") {
       return "query";
     }
@@ -1444,10 +1446,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       // race condition where concurrent searches both probe with "query" while
       // the version is null — the second call would otherwise fail after the
       // first sets the version to "v1".
-      if (
-        effectiveTool === "query" &&
-        this.isToolNotFoundError(err)
-      ) {
+      if (effectiveTool === "query" && this.isToolNotFoundError(err)) {
         this.markQmdV1Fallback();
         const v1Tool = this.resolveQmdMcpTool(params.searchCommand ?? "query");
         return this.runQmdSearchViaMcporter({
@@ -2255,7 +2254,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runMcporterAcrossCollections(params: {
-    tool: string;
+    tool: "query" | "search" | "vector_search" | "deep_search";
     searchCommand?: string;
     query: string;
     limit: number;
