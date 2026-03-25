@@ -1,3 +1,4 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
 import {
@@ -51,6 +52,7 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
 ] as const;
+const ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat01-";
 
 function cloneFirstTemplateModel(params: {
   modelId: string;
@@ -136,6 +138,30 @@ function resolveAnthropicForwardCompatModel(
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function isAnthropicOAuthToken(apiKey: unknown): boolean {
+  return typeof apiKey === "string" && apiKey.startsWith(ANTHROPIC_OAUTH_TOKEN_PREFIX);
+}
+
+function createAnthropicOAuthAuthWrapper(baseStreamFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const apiKey = options?.apiKey;
+
+    if (!isAnthropicOAuthToken(apiKey)) {
+      return baseStreamFn(model, context, options);
+    }
+
+    const headers = { ...(options?.headers ?? {}) };
+    headers.Authorization = `Bearer ${apiKey}`;
+    headers["anthropic-version"] = headers["anthropic-version"] ?? "2023-06-01";
+
+    return baseStreamFn(model, context, {
+      ...options,
+      apiKey: undefined,
+      headers,
+    });
+  };
 }
 
 function buildAnthropicAuthDoctorHint(params: {
@@ -375,6 +401,7 @@ export default definePluginEntry({
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       },
+      wrapStreamFn: (ctx) => createAnthropicOAuthAuthWrapper(ctx.streamFn),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
       resolveDefaultThinkingLevel: ({ modelId }) =>
         matchesAnthropicModernModel(modelId) &&
