@@ -261,8 +261,9 @@ export async function buildTelegramInboundContextPayload(params: {
     route,
     sessionKey: route.sessionKey,
   });
+  const shouldPersistGroupLastRouteThread = isGroup && route.matchedBy !== "binding.channel";
   const updateLastRouteThreadId = isGroup
-    ? resolvedThreadId != null
+    ? shouldPersistGroupLastRouteThread && resolvedThreadId != null
       ? String(resolvedThreadId)
       : undefined
     : dmThreadId != null
