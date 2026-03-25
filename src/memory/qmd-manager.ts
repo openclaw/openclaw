@@ -33,7 +33,6 @@ type SqliteDatabase = import("node:sqlite").DatabaseSync;
 import type {
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,
-  ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
 import { extractKeywords } from "./query-expansion.js";
@@ -829,38 +828,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     const qmdSearchCommand = this.qmd.searchMode;
-    const mcporterEnabled = this.qmd.mcporter.enabled;
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
     ): Promise<QmdQueryResult[]> => {
       try {
-        if (mcporterEnabled) {
-          const tool: "search" | "vector_search" | "deep_search" =
-            qmdSearchCommand === "search"
-              ? "search"
-              : qmdSearchCommand === "vsearch"
-                ? "vector_search"
-                : "deep_search";
-          const minScore = opts?.minScore ?? 0;
-          if (collectionNames.length > 1) {
-            return await this.runMcporterAcrossCollections({
-              tool,
-              query: trimmed,
-              limit,
-              minScore,
-              collectionNames,
-            });
-          }
-          return await this.runQmdSearchViaMcporter({
-            mcporter: this.qmd.mcporter,
-            tool,
-            query: trimmed,
-            limit,
-            minScore,
-            collection: collectionNames[0],
-            timeoutMs: this.qmd.limits.timeoutMs,
-          });
-        }
         if (collectionNames.length > 1) {
           return await this.runQueryAcrossCollections(
             trimmed,
@@ -879,11 +850,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
           throw err;
         }
-        if (
-          !mcporterEnabled &&
-          qmdSearchCommand !== "query" &&
-          this.isUnsupportedQmdOptionError(err)
-        ) {
+        if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
           log.warn(
             `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
           );
@@ -902,8 +869,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
           }
         }
-        const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
-        log.warn(`${label} failed: ${String(err)}`);
+        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     };
@@ -1311,160 +1277,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Large `qmd update` runs can easily exceed the output cap; keep only stderr.
       discardStdout: opts?.discardOutput,
     });
-  }
-
-  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
-    if (!mcporter.enabled) {
-      return;
-    }
-    if (!mcporter.startDaemon) {
-      type McporterWarnGlobal = typeof globalThis & {
-        __openclawMcporterColdStartWarned?: boolean;
-      };
-      const g: McporterWarnGlobal = globalThis;
-      if (!g.__openclawMcporterColdStartWarned) {
-        g.__openclawMcporterColdStartWarned = true;
-        log.warn(
-          "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
-        );
-      }
-      return;
-    }
-    type McporterGlobal = typeof globalThis & {
-      __openclawMcporterDaemonStart?: Promise<void>;
-    };
-    const g: McporterGlobal = globalThis;
-    if (!g.__openclawMcporterDaemonStart) {
-      g.__openclawMcporterDaemonStart = (async () => {
-        try {
-          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
-        } catch (err) {
-          log.warn(`mcporter daemon start failed: ${String(err)}`);
-          // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
-        }
-      })();
-    }
-    await g.__openclawMcporterDaemonStart;
-  }
-
-  private async runMcporter(
-    args: string[],
-    opts?: { timeoutMs?: number },
-  ): Promise<{ stdout: string; stderr: string }> {
-    const runWithInvocation = async (spawnInvocation: {
-      command: string;
-      argv: string[];
-      shell?: boolean;
-      windowsHide?: boolean;
-    }): Promise<{ stdout: string; stderr: string }> =>
-      await runCliCommand({
-        commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-        spawnInvocation,
-        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-        env: this.env,
-        cwd: this.workspaceDir,
-        timeoutMs: opts?.timeoutMs,
-        maxOutputChars: this.maxQmdOutputChars,
-      });
-
-    const primaryInvocation = resolveCliSpawnInvocation({
-      command: "mcporter",
-      args,
-      env: this.env,
-      packageName: "mcporter",
-    });
-    try {
-      return await runWithInvocation(primaryInvocation);
-    } catch (err) {
-      if (
-        !isWindowsCommandShimEinval({
-          err,
-          command: primaryInvocation.command,
-          commandBase: "mcporter",
-        })
-      ) {
-        throw err;
-      }
-      // Some Windows npm cmd shims can still throw EINVAL on spawn; retry through
-      // shell command resolution so PATH/PATHEXT can select a runnable entrypoint.
-      log.warn("mcporter.cmd spawn returned EINVAL on Windows; retrying with bare mcporter");
-      return await runWithInvocation({
-        command: "mcporter",
-        argv: args,
-        shell: true,
-        windowsHide: true,
-      });
-    }
-  }
-
-  private async runQmdSearchViaMcporter(params: {
-    mcporter: ResolvedQmdMcporterConfig;
-    tool: "search" | "vector_search" | "deep_search";
-    query: string;
-    limit: number;
-    minScore: number;
-    collection?: string;
-    timeoutMs: number;
-  }): Promise<QmdQueryResult[]> {
-    await this.ensureMcporterDaemonStarted(params.mcporter);
-
-    const selector = `${params.mcporter.serverName}.${params.tool}`;
-    const callArgs: Record<string, unknown> = {
-      query: params.query,
-      limit: params.limit,
-      minScore: params.minScore,
-    };
-    if (params.collection) {
-      callArgs.collection = params.collection;
-    }
-
-    const result = await this.runMcporter(
-      [
-        "call",
-        selector,
-        "--args",
-        JSON.stringify(callArgs),
-        "--output",
-        "json",
-        "--timeout",
-        String(Math.max(0, params.timeoutMs)),
-      ],
-      { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
-    );
-
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
-    const isRecord = (value: unknown): value is Record<string, unknown> =>
-      typeof value === "object" && value !== null && !Array.isArray(value);
-
-    const structured =
-      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
-        ? parsedUnknown.structuredContent
-        : parsedUnknown;
-
-    const results: unknown[] =
-      isRecord(structured) && Array.isArray(structured.results)
-        ? (structured.results as unknown[])
-        : Array.isArray(structured)
-          ? structured
-          : [];
-
-    const out: QmdQueryResult[] = [];
-    for (const item of results) {
-      if (!isRecord(item)) {
-        continue;
-      }
-      const docidRaw = item.docid;
-      const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
-      if (!docid) {
-        continue;
-      }
-      const scoreRaw = item.score;
-      const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
-      const snippet = typeof item.snippet === "string" ? item.snippet : "";
-      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
-    }
-    return out;
   }
 
   private async readPartialText(
@@ -2131,39 +1943,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       return null;
     }
     return `file:${hints.preferredCollection}:${collectionRelativePath}`;
-  }
-
-  private async runMcporterAcrossCollections(params: {
-    tool: "search" | "vector_search" | "deep_search";
-    query: string;
-    limit: number;
-    minScore: number;
-    collectionNames: string[];
-  }): Promise<QmdQueryResult[]> {
-    const bestByDocId = new Map<string, QmdQueryResult>();
-    for (const collectionName of params.collectionNames) {
-      const parsed = await this.runQmdSearchViaMcporter({
-        mcporter: this.qmd.mcporter,
-        tool: params.tool,
-        query: params.query,
-        limit: params.limit,
-        minScore: params.minScore,
-        collection: collectionName,
-        timeoutMs: this.qmd.limits.timeoutMs,
-      });
-      for (const entry of parsed) {
-        if (typeof entry.docid !== "string" || !entry.docid.trim()) {
-          continue;
-        }
-        const prev = bestByDocId.get(entry.docid);
-        const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
-        const nextScore = typeof entry.score === "number" ? entry.score : Number.NEGATIVE_INFINITY;
-        if (!prev || nextScore > prevScore) {
-          bestByDocId.set(entry.docid, entry);
-        }
-      }
-    }
-    return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
   private listManagedCollectionNames(): string[] {

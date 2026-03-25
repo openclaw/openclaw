@@ -25,7 +25,7 @@ function resolveWindowsCommandShim(command: string): string {
     return command;
   }
   const base = path.basename(trimmed).toLowerCase();
-  if (base === "qmd" || base === "mcporter") {
+  if (base === "qmd") {
     return `${trimmed}.cmd`;
   }
   return command;

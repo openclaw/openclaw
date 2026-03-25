@@ -79,14 +79,6 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
-const MemoryQmdMcporterSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    serverName: z.string().optional(),
-    startDaemon: z.boolean().optional(),
-  })
-  .strict();
-
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -100,7 +92,6 @@ const LoggingLevelSchema = z.union([
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
-    mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
