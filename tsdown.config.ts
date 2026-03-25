@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineConfig } from "tsdown";
+import pluginSdkEntryList from "./scripts/lib/plugin-sdk-entrypoints.json" with { type: "json" };
 
 const env = {
   NODE_ENV: "production",
@@ -72,52 +75,13 @@ function nodeBuildConfig(config: Record<string, unknown>) {
   };
 }
 
-const pluginSdkEntrypoints = [
-  "index",
-  "core",
-  "compat",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "msteams",
-  "acpx",
-  "bluebubbles",
-  "copilot-proxy",
-  "device-pair",
-  "diagnostics-otel",
-  "diffs",
-  "feishu",
-  "google-gemini-cli-auth",
-  "googlechat",
-  "irc",
-  "llm-task",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-core",
-  "memory-lancedb",
-  "minimax-portal-auth",
-  "nextcloud-talk",
-  "nostr",
-  "open-prose",
-  "phone-control",
-  "qwen-portal-auth",
-  "synology-chat",
-  "talk-voice",
-  "test-utils",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalouser",
-  "account-id",
-  "keyed-async-queue",
-] as const;
+// Derive entrypoints from the canonical JSON list, but only include entries
+// that have a corresponding source file — entries added ahead of their source
+// (e.g. device-bootstrap, imessage-core) are silently skipped until the
+// source is created.
+const pluginSdkEntrypoints = (pluginSdkEntryList as string[]).filter((e) =>
+  existsSync(resolve("src/plugin-sdk", `${e}.ts`)),
+);
 
 export default defineConfig([
   nodeBuildConfig({

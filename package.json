@@ -598,7 +598,43 @@
       "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
       "default": "./dist/plugin-sdk/whatsapp-shared.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./openclaw.mjs",
+    "./plugin-sdk/command-auth": {
+      "types": "./dist/plugin-sdk/command-auth.d.ts",
+      "default": "./dist/plugin-sdk/command-auth.js"
+    },
+    "./plugin-sdk/device-bootstrap": {
+      "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
+      "default": "./dist/plugin-sdk/device-bootstrap.js"
+    },
+    "./plugin-sdk/imessage-core": {
+      "types": "./dist/plugin-sdk/imessage-core.d.ts",
+      "default": "./dist/plugin-sdk/imessage-core.js"
+    },
+    "./plugin-sdk/slack-targets": {
+      "types": "./dist/plugin-sdk/slack-targets.d.ts",
+      "default": "./dist/plugin-sdk/slack-targets.js"
+    },
+    "./plugin-sdk/status-helpers": {
+      "types": "./dist/plugin-sdk/status-helpers.d.ts",
+      "default": "./dist/plugin-sdk/status-helpers.js"
+    },
+    "./plugin-sdk/telegram-core": {
+      "types": "./dist/plugin-sdk/telegram-core.d.ts",
+      "default": "./dist/plugin-sdk/telegram-core.js"
+    },
+    "./plugin-sdk/web-media": {
+      "types": "./dist/plugin-sdk/web-media.d.ts",
+      "default": "./dist/plugin-sdk/web-media.js"
+    },
+    "./plugin-sdk/webhook-ingress": {
+      "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
+      "default": "./dist/plugin-sdk/webhook-ingress.js"
+    },
+    "./plugin-sdk/webhook-path": {
+      "types": "./dist/plugin-sdk/webhook-path.d.ts",
+      "default": "./dist/plugin-sdk/webhook-path.js"
+    }
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
