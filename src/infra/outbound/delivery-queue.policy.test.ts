@@ -10,6 +10,7 @@ describe("delivery-queue policy", () => {
     it.each([
       "No conversation reference found for user:abc",
       "Telegram send failed: chat not found (chat_id=user:123)",
+      "403: Forbidden: bot is not a member of the channel chat",
       "user not found",
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
