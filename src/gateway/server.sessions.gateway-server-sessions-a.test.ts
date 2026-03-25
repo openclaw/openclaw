@@ -1116,6 +1116,41 @@ describe("gateway server sessions", () => {
     expect(resolved.payload?.key).toBe("agent:main:subagent:target");
   });
 
+  test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:visible-parent": {
+          sessionId: "sess-visible-parent",
+          updatedAt: now - 3_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:hidden-parent": {
+          sessionId: "sess-hidden-parent",
+          updatedAt: now - 2_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:shared-child-key-filter": {
+          sessionId: "sess-shared-child-key-filter",
+          updatedAt: now - 1_000,
+          spawnedBy: "agent:main:subagent:hidden-parent",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      key: "agent:main:subagent:shared-child-key-filter",
+      spawnedBy: "agent:main:subagent:visible-parent",
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error?.message).toContain(
+      "No session found: agent:main:subagent:shared-child-key-filter",
+    );
+  });
+
   test("sessions.delete rejects main and aborts active runs", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
