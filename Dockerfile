@@ -273,4 +273,4 @@ USER node
 # For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD sh -c 'port="${OPENCLAW_GATEWAY_PORT:-18789}"; curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null'
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+CMD ["/app/render-start.sh"]
