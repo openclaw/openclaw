@@ -83,7 +83,8 @@ export function resolveAssistantIdentity(params: {
   agentId?: string | null;
   workspaceDir?: string | null;
 }): AssistantIdentity {
-  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const agentId = normalizeAgentId(params.agentId ?? defaultAgentId);
   const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, agentId);
   const configAssistant = params.cfg.ui?.assistant;
   const agentIdentity = resolveAgentIdentity(params.cfg, agentId);
@@ -93,7 +94,7 @@ export function resolveAssistantIdentity(params: {
   // the global ui.assistant config. Global ui.assistant is the user's
   // customization of the default/main agent and should not override subagent
   // identities that were explicitly configured in agents.list[].identity.
-  const isDefaultAgent = agentId === normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const isDefaultAgent = agentId === defaultAgentId;
   const globalName = coerceIdentityValue(configAssistant?.name, MAX_ASSISTANT_NAME);
   const agentName = coerceIdentityValue(agentIdentity?.name, MAX_ASSISTANT_NAME);
   const fileName = coerceIdentityValue(fileIdentity?.name, MAX_ASSISTANT_NAME);
