@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 type CreateFeishuClient = typeof import("./client.js").createFeishuClient;
@@ -33,6 +34,15 @@ const mockBaseHttpInstance = vi.hoisted(() => ({
 }));
 const proxyEnvKeys = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"] as const;
 type ProxyEnvKey = (typeof proxyEnvKeys)[number];
+const registerFeishuDocToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuChatToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuWikiToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuDriveToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuPermToolsMock = vi.hoisted(() => vi.fn());
+const registerFeishuBitableToolsMock = vi.hoisted(() => vi.fn());
+const feishuPluginMock = vi.hoisted(() => ({ id: "feishu-test-plugin" }));
+const setFeishuRuntimeMock = vi.hoisted(() => vi.fn());
+const registerFeishuSubagentHooksMock = vi.hoisted(() => vi.fn());
 
 let createFeishuClient: CreateFeishuClient;
 let createFeishuWSClient: CreateFeishuWSClient;
@@ -44,6 +54,42 @@ let FEISHU_HTTP_TIMEOUT_ENV_VAR: string;
 
 let priorProxyEnv: Partial<Record<ProxyEnvKey, string | undefined>> = {};
 let priorFeishuTimeoutEnv: string | undefined;
+
+vi.mock("./channel.js", () => ({
+  feishuPlugin: feishuPluginMock,
+}));
+
+vi.mock("./docx.js", () => ({
+  registerFeishuDocTools: registerFeishuDocToolsMock,
+}));
+
+vi.mock("./chat.js", () => ({
+  registerFeishuChatTools: registerFeishuChatToolsMock,
+}));
+
+vi.mock("./wiki.js", () => ({
+  registerFeishuWikiTools: registerFeishuWikiToolsMock,
+}));
+
+vi.mock("./drive.js", () => ({
+  registerFeishuDriveTools: registerFeishuDriveToolsMock,
+}));
+
+vi.mock("./perm.js", () => ({
+  registerFeishuPermTools: registerFeishuPermToolsMock,
+}));
+
+vi.mock("./bitable.js", () => ({
+  registerFeishuBitableTools: registerFeishuBitableToolsMock,
+}));
+
+vi.mock("./runtime.js", () => ({
+  setFeishuRuntime: setFeishuRuntimeMock,
+}));
+
+vi.mock("./subagent-hooks.js", () => ({
+  registerFeishuSubagentHooks: registerFeishuSubagentHooksMock,
+}));
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
@@ -287,6 +333,33 @@ describe("createFeishuClient HTTP timeout", () => {
       "https://example.com/api",
       expect.objectContaining({ timeout: 45_000 }),
     );
+  });
+});
+
+describe("feishu plugin register", () => {
+  it("registers the Feishu channel, tools, and subagent hooks", async () => {
+    const { default: plugin } = await import("../index.js");
+    const registerChannel = vi.fn();
+    const api = {
+      runtime: { log: vi.fn() },
+      registerChannel,
+      on: vi.fn(),
+      config: {},
+      registrationMode: "full",
+    } as unknown as OpenClawPluginApi;
+
+    plugin.register(api);
+
+    expect(setFeishuRuntimeMock).toHaveBeenCalledWith(api.runtime);
+    expect(registerChannel).toHaveBeenCalledTimes(1);
+    expect(registerChannel).toHaveBeenCalledWith({ plugin: feishuPluginMock });
+    expect(registerFeishuSubagentHooksMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuDocToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuChatToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuWikiToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuDriveToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuPermToolsMock).toHaveBeenCalledWith(api);
+    expect(registerFeishuBitableToolsMock).toHaveBeenCalledWith(api);
   });
 });
 
