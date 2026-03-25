@@ -9,7 +9,15 @@ import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
 function parseComponents(value: string): MigrateComponent[] {
-  const parts = value.split(",").map((s) => s.trim().toLowerCase());
+  const parts = value
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error(
+      `--include requires at least one component. Valid components: ${ALL_MIGRATE_COMPONENTS.join(", ")}`,
+    );
+  }
   const valid: MigrateComponent[] = [];
   for (const part of parts) {
     if ((ALL_MIGRATE_COMPONENTS as readonly string[]).includes(part)) {
@@ -82,8 +90,11 @@ export function registerMigrateCommand(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const components = opts.include ? parseComponents(opts.include as string) : undefined;
-        const agents = opts.agents ? parseAgents(opts.agents as string) : undefined;
+        // Always parse when the option is provided (even empty strings from env
+        // vars) to prevent silent fallback to all components/agents.
+        const components =
+          opts.include !== undefined ? parseComponents(String(opts.include)) : undefined;
+        const agents = opts.agents !== undefined ? parseAgents(String(opts.agents)) : undefined;
         await migrateExportCommand(defaultRuntime, {
           output: opts.output as string | undefined,
           components,

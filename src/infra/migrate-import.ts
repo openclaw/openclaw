@@ -80,6 +80,19 @@ export function parseManifest(raw: string): MigrateManifest {
   if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
     throw new Error("Migration manifest is missing archiveRoot.");
   }
+  {
+    const normalizedRoot = parsed.archiveRoot.trim();
+    if (
+      normalizedRoot.includes("/") ||
+      normalizedRoot.includes("\\") ||
+      normalizedRoot === ".." ||
+      normalizedRoot === "."
+    ) {
+      throw new Error(
+        `Migration manifest archiveRoot must be a single path segment: ${normalizedRoot}`,
+      );
+    }
+  }
   if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
     throw new Error("Migration manifest is missing createdAt.");
   }

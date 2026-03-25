@@ -271,6 +271,27 @@ describe("parseManifest", () => {
     });
     expect(() => parseManifest(json)).toThrow("missing required fields");
   });
+
+  it("rejects archiveRoot with path separators", () => {
+    const json = validManifestJson({ archiveRoot: "../escape/payload" });
+    expect(() => parseManifest(json)).toThrow("single path segment");
+  });
+
+  it("rejects archiveRoot that is '..'", () => {
+    const json = validManifestJson({ archiveRoot: ".." });
+    expect(() => parseManifest(json)).toThrow("single path segment");
+  });
+
+  it("rejects archiveRoot that is '.'", () => {
+    const json = validManifestJson({ archiveRoot: "." });
+    expect(() => parseManifest(json)).toThrow("single path segment");
+  });
+
+  it("accepts a normal archiveRoot", () => {
+    const json = validManifestJson({ archiveRoot: "openclaw-migrate-2026-01-01" });
+    const manifest = parseManifest(json);
+    expect(manifest.archiveRoot).toBe("openclaw-migrate-2026-01-01");
+  });
 });
 
 describe("MIGRATE_IMPORT_LIMITS", () => {
