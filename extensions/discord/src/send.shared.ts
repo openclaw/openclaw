@@ -368,7 +368,7 @@ async function sendDiscordText(
   chunkMode?: ChunkMode,
   silent?: boolean,
 ) {
-  if (!text.trim()) {
+  if (!text.trim() && !embeds?.length) {
     throw new Error("Message must be non-empty for Discord sends");
   }
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
