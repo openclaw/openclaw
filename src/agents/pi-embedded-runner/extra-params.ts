@@ -10,6 +10,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
+import { buildD0RunTraceparent } from "../../infra/d0-traceparent.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -558,6 +559,7 @@ export function createDonutAnalyticsContextWrapper(
       ...options?.headers,
       ...(sessionKey ? { "X-Session-Key": sessionKey } : {}),
       ...(threadId ? { "X-Thread-Id": threadId } : {}),
+      ...(threadRunId ? { traceparent: buildD0RunTraceparent(threadRunId) } : {}),
     };
     const onPayload = options?.onPayload;
 

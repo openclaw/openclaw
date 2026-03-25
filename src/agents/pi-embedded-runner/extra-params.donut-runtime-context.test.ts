@@ -79,6 +79,7 @@ describe("extra-params: donut runtime analytics context", () => {
     );
     expect(captured.payload.session_key).toBeUndefined();
     expect(captured.payload.thread_id).toBeUndefined();
+    expect(captured.headers?.traceparent).toBeDefined();
   });
 
   it("infers tool_call_id from the latest tool context when donut runtime context omits it", () => {
