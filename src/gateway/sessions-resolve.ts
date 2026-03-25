@@ -48,6 +48,25 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
+      if (typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0) {
+        const visible = listSessionsFromStore({
+          cfg,
+          storePath: target.storePath,
+          store,
+          opts: {
+            includeGlobal: p.includeGlobal === true,
+            includeUnknown: p.includeUnknown === true,
+            spawnedBy: p.spawnedBy,
+            agentId: p.agentId,
+          },
+        }).sessions.some((session) => session.key === target.canonicalKey);
+        if (!visible) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
+          };
+        }
+      }
       return { ok: true, key: target.canonicalKey };
     }
     const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
@@ -63,6 +82,25 @@ export async function resolveSessionKeyFromResolveParams(params: {
         s[primaryKey] = s[legacyKey];
       }
     });
+    if (typeof p.spawnedBy === "string" && p.spawnedBy.trim().length > 0) {
+      const visible = listSessionsFromStore({
+        cfg,
+        storePath: target.storePath,
+        store: loadSessionStore(target.storePath),
+        opts: {
+          includeGlobal: p.includeGlobal === true,
+          includeUnknown: p.includeUnknown === true,
+          spawnedBy: p.spawnedBy,
+          agentId: p.agentId,
+        },
+      }).sessions.some((session) => session.key === target.canonicalKey);
+      if (!visible) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
+        };
+      }
+    }
     return { ok: true, key: target.canonicalKey };
   }
 
