@@ -462,21 +462,18 @@ async function saveSessionStoreUnlocked(
       for (const archivedDir of archivedForDeletedSessions) {
         archivedDirs.add(archivedDir);
       }
-      if (archivedDirs.size > 0 || maintenance.resetArchiveRetentionMs != null) {
-        const targetDirs =
-          archivedDirs.size > 0 ? [...archivedDirs] : [path.dirname(path.resolve(storePath))];
+      const targetDirs = [path.dirname(path.resolve(storePath)), ...archivedDirs];
+      await cleanupArchivedSessionTranscripts({
+        directories: targetDirs,
+        olderThanMs: maintenance.pruneAfterMs,
+        reason: "deleted",
+      });
+      if (maintenance.resetArchiveRetentionMs != null) {
         await cleanupArchivedSessionTranscripts({
           directories: targetDirs,
-          olderThanMs: maintenance.pruneAfterMs,
-          reason: "deleted",
+          olderThanMs: maintenance.resetArchiveRetentionMs,
+          reason: "reset",
         });
-        if (maintenance.resetArchiveRetentionMs != null) {
-          await cleanupArchivedSessionTranscripts({
-            directories: targetDirs,
-            olderThanMs: maintenance.resetArchiveRetentionMs,
-            reason: "reset",
-          });
-        }
       }
 
       // Rotate the on-disk file if it exceeds the size threshold.

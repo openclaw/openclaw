@@ -181,6 +181,30 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expect(fs.stat(bakArchived)).resolves.toBeDefined();
   });
 
+  it("cleans up deleted archives even when no live sessions were pruned", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 9 * DAY_MS)}`,
+    );
+    const recentArchived = path.join(
+      testDir,
+      `recent-session.jsonl.deleted.${archiveTimestamp(now - 2 * DAY_MS)}`,
+    );
+    await fs.writeFile(oldArchived, "old", "utf-8");
+    await fs.writeFile(recentArchived, "recent", "utf-8");
+
+    await saveSessionStore(storePath, store);
+
+    await expect(fs.stat(oldArchived)).rejects.toThrow();
+    await expect(fs.stat(recentArchived)).resolves.toBeDefined();
+  });
+
   it("cleans up reset archives using resetArchiveRetention", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

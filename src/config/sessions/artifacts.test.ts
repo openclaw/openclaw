@@ -11,6 +11,10 @@ import {
 describe("session artifact helpers", () => {
   it("classifies archived artifact file names", () => {
     expect(isSessionArchiveArtifactName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(true);
+    expect(isSessionArchiveArtifactName("abc.jsonl.deleted.2026-01-01T00-00-00.000+00-00")).toBe(
+      true,
+    );
+    expect(isSessionArchiveArtifactName("abc.jsonl.deleted.20260101-000000")).toBe(true);
     expect(isSessionArchiveArtifactName("abc.jsonl.reset.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(true);
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
@@ -62,5 +66,9 @@ describe("session artifact helpers", () => {
     expect(parseSessionArchiveTimestamp(file, "deleted")).toBe(now);
     expect(parseSessionArchiveTimestamp(file, "reset")).toBeNull();
     expect(parseSessionArchiveTimestamp("keep.deleted.keep.jsonl", "deleted")).toBeNull();
+    expect(
+      parseSessionArchiveTimestamp("abc.jsonl.deleted.2026-02-23T12-34-56.000+00-00", "deleted"),
+    ).toBe(now);
+    expect(parseSessionArchiveTimestamp("abc.jsonl.deleted.20260223-123456", "deleted")).toBe(now);
   });
 });
