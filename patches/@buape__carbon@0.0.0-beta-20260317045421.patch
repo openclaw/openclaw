@@ -1,0 +1,72 @@
+diff --git a/dist/src/plugins/gateway/GatewayPlugin.js b/dist/src/plugins/gateway/GatewayPlugin.js
+index ec63a49239e20d571fe998034434ae7e88b91df8..e8a2650b26eb160445d8f3b6671c8e8962313c11 100644
+--- a/dist/src/plugins/gateway/GatewayPlugin.js
++++ b/dist/src/plugins/gateway/GatewayPlugin.js
+@@ -9,6 +9,12 @@ import { startHeartbeat, stopHeartbeat } from "./utils/heartbeat.js";
+ import { ConnectionMonitor } from "./utils/monitor.js";
+ import { createIdentifyPayload, createRequestGuildMembersPayload, createResumePayload, createUpdatePresencePayload, createUpdateVoiceStatePayload, validatePayload } from "./utils/payload.js";
+ import { GatewayRateLimit } from "./utils/rateLimit.js";
++function markIntentionalSocketClose(ws) {
++    if (!ws) {
++        return;
++    }
++    ws.__carbonIntentionalClose = true;
++}
+ export class GatewayPlugin extends Plugin {
+     id = "gateway";
+     client;
+@@ -90,6 +96,7 @@ export class GatewayPlugin extends Plugin {
+             clearTimeout(this.reconnectTimeout);
+             this.reconnectTimeout = undefined;
+         }
++        markIntentionalSocketClose(this.ws);
+         this.ws?.close();
+         const baseUrl = resume && this.state.resumeGatewayUrl
+             ? this.state.resumeGatewayUrl
+@@ -105,6 +112,7 @@ export class GatewayPlugin extends Plugin {
+         stopHeartbeat(this);
+         this.lastHeartbeatAck = true;
+         this.monitor.resetUptime();
++        markIntentionalSocketClose(this.ws);
+         this.ws?.close();
+         this.ws = null;
+         if (this.reconnectTimeout) {
+@@ -124,15 +132,16 @@ export class GatewayPlugin extends Plugin {
+     setupWebSocket() {
+         if (!this.ws)
+             return;
++        const ws = this.ws;
+         let closed = false;
+-        this.ws.on("open", () => {
++        ws.on("open", () => {
+             this.isConnecting = false;
+             // Note: reconnectAttempts is reset on READY/RESUMED instead of here,
+             // so that exponential backoff keeps increasing when the socket opens
+             // but Discord closes it before completing the handshake.
+             this.emitter.emit("debug", "WebSocket connection opened");
+         });
+-        this.ws.on("message", (data) => {
++        ws.on("message", (data) => {
+             this.monitor.recordMessageReceived();
+             const payload = validatePayload(data.toString());
+             if (!payload) {
+@@ -284,16 +293,16 @@ export class GatewayPlugin extends Plugin {
+                     break;
+             }
+         });
+-        this.ws.on("close", (code, _reason) => {
++        ws.on("close", (code, _reason) => {
+             this.isConnecting = false;
+             this.emitter.emit("debug", `WebSocket connection closed with code ${code}`);
+             this.monitor.recordReconnect();
+-            if (closed)
++            if (closed || ws.__carbonIntentionalClose)
+                 return;
+             closed = true;
+             this.handleClose(code);
+         });
+-        this.ws.on("error", (error) => {
++        ws.on("error", (error) => {
+             this.isConnecting = false;
+             this.monitor.recordError();
+             this.emitter.emit("error", error);

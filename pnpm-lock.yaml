@@ -22,6 +22,11 @@ overrides:
 
 packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
+patchedDependencies:
+  '@buape/carbon@0.0.0-beta-20260317045421':
+    hash: 0688852f67329a988d3b0f6d071f5906170e130c29d3a32fbfbc066b1f15ecfb
+    path: patches/@buape__carbon@0.0.0-beta-20260317045421.patch
+
 importers:
 
   .:
@@ -325,7 +330,7 @@ importers:
     dependencies:
       '@buape/carbon':
         specifier: 0.0.0-beta-20260317045421
-        version: 0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
+        version: 0.0.0-beta-20260317045421(patch_hash=0688852f67329a988d3b0f6d071f5906170e130c29d3a32fbfbc066b1f15ecfb)(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(opusscript@0.1.1)
@@ -7559,7 +7564,7 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@buape/carbon@0.0.0-beta-20260317045421(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
+  '@buape/carbon@0.0.0-beta-20260317045421(patch_hash=0688852f67329a988d3b0f6d071f5906170e130c29d3a32fbfbc066b1f15ecfb)(@discordjs/opus@0.10.0)(hono@4.12.8)(opusscript@0.1.1)':
     dependencies:
       '@types/node': 25.5.0
       discord-api-types: 0.38.37

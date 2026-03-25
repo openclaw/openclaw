@@ -130,10 +130,6 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
     prepareDiscordGatewayForShutdown(gateway);
-    gateway.options.reconnect = {
-      ...(gateway.options.reconnect ?? {}),
-      maxAttempts: 0,
-    };
     gateway.disconnect();
   };
 
