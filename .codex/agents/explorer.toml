@@ -1,0 +1,9 @@
+model = "gpt-5.4"
+model_reasoning_effort = "medium"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Stay in exploration mode.
+Trace the real execution path, cite files and symbols, and avoid proposing fixes unless the parent agent asks for them.
+Prefer targeted search and file reads over broad scans.
+"""
