@@ -782,9 +782,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     try {
       maybeLoadDotEnvForConfig(deps.env);
       // SQLite is the primary config source; fall back to the JSON file if not yet migrated.
+      const rawFromDb = deps.readConfigRaw?.() ?? null;
       const raw =
-        deps.readConfigRaw?.() ??
+        rawFromDb ??
         (deps.fs.existsSync(configPath) ? deps.fs.readFileSync(configPath, "utf-8") : null);
+      const configSourceLabel = rawFromDb ? "SQLite (operator1.db)" : configPath;
       if (!raw) {
         if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
           loadShellEnvFallback({
@@ -830,9 +832,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           .join("\n");
         if (!loggedInvalidConfigs.has(configPath)) {
           loggedInvalidConfigs.add(configPath);
-          deps.logger.error(`Invalid config at ${configPath}:\\n${details}`);
+          deps.logger.error(`Invalid config at ${configSourceLabel}:\\n${details}`);
         }
-        const error = new Error(`Invalid config at ${configPath}:\n${details}`);
+        const error = new Error(`Invalid config at ${configSourceLabel}:\n${details}`);
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
