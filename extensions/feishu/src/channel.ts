@@ -82,7 +82,7 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
 }
 
 function isValidFeishuCard(card: Record<string, unknown> | undefined): boolean {
-  if (!card || typeof card !== "object") {
+  if (!card) {
     return false;
   }
   // Feishu cards must have at least one key to be valid
