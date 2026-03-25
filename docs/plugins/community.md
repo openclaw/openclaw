@@ -127,6 +127,17 @@ We welcome community plugins that are useful, documented, and safe to operate.
   </Step>
 </Steps>
 
+### AIFBA Amazon Listing Analyzer for OpenClaw
+
+Cloud-powered Amazon listing analyzer for OpenClaw. Built for Amazon sellers who want one-click listing analysis, competitor-backed optimization, and an AIFBA web report.
+
+- npm: `aifba-amazon-listing-analyzer-openclaw`
+- repo: `https://github.com/corli-AIFBA/aifba-amazon-listing-analyzer-openclaw`
+
+```bash
+openclaw plugins install aifba-amazon-listing-analyzer-openclaw
+
+
 ## Quality bar
 
 | Requirement                 | Why                                           |
