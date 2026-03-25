@@ -12,6 +12,7 @@ export class SignalCollector {
   private contextSize = 0;
   private errors: string[] = [];
   private contextGrowth = 0;
+  private initialContextSize = 0;
 
   recordRetry(): void {
     this.retryCount++;
@@ -22,8 +23,10 @@ export class SignalCollector {
   }
 
   recordContextSize(size: number): void {
-    if (this.contextSize > 0) {
-      this.contextGrowth = (size - this.contextSize) / this.contextSize;
+    if (this.initialContextSize === 0) {
+      this.initialContextSize = size;
+    } else {
+      this.contextGrowth = (size - this.initialContextSize) / this.initialContextSize;
     }
     this.contextSize = size;
   }

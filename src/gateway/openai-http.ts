@@ -31,7 +31,7 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  getRouterConfigForAgent,
+  getGlobalRouterConfig,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
@@ -485,7 +485,7 @@ export async function handleOpenAiHttpRequest(
   }
 
   // Check if router is configured for this agent
-  const routerConfig = getRouterConfigForAgent(agentId);
+  const routerConfig = getGlobalRouterConfig();
   let router: ModelRouter | undefined;
   let resolvedModel = modelOverride;
   if (routerConfig?.enabled) {

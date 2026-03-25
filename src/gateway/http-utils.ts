@@ -118,9 +118,9 @@ export async function resolveOpenAiCompatModelOverride(params: {
 }
 
 /**
- * Returns the router config for an agent if configured.
+ * Returns the global router config from agent defaults.
  */
-export function getRouterConfigForAgent(_agentId: string): RouterConfig | undefined {
+export function getGlobalRouterConfig(): RouterConfig | undefined {
   const cfg = loadConfig();
   const agentDefaults = cfg.agents?.defaults;
   return agentDefaults?.router;
