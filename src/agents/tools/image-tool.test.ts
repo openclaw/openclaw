@@ -92,6 +92,7 @@ vi.mock("../bash-tools.js", () => ({
 }));
 
 vi.mock("../channel-tools.js", () => ({
+  copyChannelAgentToolMeta: vi.fn((_from, to) => to),
   listChannelAgentTools: vi.fn(() => []),
 }));
 
@@ -744,25 +745,20 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("allows workspace images outside default local media roots", async () => {
+  it("allows local image paths outside default media roots when workspaceOnly is off", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const cfg = createMinimaxImageConfig();
 
         const withoutWorkspace = createRequiredImageTool({ config: cfg, agentDir });
-        await expect(
-          withoutWorkspace.execute("t0", {
-            prompt: "Describe the image.",
-            image: imagePath,
-          }),
-        ).rejects.toThrow(/Local media path is not under an allowed directory/i);
+        await expectImageToolExecOk(withoutWorkspace, imagePath);
 
         const withWorkspace = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
 
         await expectImageToolExecOk(withWorkspace, imagePath);
 
-        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledTimes(2);
       });
     });
   });
@@ -796,6 +792,28 @@ describe("image tool implicit imageModel config", () => {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
       });
+    });
+  });
+
+  it("allows non-workspace local image paths when workspaceOnly is disabled", async () => {
+    const fetch = stubMinimaxOkFetch();
+    await withTempAgentDir(async (agentDir) => {
+      const cfg = createMinimaxImageConfig();
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-outside-"));
+      const outsideImage = path.join(outsideDir, "secret.png");
+      await fs.writeFile(outsideImage, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+      try {
+        const tool = createRequiredImageTool({
+          config: cfg,
+          agentDir,
+          fsPolicy: { workspaceOnly: false },
+        });
+
+        await expectImageToolExecOk(tool, outsideImage);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
     });
   });
 
