@@ -8,8 +8,6 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
-import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -302,10 +300,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (registryParams.loadSessionResetModule) {
       return registryParams.loadSessionResetModule;
     }
-    return async () => ({
-      performGatewaySessionReset,
-      resolveGatewaySessionStoreTarget,
-    });
+    return async () => {
+      const [{ performGatewaySessionReset }, { resolveGatewaySessionStoreTarget }] =
+        await Promise.all([
+          import("../gateway/session-reset-service.js"),
+          import("../gateway/session-utils.js"),
+        ]);
+      return {
+        performGatewaySessionReset,
+        resolveGatewaySessionStoreTarget,
+      };
+    };
   })();
   const resetSessionsInFlight = new Set<string>();
 
