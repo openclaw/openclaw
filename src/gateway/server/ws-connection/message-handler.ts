@@ -829,10 +829,11 @@ export function attachGatewayWsMessageHandler(params: {
                 resolvedByConcurrentApproval = pairingStateAllowsRequestedAccess(
                   await getPairedDevice(device.id),
                 );
-                const requestStillPending = !resolvedByConcurrentApproval
-                  ? ((recoveryRequestId = await resolveLivePendingRequestId()),
-                    recoveryRequestId === pairing.request.requestId)
-                  : false;
+                let requestStillPending = false;
+                if (!resolvedByConcurrentApproval) {
+                  recoveryRequestId = await resolveLivePendingRequestId();
+                  requestStillPending = recoveryRequestId === pairing.request.requestId;
+                }
                 if (requestStillPending) {
                   context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
                 }
