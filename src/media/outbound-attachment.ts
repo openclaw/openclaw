@@ -1,9 +1,11 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveUserPath } from "../utils.js";
-import { loadWebMedia } from "../web/media.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
+import { loadWebMedia } from "./web-media.js";
+
+const MEDIA_PREFIX_RE = /^MEDIA:/i;
 
 /**
  * Returns true for remote URLs (http/https) or data: URIs.
@@ -15,14 +17,11 @@ function isRemoteMediaUrl(mediaUrl: string): boolean {
 
 /**
  * Resolves a local media URL or path to an absolute filesystem path.
- * Handles MEDIA: prefix (used by agent tools), file:// URLs, ~ expansion,
- * and plain paths (including relative).
+ * Handles file:// URLs, ~ expansion, and plain paths (including relative).
  * Consistent with the resolution logic in loadWebMediaInternal.
  */
 function resolveLocalOutboundPath(mediaUrl: string): string {
-  // Strip the MEDIA: prefix that agent tools (e.g. TTS) prepend to media paths.
-  // loadWebMedia strips it internally; we must do the same before resolving the path.
-  const stripped = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  const stripped = mediaUrl.replace(MEDIA_PREFIX_RE, "");
   if (stripped.startsWith("file://")) {
     try {
       return fileURLToPath(stripped);
@@ -43,11 +42,8 @@ export async function resolveOutboundAttachmentFromUrl(
   maxBytes: number,
   options?: { localRoots?: readonly string[] },
 ): Promise<{ path: string; contentType?: string }> {
-  // Strip the MEDIA: prefix before any further processing so that isRemoteMediaUrl
-  // and loadWebMedia both see the bare URL/path. Without this, a MEDIA:-prefixed
-  // remote URL (e.g. "MEDIA:https://...") would fail the isRemoteMediaUrl check
-  // and enter the local-file path, producing a path.resolve("https://...") garbage path.
-  const trimmed = mediaUrl.trim().replace(/^\s*MEDIA\s*:\s*/i, "");
+  // Strip MEDIA: prefix (used by agent tools like TTS to tag media paths).
+  const trimmed = mediaUrl.trim().replace(MEDIA_PREFIX_RE, "");
   const media = await loadWebMedia(
     trimmed,
     buildOutboundMediaLoadOptions({
