@@ -374,7 +374,10 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
 
         if (!pickedNewline) {
-          if (minProgressIdx > maxIdxIfAlreadyNewline) {
+          if (minProgressIdx > maxIdxIfNeedNewline) {
+            // Cannot fit closing fence + newline within the limit while
+            // still making minimum forward progress.  Give up on fence
+            // splitting for this chunk to avoid exceeding the size limit.
             fenceToSplit = undefined;
             breakIdx = windowEnd;
           } else {
@@ -383,9 +386,11 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
         }
       }
 
-      const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
-      fenceToSplit =
-        fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+      if (fenceToSplit) {
+        const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+        fenceToSplit =
+          fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+      }
     }
 
     const rawContent = text.slice(start, breakIdx);
