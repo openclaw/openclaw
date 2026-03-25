@@ -178,9 +178,16 @@ export function ensureExplicitGatewayAuth(params: {
   if (params.urlOverrideSource === "env" && hasResolvedAuth) {
     return;
   }
+  const followupHint =
+    params.urlOverrideSource === "env"
+      ? "Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD alongside OPENCLAW_GATEWAY_URL. Env URL overrides do not reuse config-only credentials."
+      : params.urlOverrideSource === "cli"
+        ? "If this is your default local or SSH-tunneled gateway, remove --url and use the default gateway target instead."
+        : undefined;
   const message = [
     "gateway url override requires explicit credentials",
     params.errorHint,
+    followupHint,
     params.configPath ? `Config: ${params.configPath}` : undefined,
   ]
     .filter(Boolean)
@@ -925,7 +932,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlOverrideSource: context.urlOverrideSource,
     explicitAuth: context.explicitAuth,
     resolvedAuth: resolvedCredentials,
-    errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
+    errorHint: "Fix: pass --token or --password with --url (or gatewayToken in tools).",
     configPath: context.configPath,
   });
   ensureRemoteModeUrlConfigured(context);
