@@ -140,36 +140,37 @@ export async function resolveVoiceCallStartupSecrets(params: {
   }
 
   if (resolved.streaming?.enabled) {
-    resolved.streaming.openaiApiKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.streaming.openaiApiKey,
-      envVar: "OPENAI_API_KEY",
-      path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
-    });
-    resolved.streaming.elevenlabsApiKey = await resolveVoiceCallSecretInputString({
-      coreConfig,
-      value: resolved.streaming.elevenlabsApiKey,
-      envVar: "ELEVENLABS_API_KEY",
-      path: "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
-    });
+    if (resolved.streaming.sttProvider === "openai-realtime") {
+      resolved.streaming.openaiApiKey = await resolveVoiceCallSecretInputString({
+        coreConfig,
+        value: resolved.streaming.openaiApiKey,
+        envVar: "OPENAI_API_KEY",
+        path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
+      });
+    }
 
-    if (
-      resolved.streaming.sttProvider === "elevenlabs-scribe" &&
-      !resolved.streaming.elevenlabsApiKey &&
-      resolved.tts?.elevenlabs
-    ) {
-      resolved.tts = {
-        ...resolved.tts,
-        elevenlabs: {
-          ...resolved.tts.elevenlabs,
-          apiKey: await resolveVoiceCallSecretInputString({
-            coreConfig,
-            value: resolved.tts.elevenlabs.apiKey,
-            envVar: "ELEVENLABS_API_KEY",
-            path: "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
-          }),
-        },
-      };
+    if (resolved.streaming.sttProvider === "elevenlabs-scribe") {
+      resolved.streaming.elevenlabsApiKey = await resolveVoiceCallSecretInputString({
+        coreConfig,
+        value: resolved.streaming.elevenlabsApiKey,
+        envVar: "ELEVENLABS_API_KEY",
+        path: "plugins.entries.voice-call.config.streaming.elevenlabsApiKey",
+      });
+
+      if (!resolved.streaming.elevenlabsApiKey && resolved.tts?.elevenlabs) {
+        resolved.tts = {
+          ...resolved.tts,
+          elevenlabs: {
+            ...resolved.tts.elevenlabs,
+            apiKey: await resolveVoiceCallSecretInputString({
+              coreConfig,
+              value: resolved.tts.elevenlabs.apiKey,
+              envVar: "ELEVENLABS_API_KEY",
+              path: "plugins.entries.voice-call.config.tts.elevenlabs.apiKey",
+            }),
+          },
+        };
+      }
     }
   }
 
