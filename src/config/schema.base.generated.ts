@@ -10919,6 +10919,86 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          usageWebhook: {
+            type: "object",
+            properties: {
+              url: {
+                type: "string",
+                format: "uri",
+              },
+              token: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              tokenHeader: {
+                type: "string",
+              },
+            },
+            required: ["url"],
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -11226,6 +11306,85 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               additionalProperties: {},
             },
+          },
+        },
+        additionalProperties: false,
+      },
+      chatHistory: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+          },
+          channels: {
+            type: "object",
+            propertyNames: {
+              anyOf: [
+                {
+                  type: "string",
+                  const: "telegram",
+                },
+                {
+                  type: "string",
+                  const: "slack",
+                },
+                {
+                  type: "string",
+                  const: "discord",
+                },
+                {
+                  type: "string",
+                  const: "signal",
+                },
+                {
+                  type: "string",
+                  const: "whatsapp",
+                },
+              ],
+            },
+            additionalProperties: {
+              type: "boolean",
+            },
+            required: ["telegram", "slack", "discord", "signal", "whatsapp"],
+          },
+          storage: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+              },
+              splitByGroup: {
+                type: "boolean",
+              },
+              splitByMonth: {
+                type: "boolean",
+              },
+              combinedFile: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+          format: {
+            type: "object",
+            properties: {
+              includeUserId: {
+                type: "boolean",
+              },
+              includeGroupId: {
+                type: "boolean",
+              },
+              includeGroupName: {
+                type: "boolean",
+              },
+              timezone: {
+                type: "string",
+              },
+              includeReplyContext: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
           },
         },
         additionalProperties: false,
@@ -13452,7 +13611,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.defaults.memorySearch.store.path": {
       label: "Memory Search Index Path",
-      help: "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.evox/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
+      help: "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
       tags: ["storage"],
     },
     "agents.defaults.memorySearch.store.vector.enabled": {
@@ -16059,7 +16218,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.evox/extensions/<id>).",
+      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {
@@ -16280,6 +16439,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "channels.msteams.appPassword": {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
+    },
+    "gateway.usageWebhook.token": {
+      sensitive: true,
+      tags: ["security", "auth", "network"],
     },
     "skills.entries.*.apiKey": {
       sensitive: true,
