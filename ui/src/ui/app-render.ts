@@ -1271,17 +1271,23 @@ export function renderApp(state: AppViewState) {
                     if (!Array.isArray(currentList)) {
                       return;
                     }
-                    // Work on a deep clone to avoid mutating live state
-                    const list = currentList.map((item) => ({
-                      ...item,
-                    }));
-                    const defaultIndex = list.findIndex((item) => item.default === true);
-                    if (defaultIndex >= 0) {
-                      delete list[defaultIndex].default;
-                    }
-                    const index = list.findIndex((item) => item.id === agentId);
+                    const list = currentList
+                      .filter(
+                        (item): item is Record<string, unknown> =>
+                          item !== null && typeof item === "object",
+                      )
+                      .map((item) => ({
+                        ...item,
+                      }));
+                    list.forEach((item) => {
+                      if ("default" in item) {
+                        delete item.default;
+                      }
+                    });
+                    let index = list.findIndex((item) => item.id === agentId);
                     if (index < 0) {
-                      return;
+                      list.push({ id: agentId });
+                      index = list.length - 1;
                     }
                     list[index].default = true;
                     updateConfigFormValue(state, ["agents", "list"], list);
