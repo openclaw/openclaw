@@ -21,6 +21,11 @@ async function listMatchingDirs(root: string, prefix: string): Promise<string[]>
     .map((entry) => entry.name);
 }
 
+async function listMatchingEntries(root: string, prefix: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  return entries.filter((entry) => entry.name.startsWith(prefix)).map((entry) => entry.name);
+}
+
 function normalizeDarwinTmpPath(filePath: string): string {
   return process.platform === "darwin" && filePath.startsWith("/private/var/")
     ? filePath.slice("/private".length)
@@ -316,5 +321,60 @@ describe("installPackageDir", () => {
         cwd: expect.stringContaining(".openclaw-install-stage-"),
       }),
     );
+  });
+
+  it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-install-package-dir-"));
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    const npmrcContent = "git=calc.exe\n";
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(sourceDir, ".npmrc"), npmrcContent, "utf-8");
+
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      expect(cwd).toBeTruthy();
+      await expect(fs.stat(path.join(cwd ?? "", ".npmrc"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        listMatchingEntries(cwd ?? "", ".openclaw-install-hidden-npmrc-"),
+      ).resolves.toHaveLength(1);
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+
+    expect(result).toEqual({ ok: true });
+    await expect(fs.readFile(path.join(targetDir, ".npmrc"), "utf8")).resolves.toBe(npmrcContent);
+    await expect(
+      listMatchingEntries(targetDir, ".openclaw-install-hidden-npmrc-"),
+    ).resolves.toHaveLength(0);
   });
 });
