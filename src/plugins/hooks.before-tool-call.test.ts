@@ -72,7 +72,6 @@ describe("before_tool_call hook merger — requireApproval", () => {
       "plugin-a",
       () => ({
         requireApproval: {
-          id: "first",
           title: "First",
           description: "First plugin",
         },
@@ -84,7 +83,6 @@ describe("before_tool_call hook merger — requireApproval", () => {
       "plugin-b",
       () => ({
         requireApproval: {
-          id: "second",
           title: "Second",
           description: "Second plugin",
         },
@@ -93,14 +91,13 @@ describe("before_tool_call hook merger — requireApproval", () => {
     );
     const runner = createHookRunner(registry);
     const result = await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
-    expect(result?.requireApproval?.id).toBe("first");
+    expect(result?.requireApproval?.title).toBe("First");
     expect(result?.requireApproval?.pluginId).toBe("plugin-a");
   });
 
   it("does not overwrite pluginId if plugin sets it (stamped by merger)", async () => {
     addBeforeToolCallHook(registry, "actual-plugin", () => ({
       requireApproval: {
-        id: "a1",
         title: "T",
         description: "D",
         pluginId: "should-be-overwritten",
@@ -115,29 +112,28 @@ describe("before_tool_call hook merger — requireApproval", () => {
   it("merges block and requireApproval from different plugins", async () => {
     addBeforeToolCallHook(
       registry,
-      "blocker",
+      "approver",
       () => ({
-        block: true,
-        blockReason: "blocked",
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
       }),
       100,
     );
     addBeforeToolCallHook(
       registry,
-      "approver",
+      "blocker",
       () => ({
-        requireApproval: {
-          id: "a1",
-          title: "Needs approval",
-          description: "Approval needed",
-        },
+        block: true,
+        blockReason: "blocked",
       }),
       50,
     );
     const runner = createHookRunner(registry);
     const result = await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
     expect(result?.block).toBe(true);
-    expect(result?.requireApproval?.id).toBe("a1");
+    expect(result?.requireApproval?.title).toBe("Needs approval");
   });
 
   it("returns undefined requireApproval when no plugin sets it", async () => {

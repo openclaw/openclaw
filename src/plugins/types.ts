@@ -1966,12 +1966,22 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
   requireApproval?: {
-    id: string;
     title: string;
     description: string;
     severity?: "info" | "warning" | "critical";
@@ -1979,8 +1989,8 @@ export type PluginHookBeforeToolCallResult = {
     timeoutBehavior?: "allow" | "deny";
     /** Set automatically by the hook runner — plugins should not set this. */
     pluginId?: string;
-    /** Callback invoked after the user resolves the approval dialog. */
-    onResolution?: (decision: string) => Promise<void> | void;
+    /** Callback invoked with the final outcome after the approval is resolved, times out, or is cancelled. */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };
 };
 

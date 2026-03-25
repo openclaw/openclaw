@@ -141,14 +141,10 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("rejects duplicate id", async () => {
+    it("rejects plugin-provided id field", async () => {
       const handlers = createPluginApprovalHandlers(manager);
-      // Pre-create an approval
-      const record = manager.create({ title: "T", description: "D" }, 60_000, "dup-id");
-      void manager.register(record, 60_000);
-
       const opts = createMockOptions("plugin.approval.request", {
-        id: "dup-id",
+        id: "plugin-provided-id",
         title: "T",
         description: "D",
       });
@@ -156,7 +152,7 @@ describe("createPluginApprovalHandlers", () => {
       expect(opts.respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ message: expect.stringContaining("already pending") }),
+        expect.objectContaining({ message: expect.stringContaining("unexpected property") }),
       );
     });
   });
