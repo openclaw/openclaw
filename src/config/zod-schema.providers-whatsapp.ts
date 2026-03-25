@@ -10,6 +10,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  RetryConfigSchema,
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -61,6 +62,7 @@ const WhatsAppSharedSchema = z.object({
   debounceMs: z.number().int().nonnegative().optional().default(0),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   healthMonitor: ChannelHealthMonitorSchema,
+  retry: RetryConfigSchema,
 });
 
 function enforceOpenDmPolicyAllowFromStar(params: {
