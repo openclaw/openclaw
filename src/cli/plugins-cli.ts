@@ -153,6 +153,26 @@ function logSlotWarnings(warnings: string[]) {
   }
 }
 
+function buildPreferredClawHubSpec(raw: string): string | null {
+  const parsed = parseRegistryNpmSpec(raw);
+  if (!parsed) {
+    return null;
+  }
+  return formatClawHubSpecifier({
+    name: parsed.name,
+    version: parsed.selector,
+  });
+}
+
+function shouldFallbackFromClawHubToNpm(error: string): boolean {
+  const normalized = error.trim();
+  return (
+    /Package not found on ClawHub/i.test(normalized) ||
+    /ClawHub .* failed \(404\)/i.test(normalized) ||
+    /Version not found/i.test(normalized)
+  );
+}
+
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
   rawSpec: string;
@@ -312,6 +332,85 @@ async function runPluginInstallCommand(params: {
       warning: bundledPreNpmPlan.warning,
     });
     return;
+  }
+
+  const clawhubSpec = parseClawHubPluginSpec(raw);
+  if (clawhubSpec) {
+    const result = await installPluginFromClawHub({
+      spec: raw,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      defaultRuntime.error(result.error);
+      return defaultRuntime.exit(1);
+    }
+
+    clearPluginManifestRegistryCache();
+
+    let next = enablePluginInConfig(cfg, result.pluginId).config;
+    next = recordPluginInstall(next, {
+      pluginId: result.pluginId,
+      source: "clawhub",
+      spec: formatClawHubSpecifier({
+        name: result.clawhub.clawhubPackage,
+        version: result.clawhub.version,
+      }),
+      installPath: result.targetDir,
+      version: result.version,
+      integrity: result.clawhub.integrity,
+      resolvedAt: result.clawhub.resolvedAt,
+      clawhubUrl: result.clawhub.clawhubUrl,
+      clawhubPackage: result.clawhub.clawhubPackage,
+      clawhubFamily: result.clawhub.clawhubFamily,
+      clawhubChannel: result.clawhub.clawhubChannel,
+    });
+    const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+    next = slotResult.config;
+    await writeConfigFile(next);
+    logSlotWarnings(slotResult.warnings);
+    defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+    defaultRuntime.log(`Restart the gateway to load plugins.`);
+    return;
+  }
+
+  const preferredClawHubSpec = buildPreferredClawHubSpec(raw);
+  if (preferredClawHubSpec) {
+    const clawhubResult = await installPluginFromClawHub({
+      spec: preferredClawHubSpec,
+      logger: createPluginInstallLogger(),
+    });
+    if (clawhubResult.ok) {
+      clearPluginManifestRegistryCache();
+
+      let next = enablePluginInConfig(cfg, clawhubResult.pluginId).config;
+      next = recordPluginInstall(next, {
+        pluginId: clawhubResult.pluginId,
+        source: "clawhub",
+        spec: formatClawHubSpecifier({
+          name: clawhubResult.clawhub.clawhubPackage,
+          version: clawhubResult.clawhub.version,
+        }),
+        installPath: clawhubResult.targetDir,
+        version: clawhubResult.version,
+        integrity: clawhubResult.clawhub.integrity,
+        resolvedAt: clawhubResult.clawhub.resolvedAt,
+        clawhubUrl: clawhubResult.clawhub.clawhubUrl,
+        clawhubPackage: clawhubResult.clawhub.clawhubPackage,
+        clawhubFamily: clawhubResult.clawhub.clawhubFamily,
+        clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+      });
+      const slotResult = applySlotSelectionForPlugin(next, clawhubResult.pluginId);
+      next = slotResult.config;
+      await writeConfigFile(next);
+      logSlotWarnings(slotResult.warnings);
+      defaultRuntime.log(`Installed plugin: ${clawhubResult.pluginId}`);
+      defaultRuntime.log(`Restart the gateway to load plugins.`);
+      return;
+    }
+    if (!shouldFallbackFromClawHubToNpm(clawhubResult.error)) {
+      defaultRuntime.error(clawhubResult.error);
+      return defaultRuntime.exit(1);
+    }
   }
 
   const result = await installPluginFromNpmSpec({
