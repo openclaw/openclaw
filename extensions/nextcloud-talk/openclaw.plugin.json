@@ -7,6 +7,8 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "ackReaction": { "type": "string" }
+    }
   }
 }
