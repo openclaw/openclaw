@@ -96,7 +96,9 @@ export function createDiscordGatewaySupervisor(params: {
   };
   const logLateDisposedEvent = (event: DiscordGatewayEvent) => {
     params.runtime.error?.(
-      danger(`discord: suppressed late gateway ${event.type} error after dispose: ${event.message}`),
+      danger(
+        `discord: suppressed late gateway ${event.type} error after dispose: ${event.message}`,
+      ),
     );
   };
   const onGatewayError = (err: unknown) => {

@@ -225,10 +225,13 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("disconnects the gateway when startup fails before lifecycle begins after client creation", async () => {
+  it("disconnects the shared gateway and suppresses late gateway errors when startup fails before lifecycle begins", async () => {
     const disconnect = vi.fn();
+    const emitter = new EventEmitter();
+    const gateway = { emitter, disconnect, isConnected: false };
+    const runtime = baseRuntime();
     clientGetPluginMock.mockImplementation((name: string) =>
-      name === "gateway" ? { emitter: new EventEmitter(), disconnect, isConnected: false } : undefined,
+      name === "gateway" ? gateway : undefined,
     );
     createDiscordMessageHandlerMock.mockImplementationOnce(() => {
       throw new Error("handler init failed");
@@ -237,12 +240,18 @@ describe("monitorDiscordProvider", () => {
     await expect(
       monitorDiscordProvider({
         config: baseConfig(),
-        runtime: baseRuntime(),
+        runtime,
       }),
     ).rejects.toThrow("handler init failed");
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(() =>
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
+    ).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    );
   });
 
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
