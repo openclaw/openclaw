@@ -7,7 +7,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Types & Schemas** - Zod schemas, typed frontmatter parser, data model definitions including task dependencies
+- [x] **Phase 1: Types & Schemas** - Zod schemas, typed frontmatter parser, data model definitions including task dependencies (completed 2026-03-26)
 - [ ] **Phase 2: File Structure & Scaffolding** - Project folder creation, task ID generation, sub-project support
 - [ ] **Phase 3: Sync Pipeline** - File watcher, .index/ JSON generation, atomic writes, startup reindex
 - [ ] **Phase 4: Concurrency** - mkdir-based file locking for queue write safety
@@ -30,7 +30,7 @@
   3. A queue.md with Available/Claimed/Blocked sections can be parsed into a typed object and validated without error
   4. Malformed frontmatter produces a structured warning with file path and line number instead of crashing
   5. The existing `parseFrontmatterBlock()` in `src/markdown/frontmatter.ts` remains unmodified
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 Plans:
 - [x] 01-01-PLAN.md — Zod schemas, TypeScript types, and error types
 - [x] 01-02-PLAN.md — Typed frontmatter parser (YAML extraction + Zod validation)
@@ -238,7 +238,7 @@ Phase 1 (Types & Schemas)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Types & Schemas | 0/? | Not started | - |
+| 1. Types & Schemas | 3/3 | Complete   | 2026-03-26 |
 | 2. File Structure & Scaffolding | 0/? | Not started | - |
 | 3. Sync Pipeline | 0/? | Not started | - |
 | 4. Concurrency | 0/? | Not started | - |
