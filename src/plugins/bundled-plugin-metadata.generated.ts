@@ -1785,6 +1785,55 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "microsoft-foundry",
+    idHint: "microsoft-foundry",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/microsoft-foundry",
+    packageVersion: "2026.3.14",
+    packageDescription: "OpenClaw Microsoft Foundry provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "microsoft-foundry",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      enabledByDefault: true,
+      providers: ["microsoft-foundry"],
+      providerAuthEnvVars: {
+        "microsoft-foundry": ["AZURE_OPENAI_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "microsoft-foundry",
+          method: "entra-id",
+          choiceId: "microsoft-foundry-entra",
+          choiceLabel: "Microsoft Foundry (Entra ID / az login)",
+          choiceHint: "Use your Azure login — no API key needed",
+          groupId: "microsoft-foundry",
+          groupLabel: "Microsoft Foundry",
+          groupHint: "Entra ID + API key",
+        },
+        {
+          provider: "microsoft-foundry",
+          method: "api-key",
+          choiceId: "microsoft-foundry-apikey",
+          choiceLabel: "Microsoft Foundry (API key)",
+          choiceHint: "Use an Azure OpenAI API key directly",
+          groupId: "microsoft-foundry",
+          groupLabel: "Microsoft Foundry",
+          groupHint: "Entra ID + API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "minimax",
     idHint: "minimax",
     source: {
