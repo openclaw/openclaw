@@ -17,6 +17,10 @@ Volume={{OPENCLAW_WORKSPACE_DIR}}:/home/node/.openclaw/workspace:Z
 EnvironmentFile={{OPENCLAW_CONFIG_DIR}}/.env
 Environment=HOME=/home/node
 Environment=TERM=xterm-256color
+Environment=NPM_CONFIG_CACHE=/home/node/.openclaw/.npm
+Environment=NPM_CONFIG_PREFIX=/home/node/.openclaw/.npm-global
+Environment=PATH=/home/node/.openclaw/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=OPENCLAW_NO_RESPAWN=1
 PublishPort=18789:18789
 PublishPort=18790:18790
 Pull=never
