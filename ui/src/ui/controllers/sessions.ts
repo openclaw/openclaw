@@ -110,6 +110,11 @@ export async function loadSessions(
     );
     if (res) {
       if ("unchanged" in res && res.unchanged) {
+        // Rows haven't changed, but count may have shifted (e.g. sessions beyond the visible
+        // limit were added/removed).  Apply it so dashboard counters stay current.
+        if (state.sessionsResult && typeof res.count === "number") {
+          state.sessionsResult.count = res.count;
+        }
         state.sessionsListLastHash = res.hash;
         state.sessionsListLastHashParamsKey = paramsKey;
       } else {
