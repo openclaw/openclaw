@@ -127,7 +127,7 @@ _clawdock_ensure_dir() {
   if [[ ! -d "${HOME}/.clawdock" ]]; then
     /bin/mkdir -p "${HOME}/.clawdock"
   fi
-  echo "CLAWDOCK_DIR=\"$CLAWDOCK_DIR\"" > "$CLAWDOCK_CONFIG"
+  echo "CLAWDOCK_DIR=\"$CLAWDOCK_DIR\"" >"$CLAWDOCK_CONFIG"
   echo "✅ Saved to $CLAWDOCK_CONFIG"
   echo ""
   return 0
@@ -180,15 +180,15 @@ clawdock-status() {
 # Navigation
 clawdock-cd() {
   _clawdock_ensure_dir || return 1
-  cd "${CLAWDOCK_DIR}"
+  cd "${CLAWDOCK_DIR}" || return 1
 }
 
 clawdock-config() {
-  cd ~/.openclaw
+  cd ~/.openclaw || return 1
 }
 
 clawdock-workspace() {
-  cd ~/.openclaw/workspace
+  cd ~/.openclaw/workspace || return 1
 }
 
 # Container Access
@@ -314,9 +314,17 @@ clawdock-devices() {
   printf "%s\n" "$output" | _clawdock_filter_warnings
   if [ $exit_status -ne 0 ]; then
     echo ""
-    echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
-    echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
-    echo "   2. Try manual config inside container:"
+    # Case-insensitive fixed-string match; works on macOS Bash 3.2 (no ${var,,}).
+    if printf '%s\n' "$output" | grep -Fqi "gateway token mismatch"; then
+      echo -e "${_CLR_CYAN}💡 If you see token mismatch errors above:${_CLR_RESET}"
+      echo -e "   1. Run: $(_cmd clawdock-fix-token)"
+      echo -e "   2. Retry: $(_cmd clawdock-devices)"
+      echo "   3. If it still fails, check the configured token inside container:"
+    else
+      echo -e "${_CLR_CYAN}💡 If you see token errors above:${_CLR_RESET}"
+      echo -e "   1. Verify token is set: $(_cmd clawdock-token)"
+      echo "   2. If it still fails, check the configured token inside container:"
+    fi
     echo -e "      $(_cmd clawdock-shell)"
     echo -e "      $(_cmd 'openclaw config get gateway.remote.token')"
     return 1
