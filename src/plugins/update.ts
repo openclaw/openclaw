@@ -47,6 +47,21 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
+export type PluginUpdatedLifecycleEvent = {
+  /**
+   * Canonical plugin id after update resolution.
+   * Can differ from requestedPluginId when legacy keys migrate.
+   */
+  pluginId: string;
+  /** Plugin id requested by the update command before id migration. */
+  requestedPluginId: string;
+  source: "npm" | "marketplace" | "clawhub";
+  spec?: string;
+  previousVersion?: string;
+  nextVersion?: string;
+  installPath: string;
+};
+
 export type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToNpm: string[];
@@ -260,6 +275,7 @@ export async function updateNpmInstalledPlugins(params: {
   dryRun?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  onPluginUpdated?: (event: PluginUpdatedLifecycleEvent) => void | Promise<void>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -567,6 +583,23 @@ export async function updateNpmInstalledPlugins(params: {
         marketplacePlugin: record.marketplacePlugin,
       });
     }
+
+    if (params.onPluginUpdated) {
+      try {
+        await params.onPluginUpdated({
+          pluginId: resolvedPluginId,
+          requestedPluginId: pluginId,
+          source: record.source,
+          spec: effectiveSpec,
+          previousVersion: currentVersion ?? undefined,
+          nextVersion: nextVersion ?? undefined,
+          installPath: result.targetDir,
+        });
+      } catch (error) {
+        logger.warn?.(`plugin_updated callback failed for "${resolvedPluginId}": ${String(error)}`);
+      }
+    }
+
     changed = true;
 
     const currentLabel = currentVersion ?? "unknown";

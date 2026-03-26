@@ -488,6 +488,43 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
   });
+
+  it("emits onPluginUpdated with resolved plugin metadata after successful updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/voice-call",
+      targetDir: "/tmp/openclaw-voice-call",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+    const onPluginUpdated = vi.fn();
+
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              installPath: "/tmp/voice-call",
+            },
+          },
+        },
+      },
+      pluginIds: ["voice-call"],
+      onPluginUpdated,
+    });
+
+    expect(onPluginUpdated).toHaveBeenCalledWith({
+      pluginId: "@openclaw/voice-call",
+      requestedPluginId: "voice-call",
+      source: "npm",
+      spec: "@openclaw/voice-call",
+      previousVersion: undefined,
+      nextVersion: "0.0.2",
+      installPath: "/tmp/openclaw-voice-call",
+    });
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {

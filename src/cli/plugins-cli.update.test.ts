@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  ensurePluginRegistryLoaded,
+  hasPluginUpdatedHooks,
   loadConfig,
   resetPluginsCliTestState,
+  runPluginUpdatedForPlugin,
   runPluginsCommand,
   runtimeErrors,
   runtimeLogs,
@@ -284,5 +287,81 @@ describe("plugins cli update", () => {
     expect(
       runtimeLogs.some((line) => line.includes("Restart the gateway to load plugins and hooks.")),
     ).toBe(true);
+  });
+
+  it("runs plugin_updated lifecycle hooks for updated plugins", async () => {
+    const cfg = {
+      plugins: {
+        installs: {
+          alpha: {
+            source: "npm",
+            spec: "@openclaw/alpha@1.0.0",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      plugins: {
+        installs: {
+          alpha: {
+            source: "npm",
+            spec: "@openclaw/alpha@1.1.0",
+            installPath: "/tmp/alpha",
+            version: "1.1.0",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(cfg);
+    hasPluginUpdatedHooks.mockReturnValue(true);
+    updateNpmInstalledPlugins.mockImplementation(async (params: unknown) => {
+      const opts = params as {
+        onPluginUpdated?: (event: {
+          pluginId: string;
+          requestedPluginId: string;
+          source: "npm";
+          spec: string;
+          previousVersion: string;
+          nextVersion: string;
+          installPath: string;
+        }) => Promise<void> | void;
+      };
+      await opts.onPluginUpdated?.({
+        pluginId: "alpha",
+        requestedPluginId: "alpha",
+        source: "npm",
+        spec: "@openclaw/alpha@1.1.0",
+        previousVersion: "1.0.0",
+        nextVersion: "1.1.0",
+        installPath: "/tmp/alpha",
+      });
+      return {
+        outcomes: [{ pluginId: "alpha", status: "updated", message: "Updated alpha" }],
+        changed: true,
+        config: nextConfig,
+      };
+    });
+    updateNpmInstalledHookPacks.mockResolvedValue({
+      outcomes: [],
+      changed: false,
+      config: nextConfig,
+    });
+
+    await runPluginsCommand(["plugins", "update", "alpha"]);
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({ scope: "all" });
+    expect(runPluginUpdatedForPlugin).toHaveBeenCalledWith(
+      "alpha",
+      {
+        pluginId: "alpha",
+        requestedPluginId: "alpha",
+        source: "npm",
+        spec: "@openclaw/alpha@1.1.0",
+        previousVersion: "1.0.0",
+        nextVersion: "1.1.0",
+        installPath: "/tmp/alpha",
+      },
+      { trigger: "plugins_update" },
+    );
   });
 });
