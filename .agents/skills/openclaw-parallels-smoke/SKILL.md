@@ -17,6 +17,11 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Per-phase logs land under `/tmp/openclaw-parallels-*`.
 - Do not run local and gateway agent turns in parallel on the same fresh workspace or session.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
+- If the workflow installs OpenClaw from a repo checkout instead of the site installer/npm release, finish by installing a real guest CLI shim and verifying it in a fresh guest shell. `pnpm openclaw ...` inside the repo is not enough for handoff parity.
+- On macOS guests, prefer a user-global install plus a stable PATH-visible shim:
+  - install with `NPM_CONFIG_PREFIX="$HOME/.npm-global" npm install -g .`
+  - make sure `~/.local/bin/openclaw` exists or `~/.npm-global/bin` is on PATH
+  - verify from a brand-new guest shell with `which openclaw` and `openclaw --version`
 
 ## npm install then update
 
