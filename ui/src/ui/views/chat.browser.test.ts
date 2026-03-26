@@ -10,6 +10,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     thinkingLevel: null,
     showThinking: false,
     showToolCalls: true,
+    expandToolCalls: false,
     loading: false,
     sending: false,
     canAbort: false,

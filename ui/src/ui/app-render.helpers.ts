@@ -197,6 +197,22 @@ export function renderChatControls(state: AppViewState) {
       ></path>
     </svg>
   `;
+  // "Expand/collapse all" icon (unfold-vertical / chevrons-down-up)
+  const expandToolCallsIcon = html`
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="m7 20 5-5 5 5"></path>
+      <path d="m7 4 5 5 5-5"></path>
+    </svg>
+  `;
   const refreshIcon = html`
     <svg
       width="18"
@@ -291,6 +307,23 @@ export function renderChatControls(state: AppViewState) {
         title=${disableThinkingToggle ? t("chat.onboardingDisabled") : t("chat.toolCallsToggle")}
       >
         ${toolCallsIcon}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${state.settings.chatExpandToolCalls ? "active" : ""}"
+        ?disabled=${!showToolCalls}
+        @click=${() => {
+          if (!showToolCalls) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatExpandToolCalls: !state.settings.chatExpandToolCalls,
+          });
+        }}
+        aria-pressed=${state.settings.chatExpandToolCalls}
+        title=${!showToolCalls ? t("chat.onboardingDisabled") : t("chat.expandToolCallsToggle")}
+      >
+        ${expandToolCallsIcon}
       </button>
       <button
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
@@ -462,6 +495,25 @@ export function renderChatMobileToggle(state: AppViewState) {
               title=${t("chat.toolCallsToggle")}
             >
               ${toolCallsIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${state.settings.chatExpandToolCalls ? "active" : ""}"
+              ?disabled=${!showToolCalls}
+              @click=${() => {
+                if (showToolCalls) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatExpandToolCalls: !state.settings.chatExpandToolCalls,
+                  });
+                }
+              }}
+              aria-pressed=${state.settings.chatExpandToolCalls}
+              title=${t("chat.expandToolCallsToggle")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m7 20 5-5 5 5"></path>
+                <path d="m7 4 5 5 5-5"></path>
+              </svg>
             </button>
             <button
               class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"

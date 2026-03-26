@@ -62,6 +62,7 @@ function createHost() {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatExpandToolCalls: false,
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 280,

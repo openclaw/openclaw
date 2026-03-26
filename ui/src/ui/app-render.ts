@@ -321,6 +321,7 @@ export function renderApp(state: AppViewState) {
   const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const expandToolCalls = state.settings.chatExpandToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -1464,6 +1465,7 @@ export function renderApp(state: AppViewState) {
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
                 showToolCalls,
+                expandToolCalls,
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,

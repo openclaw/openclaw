@@ -384,6 +384,7 @@ export const en: TranslationMap = {
     refreshTitle: "Refresh chat data",
     thinkingToggle: "Toggle assistant thinking/working output",
     toolCallsToggle: "Toggle tool calls and tool results",
+    expandToolCallsToggle: "Expand tool output by default",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
     hideCronSessions: "Hide cron sessions",
     showCronSessions: "Show cron sessions",
