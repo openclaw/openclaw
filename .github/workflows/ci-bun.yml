@@ -99,4 +99,10 @@ jobs:
           path: src/canvas-host/a2ui/
 
       - name: Run Bun test shard
-        run: OPENCLAW_TEST_ISOLATE=1 ${{ matrix.command }} --shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard "$SHARD_INDEX/$SHARD_COUNT"

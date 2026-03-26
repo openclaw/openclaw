@@ -30,6 +30,7 @@ jobs:
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
+      run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
       changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
@@ -330,7 +331,24 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            extensions)
+              pnpm test:extensions
+              ;;
+            contracts)
+              pnpm test:contracts
+              pnpm protocol:check
+              ;;
+            *)
+              echo "Unsupported checks-fast task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   checks:
     name: ${{ matrix.check_name }}
@@ -365,6 +383,7 @@ jobs:
       - name: Configure Node test resources
         if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
+          TASK: ${{ matrix.task }}
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
@@ -372,7 +391,7 @@ jobs:
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-          if [ "${{ matrix.task }}" = "channels" ]; then
+          if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
           fi
@@ -397,7 +416,23 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test|compat-node22)
+              pnpm test
+              ;;
+            channels)
+              pnpm test:channels
+              ;;
+            *)
+              echo "Unsupported checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   extension-fast:
     name: "extension-fast"
@@ -728,9 +763,12 @@ jobs:
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
         run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
       - name: Download dist artifact
         if: matrix.task == 'test'
@@ -747,7 +785,20 @@ jobs:
           path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported Windows checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   macos-node:
     name: ${{ matrix.check_name }}
@@ -783,14 +834,29 @@ jobs:
           path: src/canvas-host/a2ui/
 
       - name: Configure test shard (macOS)
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
         run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: ${{ matrix.command }}
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported macOS node task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   macos-swift-lint:
     name: "macos-swift-lint"
@@ -963,4 +1029,26 @@ jobs:
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test-play)
+              ./gradlew --no-daemon :app:testPlayDebugUnitTest
+              ;;
+            test-third-party)
+              ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+              ;;
+            build-play)
+              ./gradlew --no-daemon :app:assemblePlayDebug
+              ;;
+            build-third-party)
+              ./gradlew --no-daemon :app:assembleThirdPartyDebug
+              ;;
+            *)
+              echo "Unsupported Android task: $TASK" >&2
+              exit 1
+              ;;
+          esac
