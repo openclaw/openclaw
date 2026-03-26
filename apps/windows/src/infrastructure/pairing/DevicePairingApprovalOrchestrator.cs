@@ -243,11 +243,13 @@ internal sealed class DevicePairingApprovalOrchestrator : IHostedService, IDevic
                 {
                     case PairingDecision.Approve:
                         lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                        NotifyPendingChanged();
                         await ApproveAsync(req.RequestId, ct);
                         break;
 
                     case PairingDecision.Reject:
                         lock (_lock) { _queue.RemoveAll(r => r.RequestId == req.RequestId); }
+                        NotifyPendingChanged();
                         await RejectAsync(req.RequestId, ct);
                         break;
 

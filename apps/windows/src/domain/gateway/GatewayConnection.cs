@@ -71,6 +71,13 @@ public sealed class GatewayConnection : Entity<string>
         State = GatewayConnectionState.Paused;
     }
 
+    public void MarkResumed()
+    {
+        // Tolerate already-Connected (race between UI and reconnect coordinator).
+        if (State == GatewayConnectionState.Paused)
+            State = GatewayConnectionState.Connected;
+    }
+
     public void MarkReconnecting()
     {
         State = GatewayConnectionState.Reconnecting;
