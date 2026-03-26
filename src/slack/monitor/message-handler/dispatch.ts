@@ -39,6 +39,9 @@ function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 }
 
+const MAX_SLACK_FINAL_GUARD_EVIDENCE_TEXTS = 24;
+const MAX_SLACK_FINAL_GUARD_EVIDENCE_CHARS = 8_000;
+
 export function isSlackSuppressedReplyPayload(payload: ReplyPayload): boolean {
   const trimmed = payload.text?.trim();
   // This Slack path only renders text/media. Flags like isError/channelData do
@@ -74,6 +77,38 @@ export function didSlackDispatchDeliverAnyReply(params: {
 
 export function formatSlackSuppressedReplyPreview(text?: string): string {
   return (text ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+}
+
+function collectSlackFinalGuardEvidence(params: {
+  evidenceTexts: string[];
+  evidenceSet: Set<string>;
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+}): void {
+  // Only raw tool output is evidence-grade here. Model-authored block/final
+  // text can hallucinate and must not feed later numeric rewrites.
+  if (params.kind !== "tool") {
+    return;
+  }
+  const text = params.payload.text?.trim();
+  if (!text || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    return;
+  }
+  if (params.evidenceSet.has(text)) {
+    return;
+  }
+  if (params.evidenceTexts.length >= MAX_SLACK_FINAL_GUARD_EVIDENCE_TEXTS) {
+    return;
+  }
+
+  const usedChars = params.evidenceTexts.reduce((sum, value) => sum + value.length, 0);
+  const remainingChars = MAX_SLACK_FINAL_GUARD_EVIDENCE_CHARS - usedChars;
+  if (remainingChars <= 0 || text.length > remainingChars) {
+    return;
+  }
+
+  params.evidenceTexts.push(text);
+  params.evidenceSet.add(text);
 }
 
 export function requireSlackDispatchResult<T>(result: T | undefined, error: unknown): T {
@@ -562,11 +597,19 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
+  const finalGuardEvidenceTexts: string[] = [];
+  const finalGuardEvidenceSet = new Set<string>();
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
     deliver: async (incomingPayload, info) => {
+      collectSlackFinalGuardEvidence({
+        evidenceTexts: finalGuardEvidenceTexts,
+        evidenceSet: finalGuardEvidenceSet,
+        kind: info.kind,
+        payload: incomingPayload,
+      });
       if (
         shouldSkipSlackReplyDelivery({
           kind: info.kind,
@@ -588,8 +631,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ? applySlackFinalReplyGuardsSafely({
             questionText: inboundText,
             inboundText,
+            evidenceTexts: finalGuardEvidenceTexts,
             incidentRootOnly: prepared.channelConfig?.incidentRootOnly === true,
             isThreadReply,
+            onEvidenceRewrite: (rewrite) => {
+              if (!shouldLogVerbose()) {
+                return;
+              }
+              logVerbose(
+                `slack-guard: evidence rewrite kind=${rewrite.kind} key=${rewrite.key} ${rewrite.previous} -> ${rewrite.next}`,
+              );
+            },
             payload: incomingPayload,
             onError: (err) => {
               runtime.error?.(danger(`slack-guard: final reply guard failed: ${String(err)}`));

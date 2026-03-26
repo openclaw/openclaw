@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
+  applySlackFinalReplyGuards,
   enforceSlackDirectEitherOrAnswer,
+  enforceSlackEvidenceConsistency,
   enforceSlackNoProgressOnlyReply,
+  enforceSlackNumericSummaryConsistency,
   enforceSlackDisprovedTheoryRetraction,
   extractEitherOrQuestion,
   shouldRequireSlackDisprovedTheory,
@@ -51,6 +54,356 @@ describe("enforceSlackDirectEitherOrAnswer", () => {
     });
 
     expect(payload.text).toBe("Yes. Looking now.");
+  });
+});
+
+describe("slack numeric summary consistency guard", () => {
+  const mismatchedSummaryReply = `[[reply_to_current]] Here's the same breakdown, filtered to vaults with ≥ $10k total assets:
+
+**Vaults ≥ $10k: 544 total**
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| **Grand total** | **444** | **319** | **125** |
+
+For comparison, the unfiltered numbers:
+
+| Version | All | ≥ $10k | < $10k |
+|---------|----:|-------:|-------:|
+| v1 | 201 | 55 | 146 |
+| v1.1 | 1,117 | 255 | 862 |
+| v2 | 1,069 | 134 | 935 |
+| **Total** | **2,387** | **444** | **1,943** |
+
+~81% of all vaults have under $10k in assets.`;
+
+  const evidenceTexts = [
+    `--- v1 total >= 10k ---
+55
+--- v1 listed ---
+48
+--- v1 unlisted ---
+7`,
+    `- v1.1: 255 total, 174 listed, 81 unlisted
+- v2: 134 total, 97 listed, 37 unlisted`,
+    `| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+  ];
+
+  it("rewrites a mismatched headline total from the first markdown table", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: { text: mismatchedSummaryReply },
+    });
+
+    expect(payload.text).toContain("**Vaults ≥ $10k: 444 total**");
+    expect(payload.text).not.toContain("**Vaults ≥ $10k: 544 total**");
+  });
+
+  it("runs for all final Slack replies, not only incident-root-only threads", () => {
+    const payload = applySlackFinalReplyGuards({
+      questionText: "same lists as before but split for 10k",
+      inboundText: "same lists as before but split for 10k",
+      evidenceTexts,
+      incidentRootOnly: false,
+      isThreadReply: true,
+      payload: { text: mismatchedSummaryReply },
+    });
+
+    expect(payload.text).toContain("**Vaults ≥ $10k: 444 total**");
+  });
+
+  it("rewrites labeled evidence lines before reconciling the summary total", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts,
+      payload: {
+        text: `- v1.1: 255 total, 174 listed, 18 unlisted
+- v2: 134 total, 79 listed, 37 unlisted
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 18 |
+| v2 | 134 | 79 | 37 |
+| Grand total | 444 | 301 | 62 |`,
+      },
+    });
+
+    expect(payload.text).toContain("- v1.1: 255 total, 174 listed, 81 unlisted");
+    expect(payload.text).toContain("- v2: 134 total, 97 listed, 37 unlisted");
+    expect(payload.text).toContain("| v1.1 | 255 | 174 | 81 |");
+    expect(payload.text).toContain("| v2 | 134 | 97 | 37 |");
+    expect(payload.text).toContain("| Grand total | 444 | 319 | 125 |");
+  });
+
+  it("does not recompute table totals from reply-only rows that lack evidence", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: ["- v1: 55 total, 48 listed, 7 unlisted"],
+      payload: {
+        text: `| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 999 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      },
+    });
+
+    expect(payload.text).toContain("| v2 | 999 | 97 | 37 |");
+    expect(payload.text).toContain("| Grand total | 444 | 319 | 125 |");
+    expect(payload.text).not.toContain("| Grand total | 1,309 | 319 | 125 |");
+  });
+
+  it("recomputes a single-row total when that row is uniquely evidence-backed", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: ["- us-east-1: 5 total"],
+      payload: {
+        text: `| Region | Total |
+|--------|------:|
+| us-east-1 | 7 |
+| Grand total | 7 |`,
+      },
+    });
+
+    expect(payload.text).toContain("| us-east-1 | 5 |");
+    expect(payload.text).toContain("| Grand total | 5 |");
+  });
+
+  it("ignores inconsistent total rows from evidence tables", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: [
+        `| Region | Total |
+|--------|------:|
+| us-east-1 | 5 |
+| Grand total | 999 |`,
+      ],
+      payload: {
+        text: "- Grand total: 7 total",
+      },
+    });
+
+    expect(payload.text).toBe("- Grand total: 7 total");
+  });
+
+  it("keeps the reply unchanged when the table total is not internally consistent", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: mismatchedSummaryReply.replace(
+          "**444** | **319** | **125**",
+          "**445** | **319** | **125**",
+        ),
+      },
+    });
+
+    expect(payload.text).toContain("**Vaults ≥ $10k: 544 total**");
+    expect(payload.text).toContain("| **Grand total** | **445** | **319** | **125** |");
+  });
+
+  it("keeps the reply unchanged when the primary table column cannot be fully validated", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Vaults ≥ $10k: 544 total
+
+| Version | Total ≥ $10k | Listed |
+|---------|------------:|-------:|
+| v1 | n/a | 48 |
+| Grand total | 444 | 48 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Vaults ≥ $10k: 544 total");
+    expect(payload.text).toContain("| v1 | n/a | 48 |");
+  });
+
+  it("ignores malformed markdown tables whose separator columns do not match the header", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Vaults ≥ $10k: 544 total
+
+| Version | Total ≥ $10k | Listed |
+|---------|------------:|
+| v1 | 55 | 48 |
+| Grand total | 444 | 48 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Vaults ≥ $10k: 544 total");
+  });
+
+  it("rejects totals that would lose integer precision", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Vaults ≥ $10k: 544 total
+
+| Version | Total ≥ $10k |
+|---------|------------:|
+| v1 | 9,007,199,254,740,992 |
+| Grand total | 9,007,199,254,740,992 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Vaults ≥ $10k: 544 total");
+  });
+
+  it("rejects totals that would lose decimal precision", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Vaults ≥ $10k: 544 total
+
+| Version | Total ≥ $10k |
+|---------|------------:|
+| v1 | 9,007,199,254,740,991.5 |
+| Grand total | 9,007,199,254,740,991.5 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Vaults ≥ $10k: 544 total");
+  });
+
+  it("accepts exact max-safe-integer totals without precision loss", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Vaults ≥ $10k: 544 total
+
+| Version | Total ≥ $10k |
+|---------|------------:|
+| v1 | 9,007,199,254,740,991 |
+| Grand total | 9,007,199,254,740,991 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Vaults ≥ $10k: 9,007,199,254,740,991 total");
+  });
+
+  it("skips oversized numeric-like evidence lines before token extraction", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: [`Grand total: ${"1,".repeat(1_500)} total`],
+      payload: { text: "- Grand total: 7 total" },
+    });
+
+    expect(payload.text).toBe("- Grand total: 7 total");
+  });
+
+  it("does not rewrite narrative context lines above the first table", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Historical inventory had 2,387 total vaults before filtering.
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Historical inventory had 2,387 total vaults before filtering.");
+  });
+
+  it("does not rewrite unrelated contextual totals above the filtered table", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `All vaults: 2,387 total
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      },
+    });
+
+    expect(payload.text).toContain("All vaults: 2,387 total");
+    expect(payload.text).not.toContain("All vaults: 444 total");
+  });
+
+  it("stops scanning once it leaves the immediate summary block above the table", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `Overall inventory: 2,387 total
+
+Filtered subset details:
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      },
+    });
+
+    expect(payload.text).toContain("Overall inventory: 2,387 total");
+    expect(payload.text).not.toContain("Overall inventory: 444 total");
+  });
+
+  it("does not rewrite per-version metric lines as the summary total", () => {
+    const payload = enforceSlackNumericSummaryConsistency({
+      payload: {
+        text: `- v1: 55 total
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      },
+    });
+
+    expect(payload.text).toContain("- v1: 55 total");
+    expect(payload.text).not.toContain("- v1: 444 total");
+  });
+
+  it("leaves replies unchanged when conflicting evidence values exist for the same metric", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: [
+        "- v1: 55 total, 48 listed, 7 unlisted",
+        "- v1: 55 total, 50 listed, 7 unlisted",
+      ],
+      payload: {
+        text: "- v1: 55 total, 47 listed, 7 unlisted",
+      },
+    });
+
+    expect(payload.text).toBe("- v1: 55 total, 47 listed, 7 unlisted");
+  });
+
+  it("rewrites metric-line-only replies without markdown tables", () => {
+    const payload = enforceSlackEvidenceConsistency({
+      evidenceTexts: ["- v2: 134 total, 97 listed, 37 unlisted"],
+      payload: {
+        text: "- v2: 134 total, 79 listed, 37 unlisted",
+      },
+    });
+
+    expect(payload.text).toBe("- v2: 134 total, 97 listed, 37 unlisted");
+  });
+
+  it("leaves payloads unchanged when evidence is empty or the payload is an error", () => {
+    const errorPayload = {
+      text: mismatchedSummaryReply,
+      isError: true,
+    } as const;
+
+    expect(
+      enforceSlackEvidenceConsistency({
+        evidenceTexts: [],
+        payload: { text: "- v2: 134 total, 79 listed, 37 unlisted" },
+      }).text,
+    ).toBe("- v2: 134 total, 79 listed, 37 unlisted");
+    expect(enforceSlackEvidenceConsistency({ evidenceTexts, payload: errorPayload })).toBe(
+      errorPayload,
+    );
+    expect(enforceSlackNumericSummaryConsistency({ payload: errorPayload })).toBe(errorPayload);
   });
 });
 

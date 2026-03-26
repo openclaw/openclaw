@@ -172,4 +172,104 @@ describe("dispatchPreparedSlackMessage final-only delivery", () => {
       deliverRepliesMock.mock.calls.map((call) => call[0].replies[0]?.text as string | undefined),
     ).toEqual(["tool update", "block update", "final answer"]);
   });
+
+  it("uses skipped tool evidence to correct the final Slack reply", async () => {
+    dispatchInboundMessageMock.mockImplementation(async ({ dispatcher }) => {
+      dispatcher.sendToolResult({
+        text: `--- v1 total >= 10k ---
+55
+--- v1 listed ---
+48
+--- v1 unlisted ---
+7`,
+      });
+      dispatcher.sendToolResult({
+        text: `- v1.1: 255 total, 174 listed, 81 unlisted
+- v2: 134 total, 97 listed, 37 unlisted`,
+      });
+      dispatcher.sendToolResult({
+        text: `| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      });
+      dispatcher.sendFinalReply({
+        text: `**Vaults ≥ $10k: 544 total**
+
+- v1.1: 255 total, 174 listed, 18 unlisted
+- v2: 134 total, 79 listed, 37 unlisted
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 18 |
+| v2 | 134 | 79 | 37 |
+| Grand total | 444 | 301 | 62 |`,
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return {
+        queuedFinal: true,
+        counts: dispatcher.getQueuedCounts(),
+      };
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedMessage({ incidentRootOnly: true }));
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const finalReply = deliverRepliesMock.mock.calls[0]?.[0].replies[0]?.text as string | undefined;
+    expect(finalReply).toContain("**Vaults ≥ $10k: 444 total**");
+    expect(finalReply).toContain("- v1.1: 255 total, 174 listed, 81 unlisted");
+    expect(finalReply).toContain("- v2: 134 total, 97 listed, 37 unlisted");
+    expect(finalReply).toContain("| v1.1 | 255 | 174 | 81 |");
+    expect(finalReply).toContain("| v2 | 134 | 97 | 37 |");
+    expect(finalReply).toContain("| Grand total | 444 | 319 | 125 |");
+  });
+
+  it("ignores skipped block replies when collecting final-guard evidence", async () => {
+    dispatchInboundMessageMock.mockImplementation(async ({ dispatcher }) => {
+      dispatcher.sendToolResult({
+        text: `| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      });
+      dispatcher.sendBlockReply({
+        text: `- v1.1: 255 total, 174 listed, 18 unlisted
+- v2: 134 total, 79 listed, 37 unlisted`,
+      });
+      dispatcher.sendFinalReply({
+        text: `**Vaults ≥ $10k: 444 total**
+
+- v1.1: 255 total, 174 listed, 81 unlisted
+- v2: 134 total, 97 listed, 37 unlisted
+
+| Version | Total ≥ $10k | Listed | Unlisted |
+|---------|------------:|-------:|---------:|
+| v1 | 55 | 48 | 7 |
+| v1.1 | 255 | 174 | 81 |
+| v2 | 134 | 97 | 37 |
+| Grand total | 444 | 319 | 125 |`,
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return {
+        queuedFinal: true,
+        counts: dispatcher.getQueuedCounts(),
+      };
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedMessage({ incidentRootOnly: true }));
+
+    const finalReply = deliverRepliesMock.mock.calls[0]?.[0].replies[0]?.text as string | undefined;
+    expect(finalReply).toContain("**Vaults ≥ $10k: 444 total**");
+    expect(finalReply).toContain("- v1.1: 255 total, 174 listed, 81 unlisted");
+    expect(finalReply).toContain("- v2: 134 total, 97 listed, 37 unlisted");
+    expect(finalReply).not.toContain("18 unlisted");
+    expect(finalReply).not.toContain("79 listed");
+  });
 });
