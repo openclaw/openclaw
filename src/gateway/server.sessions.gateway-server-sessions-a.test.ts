@@ -1738,7 +1738,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
-    const { dir } = await createSessionStoreDir();
+    const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
 
     await writeSessionStore({
@@ -1751,6 +1751,11 @@ describe("gateway server sessions", () => {
             agent: "codex",
             runtimeSessionName: "runtime:reset",
             mode: "persistent",
+            runtimeOptions: {
+              runtimeMode: "auto",
+              timeoutSeconds: 30,
+            },
+            cwd: "/tmp/acp-session",
             state: "idle",
             lastActivityAt: Date.now(),
           },
@@ -1758,16 +1763,74 @@ describe("gateway server sessions", () => {
       },
     });
     const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        acp?: {
+          backend?: string;
+          agent?: string;
+          runtimeSessionName?: string;
+          mode?: string;
+          runtimeOptions?: {
+            runtimeMode?: string;
+            timeoutSeconds?: number;
+          };
+          cwd?: string;
+          state?: string;
+        };
+      };
+    }>(ws, "sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.acp).toMatchObject({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:reset",
+      mode: "persistent",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
+      },
+      cwd: "/tmp/acp-session",
+      state: "idle",
+    });
     expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
       allowBackendUnavailable: true,
       cfg: expect.any(Object),
       requireAcpSession: false,
       reason: "session-reset",
       sessionKey: "agent:main:main",
+    });
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        acp?: {
+          backend?: string;
+          agent?: string;
+          runtimeSessionName?: string;
+          mode?: string;
+          runtimeOptions?: {
+            runtimeMode?: string;
+            timeoutSeconds?: number;
+          };
+          cwd?: string;
+          state?: string;
+        };
+      }
+    >;
+    expect(store["agent:main:main"]?.acp).toMatchObject({
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "runtime:reset",
+      mode: "persistent",
+      runtimeOptions: {
+        runtimeMode: "auto",
+        timeoutSeconds: 30,
+      },
+      cwd: "/tmp/acp-session",
+      state: "idle",
     });
 
     ws.close();
