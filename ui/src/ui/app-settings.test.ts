@@ -40,6 +40,7 @@ type SettingsHost = {
     chatFocusMode: boolean;
     chatShowThinking: boolean;
     chatShowToolCalls: boolean;
+    chatExpandToolCalls: boolean;
     splitRatio: number;
     navCollapsed: boolean;
     navWidth: number;
@@ -144,6 +145,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
+    chatExpandToolCalls: false,
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,

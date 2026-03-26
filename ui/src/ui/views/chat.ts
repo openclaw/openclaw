@@ -57,6 +57,7 @@ export type ChatProps = {
   thinkingLevel: string | null;
   showThinking: boolean;
   showToolCalls: boolean;
+  expandToolCalls: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -977,6 +978,7 @@ export function renderChat(props: ChatProps) {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
               showToolCalls: props.showToolCalls,
+              expandToolCalls: props.expandToolCalls,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
               basePath: props.basePath,
