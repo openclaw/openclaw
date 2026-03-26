@@ -27,61 +27,74 @@ vi.mock("../logger.js", async () => {
 const { ensureMediaHosted } = await import("./host.js");
 const { PortInUseError } = await import("../infra/ports.js");
 
+type CleanupCase = {
+  name: string;
+  filePath: string;
+  savedMedia: { id: string; size: number };
+  tailnetHostname?: string;
+  tailnetError?: Error;
+  port?: number;
+  startServer: boolean;
+  ensurePortError?: Error;
+  startServerError?: Error;
+  expectedError: RegExp | Error;
+  expectedCleanupPath: string;
+};
+
+type SuccessCase = {
+  name: string;
+  filePath: string;
+  savedMedia: { id: string; size: number };
+  tailnetHostname: string;
+  port: number;
+  startServer: boolean;
+  ensurePortError?: Error;
+  expectedUrl: string;
+  expectServerStart: boolean;
+};
+
+type HostedMediaCase = CleanupCase | SuccessCase;
+
 describe("ensureMediaHosted", () => {
-  function mockSavedMedia(id: string, size: number) {
+  function mockSavedMedia(id: string, size: number, path = `/tmp/${id}`) {
     saveMediaSource.mockResolvedValue({
       id,
-      path: `/tmp/${id}`,
+      path,
       size,
     });
   }
 
-  async function expectHostedMediaCase(
-    params:
-      | {
-          filePath: string;
-          savedMedia: { id: string; size: number };
-          tailnetHostname: string;
-          startServer: boolean;
-          expectedError: RegExp;
-          expectedCleanupPath: string;
-        }
-      | {
-          filePath: string;
-          savedMedia: { id: string; size: number };
-          tailnetHostname: string;
-          port: number;
-          startServer: boolean;
-          ensurePortError?: Error;
-          expectedUrl: string;
-          expectServerStart: boolean;
-        },
-  ) {
-    getTailnetHostname.mockResolvedValue(params.tailnetHostname);
-    if ("expectedError" in params) {
-      saveMediaSource.mockResolvedValue({
-        id: params.savedMedia.id,
-        path: params.filePath,
-        size: params.savedMedia.size,
-      });
+  async function expectHostedMediaCase(params: HostedMediaCase) {
+    mockSavedMedia(params.savedMedia.id, params.savedMedia.size, params.filePath);
+    if ("tailnetError" in params && params.tailnetError) {
+      getTailnetHostname.mockRejectedValue(params.tailnetError);
+    } else {
+      getTailnetHostname.mockResolvedValue(params.tailnetHostname);
+    }
+
+    if (params.ensurePortError) {
+      ensurePortAvailable.mockRejectedValue(params.ensurePortError);
+    } else {
       ensurePortAvailable.mockResolvedValue(undefined);
+    }
+
+    if ("expectedError" in params) {
+      if (params.startServerError) {
+        startMediaServer.mockRejectedValue(params.startServerError);
+      } else {
+        startMediaServer.mockResolvedValue({ unref: vi.fn() } as unknown as Server);
+      }
       const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
 
       await expect(
-        ensureMediaHosted(params.filePath, { startServer: params.startServer }),
+        ensureMediaHosted(params.filePath, { startServer: params.startServer, port: params.port }),
       ).rejects.toThrow(params.expectedError);
       expect(rmSpy).toHaveBeenCalledWith(params.expectedCleanupPath);
       rmSpy.mockRestore();
       return;
     }
 
-    mockSavedMedia(params.savedMedia.id, params.savedMedia.size);
-    if (params.ensurePortError) {
-      ensurePortAvailable.mockRejectedValue(params.ensurePortError);
-    } else {
-      ensurePortAvailable.mockResolvedValue(undefined);
-      startMediaServer.mockResolvedValue({ unref: vi.fn() } as unknown as Server);
-    }
+    startMediaServer.mockResolvedValue({ unref: vi.fn() } as unknown as Server);
 
     const result = await ensureMediaHosted(params.filePath, {
       startServer: params.startServer,
@@ -120,6 +133,36 @@ describe("ensureMediaHosted", () => {
       expectedCleanupPath: "/tmp/file1",
     },
     {
+      name: "cleans up when hostname lookup fails after save",
+      filePath: "/tmp/file-hostname",
+      savedMedia: { id: "id-hostname", size: 5 },
+      tailnetError: new Error("hostname lookup failed"),
+      startServer: false,
+      expectedError: /hostname lookup failed/,
+      expectedCleanupPath: "/tmp/file-hostname",
+    },
+    {
+      name: "cleans up when port check fails unexpectedly",
+      filePath: "/tmp/file-port",
+      savedMedia: { id: "id-port", size: 5 },
+      tailnetHostname: "tail.net",
+      startServer: false,
+      ensurePortError: new Error("port check failed"),
+      expectedError: /port check failed/,
+      expectedCleanupPath: "/tmp/file-port",
+    },
+    {
+      name: "cleans up when media server startup fails",
+      filePath: "/tmp/file-start",
+      savedMedia: { id: "id-start", size: 9 },
+      tailnetHostname: "tail.net",
+      port: 1234,
+      startServer: true,
+      startServerError: new Error("startup failed"),
+      expectedError: /startup failed/,
+      expectedCleanupPath: "/tmp/file-start",
+    },
+    {
       name: "starts media server when allowed",
       filePath: "/tmp/id2",
       savedMedia: { id: "id2", size: 9 },
@@ -140,7 +183,7 @@ describe("ensureMediaHosted", () => {
       expectedUrl: "https://tail.net/media/id3",
       expectServerStart: false,
     },
-  ] as const)("$name", async (testCase) => {
+  ] satisfies HostedMediaCase[])("$name", async (testCase) => {
     await expectHostedMediaCase(testCase);
   });
 });

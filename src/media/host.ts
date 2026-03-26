@@ -30,29 +30,33 @@ export async function ensureMediaHosted(
   const runtime = opts.runtime ?? defaultRuntime;
 
   const saved = await saveMediaSource(source);
-  const hostname = await getTailnetHostname();
+  try {
+    const hostname = await getTailnetHostname();
 
-  // Decide whether we must start a media server.
-  const needsServerStart = await isPortFree(port);
-  if (needsServerStart && !opts.startServer) {
-    await fs.rm(saved.path).catch(() => {});
-    throw new Error(
-      `Media hosting requires the webhook/Funnel server. Start \`${formatCliCommand("openclaw webhook")}\`/\`${formatCliCommand("openclaw up")}\` or re-run with --serve-media.`,
-    );
-  }
-  if (needsServerStart && opts.startServer) {
-    if (!mediaServer) {
-      mediaServer = await startMediaServer(port, TTL_MS, runtime);
-      logInfo(
-        `🦞 Started temporary media host on http://localhost:${port}/media/:id (TTL ${TTL_MS / 1000}s)`,
-        runtime,
+    // Decide whether we must start a media server.
+    const needsServerStart = await isPortFree(port);
+    if (needsServerStart && !opts.startServer) {
+      throw new Error(
+        `Media hosting requires the webhook/Funnel server. Start \`${formatCliCommand("openclaw webhook")}\`/\`${formatCliCommand("openclaw up")}\` or re-run with --serve-media.`,
       );
-      mediaServer.unref?.();
     }
-  }
+    if (needsServerStart && opts.startServer) {
+      if (!mediaServer) {
+        mediaServer = await startMediaServer(port, TTL_MS, runtime);
+        logInfo(
+          `🦞 Started temporary media host on http://localhost:${port}/media/:id (TTL ${TTL_MS / 1000}s)`,
+          runtime,
+        );
+        mediaServer.unref?.();
+      }
+    }
 
-  const url = `https://${hostname}/media/${saved.id}`;
-  return { url, id: saved.id, size: saved.size };
+    const url = `https://${hostname}/media/${saved.id}`;
+    return { url, id: saved.id, size: saved.size };
+  } catch (error) {
+    await fs.rm(saved.path).catch(() => {});
+    throw error;
+  }
 }
 
 async function isPortFree(port: number) {
