@@ -453,6 +453,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
+  const normalizedProvider = normalizeProviderId(provider);
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({

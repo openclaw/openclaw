@@ -49,9 +49,10 @@ async function resolveImageRuntime(params: {
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const registryHit = modelRegistry.find(resolvedRef.provider, resolvedRef.model) as
-    | Model<Api>
-    | null;
+  const registryHit = modelRegistry.find(
+    resolvedRef.provider,
+    resolvedRef.model,
+  ) as Model<Api> | null;
 
   // Always run the full resolution pipeline so that user config overrides
   // (e.g. input: ["text", "image"]) are applied even for registry-cached models.

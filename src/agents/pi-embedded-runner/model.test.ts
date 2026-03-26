@@ -750,7 +750,12 @@ describe("resolveModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveModelForTest("openrouter", "anthropic/claude-opus-4-6", "/tmp/agent", cfg);
+    const result = resolveModelForTest(
+      "openrouter",
+      "anthropic/claude-opus-4-6",
+      "/tmp/agent",
+      cfg,
+    );
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
