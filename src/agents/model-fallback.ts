@@ -14,6 +14,7 @@ import {
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { getSoonestCooldownExpiryWithTimestamp } from "./auth-profiles/usage.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   coerceToFailoverError,
@@ -198,7 +199,7 @@ async function runFallbackCandidate<T>(params: {
         if (reason === "overloaded") {
           return attempt <= 1 + (retryConfig?.overloaded ?? 1);
         }
-        if (reason === "auth_failure") {
+        if (reason === "auth" || reason === "auth_permanent") {
           return attempt <= 1 + (retryConfig?.auth_failure ?? 0);
         }
         return false;
@@ -285,6 +286,7 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   candidates: ModelCandidate[];
+  now: number;
 }): number | null {
   if (!params.authStore) {
     return null;
@@ -658,6 +660,7 @@ export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
+  now?: number;
   runId?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -701,7 +704,7 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
-        const now = Date.now();
+        const now = params.now ?? Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
         const decision = resolveCooldownDecision({
           candidate,
@@ -915,6 +918,7 @@ export async function runWithModelFallback<T>(params: {
       agentDir: params.agentDir,
       cfg: params.cfg,
       candidates,
+      now: params.now ?? Date.now(),
     }),
   });
 }

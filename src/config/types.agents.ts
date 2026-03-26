@@ -97,5 +97,12 @@ export type AgentConfig = {
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
+  /** Optional retry settings for fallback retries across providers/models. */
+  retries?: {
+    default?: number;
+    rate_limit?: number;
+    overloaded?: number;
+    auth_failure?: number;
+  };
   list?: AgentConfig[];
 };
