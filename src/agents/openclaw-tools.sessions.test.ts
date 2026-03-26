@@ -168,6 +168,13 @@ describe("sessions tools", () => {
               parentSessionKey: "agent:main:main",
             },
             {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              sessionId: "s-subagent-worker",
+              updatedAt: 13,
+              spawnedBy: "agent:main:main",
+            },
+            {
               key: "cron:job-1",
               kind: "direct",
               sessionId: "s-cron",
@@ -203,6 +210,7 @@ describe("sessions tools", () => {
       sessions?: Array<{
         key?: string;
         channel?: string;
+        spawnedBy?: string;
         status?: string;
         startedAt?: number;
         runtimeMs?: number;
@@ -212,7 +220,7 @@ describe("sessions tools", () => {
         messages?: Array<{ role?: string }>;
       }>;
     };
-    expect(details.sessions).toHaveLength(4);
+    expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);
@@ -227,6 +235,9 @@ describe("sessions tools", () => {
 
     const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
+
+    const subagentWorker = details.sessions?.find((s) => s.key === "agent:main:subagent:worker");
+    expect(subagentWorker?.spawnedBy).toBe("agent:main:main");
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
     const cronDetails = cronOnly.details as {
