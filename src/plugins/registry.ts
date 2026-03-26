@@ -26,7 +26,6 @@ import {
 } from "./types.js";
 import type {
   ImageGenerationProviderPlugin,
-  VideoGenerationProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliRegistrar,
@@ -124,8 +123,6 @@ export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
-export type PluginVideoGenerationProviderRegistration =
-  PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
 
@@ -185,7 +182,6 @@ export type PluginRecord = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
   cliCommands: string[];
@@ -209,7 +205,6 @@ export type PluginRegistry = {
   speechProviders: PluginSpeechProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
-  videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   httpRoutes: PluginHttpRouteRegistration[];
@@ -649,19 +644,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerVideoGenerationProvider = (
-    record: PluginRecord,
-    provider: VideoGenerationProviderPlugin,
-  ) => {
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "video-generation provider",
-      registrations: registry.videoGenerationProviders,
-      ownedIds: record.videoGenerationProviderIds,
-    });
-  };
-
   const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -935,10 +917,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerImageGenerationProvider:
         registrationMode === "full"
           ? (provider) => registerImageGenerationProvider(record, provider)
-          : () => {},
-      registerVideoGenerationProvider:
-        registrationMode === "full"
-          ? (provider) => registerVideoGenerationProvider(record, provider)
           : () => {},
       registerWebSearchProvider:
         registrationMode === "full"

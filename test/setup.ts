@@ -59,6 +59,7 @@ import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { cleanupSessionStateForTest } from "../src/test-utils/session-state-cleanup.js";
 import { withIsolatedTestHome } from "./test-env.js";
 
@@ -75,12 +76,6 @@ type RegistryState = {
   httpRouteRegistryPinned: boolean;
   key: string | null;
   version: number;
-};
-
-type TestChannelRegistration = {
-  pluginId: string;
-  plugin: unknown;
-  source: string;
 };
 
 const globalRegistryState = (() => {
@@ -222,33 +217,6 @@ const createStubPlugin = (params: {
     },
   },
   outbound: createStubOutbound(params.id, params.deliveryMode),
-});
-
-const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  hooks: [],
-  typedHooks: [],
-  channels: channels as unknown as PluginRegistry["channels"],
-  channelSetups: channels.map((entry) => ({
-    pluginId: entry.pluginId,
-    plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
-    source: entry.source,
-    enabled: true,
-  })),
-  providers: [],
-  speechProviders: [],
-  mediaUnderstandingProviders: [],
-  imageGenerationProviders: [],
-  videoGenerationProviders: [],
-  webSearchProviders: [],
-  gatewayHandlers: {},
-  httpRoutes: [],
-  cliRegistrars: [],
-  services: [],
-  commands: [],
-  conversationBindingResolvedHandlers: [],
-  diagnostics: [],
 });
 
 const createDefaultRegistry = () =>
