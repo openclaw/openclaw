@@ -472,9 +472,7 @@ internal sealed partial class SystemTrayViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            await System.IO.File.WriteAllTextAsync(
-                @"C:\temp\openchat_error.txt",
-                $"{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}");
+            System.Diagnostics.Debug.WriteLine($"OpenChat failed: {ex}");
         }
     }
 

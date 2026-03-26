@@ -70,12 +70,14 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
                 var fromGateway = await TryLoadFromGatewayAsync(ct);
                 if (fromGateway is not null)
                 {
-                    // Gateway config schema lacks Windows-only credential fields — restore from local file.
+                    // Gateway config schema lacks Windows-only fields — restore from local file.
                     try
                     {
                         var local = await LoadLocalAsync(ct);
                         if (!string.IsNullOrEmpty(local.RemoteToken))    fromGateway.SetRemoteToken(local.RemoteToken);
                         if (!string.IsNullOrEmpty(local.RemotePassword)) fromGateway.SetRemotePassword(local.RemotePassword);
+                        // IsPaused is persisted locally so pause survives restart in remote mode.
+                        if (local.IsPaused) fromGateway.SetIsPaused(true);
                     }
                     catch { }
                     _cachedConnectionMode = fromGateway.ConnectionMode;
