@@ -69,8 +69,9 @@ export function createEventHandlers(context: EventHandlerContext) {
   let pendingHistoryRefresh = false;
 
   const pruneRunMap = (runs: Map<string, number>) => {
+    const pruned: string[] = [];
     if (runs.size <= 200) {
-      return;
+      return pruned;
     }
     const keepUntil = Date.now() - 10 * 60 * 1000;
     for (const [key, ts] of runs) {
@@ -79,16 +80,19 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (ts < keepUntil) {
         runs.delete(key);
+        pruned.push(key);
       }
     }
     if (runs.size > 200) {
       for (const key of runs.keys()) {
         runs.delete(key);
+        pruned.push(key);
         if (runs.size <= 150) {
           break;
         }
       }
     }
+    return pruned;
   };
 
   const syncSessionKey = () => {
@@ -124,7 +128,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.set(runId, Date.now());
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
-    pruneRunMap(finalizedRuns);
+    for (const prunedRunId of pruneRunMap(finalizedRuns)) {
+      terminalRunStatus.delete(prunedRunId);
+    }
   };
 
   const noteRunTerminalStatus = (runId: string, status: "idle" | "error" | "aborted") => {
@@ -185,6 +191,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     settleRunTools(params.runId, {
       isError: true,
     });
+    // Aborted/error runs are not tracked as finalized for late tool events, so
+    // their terminal status is no longer needed after settling current tools.
+    terminalRunStatus.delete(params.runId);
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
