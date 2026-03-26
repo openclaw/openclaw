@@ -182,6 +182,7 @@ describe("cli session history", () => {
       const messages = augmentChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
+          updatedAt: Date.now(),
           cliSessionBindings: {
             "claude-cli": {
               sessionId,
@@ -205,6 +206,7 @@ describe("cli session history", () => {
       const messages = augmentChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
+          updatedAt: Date.now(),
           cliSessionIds: {
             "claude-cli": sessionId,
           },
@@ -226,6 +228,7 @@ describe("cli session history", () => {
       const messages = augmentChatHistoryWithCliSessionImports({
         entry: {
           sessionId: "openclaw-session",
+          updatedAt: Date.now(),
           claudeCliSessionId: sessionId,
         },
         provider: "claude-cli",
