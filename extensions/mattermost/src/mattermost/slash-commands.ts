@@ -181,6 +181,12 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
+  {
+    trigger: "oc_pause",
+    originalName: "stop",
+    description: "Immediately stop the running agent",
+    autoComplete: true,
+  },
 ];
 
 // ─── Command registration ────────────────────────────────────────────────────

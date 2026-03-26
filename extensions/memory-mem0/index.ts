@@ -333,6 +333,7 @@ export default {
                   text: `No relevant memories found for: "${params.query}"`,
                 },
               ],
+              details: undefined,
             };
           }
 
@@ -350,6 +351,7 @@ export default {
                 text: `Found ${memories.length} relevant memories:\n\n${formatted}`,
               },
             ],
+            details: undefined,
           };
         },
       },
@@ -379,6 +381,7 @@ export default {
                   text: "Failed to store memory.",
                 },
               ],
+              details: undefined,
             };
           }
 
@@ -390,6 +393,7 @@ export default {
                 text: `Stored in memory: ${stored}`,
               },
             ],
+            details: undefined,
           };
         },
       },
@@ -422,6 +426,7 @@ export default {
                   text: "No memories stored yet.",
                 },
               ],
+              details: undefined,
             };
           }
 
@@ -434,6 +439,7 @@ export default {
                 text: `Total memories: ${memories.length}\n\n${formatted}`,
               },
             ],
+            details: undefined,
           };
         },
       },
@@ -469,6 +475,7 @@ export default {
                   : `Failed to delete memory: ${params.id}`,
               },
             ],
+            details: undefined,
           };
         },
       },
