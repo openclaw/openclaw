@@ -175,7 +175,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
-  if (threadRootId && params.replyToMode !== "off") {
+  if (threadRootId) {
     return threadRootId;
   }
   if (params.kind === "direct") {
@@ -467,7 +467,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
           typing: {
-            start: () => sendTypingIndicator(opts.channelId, (opts.post.root_id || "").trim() || threadContext.effectiveReplyToId),
+            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -491,7 +491,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
-                  threadRootId: (opts.post.root_id || "").trim() || threadContext.effectiveReplyToId,
+                  threadRootId: threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
                 }),
                 textLimit,
@@ -596,7 +596,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     teamId?: string;
     postId: string;
     effectiveReplyToId?: string;
-    rawThreadRootId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
@@ -661,7 +660,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       typing: shouldDeliverReplies
         ? {
-            start: () => sendTypingIndicator(params.channelId, params.rawThreadRootId || params.effectiveReplyToId),
+            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -699,7 +698,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
-              threadRootId: params.rawThreadRootId || params.effectiveReplyToId,
+              threadRootId: params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
             }),
             textLimit,
@@ -922,7 +921,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           postId: params.payload.post_id,
           effectiveReplyToId: threadContext.effectiveReplyToId,
-          rawThreadRootId: (params.post.root_id || "").trim() || undefined,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
@@ -1386,7 +1384,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       channel: "mattermost",
       accountId: account.accountId,
       typing: {
-        start: () => sendTypingIndicator(channelId, threadRootId || effectiveReplyToId),
+        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
         onStartError: (err) => {
           logTypingFailure({
             log: (message) => logger.debug?.(message),
@@ -1411,7 +1409,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostReplyRootId({
-              threadRootId: threadRootId || effectiveReplyToId,
+              threadRootId: effectiveReplyToId,
               replyToId: payload.replyToId,
             }),
             textLimit,
