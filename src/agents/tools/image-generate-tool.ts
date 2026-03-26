@@ -16,7 +16,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, readBooleanParam, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyImageGenerationModelConfigDefaults,
@@ -105,6 +105,18 @@ const ImageGenerateToolSchema = Type.Object({
       minimum: 1,
       maximum: MAX_COUNT,
     }),
+  ),
+  seed: Type.Optional(Type.Number({ description: "Random seed for reproducibility." })),
+  watermark: Type.Optional(Type.Boolean({ description: "Add watermark to image." })),
+  guidanceScale: Type.Optional(
+    Type.Number({
+      description: "Controls prompt adherence strength (1.0-20.0). Higher means stricter.",
+      minimum: 1,
+      maximum: 20,
+    }),
+  ),
+  optimizePrompt: Type.Optional(
+    Type.Boolean({ description: "Enable automatic prompt optimization for better results." }),
   ),
 });
 
@@ -342,7 +354,7 @@ type ImageGenerateSandboxConfig = {
 async function loadReferenceImages(params: {
   imageInputs: string[];
   maxBytes?: number;
-  localRoots: string[];
+  workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
 }): Promise<
   Array<{
@@ -402,6 +414,14 @@ async function loadReferenceImages(params: {
           };
     const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
+    const localRoots = resolveMediaToolLocalRoots(
+      params.workspaceDir,
+      {
+        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
+      },
+      resolvedPath ? [resolvedPath] : undefined,
+    );
+
     const media = isDataUrl
       ? decodeDataUrl(resolvedImage)
       : params.sandboxConfig
@@ -412,7 +432,7 @@ async function loadReferenceImages(params: {
           })
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
-            localRoots: params.localRoots,
+            localRoots,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -471,9 +491,6 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -549,7 +566,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        localRoots,
+        workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
@@ -574,6 +591,11 @@ export function createImageGenerateTool(options?: {
         resolution,
       });
 
+      const seed = readNumberParam(params, "seed", { integer: true });
+      const watermark = readBooleanParam(params, "watermark");
+      const guidanceScale = readNumberParam(params, "guidanceScale");
+      const optimizePrompt = readBooleanParam(params, "optimizePrompt");
+
       const result = await generateImage({
         cfg: effectiveCfg,
         prompt,
@@ -584,6 +606,10 @@ export function createImageGenerateTool(options?: {
         resolution,
         count,
         inputImages,
+        seed,
+        watermark,
+        guidanceScale,
+        optimizePrompt,
       });
 
       const savedImages = await Promise.all(

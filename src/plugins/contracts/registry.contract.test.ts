@@ -182,6 +182,7 @@ describe("plugin contract registry", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: ["exa"],
       toolNames: [],
     });
@@ -190,6 +191,7 @@ describe("plugin contract registry", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: ["firecrawl"],
       toolNames: ["firecrawl_search", "firecrawl_scrape"],
     });
@@ -198,6 +200,7 @@ describe("plugin contract registry", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: ["tavily"],
       toolNames: ["tavily_search", "tavily_extract"],
     });
@@ -209,6 +212,7 @@ describe("plugin contract registry", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: ["fal"],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: [],
     });
     expect(findRegistrationForPlugin("google")).toMatchObject({
@@ -216,6 +220,7 @@ describe("plugin contract registry", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: ["google"],
       imageGenerationProviderIds: ["google"],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: ["gemini"],
     });
     expect(findRegistrationForPlugin("openai")).toMatchObject({
@@ -223,18 +228,21 @@ describe("plugin contract registry", () => {
       speechProviderIds: ["openai"],
       mediaUnderstandingProviderIds: ["openai"],
       imageGenerationProviderIds: ["openai"],
+      videoGenerationProviderIds: [],
     });
     expect(findRegistrationForPlugin("elevenlabs")).toMatchObject({
       providerIds: [],
       speechProviderIds: ["elevenlabs"],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
     });
     expect(findRegistrationForPlugin("microsoft")).toMatchObject({
       providerIds: [],
       speechProviderIds: ["microsoft"],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
     });
   });
 

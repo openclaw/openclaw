@@ -351,6 +351,7 @@ function createPluginRecord(params: {
     speechProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -725,7 +726,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    // Pass loader's moduleUrl so the openclaw root can always be resolved even when
+    // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
+    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
