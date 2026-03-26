@@ -1,0 +1,3 @@
+# PaddleOCR Text Recognition Dependencies
+
+httpx>=0.24.0
