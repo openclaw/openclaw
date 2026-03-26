@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import { __test__, isSensitiveConfigPath } from "./schema.hints.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -30,6 +31,8 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
     expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
   });
 });
 
@@ -137,5 +140,20 @@ describe("mapSensitivePaths", () => {
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
+  });
+
+  it("marks buildSecretInputSchema fields as sensitive via registry", () => {
+    const schema = z.object({
+      encryptKey: buildSecretInputSchema().optional(),
+      appSecret: buildSecretInputSchema().optional(),
+      nested: z.object({
+        verificationToken: buildSecretInputSchema().optional(),
+      }),
+    });
+    const hints = mapSensitivePaths(schema, "", {});
+
+    expect(hints["encryptKey"]?.sensitive).toBe(true);
+    expect(hints["appSecret"]?.sensitive).toBe(true);
+    expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
   });
 });
