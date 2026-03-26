@@ -378,6 +378,10 @@ export async function dispatchReplyFromConfig(params: {
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            // Suppress tool error payloads when messages.suppressToolErrors is enabled.
+            if (cfg.messages?.suppressToolErrors && payload.isError) {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
