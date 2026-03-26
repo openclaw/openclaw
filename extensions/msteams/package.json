@@ -4,8 +4,11 @@
   "description": "OpenClaw Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
-    "@microsoft/teams.api": "2.0.5",
-    "@microsoft/teams.apps": "2.0.5",
+    "@microsoft/teams.api": "2.0.6",
+    "@microsoft/teams.apps": "2.0.6",
+    "@microsoft/teams.cards": "2.0.6",
+    "@microsoft/teams.common": "2.0.6",
+    "@microsoft/teams.graph": "2.0.6",
     "express": "^5.2.1"
   },
   "devDependencies": {
