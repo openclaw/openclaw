@@ -248,37 +248,33 @@ export async function deliverAgentCommandResult(params: {
 
 /**
  * Build `MessageSendingAgentContext` from the embedded-pi run result metadata.
- * Returns `undefined` when there is no meaningful agent metadata to expose.
+ * Exported for testing.
  */
-function buildAgentContextFromMeta(
+export function buildAgentContextFromMeta(
   result: RunResult,
   outboundSession: OutboundSessionContext | undefined,
   channel: string,
   payloads: Array<{ text?: string }>,
 ): MessageSendingAgentContext | undefined {
   const meta = result.meta;
-  if (!meta) return undefined;
+  if (!meta) {
+    return undefined;
+  }
 
   const agentMeta = meta.agentMeta;
   const toolMetas = meta.toolMetas ?? [];
-
-  const toolCalls = toolMetas.map((t) => ({
-    tool: t.toolName,
-    // toolMeta.meta contains a freeform string; absence of "error" is a
-    // reasonable heuristic for success. Hook authors who need more detail
-    // can inspect `content` for tool-error patterns.
-    success: !t.meta?.toLowerCase().includes("error"),
-  }));
+  const toolCalls = toolMetas.map((t) => t.toolName);
 
   const usage = agentMeta?.usage;
-  const lastCallUsage = agentMeta?.lastCallUsage;
 
-  // contextFillPercent and contextWindow are not available from the run result
-  // metadata today — the model's contextWindow is known at run time but not
-  // propagated through EmbeddedPiAgentMeta. These fields are left undefined
-  // until a future change threads contextWindow through agentMeta.
-  const contextWindow: number | undefined = undefined;
-  const contextFillPercent: number | undefined = undefined;
+  // Derive context fill from the last API call usage (not accumulated totals,
+  // which overstate context size across tool-use loops / compaction retries).
+  const lastCall = agentMeta?.lastCallUsage;
+  const contextWindow = agentMeta?.contextWindow;
+  const contextFillPercent =
+    lastCall?.total != null && contextWindow && contextWindow > 0
+      ? Math.min(100, Math.max(0, Math.round((lastCall.total / contextWindow) * 100)))
+      : undefined;
 
   const responseLength = payloads.reduce((sum, p) => sum + (p.text?.length ?? 0), 0);
 
@@ -289,10 +285,9 @@ function buildAgentContextFromMeta(
       ? {
           input: usage.input ?? 0,
           output: usage.output ?? 0,
-          total: usage.total ?? 0,
+          total: usage.total ?? (usage.input ?? 0) + (usage.output ?? 0),
         }
       : undefined,
-    contextWindow,
     contextFillPercent,
     agentId: outboundSession?.agentId,
     sessionKey: outboundSession?.key,

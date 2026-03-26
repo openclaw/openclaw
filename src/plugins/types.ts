@@ -579,13 +579,9 @@ export type PluginHookMessageReceivedEvent = {
  * `undefined` for non-agent deliveries (cron, heartbeat, restart sentinel).
  */
 export type MessageSendingAgentContext = {
-  /** Tools invoked during this agent turn. */
-  toolCalls: Array<{
-    tool: string;
-    /** Whether the tool call completed without error. */
-    success: boolean;
-  }>;
-  /** Convenience: `toolCalls.length`. */
+  /** Tool names invoked during this agent turn. */
+  toolCalls: string[];
+  /** Number of tools invoked (convenience for `toolCalls.length`). */
   toolCallCount: number;
   /** Token usage for this turn (from the provider's usage report). */
   tokenUsage?: {
@@ -593,8 +589,6 @@ export type MessageSendingAgentContext = {
     output: number;
     total: number;
   };
-  /** Model context window size in tokens, when known. */
-  contextWindow?: number;
   /**
    * Approximate context utilization as a percentage (0–100).
    * Derived from `lastCallUsage.total / contextWindow` when both are available.
@@ -604,8 +598,6 @@ export type MessageSendingAgentContext = {
   agentId?: string;
   /** Session key for correlation. */
   sessionKey?: string;
-  /** Whether this message targets a group/channel (vs DM). */
-  isGroup?: boolean;
   /** Outbound channel type (telegram, discord, slack, etc). */
   channel?: string;
   /** Character count of the agent response text. */

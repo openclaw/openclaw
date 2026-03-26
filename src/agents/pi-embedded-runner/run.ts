@@ -1395,6 +1395,7 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: lastCallUsage ?? undefined,
             promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            contextWindow: effectiveModel.contextWindow,
           };
 
           const payloads = buildEmbeddedRunPayloads({

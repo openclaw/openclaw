@@ -28,6 +28,8 @@ export type EmbeddedPiAgentMeta = {
     cacheWrite?: number;
     total?: number;
   };
+  /** Effective context window size in tokens (after config overrides). */
+  contextWindow?: number;
 };
 
 export type EmbeddedPiRunMeta = {
