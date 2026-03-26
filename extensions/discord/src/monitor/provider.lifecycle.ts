@@ -415,9 +415,8 @@ export async function runDiscordGatewayLifecycle(params: {
     // there, but as an additional safety net we also swallow it here when the
     // lifecycle is already stopping — re-throwing would crash the gateway.
     // See #54931.
-    if (lifecycleStopping) {
-      // Intentional shutdown — swallow the error.
-    } else if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
+    // Intentional shutdown — swallow the error (see #54931).
+    if (!lifecycleStopping && !sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
       throw err;
     }
   } finally {
