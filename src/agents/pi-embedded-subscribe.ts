@@ -143,6 +143,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
     state.lastStreamedReasoningRaw = undefined;
+    state.lastEmittedReasoningRaw = undefined;
     state.lastReasoningSent = undefined;
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
