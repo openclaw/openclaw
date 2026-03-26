@@ -175,6 +175,7 @@ const FeishuSharedConfigShape = {
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
+  cardHeader: z.boolean().optional(), // When false, hides the card header to improve message list preview readability (default: true)
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,

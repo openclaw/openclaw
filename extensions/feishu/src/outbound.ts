@@ -119,7 +119,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
       if (useCard) {
-        const header = identity
+        const cardHeaderEnabled = account.config?.cardHeader !== false;
+        const header = (identity && cardHeaderEnabled)
           ? {
               title: identity.emoji
                 ? `${identity.emoji} ${identity.name ?? ""}`.trim()
