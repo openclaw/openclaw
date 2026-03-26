@@ -218,6 +218,44 @@ describe("workspace path resolution", () => {
       }
     });
   });
+
+  it("allows includedWorkDirs when workspaceOnly is enabled", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-extra-", async (includedDir) => {
+        const cfg: OpenClawConfig = {
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            list: [{ id: "main", workspace: workspaceDir, includedWorkDirs: [includedDir] }],
+          },
+        };
+        const tools = createOpenClawCodingTools({
+          config: cfg,
+          sessionKey: "agent:main:main",
+          workspaceDir,
+        });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+
+        const target = path.join(includedDir, "included.txt");
+        await fs.writeFile(target, "hello world", "utf8");
+
+        const readResult = await readTool.execute("included-read", { path: target });
+        expect(getTextContent(readResult)).toContain("hello world");
+
+        await writeTool.execute("included-write", {
+          path: target,
+          content: "hello openclaw",
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("hello openclaw");
+
+        await editTool.execute("included-edit", {
+          path: target,
+          oldText: "openclaw",
+          newText: "workflow",
+        });
+        expect(await fs.readFile(target, "utf8")).toBe("hello workflow");
+      });
+    });
+  });
 });
 
 describe("sandboxed workspace paths", () => {

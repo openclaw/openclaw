@@ -16,6 +16,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
+  includedWorkDirs?: string[];
   agentDir?: string;
   systemPromptOverride?: AgentEntry["systemPromptOverride"];
   model?: AgentEntry["model"];
@@ -107,6 +108,9 @@ export function resolveAgentConfig(
   return {
     name: readStringValue(entry.name),
     workspace: readStringValue(entry.workspace),
+    includedWorkDirs: Array.isArray(entry.includedWorkDirs)
+      ? entry.includedWorkDirs.filter((value): value is string => typeof value === "string")
+      : undefined,
     agentDir: readStringValue(entry.agentDir),
     systemPromptOverride: readStringValue(entry.systemPromptOverride),
     model:

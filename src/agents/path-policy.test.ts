@@ -6,7 +6,11 @@ vi.mock("./sandbox-paths.js", () => ({
   resolveSandboxInputPath: resolveSandboxInputPathMock,
 }));
 
-import { toRelativeWorkspacePath } from "./path-policy.js";
+import {
+  normalizeBoundaryRoots,
+  resolvePathWithinRoots,
+  toRelativeWorkspacePath,
+} from "./path-policy.js";
 
 describe("toRelativeWorkspacePath (windows semantics)", () => {
   beforeEach(() => {
@@ -34,5 +38,23 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("prefers the most specific matching root", () => {
+    const match = resolvePathWithinRoots(
+      ["/tmp/workspace", "/tmp/workspace/repos/project"],
+      "/tmp/workspace/repos/project/src/index.ts",
+    );
+    expect(match).toEqual({
+      root: "/tmp/workspace/repos/project",
+      resolved: "/tmp/workspace/repos/project/src/index.ts",
+      relative: "src/index.ts",
+    });
+  });
+
+  it("normalizes and deduplicates boundary roots", () => {
+    expect(
+      normalizeBoundaryRoots(["/tmp/workspace", "/tmp/workspace", "/tmp/workspace/."]),
+    ).toEqual(["/tmp/workspace"]);
   });
 });

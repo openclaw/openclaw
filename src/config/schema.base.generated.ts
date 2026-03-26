@@ -5579,6 +5579,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 workspace: {
                   type: "string",
                 },
+                includedWorkDirs: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
                 agentDir: {
                   type: "string",
                 },
@@ -23138,6 +23144,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Skill Filter",
       help: "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       tags: ["advanced"],
+    },
+    "agents.list[].includedWorkDirs": {
+      label: "Agent Included Work Dirs",
+      tags: ["storage"],
     },
     "agents.list[].runtime": {
       label: "Agent Runtime",

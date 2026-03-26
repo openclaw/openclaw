@@ -281,6 +281,7 @@ export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  includedWorkDirs?: string[];
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
@@ -384,6 +385,7 @@ export function createImageTool(options?: {
               root: options.sandbox.root.trim(),
               bridge: options.sandbox.bridge,
               workspaceOnly: options.fsPolicy?.workspaceOnly === true,
+              allowedRoots: options?.includedWorkDirs,
             }
           : null;
 
@@ -471,6 +473,7 @@ export function createImageTool(options?: {
           options?.workspaceDir,
           {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+            includedWorkDirs: options?.includedWorkDirs,
           },
           resolvedPath ? [resolvedPath] : undefined,
         );

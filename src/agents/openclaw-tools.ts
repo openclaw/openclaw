@@ -60,6 +60,7 @@ export function createOpenClawTools(
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
     agentDir?: string;
+    includedWorkDirs?: string[];
     sandboxRoot?: string;
     sandboxContainerWorkdir?: string;
     sandboxFsBridge?: SandboxFsBridge;
@@ -144,6 +145,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options.agentDir,
         workspaceDir,
+        includedWorkDirs: options?.includedWorkDirs,
         sandbox,
         fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
@@ -179,6 +181,7 @@ export function createOpenClawTools(
         config: options?.config,
         agentDir: options.agentDir,
         workspaceDir,
+        includedWorkDirs: options?.includedWorkDirs,
         sandbox,
         fsPolicy: options?.fsPolicy,
       })

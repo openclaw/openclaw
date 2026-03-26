@@ -15,7 +15,11 @@ import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
-import { toRelativeWorkspacePath } from "./path-policy.js";
+import {
+  normalizeBoundaryRoots,
+  resolvePathWithinRoots,
+  toRelativeWorkspacePath,
+} from "./path-policy.js";
 import { wrapEditToolWithRecovery } from "./pi-tools.host-edit.js";
 import {
   REQUIRED_PARAM_GROUPS,
@@ -590,10 +594,12 @@ export function wrapToolWorkspaceRootGuardWithOptions(
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
+    includedRoots?: string[];
   },
 ): AnyAgentTool {
   const pathParamKeys =
     options?.pathParamKeys && options.pathParamKeys.length > 0 ? options.pathParamKeys : ["path"];
+  const allowedRoots = normalizeBoundaryRoots([root, ...(options?.includedRoots ?? [])]);
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -609,10 +615,25 @@ export function wrapToolWorkspaceRootGuardWithOptions(
           root,
           containerWorkdir: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        let guardedPath = sandboxPath;
+        if (allowedRoots.length <= 1) {
+          const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+          guardedPath = sandboxResult.resolved;
+        } else {
+          const match = resolvePathWithinRoots(allowedRoots, sandboxPath, {
+            cwd: root,
+            boundaryLabel: "allowed work roots",
+          });
+          const sandboxResult = await assertSandboxPath({
+            filePath: match.resolved,
+            cwd: match.root,
+            root: match.root,
+          });
+          guardedPath = sandboxResult.resolved;
+        }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
-          normalizedRecord[key] = sandboxResult.resolved;
+          normalizedRecord[key] = guardedPath;
         }
       }
       return tool.execute(toolCallId, normalizedRecord ?? args, signal, onUpdate);

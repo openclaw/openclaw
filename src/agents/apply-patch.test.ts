@@ -332,6 +332,29 @@ describe("applyPatch", () => {
     });
   });
 
+  it("allows writes into explicitly allowed roots", async () => {
+    await withTempDir(async (dir) => {
+      const includedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-allowed-"));
+      const allowedPath = path.join(includedDir, "allowed.txt");
+      const relativeAllowed = path.relative(dir, allowedPath);
+      const patch = `*** Begin Patch
+*** Add File: ${relativeAllowed}
++allowed
+*** End Patch`;
+
+      try {
+        const result = await applyPatch(patch, {
+          cwd: dir,
+          allowedRoots: [includedDir],
+        });
+        expect(result.summary.added).toEqual([allowedPath]);
+        expect(await fs.readFile(allowedPath, "utf8")).toBe("allowed\n");
+      } finally {
+        await fs.rm(includedDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));

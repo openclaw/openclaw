@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./sandbox-paths.js", () => ({
   assertSandboxPath: mocks.assertSandboxPath,
+  resolveSandboxInputPath: (filePath: string, cwd: string) =>
+    path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath),
 }));
 
 function createToolHarness() {
@@ -205,5 +207,21 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
       undefined,
       undefined,
     );
+  });
+
+  it("validates absolute paths against included roots", async () => {
+    const { tool } = createToolHarness();
+    const includedRoot = "/tmp/repo";
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      includedRoots: [includedRoot],
+    });
+
+    await wrapped.execute("tc-included", { path: "/tmp/repo/src/index.ts" });
+
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
+      filePath: "/tmp/repo/src/index.ts",
+      cwd: includedRoot,
+      root: includedRoot,
+    });
   });
 });

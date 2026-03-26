@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { appendLocalMediaParentRoots } from "../../media/local-roots.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
@@ -356,15 +357,22 @@ export function buildTaskRunDetails(
 
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
-  options?: { workspaceOnly?: boolean },
-  _mediaSources?: readonly string[],
+  options?: { workspaceOnly?: boolean; includedWorkDirs?: readonly string[] },
+  mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
+  const includedRoots = (options?.includedWorkDirs ?? [])
+    .map((entry) => normalizeWorkspaceDir(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const scopedWorkspaceRoots = Array.from(
+    new Set([workspaceDir, ...includedRoots].filter((entry): entry is string => Boolean(entry))),
+  );
   if (options?.workspaceOnly) {
-    return workspaceDir ? [workspaceDir] : [];
+    return scopedWorkspaceRoots;
   }
   const roots = getDefaultLocalRoots();
-  return workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  const scopedRoots = Array.from(new Set([...roots, ...scopedWorkspaceRoots]));
+  return appendLocalMediaParentRoots(scopedRoots, mediaSources);
 }
 
 export function resolvePromptAndModelOverride(
