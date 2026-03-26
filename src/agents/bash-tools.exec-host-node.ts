@@ -116,7 +116,11 @@ export async function executeNodeHostCommand(
       },
     );
     prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("unknown command") && !msg.includes("command not allowed")) {
+      throw err;
+    }
     prepared = null;
   }
   if (!prepared) {
@@ -124,7 +128,7 @@ export async function executeNodeHostCommand(
       plan: {
         argv,
         cwd: params.workdir ?? null,
-        commandText: params.command ?? formatExecCommand(argv),
+        commandText: params.command || formatExecCommand(argv),
         commandPreview: null,
         agentId: params.agentId,
         sessionKey: params.sessionKey,

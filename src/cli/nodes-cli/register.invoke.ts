@@ -145,7 +145,11 @@ async function prepareNodesRunContext(params: {
       idempotencyKey: `prepare-${randomIdempotencyKey()}`,
     })) as { payload?: unknown } | null;
     preparedPayload = prepareResponse?.payload;
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("unknown command") && !msg.includes("command not allowed")) {
+      throw err;
+    }
     preparedPayload = null;
   }
 
