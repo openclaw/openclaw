@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
