@@ -275,7 +275,11 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    const receivedKeys = Object.keys(record).filter(
+      (k) => record[k] !== undefined && record[k] !== null,
+    );
+    const receivedHint = receivedKeys.length > 0 ? ` (received: ${receivedKeys.join(", ")})` : "";
+    throw parameterValidationError(`Missing required ${noun}: ${joined}${receivedHint}`);
   }
 }
 
