@@ -392,6 +392,40 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForCleanupCompleted("run-terminal-error");
   });
 
+  it("bumps registry generation when lifecycle end completion mutates run timing/status", async () => {
+    registerCompletionRun("run-generation-end", "generation-end", "generation end test");
+    setAssistantOutput("agent:main:subagent:generation-end", "done");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    emitLifecycleEvent("run-generation-end", { phase: "end", endedAt: Date.now() });
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
+  it("bumps registry generation when deferred lifecycle error completion mutates run status", async () => {
+    registerCompletionRun("run-generation-error", "generation-error", "generation error test");
+    setAssistantOutput("agent:main:subagent:generation-error", "fatal");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    emitLifecycleEvent("run-generation-error", {
+      phase: "error",
+      error: "terminal failure",
+      endedAt: 3_000,
+    });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
   it("freezes completion result at run termination across deferred announce retries", async () => {
     // Regression guard: late lifecycle noise must never overwrite the frozen completion reply.
     registerCompletionRun("run-freeze", "freeze", "freeze test");

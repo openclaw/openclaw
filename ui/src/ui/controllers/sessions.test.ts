@@ -66,7 +66,7 @@ describe("loadSessions", () => {
     expect(state.sessionsListLastHashParamsKey).toBe(paramsKey);
   });
 
-  it("preserves sessionsResult when server returns unchanged", async () => {
+  it("preserves sessionsResult rows and applies count when server returns unchanged", async () => {
     const existing: SessionsListResult = {
       ts: 1,
       path: "p",
@@ -74,7 +74,7 @@ describe("loadSessions", () => {
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [{ key: "k", kind: "direct", updatedAt: 1 }],
     };
-    const request = vi.fn(async () => ({ unchanged: true, hash: "next", ts: 2, count: 1 }));
+    const request = vi.fn(async () => ({ unchanged: true, hash: "next", ts: 2, count: 7 }));
     const paramsKey = buildSessionsListLastHashParamsKey({
       includeGlobal: true,
       includeUnknown: true,
@@ -88,6 +88,7 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(state.sessionsResult).toBe(existing);
+    expect(state.sessionsResult?.count).toBe(7);
     expect(state.sessionsListLastHash).toBe("next");
   });
 

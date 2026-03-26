@@ -585,6 +585,8 @@ async function completeSubagentRun(params: {
   }
 
   if (mutated) {
+    // Bump generation so sessions.list cache keys invalidate when completion state changes.
+    subagentRegistryGeneration += 1;
     persistSubagentRuns();
   }
 
