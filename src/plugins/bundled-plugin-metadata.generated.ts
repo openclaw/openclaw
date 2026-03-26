@@ -887,6 +887,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               apiKey: {
                 type: ["string", "object"],
               },
+              baseUrl: {
+                type: "string",
+              },
             },
           },
         },
@@ -900,6 +903,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Exa Search API key (fallback: EXA_API_KEY env var).",
           sensitive: true,
           placeholder: "exa-...",
+        },
+        "webSearch.baseUrl": {
+          label: "Exa Search Base URL",
+          help: "Exa Search base URL override.",
         },
       },
     },

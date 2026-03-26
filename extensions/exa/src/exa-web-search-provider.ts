@@ -32,6 +32,7 @@ const EXA_MAX_SEARCH_COUNT = 100;
 
 type ExaConfig = {
   apiKey?: string;
+  baseUrl?: string;
 };
 
 type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
@@ -329,6 +330,7 @@ function resolveFreshnessStartDate(freshness: ExaFreshness): string {
 
 async function runExaSearch(params: {
   apiKey: string;
+  baseUrl?: string;
   query: string;
   count: number;
   freshness?: ExaFreshness;
@@ -354,9 +356,13 @@ async function runExaSearch(params: {
     body.endPublishedDate = params.dateBefore;
   }
 
+  const endpoint =
+    typeof params.baseUrl === "string" && params.baseUrl.trim()
+      ? params.baseUrl.trim()
+      : EXA_SEARCH_ENDPOINT;
   return withTrustedWebSearchEndpoint(
     {
-      url: EXA_SEARCH_ENDPOINT,
+      url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
       init: {
         method: "POST",
@@ -534,6 +540,7 @@ function createExaToolDefinition(
       const start = Date.now();
       const results = await runExaSearch({
         apiKey,
+        baseUrl: exaConfig.baseUrl,
         query,
         count: resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
         freshness,

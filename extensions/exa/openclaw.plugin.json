@@ -9,6 +9,10 @@
       "help": "Exa Search API key (fallback: EXA_API_KEY env var).",
       "sensitive": true,
       "placeholder": "exa-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Exa Search Base URL",
+      "help": "Exa Search base URL override."
     }
   },
   "configSchema": {
@@ -21,6 +25,9 @@
         "properties": {
           "apiKey": {
             "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
           }
         }
       }
