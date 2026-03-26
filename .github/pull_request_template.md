@@ -2,6 +2,8 @@
 
 Describe the problem and fix in 2–5 bullets:
 
+If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
+
 - Problem:
 - Why it matters:
 - What changed:
