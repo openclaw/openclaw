@@ -1,5 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { stringEnum } from "openclaw/plugin-sdk/core";
+
+function stringEnum<T extends readonly string[]>(values: T) {
+  return Type.Unsafe<T[number]>({
+    type: "string",
+    enum: [...values],
+  });
+}
 
 const discordComponentEmojiSchema = Type.Object({
   name: Type.String(),
