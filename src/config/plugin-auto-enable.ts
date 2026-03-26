@@ -457,6 +457,13 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     const allow = next.plugins?.allow;
+    // Skip auto-enable for non-built-in plugins already listed in plugins.allow.
+    // plugins.allow is the user's explicit opt-in; writing to plugins.entries
+    // would trigger a config-change → gateway reload → doctor re-run loop.
+    // See: https://github.com/openclaw/openclaw/issues/55163
+    if (builtInChannelId == null && Array.isArray(allow) && allow.includes(entry.pluginId)) {
+      continue;
+    }
     const allowMissing =
       builtInChannelId == null && Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled =
