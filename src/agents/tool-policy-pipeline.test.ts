@@ -52,7 +52,7 @@ describe("tool-policy-pipeline", () => {
     expect(warnings[0]).toContain("unknown entries (wat)");
   });
 
-  test("warns gated core tools as unavailable instead of plugin-only unknowns", () => {
+  test("suppresses built-in profile warnings for unavailable gated core tools", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
     applyToolPolicyPipeline({
@@ -65,6 +65,52 @@ describe("tool-policy-pipeline", () => {
         {
           policy: { allow: ["apply_patch"] },
           label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+          suppressUnavailableCoreToolWarning: true,
+        },
+      ],
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  test("still warns for profile steps when explicit alsoAllow entries are present", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch"] },
+          label: "tools.profile (coding)",
+          stripPluginOnlyAllowlist: true,
+          suppressUnavailableCoreToolWarning: false,
+        },
+      ],
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("unknown entries (apply_patch)");
+    expect(warnings[0]).toContain(
+      "shipped core tools but unavailable in the current runtime/provider/model/config",
+    );
+  });
+
+  test("still warns for explicit allowlists that mention unavailable gated core tools", () => {
+    const warnings: string[] = [];
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    applyToolPolicyPipeline({
+      // oxlint-disable-next-line typescript/no-explicit-any
+      tools: tools as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      steps: [
+        {
+          policy: { allow: ["apply_patch"] },
+          label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],
@@ -88,8 +134,8 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["apply_patch"] },
-          label: "tools.profile (coding)",
+          policy: { allow: ["wat"] },
+          label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],
