@@ -45670,6 +45670,16 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.compat.supportsResponsesPromptCache",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.compat.supportsStore",
       "kind": "core",
       "type": "boolean",

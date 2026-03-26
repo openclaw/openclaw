@@ -154,8 +154,19 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
-function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
+function shouldStripResponsesPromptCache(model: {
+  api?: unknown;
+  baseUrl?: unknown;
+  compat?: unknown;
+}): boolean {
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
+    return false;
+  }
+  const compat =
+    model.compat != null && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  if (compat?.supportsResponsesPromptCache === true) {
     return false;
   }
   // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep

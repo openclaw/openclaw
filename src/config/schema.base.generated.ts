@@ -1215,6 +1215,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           supportsTools: {
                             type: "boolean",
                           },
+                          supportsResponsesPromptCache: {
+                            type: "boolean",
+                          },
                           supportsStrictMode: {
                             type: "boolean",
                           },
