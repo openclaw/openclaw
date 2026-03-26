@@ -139,4 +139,41 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus?.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
     vi.useRealTimers();
   });
+
+  it("preserves compaction active status when willRetry is true", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+
+    // Start compaction
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "start" },
+    });
+
+    expect(host.compactionStatus).toEqual({
+      active: true,
+      startedAt: expect.any(Number),
+      completedAt: null,
+    });
+
+    // End with willRetry=true - should not update status
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "compaction",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { phase: "end", willRetry: true },
+    });
+
+    // Status should remain active (startedAt preserved), no timer set
+    expect((host.compactionStatus as { active: boolean })?.active).toBe(true);
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
 });
