@@ -68,7 +68,7 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("updates in-memory source to auto for transient image-provider auth pick", async () => {
+  it("preserves user-locked source in session for transient image-provider auth pick", async () => {
     await withStateDirEnv("openclaw-auth-", async ({ stateDir }) => {
       const agentDir = path.join(stateDir, "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -96,7 +96,9 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       expect(resolved.authProfileId).toBe("anthropic:main");
       expect(resolved.authProfileIdSource).toBe("auto");
-      expect(sessionEntry.authProfileOverrideSource).toBe("auto");
+      // In-memory session entry keeps original source ("user") so next normal turn
+      // still respects user-locked profile. Only the run result gets "auto".
+      expect(sessionEntry.authProfileOverrideSource).toBe("user");
       expect(sessionEntry.authProfileOverride).toBe("openai:main");
     });
   });
