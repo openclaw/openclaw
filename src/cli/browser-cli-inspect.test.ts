@@ -46,15 +46,17 @@ const sharedMocks = vi.hoisted(() => ({
     },
   ),
 }));
-vi.mock("./browser-cli-shared.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-shared.js", () => ({
   callBrowserRequest: sharedMocks.callBrowserRequest,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
   defaultRuntime: runtime,
+  loadConfig: configMocks.loadConfig,
 }));
 
-let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
+let registerBrowserInspectCommands: typeof import("../../extensions/browser/src/cli/browser-cli-inspect.js").registerBrowserInspectCommands;
 
 type SnapshotDefaultsCase = {
   label: string;
@@ -78,7 +80,8 @@ describe("browser cli snapshot defaults", () => {
   const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
-    ({ registerBrowserInspectCommands } = await import("./browser-cli-inspect.js"));
+    ({ registerBrowserInspectCommands } =
+      await import("../../extensions/browser/src/cli/browser-cli-inspect.js"));
   });
 
   afterEach(() => {
