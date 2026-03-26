@@ -19,6 +19,12 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 // Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
 // inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
 const MEDIA_FILE_MODE = 0o644;
+async function enforceMediaFileMode(filePath: string): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fs.chmod(filePath, MEDIA_FILE_MODE);
+}
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
@@ -239,7 +245,8 @@ async function downloadToFile(
             }
           });
           pipeline(res, out)
-            .then(() => {
+            .then(async () => {
+              await enforceMediaFileMode(dest);
               const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
               const rawHeader = res.headers["content-type"];
               const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
@@ -304,9 +311,10 @@ async function writeSavedMediaBuffer(params: {
   buffer: Buffer;
 }): Promise<string> {
   const dest = path.join(params.dir, params.id);
-  await retryAfterRecreatingDir(params.dir, () =>
-    fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE }),
-  );
+  await retryAfterRecreatingDir(params.dir, async () => {
+    await fs.writeFile(dest, params.buffer, { mode: MEDIA_FILE_MODE });
+    await enforceMediaFileMode(dest);
+  });
   return dest;
 }
 
