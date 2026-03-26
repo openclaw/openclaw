@@ -34,43 +34,6 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     resetRunOverflowCompactionHarnessMocks();
   });
 
-  beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedRunContextEngineMaintenance.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedCoerceToFailoverError.mockReset();
-    mockedDescribeFailoverError.mockReset();
-    mockedResolveFailoverStatus.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
-    mockedGlobalHookRunner.runAfterCompaction.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
-    mockedCoerceToFailoverError.mockReturnValue(null);
-    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
-      message: err instanceof Error ? err.message : String(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
-    });
-    mockedPickFallbackThinkingLevel.mockReturnValue(null);
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
-  });
-
   it("passes precomputed legacy before_agent_start result into the attempt", async () => {
     const legacyResult = {
       modelOverride: "legacy-model",
