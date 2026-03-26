@@ -7,9 +7,18 @@
     "additionalProperties": false,
     "properties": {
       "nodeName": { "type": "string", "description": "This node's fleet ID (e.g. kubuntu)" },
-      "maxThreads": { "type": "number", "description": "Max concurrent task threads (default: 4, 0 to disable)" },
-      "pollIntervalMs": { "type": "number", "description": "Task poll interval in ms (default: 30000)" },
-      "worktreeBaseDir": { "type": "string", "description": "Git worktree base directory (default: /repo/worktrees)" },
+      "maxThreads": {
+        "type": "number",
+        "description": "Max concurrent task threads (default: 4, 0 to disable)"
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "description": "Task poll interval in ms (default: 30000)"
+      },
+      "worktreeBaseDir": {
+        "type": "string",
+        "description": "Git worktree base directory (default: /repo/worktrees)"
+      },
       "repoDir": { "type": "string", "description": "Git repo root (default: /repo)" }
     }
   }

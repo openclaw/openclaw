@@ -9,6 +9,8 @@
     "ioredis": "5.6.1"
   },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

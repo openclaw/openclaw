@@ -57,10 +57,10 @@
  */
 
 export interface McpServerEntry {
-	command: string;
-	args: string[];
-	cwd?: string;
-	env?: Record<string, string>;
+  command: string;
+  args: string[];
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 /**
@@ -68,42 +68,42 @@ export interface McpServerEntry {
  * Call this to get the config block for openclaw.json.
  */
 export function generateMcpServersConfig(mcpServersRoot: string): Record<string, McpServerEntry> {
-	const pythonPath = mcpServersRoot;
+  const pythonPath = mcpServersRoot;
 
-	return {
-		"fleet-tools": {
-			command: "python3",
-			args: [`${mcpServersRoot}/fleet-tools/server.py`],
-			env: { PYTHONPATH: pythonPath },
-		},
-		"knowledge-tools": {
-			command: "python3",
-			args: [`${mcpServersRoot}/knowledge-tools/server.py`],
-			env: {
-				PYTHONPATH: pythonPath,
-				KNOWLEDGE_API_URL: "http://100.119.126.67:8890",
-			},
-		},
-		"delegation-tools": {
-			command: "python3",
-			args: [`${mcpServersRoot}/delegation-tools/server.py`],
-			env: {
-				PYTHONPATH: pythonPath,
-				ARCHON_API_URL: "http://100.69.32.10:8181",
-			},
-		},
-		"pipeline-tools": {
-			command: "python3",
-			args: [`${mcpServersRoot}/pipeline-tools/server.py`],
-			env: { PYTHONPATH: pythonPath },
-		},
-		"self-tools": {
-			command: "python3",
-			args: [`${mcpServersRoot}/self-tools/server.py`],
-			env: {
-				PYTHONPATH: pythonPath,
-				PLUGIN_SOURCE_ROOT: mcpServersRoot.replace("/mcp-servers", ""),
-			},
-		},
-	};
+  return {
+    "fleet-tools": {
+      command: "python3",
+      args: [`${mcpServersRoot}/fleet-tools/server.py`],
+      env: { PYTHONPATH: pythonPath },
+    },
+    "knowledge-tools": {
+      command: "python3",
+      args: [`${mcpServersRoot}/knowledge-tools/server.py`],
+      env: {
+        PYTHONPATH: pythonPath,
+        KNOWLEDGE_API_URL: "http://100.119.126.67:8890",
+      },
+    },
+    "delegation-tools": {
+      command: "python3",
+      args: [`${mcpServersRoot}/delegation-tools/server.py`],
+      env: {
+        PYTHONPATH: pythonPath,
+        ARCHON_API_URL: "http://100.69.32.10:8181",
+      },
+    },
+    "pipeline-tools": {
+      command: "python3",
+      args: [`${mcpServersRoot}/pipeline-tools/server.py`],
+      env: { PYTHONPATH: pythonPath },
+    },
+    "self-tools": {
+      command: "python3",
+      args: [`${mcpServersRoot}/self-tools/server.py`],
+      env: {
+        PYTHONPATH: pythonPath,
+        PLUGIN_SOURCE_ROOT: mcpServersRoot.replace("/mcp-servers", ""),
+      },
+    },
+  };
 }

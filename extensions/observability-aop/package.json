@@ -5,6 +5,8 @@
   "description": "AOP observability bridge — forwards plugin hooks and diagnostic events to AOP Server",
   "type": "module",
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

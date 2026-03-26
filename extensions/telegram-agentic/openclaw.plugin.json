@@ -9,9 +9,18 @@
       "notificationBatching": {
         "type": "object",
         "properties": {
-          "critical": { "type": "number", "description": "Minutes between critical notification batches (default: 5)" },
-          "high": { "type": "number", "description": "Minutes between high-priority batches (default: 60)" },
-          "medium": { "type": "number", "description": "Minutes between medium-priority batches (default: 180)" }
+          "critical": {
+            "type": "number",
+            "description": "Minutes between critical notification batches (default: 5)"
+          },
+          "high": {
+            "type": "number",
+            "description": "Minutes between high-priority batches (default: 60)"
+          },
+          "medium": {
+            "type": "number",
+            "description": "Minutes between medium-priority batches (default: 180)"
+          }
         }
       },
       "aopLogFile": {

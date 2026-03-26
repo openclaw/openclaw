@@ -794,6 +794,51 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "distributed-workers",
+    idHint: "distributed-workers",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/distributed-workers",
+    packageVersion: "1.0.0",
+    packageDescription: "Distributed task execution with claim arbitration and worktree isolation",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "distributed-workers",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          nodeName: {
+            type: "string",
+            description: "This node's fleet ID (e.g. kubuntu)",
+          },
+          maxThreads: {
+            type: "number",
+            description: "Max concurrent task threads (default: 4, 0 to disable)",
+          },
+          pollIntervalMs: {
+            type: "number",
+            description: "Task poll interval in ms (default: 30000)",
+          },
+          worktreeBaseDir: {
+            type: "string",
+            description: "Git worktree base directory (default: /repo/worktrees)",
+          },
+          repoDir: {
+            type: "string",
+            description: "Git repo root (default: /repo)",
+          },
+        },
+      },
+      name: "Distributed Workers",
+      description: "Multi-node task execution with claim arbitration and worktree isolation",
+    },
+  },
+  {
     dirName: "duckduckgo",
     idHint: "duckduckgo-plugin",
     source: {
@@ -1040,6 +1085,41 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Firecrawl Search base URL override.",
         },
       },
+    },
+  },
+  {
+    dirName: "fleet-coordinator",
+    idHint: "fleet-coordinator",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/fleet-coordinator",
+    packageVersion: "1.0.0",
+    packageDescription:
+      "Fleet registry, health monitoring, task routing, and guard hooks for OpenClaw fleet",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "fleet-coordinator",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          fleetConfigPath: {
+            type: "string",
+            description: "Path to fleet.json (default: config/fleet.json)",
+          },
+          healthCheckIntervalMs: {
+            type: "number",
+            description: "Health check interval in milliseconds (default: 60000)",
+          },
+        },
+      },
+      name: "Fleet Coordinator",
+      description:
+        "Multi-node fleet registry, health monitoring, task routing, scheduling, and guard hooks",
     },
   },
   {
@@ -2231,6 +2311,55 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "observability-aop",
+    idHint: "observability-aop",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/observability-aop",
+    packageVersion: "1.0.0",
+    packageDescription:
+      "AOP observability bridge — forwards plugin hooks and diagnostic events to AOP Server",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "observability-aop",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          aopServerUrl: {
+            type: "string",
+            description: "AOP Server URL (default: http://100.69.32.10:3010)",
+          },
+          nodeName: {
+            type: "string",
+            description: "This node's fleet ID for event attribution",
+          },
+          batchSize: {
+            type: "number",
+            description: "Events to buffer before flushing (default: 10)",
+          },
+          flushIntervalMs: {
+            type: "number",
+            description: "Max time between flushes in ms (default: 5000)",
+          },
+        },
+      },
+      name: "AOP Observability Bridge",
+      description:
+        "Bridges upstream plugin hooks and diagnostic events to the AOP Server for fleet-wide observability",
+      uiHints: {
+        aopServerUrl: {
+          label: "AOP Server URL",
+          help: "HTTP endpoint for the AOP event ingestion server",
+        },
+      },
+    },
+  },
+  {
     dirName: "ollama",
     idHint: "ollama",
     source: {
@@ -2964,6 +3093,79 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["telegram"],
+    },
+  },
+  {
+    dirName: "telegram-agentic",
+    idHint: "telegram-agentic",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/telegram-agentic",
+    packageVersion: "1.0.0",
+    packageDescription:
+      "Agentic fleet tools plugin for OpenClaw — fleet management, knowledge, delegation, and art pipeline",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "telegram-agentic",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          notificationBatching: {
+            type: "object",
+            properties: {
+              critical: {
+                type: "number",
+                description: "Minutes between critical notification batches (default: 5)",
+              },
+              high: {
+                type: "number",
+                description: "Minutes between high-priority batches (default: 60)",
+              },
+              medium: {
+                type: "number",
+                description: "Minutes between medium-priority batches (default: 180)",
+              },
+            },
+          },
+          aopLogFile: {
+            type: "string",
+            description: "Path to AOP-compatible event log file (default: ~/.openclaw/all.jsonl)",
+          },
+          githubToken: {
+            type: "string",
+            description:
+              "GitHub personal access token for API calls (fallback: GITHUB_TOKEN env var)",
+          },
+          reportOutputDir: {
+            type: "string",
+            description: "Directory for saved reports (default: ~/.openclaw/workspace/reports)",
+          },
+        },
+      },
+      name: "Agentic Fleet Tools",
+      description:
+        "Fleet management, knowledge, delegation, and art pipeline tools for the OpenClaw fleet",
+      uiHints: {
+        githubToken: {
+          label: "GitHub Token",
+          help: "Personal access token for GitHub API (fallback: GITHUB_TOKEN env var)",
+          sensitive: true,
+          placeholder: "ghp_...",
+        },
+        reportOutputDir: {
+          label: "Report Output Directory",
+          help: "Where reports are saved",
+        },
+        aopLogFile: {
+          label: "AOP Log File",
+          help: "Path to the observability event log",
+        },
+      },
     },
   },
   {

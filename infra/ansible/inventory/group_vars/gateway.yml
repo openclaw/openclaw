@@ -4,5 +4,5 @@ openclaw_gateway_auth_mode: "token"
 
 # Telegram channel config
 openclaw_telegram_dm_policy: "allowlist"
-openclaw_telegram_allow_from: []  # Populate with Telegram user IDs
+openclaw_telegram_allow_from: [] # Populate with Telegram user IDs
 openclaw_telegram_require_mention: true

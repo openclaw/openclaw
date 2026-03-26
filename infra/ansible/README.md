@@ -11,12 +11,12 @@ Ansible infrastructure for deploying upstream OpenClaw (v2026.3.24) across the f
 
 ## Fleet Topology
 
-| Node | Tailscale IP | Mode | Role |
-|------|-------------|------|------|
-| Gateway VPS | 100.69.32.10 | gateway | Production gateway, Telegram |
-| Kubuntu | 100.93.214.109 | node | GPU/brain, Ollama provider |
-| Pop!_OS | 100.119.126.67 | node | Utility, knowledge |
-| Mac | 127.0.0.1 (local) | gateway | Dev workstation |
+| Node        | Tailscale IP      | Mode    | Role                         |
+| ----------- | ----------------- | ------- | ---------------------------- |
+| Gateway VPS | 100.69.32.10      | gateway | Production gateway, Telegram |
+| Kubuntu     | 100.93.214.109    | node    | GPU/brain, Ollama provider   |
+| Pop!\_OS    | 100.119.126.67    | node    | Utility, knowledge           |
+| Mac         | 127.0.0.1 (local) | gateway | Dev workstation              |
 
 ## Quick Start
 
@@ -43,18 +43,18 @@ ansible-playbook playbooks/upstream.yml --limit nodes
 
 ## Playbooks
 
-| Playbook | Purpose |
-|----------|---------|
-| `upstream.yml` | Deploy upstream OpenClaw to fleet |
-| `rollback.yml` | Stop upstream, restart old fork |
-| `smoke-test.yml` | Verify deployment health |
+| Playbook         | Purpose                           |
+| ---------------- | --------------------------------- |
+| `upstream.yml`   | Deploy upstream OpenClaw to fleet |
+| `rollback.yml`   | Stop upstream, restart old fork   |
+| `smoke-test.yml` | Verify deployment health          |
 
 ## Deployment Order
 
 1. **Mac** — local development and validation
 2. **Gateway VPS** — production gateway with Telegram
 3. **Kubuntu** — node (image pull + config only in base phase)
-4. **Pop!_OS** — node (image pull + config only in base phase)
+4. **Pop!\_OS** — node (image pull + config only in base phase)
 
 ## Stopping the Old Fork
 
@@ -93,6 +93,7 @@ Checks: container health, HTTP `/healthz`, Telegram channel status, cross-node r
 Secrets are injected via environment variables at deploy time. Never commit real values. The `upstream.env` file is deployed with mode 0600.
 
 Required secrets:
+
 - `OPENCLAW_GATEWAY_TOKEN` — shared gateway auth token
 - `ANTHROPIC_API_KEY` — Anthropic API key
 - `TELEGRAM_BOT_TOKEN` — Telegram bot token (gateway only)
