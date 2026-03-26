@@ -75,6 +75,27 @@ describe("bundled plugin load path repair", () => {
     expect(result.config.plugins?.load?.paths).toEqual([bundledPath]);
   });
 
+  it("preserves non-string path entries when repairing legacy bundled paths", () => {
+    const packageRoot = path.resolve("app-node-modules", "openclaw");
+    const legacyPath = path.join(packageRoot, "extensions", "feishu");
+    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
+      new Map([["feishu", bundled("feishu", bundledPath)]]),
+    );
+
+    const cfg = {
+      plugins: {
+        load: {
+          paths: [legacyPath, 42, "/other/path"],
+        },
+      },
+    } as unknown as Parameters<typeof maybeRepairBundledPluginLoadPaths>[0];
+
+    const result = maybeRepairBundledPluginLoadPaths(cfg);
+
+    expect(result.config.plugins?.load?.paths).toEqual([bundledPath, 42, "/other/path"]);
+  });
+
   it("formats a doctor hint for legacy bundled plugin paths", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = path.join(packageRoot, "extensions", "feishu");

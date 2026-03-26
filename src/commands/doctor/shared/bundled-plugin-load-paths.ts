@@ -116,9 +116,10 @@ export function maybeRepairBundledPluginLoadPaths(
     hits.map((hit) => [path.normalize(resolveUserPath(hit.fromPath, env)), hit]),
   );
   const seen = new Set<string>();
-  const rewritten: string[] = [];
+  const rewritten: Array<(typeof paths)[number]> = [];
   for (const entry of paths) {
     if (typeof entry !== "string") {
+      rewritten.push(entry);
       continue;
     }
     const resolved = path.normalize(resolveUserPath(entry, env));
