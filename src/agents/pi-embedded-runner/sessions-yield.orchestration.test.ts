@@ -62,7 +62,7 @@ describe("sessions_yield orchestration", () => {
       makeAttemptResult({
         promptError: null,
         yieldDetected: true,
-        clientToolCall: { name: "hosted_tool", params: { arg: "value" } },
+        clientToolCall: { id: "call_1", name: "hosted_tool", params: { arg: "value" } },
       }),
     );
 
@@ -75,13 +75,14 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.stopReason).toBe("tool_calls");
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
+    expect(result.meta.pendingToolCalls![0].id).toBe("call_1");
   });
 
   it("clientToolCalls takes precedence over promptError", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         promptError: new Error("request_too_large: Request size exceeds model context window"),
-        clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
+        clientToolCall: { id: "call_2", name: "hosted_tool", params: { arg: "value" } },
       }),
     );
 
@@ -93,6 +94,7 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.stopReason).toBe("tool_calls");
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
+    expect(result.meta.pendingToolCalls![0].id).toBe("call_2");
   });
 
   it("normal attempt without yield has no stopReason override", async () => {

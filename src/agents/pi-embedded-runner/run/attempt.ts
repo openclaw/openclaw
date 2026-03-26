@@ -175,6 +175,7 @@ type PromptBuildHookRunner = {
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
+const CLIENT_TOOL_INTERRUPT_REASON = "client_tool";
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 250 : 2_000;
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
@@ -374,6 +375,85 @@ export function stripSessionsYieldArtifacts(activeSession: {
     const isYieldInterruptMessage =
       last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
     if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
+      break;
+    }
+    fileEntries.pop();
+    if (last.id) {
+      byId.delete(last.id);
+    }
+    sessionManager.leafId = last.parentId ?? null;
+    changed = true;
+  }
+  if (changed) {
+    sessionManager._rewriteFile?.();
+  }
+}
+
+function stripClientToolArtifacts(
+  activeSession: {
+    messages: AgentMessage[];
+    agent: { replaceMessages: (messages: AgentMessage[]) => void };
+    sessionManager?: unknown;
+  },
+  toolCallId: string,
+) {
+  if (!toolCallId) {
+    return;
+  }
+
+  const strippedMessages = activeSession.messages.slice();
+  while (strippedMessages.length > 0) {
+    const last = strippedMessages.at(-1) as
+      | AgentMessage
+      | { role?: string; stopReason?: string; toolCallId?: string };
+    if (last?.role === "assistant" && "stopReason" in last && last.stopReason === "aborted") {
+      strippedMessages.pop();
+      continue;
+    }
+    if (last?.role === "toolResult" && last.toolCallId === toolCallId) {
+      strippedMessages.pop();
+      continue;
+    }
+    break;
+  }
+  if (strippedMessages.length !== activeSession.messages.length) {
+    activeSession.agent.replaceMessages(strippedMessages);
+  }
+
+  const sessionManager = activeSession.sessionManager as
+    | {
+        fileEntries?: Array<{
+          type?: string;
+          id?: string;
+          parentId?: string | null;
+          message?: { role?: string; stopReason?: string; toolCallId?: string };
+        }>;
+        byId?: Map<string, { id: string }>;
+        leafId?: string | null;
+        _rewriteFile?: () => void;
+      }
+    | undefined;
+  const fileEntries = sessionManager?.fileEntries;
+  const byId = sessionManager?.byId;
+  if (!fileEntries || !byId) {
+    return;
+  }
+
+  let changed = false;
+  while (fileEntries.length > 1) {
+    const last = fileEntries.at(-1);
+    if (!last || last.type === "session") {
+      break;
+    }
+    const isClientAbortAssistant =
+      last.type === "message" &&
+      last.message?.role === "assistant" &&
+      last.message?.stopReason === "aborted";
+    const isClientToolResult =
+      last.type === "message" &&
+      last.message?.role === "toolResult" &&
+      last.message?.toolCallId === toolCallId;
+    if (!isClientAbortAssistant && !isClientToolResult) {
       break;
     }
     fileEntries.pop();
@@ -2156,16 +2236,23 @@ export async function runEmbeddedAttempt(
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      let clientToolCallDetected: {
+        id: string;
+        name: string;
+        params: Record<string, unknown>;
+      } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
       });
+      let interruptForClientTool:
+        | ((toolCallId: string, toolName: string, toolParams: Record<string, unknown>) => void)
+        | undefined;
       const clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
-            (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+            (toolCallId, toolName, toolParams) => {
+              interruptForClientTool?.(toolCallId, toolName, toolParams);
             },
             {
               agentId: sessionAgentId,
@@ -2517,6 +2604,7 @@ export async function runEmbeddedAttempt(
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
+      let clientToolInterrupted = false;
       let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
@@ -2559,6 +2647,12 @@ export async function runEmbeddedAttempt(
         }
         abortCompaction();
         void activeSession.abort();
+      };
+      interruptForClientTool = (toolCallId, toolName, toolParams) => {
+        clientToolCallDetected = { id: toolCallId, name: toolName, params: toolParams };
+        if (!runAbortController.signal.aborted) {
+          abortRun(false, CLIENT_TOOL_INTERRUPT_REASON);
+        }
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
@@ -2910,6 +3004,11 @@ export async function runEmbeddedAttempt(
             isRunnerAbortError(err) &&
             err instanceof Error &&
             err.cause === "sessions_yield";
+          clientToolInterrupted =
+            !!clientToolCallDetected &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === CLIENT_TOOL_INTERRUPT_REASON;
           if (yieldAborted) {
             aborted = false;
             // Ensure the session abort has mostly settled before proceeding, but
@@ -2923,6 +3022,14 @@ export async function runEmbeddedAttempt(
             if (yieldMessage) {
               await persistSessionsYieldContextMessage(activeSession, yieldMessage);
             }
+          } else if (clientToolInterrupted && clientToolCallDetected) {
+            aborted = false;
+            const interruptedClientToolCall = clientToolCallDetected as {
+              id: string;
+              name: string;
+              params: Record<string, unknown>;
+            };
+            stripClientToolArtifacts(activeSession, interruptedClientToolCall.id);
           } else {
             promptError = err;
             promptErrorSource = "prompt";
@@ -2955,14 +3062,15 @@ export async function runEmbeddedAttempt(
 
           // Skip compaction wait when yield aborted the run — the signal is
           // already tripped and abortable() would immediately reject.
-          const compactionRetryWait = yieldAborted
-            ? { timedOut: false }
-            : await waitForCompactionRetryWithAggregateTimeout({
-                waitForCompactionRetry,
-                abortable,
-                aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionStillInFlight: isCompactionInFlight,
-              });
+          const compactionRetryWait =
+            yieldAborted || clientToolInterrupted
+              ? { timedOut: false }
+              : await waitForCompactionRetryWithAggregateTimeout({
+                  waitForCompactionRetry,
+                  abortable,
+                  aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+                  isCompactionStillInFlight: isCompactionInFlight,
+                });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
             if (!isProbeSession) {

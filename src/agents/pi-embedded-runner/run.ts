@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -1042,7 +1041,7 @@ export async function runEmbeddedPiAgent(
           // follow-up prompt/overflow branches can otherwise swallow the
           // side-channel pendingToolCalls metadata and cause `/v1/responses` to
           // return plain text instead of OpenResponses function_call items.
-          if (attempt.clientToolCalls && attempt.clientToolCalls.length > 0) {
+          if (attempt.clientToolCall) {
             const usageMeta = buildUsageAgentMetaFields({
               usageAccumulator,
               lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
@@ -1098,11 +1097,13 @@ export async function runEmbeddedPiAgent(
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
                 stopReason: "tool_calls",
-                pendingToolCalls: attempt.clientToolCalls.map((call) => ({
-                  id: randomBytes(5).toString("hex").slice(0, 9),
-                  name: call.name,
-                  arguments: JSON.stringify(call.params),
-                })),
+                pendingToolCalls: [
+                  {
+                    id: attempt.clientToolCall.id,
+                    name: attempt.clientToolCall.name,
+                    arguments: JSON.stringify(attempt.clientToolCall.params),
+                  },
+                ],
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1894,6 +1895,24 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+          const pendingClientToolCall = attempt.clientToolCall as
+            | { id: string; name: string; params: Record<string, unknown> }
+            | undefined;
+          const stopReason = pendingClientToolCall
+            ? "tool_calls"
+            : attempt.yieldDetected
+              ? "end_turn"
+              : (lastAssistant?.stopReason as string | undefined);
+          let pendingToolCalls: Array<{ id: string; name: string; arguments: string }> | undefined;
+          if (pendingClientToolCall) {
+            pendingToolCalls = [
+              {
+                id: pendingClientToolCall.id,
+                name: pendingClientToolCall.name,
+                arguments: JSON.stringify(pendingClientToolCall.params),
+              },
+            ];
+          }
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {
@@ -1904,20 +1923,8 @@ export async function runEmbeddedPiAgent(
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : attempt.yieldDetected
-                  ? "end_turn"
-                  : (lastAssistant?.stopReason as string | undefined),
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
+              stopReason,
+              pendingToolCalls,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,

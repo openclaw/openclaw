@@ -345,7 +345,7 @@ describe("before_tool_call hook integration for client tools", () => {
     const extensionContext = {} as Parameters<typeof tool.execute>[4];
     await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, extensionContext);
 
-    expect(onClientToolCall).toHaveBeenCalledWith("client_tool", {
+    expect(onClientToolCall).toHaveBeenCalledWith("client-call-1", "client_tool", {
       value: "ok",
       extra: true,
     });
