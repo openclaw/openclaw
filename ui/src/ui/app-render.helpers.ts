@@ -6,7 +6,7 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
-import { createChatModelOverride } from "./chat-model-ref.ts";
+import { createChatModelOverride, normalizeChatModelOverrideValue } from "./chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,

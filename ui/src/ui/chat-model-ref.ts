@@ -145,8 +145,13 @@ export function formatChatModelDisplay(value: string): string {
 
 export function buildChatModelOption(entry: ModelCatalogEntry): { value: string; label: string } {
   const provider = entry.provider?.trim();
+  const id = entry.id.trim();
+  // Catalog entries have an authoritative provider, so always prefix.
+  // buildQualifiedChatModelValue early-returns for slash-containing IDs,
+  // but catalog IDs (e.g. OpenRouter "meta-llama/llama-3-70b") still need
+  // the provider prefix to build a fully qualified option value.
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: provider ? `${entry.id} · ${provider}` : entry.id,
+    value: provider ? `${provider}/${id}` : id,
+    label: provider ? `${id} · ${provider}` : id,
   };
 }
