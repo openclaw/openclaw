@@ -6,6 +6,10 @@ vi.mock("../../config/sessions.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
+  resolveSessionTranscriptPath: vi.fn(
+    (sessionId: string, agentId?: string) =>
+      `/tmp/agents/${agentId ?? "main"}/sessions/${sessionId}.jsonl`,
+  ),
 }));
 
 vi.mock("../../agents/bootstrap-cache.js", () => ({
@@ -18,7 +22,11 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
+import {
+  loadSessionStore,
+  evaluateSessionFreshness,
+  resolveSessionTranscriptPath,
+} from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -52,6 +60,7 @@ function resolveWithStoredEntry(params?: {
 describe("resolveCronSession", () => {
   beforeEach(() => {
     vi.mocked(clearBootstrapSnapshot).mockReset();
+    vi.mocked(resolveSessionTranscriptPath).mockClear();
   });
 
   it("preserves modelOverride and providerOverride from existing session entry", () => {
@@ -97,6 +106,9 @@ describe("resolveCronSession", () => {
     expect(result.sessionEntry.providerOverride).toBeUndefined();
     expect(result.sessionEntry.model).toBeUndefined();
     expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.sessionFile).toBe(
+      `/tmp/agents/main/sessions/${result.sessionEntry.sessionId}.jsonl`,
+    );
   });
 
   // New tests for session reuse behavior (#18027)
@@ -123,6 +135,7 @@ describe("resolveCronSession", () => {
           sessionId: "old-session-id",
           updatedAt: NOW_MS - 86_400_000, // 1 day ago
           systemSent: true,
+          sessionFile: "/tmp/agents/main/sessions/old-session-id.jsonl",
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
           sendPolicy: "allow",
@@ -133,10 +146,17 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
       expect(result.systemSent).toBe(false);
+      expect(result.sessionEntry.sessionFile).toBe(
+        `/tmp/agents/main/sessions/${result.sessionEntry.sessionId}.jsonl`,
+      );
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
       expect(result.sessionEntry.sendPolicy).toBe("allow");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      expect(vi.mocked(resolveSessionTranscriptPath)).toHaveBeenCalledWith(
+        result.sessionEntry.sessionId,
+        "main",
+      );
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -155,6 +175,9 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
       expect(result.isNewSession).toBe(true);
       expect(result.systemSent).toBe(false);
+      expect(result.sessionEntry.sessionFile).toBe(
+        `/tmp/agents/main/sessions/${result.sessionEntry.sessionId}.jsonl`,
+      );
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
@@ -258,6 +281,9 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).toBeDefined();
       expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBe(
+        `/tmp/agents/main/sessions/${result.sessionEntry.sessionId}.jsonl`,
+      );
       // Should still preserve other fields from entry
       expect(result.sessionEntry.modelOverride).toBe("some-model");
     });

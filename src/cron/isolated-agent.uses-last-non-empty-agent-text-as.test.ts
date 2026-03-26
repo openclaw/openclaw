@@ -545,6 +545,61 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("rewrites sessionFile when a cron session rolls to a new session id", async () => {
+    await withTempHome(async (home) => {
+      const previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+      delete process.env.OPENCLAW_TEST_FAST;
+      try {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const raw = await fs.readFile(storePath, "utf-8");
+        const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+        const oldSessionFile = path.join(
+          home,
+          ".openclaw",
+          "agents",
+          "main",
+          "sessions",
+          "old-session-id.jsonl",
+        );
+        store["agent:main:cron:job-1"] = {
+          sessionId: "old-session-id",
+          updatedAt: 0,
+          sessionFile: oldSessionFile,
+        };
+        await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+        const { res } = await runCronTurn(home, {
+          jobPayload: { kind: "agentTurn", message: "ping", deliver: false },
+          message: "ping",
+          mockTexts: ["ok"],
+          storePath,
+        });
+
+        const updatedRaw = await fs.readFile(storePath, "utf-8");
+        const updatedStore = JSON.parse(updatedRaw) as Record<
+          string,
+          { sessionId?: string; sessionFile?: string }
+        >;
+        const stableEntry = updatedStore["agent:main:cron:job-1"];
+        expect(res.sessionKey).toBeDefined();
+        const runSessionKey = res.sessionKey as string;
+        const runEntry = updatedStore[runSessionKey];
+
+        expect(stableEntry?.sessionId).toBe(res.sessionId);
+        expect(stableEntry?.sessionFile).toContain(`${res.sessionId}.jsonl`);
+        expect(stableEntry?.sessionFile).not.toBe(oldSessionFile);
+        expect(runEntry?.sessionId).toBe(res.sessionId);
+        expect(runEntry?.sessionFile).toBe(stableEntry?.sessionFile);
+      } finally {
+        if (previousFastTestEnv == null) {
+          delete process.env.OPENCLAW_TEST_FAST;
+        } else {
+          process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+        }
+      }
+    });
+  });
+
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
