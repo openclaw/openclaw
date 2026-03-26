@@ -141,6 +141,28 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
+    it("passes caller connId to hasExecApprovalClients to exclude self", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const hasExecApprovalClients = vi.fn().mockReturnValue(false);
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "T", description: "D" },
+        {
+          client: {
+            connId: "backend-conn-42",
+            connect: { client: { id: "test", displayName: "Test" } },
+          } as unknown as GatewayRequestHandlerOptions["client"],
+          context: {
+            broadcast: vi.fn(),
+            logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+            hasExecApprovalClients,
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      );
+      await handlers["plugin.approval.request"](opts);
+      expect(hasExecApprovalClients).toHaveBeenCalledWith("backend-conn-42");
+    });
+
     it("rejects invalid severity value", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", {

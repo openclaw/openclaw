@@ -183,7 +183,7 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      const hasExecApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       let forwarded = false;
       if (opts?.forwarder) {
         try {

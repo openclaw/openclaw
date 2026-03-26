@@ -20,7 +20,7 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.request": async ({ params, respond, context }) => {
+    "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (!validatePluginApprovalRequestParams(params)) {
         respond(
           false,
@@ -116,7 +116,7 @@ export function createPluginApprovalHandlers(
         }
       }
 
-      const hasApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       if (!hasApprovalClients && !forwarded) {
         manager.expire(record.id, "no-approval-route");
         respond(

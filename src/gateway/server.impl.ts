@@ -1182,8 +1182,11 @@ export async function startGatewayServer(
       nodeUnsubscribe,
       nodeUnsubscribeAll,
       hasConnectedMobileNode: hasMobileNodeConnected,
-      hasExecApprovalClients: () => {
+      hasExecApprovalClients: (excludeConnId?: string) => {
         for (const gatewayClient of clients) {
+          if (excludeConnId && gatewayClient.connId === excludeConnId) {
+            continue;
+          }
           const scopes = Array.isArray(gatewayClient.connect.scopes)
             ? gatewayClient.connect.scopes
             : [];
