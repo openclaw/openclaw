@@ -998,6 +998,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run plugin_updated hook for all registered handlers.
+   * Kept as a broadcast variant for future non-targeted lifecycle dispatch.
    */
   async function runPluginUpdated(
     event: PluginHookPluginUpdatedEvent,

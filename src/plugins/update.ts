@@ -14,6 +14,7 @@ import {
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import type { PluginHookPluginUpdatedEvent } from "./types.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -47,20 +48,7 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
-export type PluginUpdatedLifecycleEvent = {
-  /**
-   * Canonical plugin id after update resolution.
-   * Can differ from requestedPluginId when legacy keys migrate.
-   */
-  pluginId: string;
-  /** Plugin id requested by the update command before id migration. */
-  requestedPluginId: string;
-  source: "npm" | "marketplace" | "clawhub";
-  spec?: string;
-  previousVersion?: string;
-  nextVersion?: string;
-  installPath: string;
-};
+export type PluginUpdatedLifecycleEvent = PluginHookPluginUpdatedEvent;
 
 export type PluginChannelSyncSummary = {
   switchedToBundled: string[];
@@ -584,7 +572,9 @@ export async function updateNpmInstalledPlugins(params: {
       });
     }
 
-    if (params.onPluginUpdated) {
+    const isVersionChanged = !(currentVersion && nextVersion && currentVersion === nextVersion);
+
+    if (params.onPluginUpdated && isVersionChanged) {
       try {
         await params.onPluginUpdated({
           pluginId: resolvedPluginId,
@@ -604,7 +594,7 @@ export async function updateNpmInstalledPlugins(params: {
 
     const currentLabel = currentVersion ?? "unknown";
     const nextLabel = nextVersion ?? "unknown";
-    if (currentVersion && nextVersion && currentVersion === nextVersion) {
+    if (!isVersionChanged) {
       outcomes.push({
         pluginId,
         status: "unchanged",
