@@ -190,15 +190,16 @@ export async function runServiceStart(params: {
   const json = Boolean(params.opts?.json);
   const { stdout, emit, fail } = createDaemonActionContext({ action: "start", json });
 
-  if (
-    (await resolveServiceLoadedOrFail({
-      serviceNoun: params.serviceNoun,
-      service: params.service,
-      fail,
-    })) === null
-  ) {
+  // Check if service check fails (throws exception), but don't fail on "not loaded".
+  // startGatewayService will handle the "installed but not loaded" case by calling
+  // restartLaunchAgent which has bootstrap logic.
+  try {
+    await params.service.isLoaded({ env: process.env });
+  } catch (err) {
+    fail(`${params.serviceNoun} service check failed: ${String(err)}`);
     return;
   }
+
   // Pre-flight config validation (#35862) — run for both loaded and not-loaded
   // to prevent launching from invalid config in any start path.
   {
