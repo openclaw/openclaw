@@ -5,7 +5,7 @@ import {
   ensureContextEnginesInitialized,
   resolveContextEngine,
 } from "../../context-engine/index.js";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
@@ -15,8 +15,8 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
-  isProfileInCooldown,
   type AuthProfileFailureReason,
+  isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -40,33 +40,34 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   getApiKeyForModel,
-  resolveAuthProfileOrder,
   type ResolvedProviderAuth,
+  resolveAuthProfileOrder,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  formatBillingErrorMessage,
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
+  type FailoverReason,
   formatAssistantErrorText,
+  formatBillingErrorMessage,
   isAuthAssistantError,
   isBillingAssistantError,
   isCompactionFailureError,
-  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
-  parseImageSizeError,
-  parseImageDimensionError,
+  isLikelyContextOverflowError,
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
+  parseImageDimensionError,
+  parseImageSizeError,
   pickFallbackThinkingLevel,
-  type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import { runPostCompactionSideEffects } from "./compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -77,8 +78,8 @@ import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
-  truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
+  truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import {
@@ -365,7 +366,9 @@ export async function runEmbeddedPiAgent(
         );
       }
 
-      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+      const authStore = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
@@ -458,7 +461,10 @@ export async function runEmbeddedPiAgent(
           authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
           if (preparedAuth.baseUrl) {
             runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
-            effectiveModel = { ...effectiveModel, baseUrl: preparedAuth.baseUrl };
+            effectiveModel = {
+              ...effectiveModel,
+              baseUrl: preparedAuth.baseUrl,
+            };
           }
           runtimeAuthState = {
             ...runtimeAuthState,
@@ -661,7 +667,7 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (candidate && isProfileInCooldown(authStore, candidate, undefined, modelId)) {
             nextIndex += 1;
             continue;
           }
@@ -688,7 +694,9 @@ export async function runEmbeddedPiAgent(
         );
         const allAutoProfilesInCooldown =
           autoProfileCandidates.length > 0 &&
-          autoProfileCandidates.every((candidate) => isProfileInCooldown(authStore, candidate));
+          autoProfileCandidates.every((candidate) =>
+            isProfileInCooldown(authStore, candidate, undefined, modelId),
+          );
         const unavailableReason = allAutoProfilesInCooldown
           ? (resolveProfilesUnavailableReason({
               store: authStore,
@@ -704,7 +712,9 @@ export async function runEmbeddedPiAgent(
         while (profileIndex < profileCandidates.length) {
           const candidate = profileCandidates[profileIndex];
           const inCooldown =
-            candidate && candidate !== lockedProfileId && isProfileInCooldown(authStore, candidate);
+            candidate &&
+            candidate !== lockedProfileId &&
+            isProfileInCooldown(authStore, candidate, undefined, modelId);
           if (inCooldown) {
             if (allowTransientCooldownProbe && !didTransientCooldownProbe) {
               didTransientCooldownProbe = true;
@@ -757,6 +767,7 @@ export async function runEmbeddedPiAgent(
         }
       };
 
+      const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
@@ -769,11 +780,13 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let timeoutCompactionAttempts = 0;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+        modelId?: string;
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
@@ -786,6 +799,7 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           agentDir,
           runId: params.runId,
+          modelId: failure.modelId,
         });
       };
       const resolveAuthProfileFailureReason = (
@@ -823,6 +837,51 @@ export async function runEmbeddedPiAgent(
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
       try {
+        // When the engine owns compaction, compactEmbeddedPiSessionDirect is
+        // bypassed. Fire lifecycle hooks here so recovery paths still notify
+        // subscribers like memory extensions and usage trackers.
+        const runOwnsCompactionBeforeHook = async (reason: string) => {
+          if (
+            contextEngine.info.ownsCompaction !== true ||
+            !hookRunner?.hasHooks("before_compaction")
+          ) {
+            return;
+          }
+          try {
+            await hookRunner.runBeforeCompaction(
+              { messageCount: -1, sessionFile: params.sessionFile },
+              hookCtx,
+            );
+          } catch (hookErr) {
+            log.warn(`before_compaction hook failed during ${reason}: ${String(hookErr)}`);
+          }
+        };
+        const runOwnsCompactionAfterHook = async (
+          reason: string,
+          compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
+        ) => {
+          if (
+            contextEngine.info.ownsCompaction !== true ||
+            !compactResult.ok ||
+            !compactResult.compacted ||
+            !hookRunner?.hasHooks("after_compaction")
+          ) {
+            return;
+          }
+          try {
+            await hookRunner.runAfterCompaction(
+              {
+                messageCount: -1,
+                compactedCount: -1,
+                tokenCount: compactResult.result?.tokensAfter,
+                sessionFile: params.sessionFile,
+              },
+              hookCtx,
+            );
+          } catch (hookErr) {
+            log.warn(`after_compaction hook failed during ${reason}: ${String(hookErr)}`);
+          }
+        };
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
@@ -990,6 +1049,103 @@ export async function runEmbeddedPiAgent(
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
 
+          // ── Timeout-triggered compaction ──────────────────────────────────
+          // When the LLM times out with high context usage, compact before
+          // retrying to break the death spiral of repeated timeouts.
+          if (timedOut && !timedOutDuringCompaction) {
+            // Only consider prompt-side tokens here. API totals include output
+            // tokens, which can make a long generation look like high context
+            // pressure even when the prompt itself was small.
+            const lastTurnPromptTokens = derivePromptTokens(lastRunPromptUsage);
+            const tokenUsedRatio =
+              lastTurnPromptTokens != null && ctxInfo.tokens > 0
+                ? lastTurnPromptTokens / ctxInfo.tokens
+                : 0;
+            if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
+              log.warn(
+                `[timeout-compaction] already attempted timeout compaction ${timeoutCompactionAttempts} time(s); falling through to failover rotation`,
+              );
+            } else if (tokenUsedRatio > 0.65) {
+              const timeoutDiagId = createCompactionDiagId();
+              timeoutCompactionAttempts++;
+              log.warn(
+                `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
+                  `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
+              );
+              let timeoutCompactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
+              await runOwnsCompactionBeforeHook("timeout recovery");
+              try {
+                const timeoutCompactionRuntimeContext = {
+                  ...buildEmbeddedCompactionRuntimeContext({
+                    sessionKey: params.sessionKey,
+                    messageChannel: params.messageChannel,
+                    messageProvider: params.messageProvider,
+                    agentAccountId: params.agentAccountId,
+                    currentChannelId: params.currentChannelId,
+                    currentThreadTs: params.currentThreadTs,
+                    currentMessageId: params.currentMessageId,
+                    authProfileId: lastProfileId,
+                    workspaceDir: resolvedWorkspace,
+                    agentDir,
+                    config: params.config,
+                    skillsSnapshot: params.skillsSnapshot,
+                    senderIsOwner: params.senderIsOwner,
+                    senderId: params.senderId,
+                    provider,
+                    modelId,
+                    thinkLevel,
+                    reasoningLevel: params.reasoningLevel,
+                    bashElevated: params.bashElevated,
+                    extraSystemPrompt: params.extraSystemPrompt,
+                    ownerNumbers: params.ownerNumbers,
+                  }),
+                  runId: params.runId,
+                  trigger: "timeout_recovery",
+                  diagId: timeoutDiagId,
+                  attempt: timeoutCompactionAttempts,
+                  maxAttempts: MAX_TIMEOUT_COMPACTION_ATTEMPTS,
+                };
+                timeoutCompactResult = await contextEngine.compact({
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.sessionFile,
+                  tokenBudget: ctxInfo.tokens,
+                  force: true,
+                  compactionTarget: "budget",
+                  runtimeContext: timeoutCompactionRuntimeContext,
+                });
+              } catch (compactErr) {
+                log.warn(
+                  `[timeout-compaction] contextEngine.compact() threw during timeout recovery for ${provider}/${modelId}: ${String(compactErr)}`,
+                );
+                timeoutCompactResult = {
+                  ok: false,
+                  compacted: false,
+                  reason: String(compactErr),
+                };
+              }
+              await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
+              if (timeoutCompactResult.compacted) {
+                autoCompactionCount += 1;
+                if (contextEngine.info.ownsCompaction === true) {
+                  await runPostCompactionSideEffects({
+                    config: params.config,
+                    sessionKey: params.sessionKey,
+                    sessionFile: params.sessionFile,
+                  });
+                }
+                log.info(
+                  `[timeout-compaction] compaction succeeded for ${provider}/${modelId}; retrying prompt`,
+                );
+                continue;
+              } else {
+                log.warn(
+                  `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
+                );
+              }
+            }
+          }
+
           const contextOverflowError = !aborted
             ? (() => {
                 if (promptError) {
@@ -1002,7 +1158,10 @@ export async function runEmbeddedPiAgent(
                   return null;
                 }
                 if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
-                  return { text: assistantErrorText, source: "assistantError" as const };
+                  return {
+                    text: assistantErrorText,
+                    source: "assistantError" as const,
+                  };
                 }
                 return null;
               })()
@@ -1055,24 +1214,7 @@ export async function runEmbeddedPiAgent(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
               let compactResult: Awaited<ReturnType<typeof contextEngine.compact>>;
-              // When the engine owns compaction, hooks are not fired inside
-              // compactEmbeddedPiSessionDirect (which is bypassed).  Fire them
-              // here so subscribers (memory extensions, usage trackers) are
-              // notified even on overflow-recovery compactions.
-              const overflowEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-              const overflowHookRunner = overflowEngineOwnsCompaction ? hookRunner : null;
-              if (overflowHookRunner?.hasHooks("before_compaction")) {
-                try {
-                  await overflowHookRunner.runBeforeCompaction(
-                    { messageCount: -1, sessionFile: params.sessionFile },
-                    hookCtx,
-                  );
-                } catch (hookErr) {
-                  log.warn(
-                    `before_compaction hook failed during overflow recovery: ${String(hookErr)}`,
-                  );
-                }
-              }
+              await runOwnsCompactionBeforeHook("overflow recovery");
               try {
                 const overflowCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
@@ -1133,29 +1275,13 @@ export async function runEmbeddedPiAgent(
                 log.warn(
                   `contextEngine.compact() threw during overflow recovery for ${provider}/${modelId}: ${String(compactErr)}`,
                 );
-                compactResult = { ok: false, compacted: false, reason: String(compactErr) };
+                compactResult = {
+                  ok: false,
+                  compacted: false,
+                  reason: String(compactErr),
+                };
               }
-              if (
-                compactResult.ok &&
-                compactResult.compacted &&
-                overflowHookRunner?.hasHooks("after_compaction")
-              ) {
-                try {
-                  await overflowHookRunner.runAfterCompaction(
-                    {
-                      messageCount: -1,
-                      compactedCount: -1,
-                      tokenCount: compactResult.result?.tokensAfter,
-                      sessionFile: params.sessionFile,
-                    },
-                    hookCtx,
-                  );
-                } catch (hookErr) {
-                  log.warn(
-                    `after_compaction hook failed during overflow recovery: ${String(hookErr)}`,
-                  );
-                }
-              }
+              await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
@@ -1336,6 +1462,7 @@ export async function runEmbeddedPiAgent(
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
               reason: promptProfileFailureReason,
+              modelId,
             });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText);
@@ -1477,6 +1604,7 @@ export async function runEmbeddedPiAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
+                modelId,
               });
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);

@@ -45,11 +45,17 @@ jobs:
       matrix:
         include:
           - shard_index: 1
-            shard_count: 2
-            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 1/2
+            shard_count: 4
+            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 1/4
           - shard_index: 2
-            shard_count: 2
-            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 2/2
+            shard_count: 4
+            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 2/4
+          - shard_index: 3
+            shard_count: 4
+            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 3/4
+          - shard_index: 4
+            shard_count: 4
+            command: OPENCLAW_TEST_ISOLATE=1 bunx vitest run --config vitest.unit.config.ts --shard 4/4
     steps:
       - name: Checkout
         uses: actions/checkout@v6
