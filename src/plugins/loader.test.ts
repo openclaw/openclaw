@@ -1745,6 +1745,24 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           ).toBe(true);
         },
       },
+      {
+        label: "requires cli backend ids",
+        pluginId: "cli-backend-missing-id",
+        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
+  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends).toHaveLength(0);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "cli-backend-missing-id" &&
+                diag.message === "cli backend registration missing id",
+            ),
+          ).toBe(true);
+        },
+      },
     ] as const;
 
     for (const scenario of scenarios) {
@@ -1862,6 +1880,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+        },
+      },
+      {
+        label: "plugin cli backend ids",
+        ownerA: "cli-backend-owner-a",
+        ownerB: "cli-backend-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.cliBackends?.length ?? 0,
+        duplicateMessage:
+          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
       },
     ] as const;

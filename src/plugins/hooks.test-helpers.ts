@@ -16,6 +16,7 @@ export function createMockPluginRegistry(
         toolNames: [],
         hookNames: [],
         channelIds: [],
+        cliBackendIds: [],
         providerIds: [],
         speechProviderIds: [],
         mediaUnderstandingProviderIds: [],

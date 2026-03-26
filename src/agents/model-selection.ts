@@ -6,6 +6,7 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -81,10 +82,9 @@ export {
 
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  if (normalized === "claude-cli") {
-    return true;
-  }
-  if (normalized === "codex-cli") {
+  if (
+    resolveRuntimeCliBackends().some((backend) => normalizeProviderId(backend.id) === normalized)
+  ) {
     return true;
   }
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
