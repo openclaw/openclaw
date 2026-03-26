@@ -482,13 +482,65 @@ describe("exec approvals", () => {
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        deliver: true,
+        deliver: false,
         idempotencyKey: expect.stringContaining("exec-approval-followup:"),
       }),
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
       "An async command the user already approved has completed.",
+    );
+  });
+
+  it("webchat exec approval follow-up uses internal agent run (no outbound deliver)", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+    });
+
+    const result = await tool.execute("call-gw-followup-webchat", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect
+      .poll(
+        () =>
+          agentCalls.some((c) =>
+            String((c as { idempotencyKey?: string }).idempotencyKey ?? "").includes(
+              "exec-approval-followup:",
+            ),
+          ),
+        { timeout: 3_000, interval: 20 },
+      )
+      .toBe(true);
+    const followup = agentCalls.find((c) =>
+      String((c as { idempotencyKey?: string }).idempotencyKey ?? "").includes(
+        "exec-approval-followup:",
+      ),
+    );
+    expect(followup).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliver: false,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
+      }),
     );
   });
 
