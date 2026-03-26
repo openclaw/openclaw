@@ -6,14 +6,16 @@ Decision-tree guide for investigating consumer frontend issues across Morpho web
 
 ## Tools
 
-| Tool                      | Path                                   | Purpose                                               |
-| ------------------------- | -------------------------------------- | ----------------------------------------------------- |
-| Consumer bug preflight    | `scripts/consumer-bug-preflight.sh`    | Consolidated probe for consumer tx bugs               |
-| Frontend project resolver | `scripts/frontend-project-resolver.sh` | Infer likely projects from a user question            |
-| PostHog MCP launcher      | `scripts/posthog-mcp.sh`               | Session replay, flow drop-offs, event anomalies       |
-| Sentry API wrapper        | `scripts/sentry-api.sh`                | JS/runtime issue groups, stack traces, event payloads |
-| Sentry CLI wrapper        | `scripts/sentry-cli.sh`                | CLI access to Sentry                                  |
-| Linear ticket API         | `scripts/linear-ticket-api.sh`         | Search/create known issues                            |
+| Tool                      | Path                                   | Purpose                                                     |
+| ------------------------- | -------------------------------------- | ----------------------------------------------------------- |
+| Consumer bug preflight    | `scripts/consumer-bug-preflight.sh`    | Consolidated probe for consumer tx bugs                     |
+| Frontend project resolver | `scripts/frontend-project-resolver.sh` | Infer likely projects from a user question                  |
+| Frontend dev server       | `scripts/frontend-devserver.sh`        | Clone, install, and run local dev server for any Morpho app |
+| Chrome DevTools MCP       | `chrome-devtools` MCP server           | Navigate, screenshot, DOM/network/console inspection        |
+| PostHog MCP launcher      | `scripts/posthog-mcp.sh`               | Session replay, flow drop-offs, event anomalies             |
+| Sentry API wrapper        | `scripts/sentry-api.sh`                | JS/runtime issue groups, stack traces, event payloads       |
+| Sentry CLI wrapper        | `scripts/sentry-cli.sh`                | CLI access to Sentry                                        |
+| Linear ticket API         | `scripts/linear-ticket-api.sh`         | Search/create known issues                                  |
 
 ## Decision Tree
 
@@ -70,6 +72,26 @@ Decision-tree guide for investigating consumer frontend issues across Morpho web
 2. Check release correlation after a bad frontend deploy.
 3. Cross-reference with Grafana / CloudWatch for infra or edge behavior changes.
 4. If the issue is data-layer, pivot to the DB-first or single-vault investigation path.
+
+### Visual / E2E Reproduction
+
+**Symptom:** Need to see the actual page, capture screenshots, inspect DOM, check network requests, or reproduce a user's exact flow.
+
+1. Start the relevant dev server:
+   ```bash
+   /home/node/.openclaw/skills/morpho-sre/scripts/frontend-devserver.sh start <app-key>
+   ```
+2. Use the `chrome-devtools` MCP to navigate to the dev server URL and inspect:
+   - Navigate to pages, take screenshots of rendered state
+   - Inspect DOM elements and computed styles
+   - Monitor network requests and responses
+   - Read browser console messages and errors
+3. After investigation, stop the dev server:
+   ```bash
+   /home/node/.openclaw/skills/morpho-sre/scripts/frontend-devserver.sh stop <app-key>
+   ```
+
+Available app keys: `curator-app`, `curator-v2-app`, `delegate-app`, `liquidation-app`, `markets-v2-app`, `ui-app`, `consumer-app`. Run `frontend-devserver.sh list` for all keys with repos and ports.
 
 ### Unknown / Ambiguous Symptom
 

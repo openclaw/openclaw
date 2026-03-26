@@ -26,9 +26,38 @@ Use the symptom to pick the starting point -- this is a decision tree, not a rig
 | Wallet / permit / approval / repay failure | `consumer-bug-preflight.sh`                                  |
 | UI / rendering issue                       | PostHog session replay                                       |
 | API / data error                           | Sentry error groups                                          |
+| Visual / E2E reproduction needed           | `frontend-devserver.sh` + Chrome DevTools MCP                |
 | Unknown / ambiguous                        | `frontend-project-resolver.sh` to identify the project first |
 
 After the starting probe, continue with the full triage order below.
+
+## Frontend Dev Server
+
+Path: `/home/node/.openclaw/skills/morpho-sre/scripts/frontend-devserver.sh`
+
+Start a local dev server for any Morpho frontend app to enable visual debugging with Chrome DevTools MCP:
+
+```bash
+frontend-devserver.sh start curator-v2-app
+frontend-devserver.sh start consumer-app --port 3010
+frontend-devserver.sh stop curator-v2-app
+frontend-devserver.sh status
+frontend-devserver.sh list
+```
+
+After starting a dev server, use the `chrome-devtools` MCP to navigate to the dev server URL, take screenshots, inspect DOM, check network requests, and analyze console messages.
+
+## Chrome DevTools MCP
+
+MCP server: `chrome-devtools` (configured in acpx)
+
+Launches headless Chromium in-container and connects via CDP. Use it to:
+
+- Navigate to dev server pages or production URLs
+- Take screenshots of rendered pages
+- Inspect DOM elements and computed styles
+- Monitor network requests and responses
+- Read browser console messages and errors
 
 ## Consumer Bug Preflight
 

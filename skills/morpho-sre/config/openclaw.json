@@ -643,6 +643,10 @@
             "posthog-prd-vmv1": {
               "command": "/home/node/.openclaw/skills/morpho-sre/scripts/posthog-mcp.sh",
               "args": ["prd", "--project-key", "vmv1"]
+            },
+            "chrome-devtools": {
+              "command": "bash",
+              "args": ["/home/node/.openclaw/skills/morpho-sre/scripts/chrome-devtools-mcp.sh"]
             }
           }
         }

@@ -16,6 +16,8 @@ ARG DUNE_CLI_VERSION=0.1.5
 # Pin the Vercel CLI to keep the SRE runtime aligned with the main runtime image.
 # See docs/reference/RELEASING.md for coordinated version bumps.
 ARG OPENCLAW_VERCEL_CLI_VERSION=50.37.0
+ARG CHROME_DEVTOOLS_MCP_VERSION=0.20.3
+ARG PNPM_VERSION=10.33.0
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -23,7 +25,9 @@ RUN apt-get update \
     awscli \
     bash \
     ca-certificates \
+    chromium \
     curl \
+    fonts-liberation \
     gh \
     git \
     gzip \
@@ -44,7 +48,10 @@ RUN mkdir -p /srv/openclaw/repos/openclaw-sre \
       npm install -g --no-fund --no-audit "openclaw@${OPENCLAW_VERSION}"; \
     fi \
   && npm install -g --no-fund --no-audit "@tobilu/qmd@${QMD_VERSION}" "vercel@${OPENCLAW_VERCEL_CLI_VERSION}" \
+  && PUPPETEER_SKIP_DOWNLOAD=true \
+     npm install -g --no-fund --no-audit "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
   && vercel --version >/dev/null \
+  && chrome-devtools-mcp --help >/dev/null \
   && rm -f /tmp/openclaw-local.tgz
 
 RUN export FOUNDRY_DIR=/opt/foundry \
@@ -135,5 +142,7 @@ RUN ACPX_VERSION="$(node -p "require('/usr/local/lib/node_modules/openclaw/exten
         ln -sf "../${name}" "${skill_root}/scripts/${name}"; \
       done; \
     done
+
+RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 USER node
