@@ -1062,7 +1062,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       // messages pass through), self-message filtering is disabled (risk of
       // self-reply loops), and reply detection is broken. Let auto-restart
       // retry instead of running in a degraded state. See #42219.
-      throw new Error(`discord: cannot start without bot identity: ${String(err)}`);
+      throw new Error(`discord: cannot start without bot identity: ${String(err)}`, { cause: err });
     }
     if (!botUserId) {
       // fetchUser succeeded but returned no id — equally unsafe to continue.
