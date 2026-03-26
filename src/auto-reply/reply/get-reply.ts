@@ -19,6 +19,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { logVerbose } from "../../globals.js";
 import { isImageAttachment, normalizeAttachments } from "../../media-understanding/attachments.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
@@ -335,7 +336,9 @@ export async function getReplyFromConfig(
           model = configuredImageModel.model;
         }
       }
-    } catch {}
+    } catch (err) {
+      logVerbose(`[get-reply] image model promotion skipped: catalog load failed (${String(err)})`);
+    }
   }
 
   const directiveResult = await resolveReplyDirectives({
