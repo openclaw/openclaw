@@ -231,11 +231,12 @@ async function bootstrapLaunchAgentOrThrow(params: {
       return;
     }
     const loadDetail = (load.stderr || load.stdout).trim();
-    // Only show GUI-session guidance when the failure is actually gui-domain related.
-    // For other load failures (e.g. plist syntax, permissions), surface the real error.
+    // Only show GUI-session guidance when the failure is actually gui-domain related
+    // and the load fallback didn't reveal a different, more actionable error.
     if (isUnsupportedGuiDomain(effectiveDetail)) {
+      const isLoadDifferentError = loadDetail && !isUnsupportedGuiDomain(loadDetail);
       throwBootstrapGuiSessionError({
-        detail: effectiveDetail,
+        detail: isLoadDifferentError ? `${loadDetail} (bootstrap: ${effectiveDetail})` : effectiveDetail,
         domain: params.domain,
         actionHint: params.actionHint,
       });
