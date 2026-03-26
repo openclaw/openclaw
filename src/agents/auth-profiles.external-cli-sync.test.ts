@@ -64,11 +64,8 @@ describe("syncExternalCliCredentials", () => {
     }));
     ({ syncExternalCliCredentials, shouldReplaceStoredOAuthCredential } =
       await import("./auth-profiles/external-cli-sync.js"));
-    ({
-      CODEX_CLI_PROFILE_ID,
-      OPENAI_CODEX_DEFAULT_PROFILE_ID,
-      MINIMAX_CLI_PROFILE_ID,
-    } = await import("./auth-profiles/constants.js"));
+    ({ CODEX_CLI_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } =
+      await import("./auth-profiles/constants.js"));
   });
 
   describe("shouldReplaceStoredOAuthCredential", () => {
