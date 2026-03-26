@@ -1,77 +1,50 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { createPiAiStreamSimpleMock } from "./extra-params.pi-ai-mock.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-  return {
-    ...original,
-    streamSimple: vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(),
-    })),
+vi.mock("@mariozechner/pi-ai", async (importOriginal) =>
+  createPiAiStreamSimpleMock(() => importOriginal<typeof import("@mariozechner/pi-ai")>()),
+);
+
+function runToolPayloadCase(provider: "openai" | "xai", modelId: string) {
+  return runExtraParamsCase({
+    applyProvider: provider,
+    applyModelId: modelId,
+    model: {
+      api: "openai-completions",
+      provider,
+      id: modelId,
+    } as Model<"openai-completions">,
+    payload: {
+      model: modelId,
+      messages: [],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "write",
+            description: "write a file",
+            parameters: { type: "object", properties: {} },
+            strict: true,
+          },
+        },
+      ],
+    },
+  }).payload as {
+    tools?: Array<{ function?: Record<string, unknown> }>;
   };
-});
+}
 
 describe("extra-params: xAI tool payload compatibility", () => {
   it("strips function.strict for xai providers", () => {
-    const payload = runExtraParamsCase({
-      applyProvider: "xai",
-      applyModelId: "grok-4-1-fast-reasoning",
-      model: {
-        api: "openai-completions",
-        provider: "xai",
-        id: "grok-4-1-fast-reasoning",
-      } as Model<"openai-completions">,
-      payload: {
-        model: "grok-4-1-fast-reasoning",
-        messages: [],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "write",
-              description: "write a file",
-              parameters: { type: "object", properties: {} },
-              strict: true,
-            },
-          },
-        ],
-      },
-    }).payload as {
-      tools?: Array<{ function?: Record<string, unknown> }>;
-    };
+    const payload = runToolPayloadCase("xai", "grok-4-1-fast-reasoning");
 
     expect(payload.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
   it("keeps function.strict for non-xai providers", () => {
-    const payload = runExtraParamsCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5.4",
-      model: {
-        api: "openai-completions",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-completions">,
-      payload: {
-        model: "gpt-5.4",
-        messages: [],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "write",
-              description: "write a file",
-              parameters: { type: "object", properties: {} },
-              strict: true,
-            },
-          },
-        ],
-      },
-    }).payload as {
-      tools?: Array<{ function?: Record<string, unknown> }>;
-    };
+    const payload = runToolPayloadCase("openai", "gpt-5.4");
 
     expect(payload.tools?.[0]?.function?.strict).toBe(true);
   });

@@ -231,7 +231,7 @@ describe("tts", () => {
   });
 
   describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp/matrix) and mp3 for others", () => {
+    it("selects opus for opus channels (telegram/feishu/whatsapp/matrix) and mp3 for others", () => {
       const cases = [
         {
           channel: "telegram",

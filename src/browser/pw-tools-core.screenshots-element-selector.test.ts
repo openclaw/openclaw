@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -26,9 +26,13 @@ function createFileChooserPageMocks() {
 }
 
 describe("pw-tools-core", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./pw-tools-core.js");
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("screenshots an element selector", async () => {

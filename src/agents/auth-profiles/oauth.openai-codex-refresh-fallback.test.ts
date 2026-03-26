@@ -2,14 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
+let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
@@ -27,6 +28,12 @@ const {
   ),
   formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   buildProviderAuthDoctorHintWithPluginMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("../cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
 }));
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
@@ -48,6 +55,11 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: formatProviderAuthProfileApiKeyWithPluginMock,
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
+
+async function loadFreshOAuthModuleForTest() {
+  vi.resetModules();
+  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+}
 
 function createExpiredOauthStore(params: {
   profileId: string;
@@ -78,6 +90,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
   let agentDir = "";
 
   beforeEach(async () => {
+    resetFileLockStateForTest();
     getOAuthApiKeyMock.mockClear();
     refreshProviderOAuthCredentialWithPluginMock.mockReset();
     refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue(undefined);
@@ -92,9 +105,11 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
+    await loadFreshOAuthModuleForTest();
   });
 
   afterEach(async () => {
+    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     envSnapshot.restore();
     await fs.rm(tempRoot, { recursive: true, force: true });

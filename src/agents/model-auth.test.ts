@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
@@ -16,6 +17,46 @@ import {
   resolveModelAuthMode,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
+
+function createCustomProviderConfig(
+  baseUrl: string,
+  modelId = "llama3",
+  modelName = "Llama 3",
+): ModelProviderConfig {
+  return {
+    baseUrl,
+    api: "openai-completions" as const,
+    models: [
+      {
+        id: modelId,
+        name: modelName,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 4096,
+      },
+    ],
+  };
+}
+
+async function resolveCustomProviderAuth(
+  provider: string,
+  baseUrl: string,
+  modelId?: string,
+  modelName?: string,
+) {
+  return resolveApiKeyForProvider({
+    provider,
+    cfg: {
+      models: {
+        providers: {
+          [provider]: createCustomProviderConfig(baseUrl, modelId, modelName),
+        },
+      },
+    },
+  });
+}
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -252,143 +293,38 @@ describe("resolveUsableCustomProviderApiKey", () => {
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "custom-127-0-0-1-8080",
-      cfg: {
-        models: {
-          providers: {
-            "custom-127-0-0-1-8080": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "qwen-3.5",
-                  name: "Qwen 3.5",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
+    const auth = await resolveCustomProviderAuth(
+      "custom-127-0-0-1-8080",
+      "http://127.0.0.1:8080/v1",
+      "qwen-3.5",
+      "Qwen 3.5",
+    );
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
     expect(auth.source).toContain("synthetic local key");
   });
 
   it("synthesizes a local auth marker for localhost custom providers", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "my-local",
-      cfg: {
-        models: {
-          providers: {
-            "my-local": {
-              baseUrl: "http://localhost:11434/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "llama3",
-                  name: "Llama 3",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
+    const auth = await resolveCustomProviderAuth("my-local", "http://localhost:11434/v1");
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
   it("synthesizes a local auth marker for IPv6 loopback (::1)", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "my-ipv6",
-      cfg: {
-        models: {
-          providers: {
-            "my-ipv6": {
-              baseUrl: "http://[::1]:8080/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "llama3",
-                  name: "Llama 3",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
+    const auth = await resolveCustomProviderAuth("my-ipv6", "http://[::1]:8080/v1");
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
   it("synthesizes a local auth marker for 0.0.0.0", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "my-wildcard",
-      cfg: {
-        models: {
-          providers: {
-            "my-wildcard": {
-              baseUrl: "http://0.0.0.0:11434/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "qwen",
-                  name: "Qwen",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
+    const auth = await resolveCustomProviderAuth(
+      "my-wildcard",
+      "http://0.0.0.0:11434/v1",
+      "qwen",
+      "Qwen",
+    );
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
   it("synthesizes a local auth marker for IPv4-mapped IPv6 (::ffff:127.0.0.1)", async () => {
-    const auth = await resolveApiKeyForProvider({
-      provider: "my-mapped",
-      cfg: {
-        models: {
-          providers: {
-            "my-mapped": {
-              baseUrl: "http://[::ffff:127.0.0.1]:8080/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "llama3",
-                  name: "Llama 3",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
+    const auth = await resolveCustomProviderAuth("my-mapped", "http://[::ffff:127.0.0.1]:8080/v1");
     expect(auth.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
