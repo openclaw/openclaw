@@ -7,6 +7,7 @@ import * as jsonFiles from "../../infra/json-files.js";
 import { loadConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
+  detectSessionStoreMigrationState,
   decodeDirectorySessionStoreEntryFileName,
   encodeDirectorySessionStoreKey,
   loadSessionStore,
@@ -96,7 +97,9 @@ describe("directory session store", () => {
       "long-key",
     );
 
-    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "migrated",
+    });
     expect(loadSessionStore(storePath)[longKey]?.sessionId).toBe("sess-long");
   });
 
@@ -110,7 +113,11 @@ describe("directory session store", () => {
       "migrate",
     );
 
-    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "migrated",
+      legacyEntries: 3,
+      migratedEntries: 2,
+    });
 
     const storeDir = resolveSessionStoreDir(storePath);
     expect(fs.existsSync(resolveSessionStoreStatePath(storePath))).toBe(true);
@@ -134,7 +141,9 @@ describe("directory session store", () => {
       "rollback",
     );
 
-    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "migrated",
+    });
     await expect(migrateSessionStoreToLegacy(storePath)).resolves.toBe(true);
 
     expect(fs.existsSync(storePath)).toBe(true);
@@ -338,8 +347,107 @@ describe("directory session store", () => {
     );
     await fsPromises.symlink(targetPath, storePath);
 
-    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(false);
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "skipped_invalid",
+    });
     expect(fs.existsSync(resolveSessionStoreStatePath(storePath))).toBe(false);
+  });
+
+  it("detects when a legacy store is ready to migrate", async () => {
+    const storePath = await writeLegacyStore(
+      {
+        "Agent:Main:Main": { sessionId: "sess-1", updatedAt: 10 },
+        "agent:main:main": { sessionId: "sess-2", updatedAt: 20 },
+      },
+      "detect-ready",
+    );
+
+    await expect(
+      detectSessionStoreMigrationState({
+        storePath,
+        normalizeKey: (sessionKey) => sessionKey.trim().toLowerCase(),
+      }),
+    ).resolves.toMatchObject({
+      storePath,
+      status: "ready_to_migrate",
+      legacyExists: true,
+      directoryActive: false,
+      legacyEntryCount: 2,
+      normalizedEntryCount: 1,
+      warnings: [],
+    });
+  });
+
+  it("detects an already active directory store without a live legacy file", async () => {
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
+      },
+      "detect-already-directory",
+    );
+
+    await migrateSessionStoreToDirectory(storePath);
+
+    await expect(
+      detectSessionStoreMigrationState({
+        storePath,
+        normalizeKey: (sessionKey) => sessionKey.trim().toLowerCase(),
+      }),
+    ).resolves.toMatchObject({
+      storePath,
+      status: "already_directory",
+      legacyExists: false,
+      directoryActive: true,
+      legacyEntryCount: 0,
+      normalizedEntryCount: 0,
+      warnings: [],
+    });
+  });
+
+  it("detects empty legacy stores without warning noise", async () => {
+    const storePath = await writeLegacyStore({}, "detect-empty");
+
+    await expect(
+      detectSessionStoreMigrationState({
+        storePath,
+        normalizeKey: (sessionKey) => sessionKey.trim().toLowerCase(),
+      }),
+    ).resolves.toMatchObject({
+      storePath,
+      status: "empty_legacy",
+      legacyExists: true,
+      directoryActive: false,
+      legacyEntryCount: 0,
+      normalizedEntryCount: 0,
+      warnings: [],
+    });
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "skipped_empty",
+      warnings: [],
+    });
+  });
+
+  it("detects invalid legacy json as skipped invalid", async () => {
+    const dir = await makeCaseDir("detect-invalid");
+    const storePath = path.join(dir, "sessions.json");
+    await fsPromises.writeFile(storePath, '"oops"', "utf-8");
+
+    await expect(
+      detectSessionStoreMigrationState({
+        storePath,
+        normalizeKey: (sessionKey) => sessionKey.trim().toLowerCase(),
+      }),
+    ).resolves.toMatchObject({
+      storePath,
+      status: "invalid_legacy",
+      legacyExists: true,
+      directoryActive: false,
+      warnings: ["Legacy sessions.json does not contain an object store."],
+    });
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "skipped_invalid",
+      warnings: ["Legacy sessions.json does not contain an object store."],
+    });
   });
 
   it("rejects writable directory stores before updating entries", async () => {

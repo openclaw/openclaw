@@ -41,7 +41,9 @@ describe("loadSessionStoreSummary", () => {
       "utf8",
     );
 
-    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toMatchObject({
+      outcome: "migrated",
+    });
 
     expect(loadSessionStoreSummary(storePath)).toEqual({
       "agent:main:whatsapp:+15550000001": {

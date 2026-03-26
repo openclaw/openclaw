@@ -44,6 +44,79 @@ type DirectorySessionEntryRecord = {
   entry: SessionEntry;
 };
 
+export type SessionStoreMigrationStatus =
+  | "already_directory"
+  | "ready_to_migrate"
+  | "empty_legacy"
+  | "invalid_legacy"
+  | "missing";
+
+export type SessionStoreMigrationDetection = {
+  storePath: string;
+  status: SessionStoreMigrationStatus;
+  legacyExists: boolean;
+  directoryActive: boolean;
+  legacyEntryCount: number;
+  normalizedEntryCount: number;
+  preview: string[];
+  warnings: string[];
+};
+
+export type SessionStoreMigrationOutcome =
+  | "migrated"
+  | "already_directory"
+  | "skipped_empty"
+  | "skipped_invalid"
+  | "failed"
+  | "missing";
+
+export type SessionStoreMigrationResult = {
+  storePath: string;
+  outcome: SessionStoreMigrationOutcome;
+  legacyEntries: number;
+  migratedEntries: number;
+  backupPath?: string;
+  warnings: string[];
+};
+
+type SessionStoreMigrationInspection =
+  | {
+      kind: "missing";
+      legacyExists: false;
+      directoryActive: boolean;
+      legacyEntryCount: 0;
+      normalizedEntryCount: 0;
+      normalizedStore: null;
+      warnings: string[];
+    }
+  | {
+      kind: "invalid_legacy";
+      legacyExists: true;
+      directoryActive: boolean;
+      legacyEntryCount: 0;
+      normalizedEntryCount: 0;
+      normalizedStore: null;
+      warnings: string[];
+    }
+  | {
+      kind: "empty_legacy";
+      legacyExists: true;
+      directoryActive: boolean;
+      legacyEntryCount: number;
+      normalizedEntryCount: 0;
+      normalizedStore: Record<string, SessionEntry>;
+      warnings: string[];
+    }
+  | {
+      kind: "ready_to_migrate";
+      legacyExists: true;
+      directoryActive: boolean;
+      legacyEntryCount: number;
+      normalizedEntryCount: number;
+      normalizedStore: Record<string, SessionEntry>;
+      warnings: string[];
+    };
+
 function isValidStateVersion(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
 }
@@ -327,10 +400,144 @@ function normalizeLegacyMigrationStore(
   return Object.fromEntries(deduped);
 }
 
-async function renameLegacyStoreToBackup(storePath: string): Promise<void> {
+function buildMigrationPreview(params: {
+  status: SessionStoreMigrationStatus;
+  normalizedEntryCount: number;
+}): string[] {
+  switch (params.status) {
+    case "already_directory":
+      return ["Directory-backed session store is already active."];
+    case "missing":
+      return ["No legacy sessions.json store was found."];
+    case "invalid_legacy":
+      return ["Legacy sessions.json exists but could not be migrated safely."];
+    case "empty_legacy":
+      return ["Legacy sessions.json contains no valid session entries to migrate."];
+    case "ready_to_migrate":
+      return [
+        `Legacy sessions.json is ready to migrate (${params.normalizedEntryCount} normalized entries).`,
+      ];
+  }
+}
+
+async function inspectLegacySessionStoreForMigration(params: {
+  storePath: string;
+  normalizeKey: (sessionKey: string) => string;
+  sourceStore?: Record<string, SessionEntry>;
+}): Promise<SessionStoreMigrationInspection> {
+  const directoryActive = isDirectorySessionStoreActive(params.storePath);
+  let sourceStore = params.sourceStore;
+  const warnings: string[] = [];
+
+  if (!sourceStore) {
+    try {
+      const stat = await fsPromises.lstat(params.storePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        warnings.push("Legacy sessions.json is not a regular file.");
+        return {
+          kind: "invalid_legacy",
+          legacyExists: true,
+          directoryActive,
+          legacyEntryCount: 0,
+          normalizedEntryCount: 0,
+          normalizedStore: null,
+          warnings,
+        };
+      }
+      if (stat.size > LEGACY_SESSION_STORE_MAX_BYTES) {
+        warnings.push("Legacy sessions.json exceeds the migration size limit.");
+        return {
+          kind: "invalid_legacy",
+          legacyExists: true,
+          directoryActive,
+          legacyEntryCount: 0,
+          normalizedEntryCount: 0,
+          normalizedStore: null,
+          warnings,
+        };
+      }
+      const raw = await fsPromises.readFile(params.storePath, "utf-8");
+      if (!raw.trim()) {
+        return {
+          kind: "empty_legacy",
+          legacyExists: true,
+          directoryActive,
+          legacyEntryCount: 0,
+          normalizedEntryCount: 0,
+          normalizedStore: Object.create(null) as Record<string, SessionEntry>,
+          warnings,
+        };
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        warnings.push("Legacy sessions.json does not contain an object store.");
+        return {
+          kind: "invalid_legacy",
+          legacyExists: true,
+          directoryActive,
+          legacyEntryCount: 0,
+          normalizedEntryCount: 0,
+          normalizedStore: null,
+          warnings,
+        };
+      }
+      sourceStore = parsed as Record<string, SessionEntry>;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return {
+          kind: "missing",
+          legacyExists: false,
+          directoryActive,
+          legacyEntryCount: 0,
+          normalizedEntryCount: 0,
+          normalizedStore: null,
+          warnings,
+        };
+      }
+      warnings.push(`Failed to parse legacy sessions.json: ${String(err)}`);
+      return {
+        kind: "invalid_legacy",
+        legacyExists: true,
+        directoryActive,
+        legacyEntryCount: 0,
+        normalizedEntryCount: 0,
+        normalizedStore: null,
+        warnings,
+      };
+    }
+  }
+
+  const legacyEntryCount = Object.keys(sourceStore).length;
+  const normalizedStore = normalizeLegacyMigrationStore(sourceStore, params.normalizeKey);
+  const normalizedEntryCount = Object.keys(normalizedStore).length;
+  if (normalizedEntryCount === 0) {
+    return {
+      kind: "empty_legacy",
+      legacyExists: true,
+      directoryActive,
+      legacyEntryCount,
+      normalizedEntryCount,
+      normalizedStore,
+      warnings,
+    };
+  }
+
+  return {
+    kind: "ready_to_migrate",
+    legacyExists: true,
+    directoryActive,
+    legacyEntryCount,
+    normalizedEntryCount,
+    normalizedStore,
+    warnings,
+  };
+}
+
+async function renameLegacyStoreToBackup(storePath: string): Promise<string | undefined> {
   const backupPath = `${storePath}.bak.${Date.now()}`;
   try {
     await fsPromises.rename(storePath, backupPath);
+    return backupPath;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       log.warn("failed to back up legacy session store after directory migration", {
@@ -338,6 +545,7 @@ async function renameLegacyStoreToBackup(storePath: string): Promise<void> {
         error: String(err),
       });
     }
+    return undefined;
   }
 }
 
@@ -586,49 +794,73 @@ export async function syncDirectorySessionStore(params: {
 }
 
 /**
+ * Inspect whether a legacy sessions.json store is ready to migrate.
+ */
+export async function detectSessionStoreMigrationState(params: {
+  storePath: string;
+  normalizeKey: (sessionKey: string) => string;
+  sourceStore?: Record<string, SessionEntry>;
+}): Promise<SessionStoreMigrationDetection> {
+  const inspection = await inspectLegacySessionStoreForMigration(params);
+  const status: SessionStoreMigrationStatus =
+    inspection.kind === "missing" && inspection.directoryActive
+      ? "already_directory"
+      : inspection.kind;
+  return {
+    storePath: params.storePath,
+    status,
+    legacyExists: inspection.legacyExists,
+    directoryActive: inspection.directoryActive,
+    legacyEntryCount: inspection.legacyEntryCount,
+    normalizedEntryCount: inspection.normalizedEntryCount,
+    preview: buildMigrationPreview({
+      status,
+      normalizedEntryCount: inspection.normalizedEntryCount,
+    }),
+    warnings: [...inspection.warnings],
+  };
+}
+
+/**
  * Crash-safe migration from `sessions.json` to `sessions.d/`.
  */
 export async function migrateLegacySessionStoreToDirectory(params: {
   storePath: string;
   normalizeKey: (sessionKey: string) => string;
   sourceStore?: Record<string, SessionEntry>;
-}): Promise<boolean> {
-  let sourceStore = params.sourceStore;
-  if (!sourceStore) {
-    try {
-      const stat = await fsPromises.lstat(params.storePath);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > LEGACY_SESSION_STORE_MAX_BYTES) {
-        return false;
-      }
-      const raw = await fsPromises.readFile(params.storePath, "utf-8");
-      if (!raw.trim()) {
-        return false;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return false;
-      }
-      sourceStore = parsed as Record<string, SessionEntry>;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        log.warn("failed to parse legacy session store during migration", {
-          storePath: params.storePath,
-          error: String(err),
-        });
-      }
-      return false;
-    }
+}): Promise<SessionStoreMigrationResult> {
+  const inspection = await inspectLegacySessionStoreForMigration(params);
+  switch (inspection.kind) {
+    case "missing":
+      return {
+        storePath: params.storePath,
+        outcome: inspection.directoryActive ? "already_directory" : "missing",
+        legacyEntries: 0,
+        migratedEntries: 0,
+        warnings: [...inspection.warnings],
+      };
+    case "invalid_legacy":
+      return {
+        storePath: params.storePath,
+        outcome: "skipped_invalid",
+        legacyEntries: 0,
+        migratedEntries: 0,
+        warnings: [...inspection.warnings],
+      };
+    case "empty_legacy":
+      return {
+        storePath: params.storePath,
+        outcome: "skipped_empty",
+        legacyEntries: inspection.legacyEntryCount,
+        migratedEntries: 0,
+        warnings: [...inspection.warnings],
+      };
+    case "ready_to_migrate":
+      break;
   }
 
-  const normalizedStore = normalizeLegacyMigrationStore(sourceStore, params.normalizeKey);
-  if (Object.keys(normalizedStore).length === 0) {
-    log.warn("skipping session-store migration because no valid legacy entries were found", {
-      storePath: params.storePath,
-    });
-    return false;
-  }
-
-  if (isDirectorySessionStoreActive(params.storePath)) {
+  const normalizedStore = inspection.normalizedStore;
+  if (inspection.directoryActive) {
     const existing = loadSessionStoreFromDirectory({ storePath: params.storePath }).store;
     const merged: Record<string, SessionEntry> = { ...existing };
     for (const [sessionKey, entry] of Object.entries(normalizedStore)) {
@@ -642,8 +874,15 @@ export async function migrateLegacySessionStoreToDirectory(params: {
       previousStore: existing,
       nextStore: merged,
     });
-    await renameLegacyStoreToBackup(params.storePath);
-    return true;
+    const backupPath = await renameLegacyStoreToBackup(params.storePath);
+    return {
+      storePath: params.storePath,
+      outcome: "migrated",
+      legacyEntries: inspection.legacyEntryCount,
+      migratedEntries: Object.keys(merged).length,
+      backupPath,
+      warnings: [...inspection.warnings],
+    };
   }
 
   const paths = resolveDirectorySessionStorePaths(params.storePath);
@@ -667,6 +906,13 @@ export async function migrateLegacySessionStoreToDirectory(params: {
     throw err;
   }
 
-  await renameLegacyStoreToBackup(params.storePath);
-  return true;
+  const backupPath = await renameLegacyStoreToBackup(params.storePath);
+  return {
+    storePath: params.storePath,
+    outcome: "migrated",
+    legacyEntries: inspection.legacyEntryCount,
+    migratedEntries: inspection.normalizedEntryCount,
+    backupPath,
+    warnings: [...inspection.warnings],
+  };
 }

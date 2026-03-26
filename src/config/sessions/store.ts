@@ -28,6 +28,7 @@ import {
   writeSessionStoreCache,
 } from "./store-cache.js";
 import {
+  type SessionStoreMigrationResult,
   isDirectorySessionStoreActive,
   loadSessionStoreFromDirectory,
   migrateLegacySessionStoreToDirectory,
@@ -57,6 +58,7 @@ import {
 const log = createSubsystemLogger("sessions/store");
 
 export {
+  detectSessionStoreMigrationState,
   decodeDirectorySessionStoreEntryFileName,
   encodeDirectorySessionStoreKey,
   resolveSessionStoreDir,
@@ -573,12 +575,12 @@ async function saveSessionStoreUnlocked(
   }
 
   if (hasLegacySessionStoreFile(storePath)) {
-    const migrated = await migrateLegacySessionStoreToDirectory({
+    const migration = await migrateLegacySessionStoreToDirectory({
       storePath,
       normalizeKey: normalizeStoreSessionKey,
       sourceStore: store,
     });
-    if (migrated) {
+    if (migration.outcome === "migrated") {
       if (isSessionStoreCacheEnabled()) {
         writeSessionStoreCache({
           storePath,
@@ -789,7 +791,9 @@ async function persistDirectorySessionEntry(params: {
 /**
  * Migrate a legacy monolithic session store to the directory-backed layout.
  */
-export async function migrateSessionStoreToDirectory(storePath: string): Promise<boolean> {
+export async function migrateSessionStoreToDirectory(
+  storePath: string,
+): Promise<SessionStoreMigrationResult> {
   return await withSessionStoreLock(storePath, async () => {
     return await migrateLegacySessionStoreToDirectory({
       storePath,

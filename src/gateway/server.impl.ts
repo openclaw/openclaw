@@ -8,7 +8,6 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { listAgentSessionDirs } from "../commands/cleanup-utils.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
   type ConfigFileSnapshot,
@@ -25,7 +24,6 @@ import { STATE_DIR } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { migrateSessionStoreToDirectory } from "../config/sessions/store.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -117,6 +115,7 @@ import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
+import { runStartupSessionStoreMigration } from "./server-session-store-migration.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -539,23 +538,13 @@ export async function startGatewayServer(
     log,
   });
   if (!minimalTestGateway) {
-    const migrationTargets = new Set<string>();
-    for (const sessionsDir of await listAgentSessionDirs(STATE_DIR)) {
-      migrationTargets.add(path.join(sessionsDir, "sessions.json"));
-    }
-    if (cfgAtStart.session?.store) {
-      migrationTargets.add(resolveStorePath(cfgAtStart.session.store));
-    }
-    for (const storePath of migrationTargets) {
-      try {
-        await migrateSessionStoreToDirectory(storePath);
-      } catch (err) {
-        log.warn("session-store directory migration failed", {
-          storePath,
-          error: String(err),
-        });
-      }
-    }
+    await runStartupSessionStoreMigration({
+      stateDir: STATE_DIR,
+      configuredStorePath: cfgAtStart.session?.store
+        ? resolveStorePath(cfgAtStart.session.store)
+        : undefined,
+      log,
+    });
   }
   const matrixInstallPathIssue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
