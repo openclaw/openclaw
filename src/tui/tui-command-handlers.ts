@@ -44,6 +44,7 @@ type CommandHandlerContext = {
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
+  enqueueQueuedMessage?: (text: string) => number;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
   requestExit: () => void;
@@ -73,6 +74,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     applySessionInfoFromPatch,
     noteLocalRunId,
     noteLocalBtwRunId,
+    enqueueQueuedMessage,
     forgetLocalRunId,
     forgetLocalBtwRunId,
     requestExit,
@@ -510,6 +512,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const isBtw = isBtwCommand(text);
+    if (!isBtw && state.activeChatRunId && enqueueQueuedMessage) {
+      const pending = enqueueQueuedMessage(text);
+      const pendingSuffix = pending > 0 ? ` (${pending} pending)` : "";
+      chatLog.addSystem(`queued prompt${pendingSuffix}`);
+      tui.requestRender();
+      return;
+    }
     const runId = randomUUID();
     try {
       if (!isBtw) {

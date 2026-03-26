@@ -211,6 +211,8 @@ export async function runTui(opts: TuiOptions) {
   let pairingHintShown = false;
   const localRunIds = new Set<string>();
   const localBtwRunIds = new Set<string>();
+  const queuedChatMessages: string[] = [];
+  let flushQueuedMessagePromise: Promise<boolean> | null = null;
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -386,6 +388,38 @@ export async function runTui(opts: TuiOptions) {
 
   const clearLocalBtwRunIds = () => {
     localBtwRunIds.clear();
+  };
+
+  const clearQueuedMessages = () => {
+    queuedChatMessages.length = 0;
+  };
+
+  const enqueueQueuedMessage = (text: string) => {
+    queuedChatMessages.push(text);
+    return queuedChatMessages.length;
+  };
+
+  let dispatchQueuedMessage: ((text: string) => Promise<void>) | undefined;
+
+  const flushQueuedMessage = async (): Promise<boolean> => {
+    if (flushQueuedMessagePromise) {
+      return await flushQueuedMessagePromise;
+    }
+    const run = async () => {
+      if (state.activeChatRunId || !dispatchQueuedMessage) {
+        return false;
+      }
+      const next = queuedChatMessages.shift();
+      if (!next) {
+        return false;
+      }
+      await dispatchQueuedMessage(next);
+      return true;
+    };
+    flushQueuedMessagePromise = run().finally(() => {
+      flushQueuedMessagePromise = null;
+    });
+    return await flushQueuedMessagePromise;
   };
 
   const client = await GatewayChatClient.connect({
@@ -694,6 +728,8 @@ export async function runTui(opts: TuiOptions) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    clearQueuedMessages,
+    flushQueuedMessage,
   });
   const {
     refreshAgents,
@@ -718,6 +754,7 @@ export async function runTui(opts: TuiOptions) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    flushQueuedMessage,
   });
 
   const requestExit = () => {
@@ -750,6 +787,7 @@ export async function runTui(opts: TuiOptions) {
       formatSessionKey,
       noteLocalRunId,
       noteLocalBtwRunId,
+      enqueueQueuedMessage,
       forgetLocalRunId,
       forgetLocalBtwRunId,
       requestExit,
@@ -761,6 +799,7 @@ export async function runTui(opts: TuiOptions) {
     openOverlay,
     closeOverlay,
   });
+  dispatchQueuedMessage = sendMessage;
   updateAutocompleteProvider();
   const submitHandler = createEditorSubmitHandler({
     editor,

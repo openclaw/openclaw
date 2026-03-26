@@ -10,6 +10,7 @@ type EventHandlerChatLog = {
     result: unknown,
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
+  settlePendingTools: (toolCallIds: Iterable<string>, opts?: { isError?: boolean }) => void;
   addSystem: (text: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
@@ -39,6 +40,7 @@ type EventHandlerContext = {
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
   clearLocalBtwRunIds?: () => void;
+  flushQueuedMessage?: () => Promise<boolean>;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
@@ -56,9 +58,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    flushQueuedMessage,
   } = context;
   const finalizedRuns = new Map<string, number>();
+  const terminalRunStatus = new Map<string, "idle" | "error" | "aborted">();
   const sessionRuns = new Map<string, number>();
+  const toolCallsByRun = new Map<string, Set<string>>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -92,7 +97,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
+    terminalRunStatus.clear();
     sessionRuns.clear();
+    toolCallsByRun.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     clearLocalRunIds?.();
@@ -120,6 +127,30 @@ export function createEventHandlers(context: EventHandlerContext) {
     pruneRunMap(finalizedRuns);
   };
 
+  const noteRunTerminalStatus = (runId: string, status: "idle" | "error" | "aborted") => {
+    terminalRunStatus.set(runId, status);
+  };
+
+  const noteToolCall = (runId: string, toolCallId: string) => {
+    const known = toolCallsByRun.get(runId);
+    if (known) {
+      known.add(toolCallId);
+      return;
+    }
+    toolCallsByRun.set(runId, new Set([toolCallId]));
+  };
+
+  const settleRunTools = (runId: string, opts?: { isError?: boolean }) => {
+    const toolCallIds = toolCallsByRun.get(runId);
+    if (!toolCallIds || toolCallIds.size === 0) {
+      return;
+    }
+    chatLog.settlePendingTools(toolCallIds, {
+      isError: opts?.isError,
+    });
+    toolCallsByRun.delete(runId);
+  };
+
   const clearActiveRunIfMatch = (runId: string) => {
     if (state.activeChatRunId === runId) {
       state.activeChatRunId = null;
@@ -131,11 +162,16 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "idle" | "error";
   }) => {
+    noteRunTerminalStatus(params.runId, params.status);
+    settleRunTools(params.runId, {
+      isError: params.status === "error",
+    });
     noteFinalizedRun(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      void flushQueuedMessage?.();
     }
     void refreshSessionInfo?.();
   };
@@ -145,12 +181,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
+    noteRunTerminalStatus(params.runId, params.status);
+    settleRunTools(params.runId, {
+      isError: true,
+    });
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
+      void flushQueuedMessage?.();
     }
     void refreshSessionInfo?.();
   };
@@ -340,8 +381,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!toolCallId) {
         return;
       }
+      noteToolCall(evt.runId, toolCallId);
+      const terminalStatus = terminalRunStatus.get(evt.runId);
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
+        if (terminalStatus) {
+          chatLog.settlePendingTools([toolCallId], {
+            isError: terminalStatus !== "idle",
+          });
+        }
       } else if (phase === "update") {
         if (!allowToolOutput) {
           return;

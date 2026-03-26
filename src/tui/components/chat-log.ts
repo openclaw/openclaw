@@ -180,6 +180,18 @@ export class ChatLog extends Container {
     });
   }
 
+  settlePendingTools(toolCallIds: Iterable<string>, opts?: { isError?: boolean }) {
+    for (const toolCallId of toolCallIds) {
+      const existing = this.toolById.get(toolCallId);
+      if (!existing) {
+        continue;
+      }
+      existing.finishPending({
+        isError: opts?.isError,
+      });
+    }
+  }
+
   setToolsExpanded(expanded: boolean) {
     this.toolsExpanded = expanded;
     for (const tool of this.toolById.values()) {

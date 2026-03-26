@@ -6,6 +6,7 @@ type MockFn = ReturnType<typeof vi.fn>;
 type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
+  settlePendingTools: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
@@ -19,6 +20,7 @@ type HandlerTui = { requestRender: (...args: unknown[]) => void };
 type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
+  settlePendingTools: MockFn;
   addSystem: MockFn;
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
@@ -34,6 +36,7 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
   return {
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
+    settlePendingTools: vi.fn(),
     addSystem: vi.fn(),
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
@@ -78,6 +81,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
     const loadHistory = vi.fn();
+    const flushQueuedMessage = vi.fn().mockResolvedValue(false);
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
@@ -100,6 +104,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       setActivityStatus,
       loadHistory,
+      flushQueuedMessage,
       noteLocalRunId,
       noteLocalBtwRunId,
       forgetLocalRunId,
@@ -126,6 +131,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       setActivityStatus: context.setActivityStatus,
       loadHistory: context.loadHistory,
+      flushQueuedMessage: context.flushQueuedMessage,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
       isLocalBtwRunId: context.isLocalBtwRunId,
@@ -629,5 +635,64 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes the next queued prompt after the active run finishes", () => {
+    const { state, flushQueuedMessage, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-main" },
+    });
+
+    handleChatEvent({
+      runId: "run-main",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(flushQueuedMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes the next queued prompt after the active run aborts", () => {
+    const { state, flushQueuedMessage, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-main" },
+    });
+
+    handleChatEvent({
+      runId: "run-main",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(flushQueuedMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("settles pending tool cards when a run finishes without tool results", () => {
+    const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-tool-cleanup",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    });
+
+    handleAgentEvent({
+      runId: "run-tool-cleanup",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-cleanup-1", name: "exec" },
+    });
+
+    handleChatEvent({
+      runId: "run-tool-cleanup",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    const [toolIds, opts] = chatLog.settlePendingTools.mock.calls.at(-1) ?? [];
+    expect(Array.from(toolIds as Iterable<string>)).toEqual(["tool-cleanup-1"]);
+    expect(opts).toEqual({ isError: false });
   });
 });

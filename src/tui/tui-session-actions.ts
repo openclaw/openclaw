@@ -30,6 +30,8 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  clearQueuedMessages?: () => void;
+  flushQueuedMessage?: () => Promise<boolean>;
 };
 
 type SessionInfoDefaults = {
@@ -60,6 +62,8 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    clearQueuedMessages,
+    flushQueuedMessage,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -374,6 +378,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
     clearLocalRunIds?.();
+    clearQueuedMessages?.();
     btw.clear();
     updateHeader();
     updateFooter();
@@ -382,6 +387,11 @@ export function createSessionActions(context: SessionActionContext) {
 
   const abortActive = async () => {
     if (!state.activeChatRunId) {
+      const flushed = (await flushQueuedMessage?.()) ?? false;
+      if (flushed) {
+        tui.requestRender();
+        return;
+      }
       chatLog.addSystem("no active run");
       tui.requestRender();
       return;

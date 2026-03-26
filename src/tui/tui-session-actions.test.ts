@@ -9,6 +9,28 @@ describe("tui session actions", () => {
     showResult: vi.fn(),
   });
 
+  const createBaseState = (): TuiStateAccess => ({
+    agentDefaultId: "main",
+    sessionMainKey: "agent:main:main",
+    sessionScope: "global",
+    agents: [],
+    currentAgentId: "main",
+    currentSessionKey: "agent:main:main",
+    currentSessionId: null,
+    activeChatRunId: null,
+    historyLoaded: false,
+    sessionInfo: {},
+    initialSessionApplied: true,
+    isConnected: true,
+    autoMessageSent: false,
+    toolsExpanded: false,
+    showThinking: false,
+    connectionStatus: "connected",
+    activityStatus: "idle",
+    statusTimeout: null,
+    lastCtrlCAt: 0,
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;
@@ -28,27 +50,7 @@ describe("tui session actions", () => {
           }),
       );
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
-      historyLoaded: false,
-      sessionInfo: {},
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
-    };
+    const state = createBaseState();
 
     const updateFooter = vi.fn();
     const updateAutocompleteProvider = vi.fn();
@@ -134,30 +136,13 @@ describe("tui session actions", () => {
       ],
     });
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
-      historyLoaded: false,
+    const state = {
+      ...createBaseState(),
       sessionInfo: {
         model: "old-model",
         modelProvider: "ollama",
         updatedAt: 100,
       },
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
     };
 
     const { applySessionInfoFromPatch, refreshSessionInfo } = createSessionActions({
@@ -220,30 +205,14 @@ describe("tui session actions", () => {
     });
     const btw = createBtwPresenter();
 
-    const state: TuiStateAccess = {
-      agentDefaultId: "main",
-      sessionMainKey: "agent:main:main",
-      sessionScope: "global",
-      agents: [],
-      currentAgentId: "main",
-      currentSessionKey: "agent:main:main",
-      currentSessionId: null,
-      activeChatRunId: null,
+    const state = {
+      ...createBaseState(),
       historyLoaded: true,
       sessionInfo: {
         model: "previous-model",
         modelProvider: "anthropic",
         updatedAt: 500,
       },
-      initialSessionApplied: true,
-      isConnected: true,
-      autoMessageSent: false,
-      toolsExpanded: false,
-      showThinking: false,
-      connectionStatus: "connected",
-      activityStatus: "idle",
-      statusTimeout: null,
-      lastCtrlCAt: 0,
     };
 
     const { setSession } = createSessionActions({
@@ -280,5 +249,40 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
     expect(btw.clear).toHaveBeenCalled();
+  });
+
+  it("flushes the next queued prompt when abort is requested with no active run", async () => {
+    const flushQueuedMessage = vi.fn().mockResolvedValue(true);
+    const chatLog = {
+      addSystem: vi.fn(),
+    } as unknown as import("./components/chat-log.js").ChatLog;
+    const tui = {
+      requestRender: vi.fn(),
+    } as unknown as import("@mariozechner/pi-tui").TUI;
+    const state = createBaseState();
+
+    const { abortActive } = createSessionActions({
+      client: {} as GatewayChatClient,
+      chatLog,
+      btw: createBtwPresenter(),
+      tui,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+      flushQueuedMessage,
+    });
+
+    await abortActive();
+
+    expect(flushQueuedMessage).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("no active run");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 });

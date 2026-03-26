@@ -11,6 +11,7 @@ function createHarness(params?: {
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
+  enqueueQueuedMessage?: ReturnType<typeof vi.fn>;
   isConnected?: boolean;
   activeChatRunId?: string | null;
 }) {
@@ -22,6 +23,7 @@ function createHarness(params?: {
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
+  const enqueueQueuedMessage = params?.enqueueQueuedMessage ?? vi.fn().mockReturnValue(1);
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
@@ -51,6 +53,7 @@ function createHarness(params?: {
     applySessionInfoFromPatch: vi.fn(),
     noteLocalRunId,
     noteLocalBtwRunId,
+    enqueueQueuedMessage,
     forgetLocalRunId: vi.fn(),
     forgetLocalBtwRunId: vi.fn(),
     requestExit: vi.fn(),
@@ -68,6 +71,7 @@ function createHarness(params?: {
     setActivityStatus,
     noteLocalRunId,
     noteLocalBtwRunId,
+    enqueueQueuedMessage,
     state,
   };
 }
@@ -138,6 +142,22 @@ describe("tui command handlers", () => {
         message: "/btw what changed?",
       }),
     );
+  });
+
+  it("queues normal prompts while another run is active", async () => {
+    const enqueueQueuedMessage = vi.fn().mockReturnValue(2);
+    const { handleCommand, sendChat, addUser, addSystem, state } = createHarness({
+      activeChatRunId: "run-active",
+      enqueueQueuedMessage,
+    });
+
+    await handleCommand("/context");
+
+    expect(enqueueQueuedMessage).toHaveBeenCalledWith("/context");
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith("queued prompt (2 pending)");
+    expect(state.activeChatRunId).toBe("run-active");
   });
 
   it("creates unique session for /new and resets shared session for /reset", async () => {
