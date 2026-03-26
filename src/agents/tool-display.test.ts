@@ -59,6 +59,12 @@ describe("tool display details", () => {
         args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 },
       }),
     );
+    const readFileAliasDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "read",
+        args: { file: "/tmp/a.txt" },
+      }),
+    );
     const writeDetail = formatToolDetail(
       resolveToolDisplay({
         name: "write",
@@ -73,6 +79,7 @@ describe("tool display details", () => {
     );
 
     expect(readDetail).toBe("lines 2-3 from /tmp/a.txt");
+    expect(readFileAliasDetail).toBe("from /tmp/a.txt");
     expect(writeDetail).toBe("to /tmp/a.txt (3 chars)");
     expect(editDetail).toBe("in /tmp/a.txt (4 chars)");
   });
