@@ -16,7 +16,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
+let ensureBrowserControlAuth: typeof import("../../extensions/browser/src/browser/control-auth.js").ensureBrowserControlAuth;
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
@@ -49,7 +49,8 @@ describe("ensureBrowserControlAuth", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    ({ ensureBrowserControlAuth } = await import("./control-auth.js"));
+    ({ ensureBrowserControlAuth } =
+      await import("../../extensions/browser/src/browser/control-auth.js"));
     vi.restoreAllMocks();
     mocks.loadConfig.mockClear();
     mocks.writeConfigFile.mockClear();

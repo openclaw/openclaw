@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import { InvalidBrowserNavigationUrlError } from "../../extensions/browser/src/browser/navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
-} from "./pw-tools-core.test-harness.js";
+} from "../../extensions/browser/src/browser/pw-tools-core.test-harness.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.snapshot.js");
+const mod = await import("../../extensions/browser/src/browser/pw-tools-core.snapshot.js");
 
 describe("pw-tools-core.snapshot navigate guard", () => {
   it("blocks unsupported non-network URLs before page lookup", async () => {
