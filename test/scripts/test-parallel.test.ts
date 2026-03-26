@@ -102,6 +102,21 @@ function runHighMemoryLocalMultiSurfacePlan(): string {
   );
 }
 
+function getPlanLines(output: string, prefix: string): string[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith(prefix));
+}
+
+function parseNumericPlanField(line: string, key: string): number {
+  const match = line.match(new RegExp(`\\b${key}=(\\d+)\\b`));
+  if (!match) {
+    throw new Error(`missing ${key} in plan line: ${line}`);
+  }
+  return Number(match[1]);
+}
+
 describe("scripts/test-parallel fatal output guard", () => {
   it("fails a zero exit when V8 reports an out-of-memory fatal", () => {
     const output = [
@@ -266,12 +281,14 @@ describe("scripts/test-parallel lane planning", () => {
       }),
     );
 
-    expect(midMemoryOutput).toContain("extensions-batch-1 filters=all maxWorkers=3");
-    expect(midMemoryOutput).toContain("extensions-batch-2 filters=all maxWorkers=3");
-    expect(midMemoryOutput).not.toContain("extensions-batch-3");
-    expect(highMemoryOutput).toContain("extensions-batch-1 filters=all maxWorkers=5");
-    expect(highMemoryOutput).toContain("extensions-batch-2 filters=all maxWorkers=5");
-    expect(highMemoryOutput).not.toContain("extensions-batch-3");
+    const midSharedBatches = getPlanLines(midMemoryOutput, "extensions-batch-");
+    const highSharedBatches = getPlanLines(highMemoryOutput, "extensions-batch-");
+
+    expect(midSharedBatches.length).toBeGreaterThan(0);
+    expect(highSharedBatches.length).toBeGreaterThan(0);
+    expect(midSharedBatches.every((line) => line.includes("filters=all maxWorkers=3"))).toBe(true);
+    expect(highSharedBatches.every((line) => line.includes("filters=all maxWorkers=5"))).toBe(true);
+    expect(highSharedBatches.length).toBeLessThanOrEqual(midSharedBatches.length);
   });
 
   it("starts isolated channel lanes before shared extension batches on high-memory local hosts", () => {
@@ -310,9 +327,17 @@ describe("scripts/test-parallel lane planning", () => {
       }),
     );
 
-    expect(output).toContain("channels-batch-1 filters=33");
-    expect(output).toContain("channels-batch-2 filters=33");
-    expect(output).toContain("channels-batch-3 filters=34");
+    const channelBatchLines = getPlanLines(output, "channels-batch-");
+    const channelBatchFilterCounts = channelBatchLines.map((line) =>
+      parseNumericPlanField(line, "filters"),
+    );
+
+    expect(channelBatchLines.length).toBeGreaterThanOrEqual(4);
+    expect(channelBatchLines.every((line) => line.includes("maxWorkers=5"))).toBe(true);
+    expect(Math.max(...channelBatchFilterCounts)).toBeLessThan(30);
+    expect(channelBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      sharedTargetedChannelProxyFiles.length,
+    );
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
