@@ -359,6 +359,7 @@ export async function performGatewaySessionReset(params: {
       lastAccountId: currentEntry?.lastAccountId,
       lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
+      acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
