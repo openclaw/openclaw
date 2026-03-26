@@ -54,25 +54,4 @@ export function collectTtsApiKeyAssignments(params: {
     }
     return;
   }
-
-  // Legacy compatibility until migrated configs have been rewritten on disk.
-  const legacyProviders = ["elevenlabs", "openai"] as const;
-  for (const providerId of legacyProviders) {
-    const providerConfig = params.tts[providerId];
-    if (!isRecord(providerConfig)) {
-      continue;
-    }
-    collectSecretInputAssignment({
-      value: providerConfig.apiKey,
-      path: `${params.pathPrefix}.${providerId}.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: params.active,
-      inactiveReason: params.inactiveReason,
-      apply: (value) => {
-        providerConfig.apiKey = value;
-      },
-    });
-  }
 }
