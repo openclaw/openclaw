@@ -33,6 +33,7 @@ import {
   migrateLegacySessionStoreToDirectory,
   readDirectorySessionStoreVersion,
   readSessionEntryFromDirectory,
+  resolveSessionStoreDir,
   syncDirectorySessionStore,
   writeSessionEntryToDirectory,
 } from "./store-directory.js";
@@ -754,8 +755,13 @@ async function persistDirectorySessionEntry(params: {
   storePath: string;
   sessionKey: string;
   next: SessionEntry;
+  saveOptions?: SaveSessionStoreOptions;
 }): Promise<SessionEntry> {
-  if (resolveMaintenanceConfig().mode === "enforce") {
+  const maintenance = {
+    ...resolveMaintenanceConfig(),
+    ...params.saveOptions?.maintenanceOverride,
+  };
+  if (maintenance.mode === "enforce") {
     const previousStore = loadSessionStoreFromDirectory({ storePath: params.storePath }).store;
     const nextStore: Record<string, SessionEntry> = {
       ...previousStore,
@@ -764,7 +770,7 @@ async function persistDirectorySessionEntry(params: {
     await saveSessionStoreUnlocked(
       params.storePath,
       nextStore,
-      { activeSessionKey: params.sessionKey },
+      { ...params.saveOptions, activeSessionKey: params.sessionKey },
       { previousStore },
     );
     return params.next;
@@ -789,6 +795,43 @@ export async function migrateSessionStoreToDirectory(storePath: string): Promise
       storePath,
       normalizeKey: normalizeStoreSessionKey,
     });
+  });
+}
+
+async function backupDirectorySessionStore(storePath: string): Promise<void> {
+  const storeDir = resolveSessionStoreDir(storePath);
+  const backupPath = `${storeDir}.bak.${Date.now()}`;
+  try {
+    await fs.promises.rename(storeDir, backupPath);
+  } catch (err) {
+    const code = getErrorCode(err);
+    if (code === "ENOENT") {
+      return;
+    }
+    log.warn("failed to back up directory session store after legacy rollback", {
+      storePath,
+      error: String(err),
+    });
+    throw err;
+  }
+}
+
+/**
+ * Restore a directory-backed session store into a legacy sessions.json snapshot.
+ */
+export async function migrateSessionStoreToLegacy(storePath: string): Promise<boolean> {
+  return await withSessionStoreLock(storePath, async () => {
+    if (!isDirectorySessionStoreActive(storePath)) {
+      return false;
+    }
+
+    const store = loadSessionStoreFromDirectory({ storePath }).store;
+    const serialized = JSON.stringify(store, null, 2);
+    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+    await writeSessionStoreAtomic({ storePath, store, serialized });
+    await backupDirectorySessionStore(storePath);
+    dropSessionStoreObjectCache(storePath);
+    return true;
   });
 }
 
@@ -1045,6 +1088,7 @@ export async function updateLastRoute(params: {
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
+  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
 }) {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
@@ -1125,6 +1169,9 @@ export async function updateLastRoute(params: {
         storePath,
         sessionKey: resolved.normalizedKey,
         next,
+        saveOptions: {
+          maintenanceOverride: params.maintenanceOverride,
+        },
       });
     }
     return await persistResolvedSessionEntry({ storePath, store: store!, resolved, next });

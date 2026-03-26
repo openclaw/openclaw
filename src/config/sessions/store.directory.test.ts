@@ -10,6 +10,7 @@ import {
   decodeDirectorySessionStoreEntryFileName,
   encodeDirectorySessionStoreKey,
   loadSessionStore,
+  migrateSessionStoreToLegacy,
   migrateSessionStoreToDirectory,
   readSessionUpdatedAt,
   resolveSessionStoreDir,
@@ -122,6 +123,29 @@ describe("directory session store", () => {
     expect(Object.keys(loaded).toSorted()).toEqual(["agent:main:main", "agent:main:other"]);
     expect(loaded["agent:main:main"]?.sessionId).toBe("sess-newer");
     expect(loaded["agent:main:main"]?.modelOverride).toBe("gpt-5.2");
+  });
+
+  it("restores a migrated directory store back to legacy json", async () => {
+    const storePath = await writeLegacyStore(
+      {
+        "agent:main:main": { sessionId: "sess-1", updatedAt: 10, thinkingLevel: "low" },
+        "agent:main:other": { sessionId: "sess-2", updatedAt: 20, thinkingLevel: "high" },
+      },
+      "rollback",
+    );
+
+    await expect(migrateSessionStoreToDirectory(storePath)).resolves.toBe(true);
+    await expect(migrateSessionStoreToLegacy(storePath)).resolves.toBe(true);
+
+    expect(fs.existsSync(storePath)).toBe(true);
+    expect(fs.existsSync(resolveSessionStoreStatePath(storePath))).toBe(false);
+    expect(
+      fs.readdirSync(path.dirname(storePath)).some((name) => name.startsWith("sessions.d.bak.")),
+    ).toBe(true);
+    expect(loadSessionStore(storePath)).toEqual({
+      "agent:main:main": { sessionId: "sess-1", updatedAt: 10, thinkingLevel: "low" },
+      "agent:main:other": { sessionId: "sess-2", updatedAt: 20, thinkingLevel: "high" },
+    });
   });
 
   it("persists empty stores back to legacy json when migration has no entries", async () => {
@@ -344,17 +368,6 @@ describe("directory session store", () => {
   });
 
   it("enforces maintenance when fast-path directory writes update an entry", async () => {
-    vi.mocked(loadConfig).mockReturnValue({
-      session: {
-        maintenance: {
-          mode: "enforce",
-          pruneAfter: "365d",
-          maxEntries: 1,
-          rotateBytes: 10_485_760,
-        },
-      },
-    });
-
     const storePath = await writeLegacyStore(
       {
         "agent:main:main": { sessionId: "sess-1", updatedAt: 10 },
@@ -369,6 +382,15 @@ describe("directory session store", () => {
       sessionKey: "agent:main:main",
       channel: "telegram",
       to: "12345",
+      maintenanceOverride: {
+        mode: "enforce",
+        pruneAfterMs: 365 * 24 * 60 * 60 * 1000,
+        maxEntries: 1,
+        rotateBytes: 10_485_760,
+        resetArchiveRetentionMs: 365 * 24 * 60 * 60 * 1000,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
     });
 
     expect(Object.keys(loadSessionStore(storePath))).toEqual(["agent:main:main"]);
