@@ -363,6 +363,7 @@ export const OpenClawSchema = z
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
+        extraArgs: z.array(z.string()).optional(),
         cdpPortRangeStart: z.number().int().min(1).max(65535).optional(),
         defaultProfile: z.string().optional(),
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
@@ -387,22 +388,24 @@ export const OpenClawSchema = z
                 userDataDir: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
+                  .optional(),
+                attachOnly: z.boolean().optional(),
+                color: HexColorSchema,
               })
-              .optional(),
-            attachOnly: z.boolean().optional(),
-            color: HexColorSchema,
-          })
-          .strict()
-          .refine(
-            (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
-            {
-              message: "Profile must set cdpPort or cdpUrl",
-            },
+              .strict()
+              .refine(
+                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                {
+                  message: "Profile must set cdpPort or cdpUrl",
+                },
+              )
+              .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+                message: 'Profile userDataDir is only supported with driver="existing-session"',
+              }),
           )
-          .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
-            message: 'Profile userDataDir is only supported with driver="existing-session"',
-          }),
-      )
+          .optional(),
+      })
+      .strict()
       .optional(),
     ui: z
       .object({

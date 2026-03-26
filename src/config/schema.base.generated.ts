@@ -407,6 +407,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           attachOnly: {
             type: "boolean",
           },
+          extraArgs: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
           cdpPortRangeStart: {
             type: "integer",
             minimum: 1,
@@ -495,12 +501,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               required: ["color"],
               additionalProperties: false,
-            },
-          },
-          extraArgs: {
-            type: "array",
-            items: {
-              type: "string",
             },
           },
         },
@@ -785,9 +785,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "number",
                 exclusiveMinimum: 0,
               },
+              rateLimitBackoffMinutes: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              rateLimitMaxHours: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
               failureWindowHours: {
                 type: "number",
                 exclusiveMinimum: 0,
+              },
+            },
+            additionalProperties: false,
+          },
+          retries: {
+            type: "object",
+            properties: {
+              default: {
+                type: "integer",
+                minimum: 0,
+                maximum: 10,
+              },
+              rate_limit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 10,
+              },
+              overloaded: {
+                type: "integer",
+                minimum: 0,
+                maximum: 10,
+              },
+              auth_failure: {
+                type: "integer",
+                minimum: 0,
+                maximum: 10,
               },
             },
             additionalProperties: false,

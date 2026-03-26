@@ -239,7 +239,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
   const ts = now ?? Date.now();
   let mutated = false;
 
-  for (const [profileId, stats] of Object.entries(usageStats)) {
+  for (const stats of Object.values(usageStats)) {
     if (!stats) {
       continue;
     }
@@ -389,10 +389,7 @@ function resolveAuthCooldownConfig(params: {
     cooldowns?.rateLimitBackoffMinutes,
     defaults.rateLimitBackoffMinutes,
   );
-  const rateLimitMaxHours = resolveHours(
-    cooldowns?.rateLimitMaxHours,
-    defaults.rateLimitMaxHours,
-  );
+  const rateLimitMaxHours = resolveHours(cooldowns?.rateLimitMaxHours, defaults.rateLimitMaxHours);
 
   const failureWindowHours = resolveHours(
     cooldowns?.failureWindowHours,
@@ -520,7 +517,6 @@ function computeNextProfileUsageStats(params: {
 
     // Hard failures always clear model scope to lock the whole profile
     updatedStats.cooldownModel = undefined;
-
   } else {
     // 2. Handle Transient Failures (Rate Limit / Overloaded / Service Errors)
     const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount, {
@@ -536,6 +532,9 @@ function computeNextProfileUsageStats(params: {
 
     // Determine the scope: Is this a specific model error or a general provider error?
     const isModelSpecificReason = params.reason === "rate_limit" || params.reason === "overloaded";
+    const existingCooldownActive =
+      typeof params.existing.cooldownUntil === "number" &&
+      params.existing.cooldownUntil > params.now;
 
     if (existingCooldownActive) {
       // Update reason so downstream knows the latest signal
@@ -561,7 +560,8 @@ function computeNextProfileUsageStats(params: {
     } else {
       // New cooldown period starts now
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = isModelSpecificReason && params.modelId ? params.modelId : undefined;
+      updatedStats.cooldownModel =
+        isModelSpecificReason && params.modelId ? params.modelId : undefined;
     }
   }
 

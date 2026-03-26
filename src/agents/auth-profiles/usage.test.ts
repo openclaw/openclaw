@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   __testing as authProfileUsageTesting,
+  calculateAuthProfileCooldownMs,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
@@ -873,6 +874,96 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     const stats = store.usageStats?.["github-copilot:github"];
     // Even same-model auth failure should clear model scope (auth is profile-wide)
     expect(stats?.cooldownReason).toBe("auth");
+    expect(stats?.cooldownModel).toBeUndefined();
+  });
+});
+
+describe("calculateAuthProfileCooldownMs", () => {
+  it("returns stepped cooldowns with explicit 30s/60s/300s settings", () => {
+    const params = { baseMs: 30_000, maxMs: 300_000 };
+    expect(calculateAuthProfileCooldownMs(1, params)).toBe(30_000);
+    expect(calculateAuthProfileCooldownMs(2, params)).toBe(60_000);
+    expect(calculateAuthProfileCooldownMs(3, params)).toBe(300_000);
+  });
+
+  it("applies base/max guards when custom values are below hard minimums", () => {
+    expect(calculateAuthProfileCooldownMs(1, { baseMs: 10_000, maxMs: 45_000 })).toBe(30_000);
+    expect(calculateAuthProfileCooldownMs(2, { baseMs: 10_000, maxMs: 45_000 })).toBe(45_000);
+    expect(calculateAuthProfileCooldownMs(4, { baseMs: 10_000, maxMs: 45_000 })).toBe(45_000);
+  });
+});
+
+describe("markAuthProfileFailure — model-awareness scenarios", () => {
+  it("scopes first model-specific rate_limit cooldown to the failing model", async () => {
+    const now = 2_000_000;
+    const store = makeStore({
+      "openai:default": {},
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        reason: "rate_limit",
+        modelId: "gpt-4o",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(store.usageStats?.["openai:default"]?.cooldownModel).toBe("gpt-4o");
+  });
+
+  it("widens to profile-wide cooldown when a different model fails during active model cooldown", async () => {
+    const now = 2_000_000;
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-4o",
+        errorCount: 1,
+        lastFailureAt: now - 1_000,
+      },
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        reason: "rate_limit",
+        modelId: "claude-3",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(store.usageStats?.["openai:default"]?.cooldownModel).toBeUndefined();
+  });
+
+  it("sets disabledUntil and clears cooldownModel for auth_permanent", async () => {
+    const now = 2_000_000;
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-4o",
+      },
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openai:default",
+        reason: "auth_permanent",
+        modelId: "gpt-4o",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const stats = store.usageStats?.["openai:default"];
+    expect(typeof stats?.disabledUntil).toBe("number");
+    expect((stats?.disabledUntil ?? 0) > now).toBe(true);
     expect(stats?.cooldownModel).toBeUndefined();
   });
 });
