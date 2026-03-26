@@ -587,6 +587,57 @@ describe("session_status tool", () => {
     ]);
   });
 
+  it("blocks sandboxed child session_status parent sessionId access outside its tree", async () => {
+    resetSessionStore({
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+      },
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+      },
+    });
+    installSandboxedSessionStatusConfig();
+    mockSpawnedSessionList(() => []);
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", {
+      sandboxed: true,
+    });
+
+    await expect(
+      tool.execute("call7-parent-session-id", {
+        sessionKey: "s-parent",
+      }),
+    ).rejects.toThrow("Session status visibility is restricted to the current session tree");
+
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledTimes(3);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.resolve",
+        params: {
+          sessionId: "s-parent",
+          spawnedBy: "agent:main:subagent:child",
+          includeGlobal: false,
+          includeUnknown: false,
+        },
+      },
+    ]);
+    expect(callGatewayMock.mock.calls).toContainEqual([
+      {
+        method: "sessions.list",
+        params: {
+          includeGlobal: false,
+          includeUnknown: false,
+          spawnedBy: "agent:main:subagent:child",
+        },
+      },
+    ]);
+  });
+
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
     resetSessionStore({
       "agent:main:main": {
