@@ -253,6 +253,72 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
   });
 
+  it("blocks DM model-selection callbacks for unpaired users when inline buttons are DM-scoped", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-callback-authz-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "dm" },
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockReturnValue(config);
+      readChannelAllowFromStore.mockResolvedValueOnce([]);
+
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-authz-bypass-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 999, first_name: "Mallory", username: "mallory" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 19,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).not.toHaveBeenCalled();
+      expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
   it("allows callback_query in groups when group policy authorizes the sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();

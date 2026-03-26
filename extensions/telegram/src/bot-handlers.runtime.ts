@@ -1242,8 +1242,9 @@ export const registerTelegramHandlers = ({
       }
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
+      // DM callbacks must enforce the same sender authorization gate as normal DM commands.
       const authorizationMode: TelegramEventAuthorizationMode =
-        !execApprovalButtonsEnabled && inlineButtonsScope === "allowlist"
+        !isGroup || (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
           : "callback-scope";
       const senderAuthorization = authorizeTelegramEventSender({
