@@ -546,6 +546,39 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("renders provenance tags when context files have provenance metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "SOUL.md",
+          content: "Be kind",
+          provenance: { source: "SOUL.md", injectedAt: "session_start", volatile: true },
+        },
+        { path: "TOOLS.md", content: "Use grep" },
+      ],
+    });
+
+    expect(prompt).toContain(
+      '<!-- ctx:provenance source="SOUL.md" injected_at="session_start" volatile="true" -->',
+    );
+    expect(prompt).toContain("## SOUL.md");
+    expect(prompt).toContain("Be kind");
+    // File without provenance should not have a tag
+    expect(prompt).not.toContain('source="TOOLS.md"');
+    expect(prompt).toContain("## TOOLS.md");
+    expect(prompt).toContain("Use grep");
+  });
+
+  it("includes context provenance guidance section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Context Provenance");
+    expect(prompt).toContain("ctx:provenance");
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

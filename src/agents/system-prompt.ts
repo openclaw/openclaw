@@ -553,6 +553,15 @@ export function buildAgentSystemPrompt(params: {
     "## Workspace Files (injected)",
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
+    "## Context Provenance",
+    "Each injected context segment is tagged with provenance metadata in an HTML comment:",
+    '`<!-- ctx:provenance source="..." injected_at="..." volatile="..." -->`',
+    "- `source`: Origin file or system (e.g. SOUL.md, AGENTS.md, memory_search).",
+    '- `injected_at`: When it was injected ("session_start" or a turn identifier).',
+    "- `volatile`: Whether the underlying source may have changed since injection.",
+    'When relying on content marked `volatile="true"` and `injected_at="session_start"`,',
+    "prefer re-reading the source file to confirm it is still current before acting on it.",
+    "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({
       isMinimal,
@@ -619,6 +628,12 @@ export function buildAgentSystemPrompt(params: {
       lines.push("");
     }
     for (const file of validContextFiles) {
+      const provenanceTag = file.provenance
+        ? `<!-- ctx:provenance source="${file.provenance.source}" injected_at="${file.provenance.injectedAt}" volatile="${file.provenance.volatile}" -->`
+        : "";
+      if (provenanceTag) {
+        lines.push(provenanceTag);
+      }
       lines.push(`## ${file.path}`, "", file.content, "");
     }
   }

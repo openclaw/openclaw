@@ -32,6 +32,11 @@ describe("buildBootstrapContextFiles", () => {
       {
         path: "/tmp/AGENTS.md",
         content: "[MISSING] Expected at: /tmp/AGENTS.md",
+        provenance: {
+          source: DEFAULT_AGENTS_FILENAME,
+          injectedAt: "session_start",
+          volatile: true,
+        },
       },
     ]);
   });
@@ -115,6 +120,22 @@ describe("buildBootstrapContextFiles", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.content.length).toBeLessThanOrEqual(20);
     expect(result[0]?.content.startsWith("[MISSING]")).toBe(true);
+  });
+
+  it("attaches provenance metadata to each bootstrap context file", () => {
+    const files = [
+      makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "hello" }),
+      makeFile({ name: "TOOLS.md", path: "/tmp/TOOLS.md", content: "world" }),
+    ];
+    const result = buildBootstrapContextFiles(files);
+    expect(result).toHaveLength(2);
+    for (const entry of result) {
+      expect(entry.provenance).toBeDefined();
+      expect(entry.provenance?.injectedAt).toBe("session_start");
+      expect(entry.provenance?.volatile).toBe(true);
+    }
+    expect(result[0]?.provenance?.source).toBe("SOUL.md");
+    expect(result[1]?.provenance?.source).toBe("TOOLS.md");
   });
 
   it("skips files with missing or invalid paths and emits warnings", () => {

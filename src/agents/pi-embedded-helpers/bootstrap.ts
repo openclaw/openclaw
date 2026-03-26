@@ -227,6 +227,11 @@ export function buildBootstrapContextFiles(
       result.push({
         path: pathValue,
         content: cappedMissingText,
+        provenance: {
+          source: file.name,
+          injectedAt: "session_start",
+          volatile: true,
+        },
       });
       continue;
     }
@@ -251,6 +256,11 @@ export function buildBootstrapContextFiles(
     result.push({
       path: pathValue,
       content: contentWithinBudget,
+      provenance: {
+        source: file.name,
+        injectedAt: "session_start",
+        volatile: true,
+      },
     });
   }
   return result;
