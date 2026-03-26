@@ -279,6 +279,9 @@ export function registerCronEditCommand(cron: Command) {
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
+              if (threadId && typeof opts.channel === "string" && opts.channel.trim() && opts.channel.trim() !== "telegram") {
+                throw new Error("--thread-id is only supported for Telegram channels");
+              }
               let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               // When --thread-id is provided without --to, fetch existing job's delivery target
               if (threadId && !toRaw) {
@@ -286,6 +289,9 @@ export function registerCronEditCommand(cron: Command) {
                   includeDisabled: true,
                 })) as { jobs?: CronJob[] } | null;
                 const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+                if (!existing) {
+                  throw new Error(`Cron job ${id} not found`);
+                }
                 toRaw = (existing?.delivery as Record<string, string> | undefined)?.to ?? "";
               }
               const to = threadId ? toRaw.replace(/:(?:topic:)?\d+$/, "") : toRaw;
