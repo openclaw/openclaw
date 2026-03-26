@@ -1388,6 +1388,50 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("preserves modelOverride for new sessions without reset trigger (subagent spawn)", async () => {
+    const storePath = await createStorePath("openclaw-subagent-model-");
+    const sessionKey = "agent:main:telegram:dm:user-subagent-model";
+    const existingSessionId = "pre-populated-session";
+    // Simulate sessions.patch writing modelOverride before first message
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+      overrides: {
+        modelOverride: "anthropic/claude-sonnet-4-6",
+        providerOverride: "anthropic",
+        // Set updatedAt far in the past so the session is stale (not fresh),
+        // which is what happens for subagent sessions on their first message.
+        updatedAt: 0,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 1 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "do something",
+        RawBody: "do something",
+        CommandBody: "do something",
+        From: "user-subagent-model",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionEntry.modelOverride).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.sessionEntry.providerOverride).toBe("anthropic");
+  });
+
   it("archives the old session store entry on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";

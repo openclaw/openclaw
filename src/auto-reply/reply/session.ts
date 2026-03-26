@@ -381,12 +381,19 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       persistedLabel = entry.label;
+    }
+    // Always preserve modelOverride/providerOverride from the session entry
+    // when it exists, even without a reset trigger.  sessions.patch writes
+    // these overrides for subagent sessions *before* the first message
+    // arrives, so gating on resetTriggered (which is always false for
+    // subagent first-runs) would silently discard the configured model.
+    if (entry) {
+      persistedModelOverride = entry.modelOverride;
+      persistedProviderOverride = entry.providerOverride;
     }
   }
 
