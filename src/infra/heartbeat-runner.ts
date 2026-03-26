@@ -295,50 +295,92 @@ async function restoreHeartbeatUpdatedAt(params: {
  * Prune heartbeat transcript entries by truncating the file back to a previous size.
  * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
  * preventing context pollution from zero-information exchanges.
+ *
+ * Safety improvements:
+ * - Tracks whether the file existed before the run (ENOENT-only deletion)
+ * - Re-resolves transcript path after session compaction
+ * - Discovers transcripts created by first-ever heartbeat runs
  */
-async function pruneHeartbeatTranscript(params: {
-  transcriptPath?: string;
-  preHeartbeatSize?: number;
-}) {
-  const { transcriptPath, preHeartbeatSize } = params;
-  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
+async function pruneHeartbeatTranscript(
+  state: { transcriptPath?: string; preHeartbeatSize?: number; fileExistedBefore?: boolean },
+  reResolveFn?: () => Promise<
+    { transcriptPath?: string; preHeartbeatSize?: number; fileExistedBefore?: boolean } | undefined
+  >,
+) {
+  // Re-resolve transcript path after the run (handles session compaction).
+  let resolved = state;
+  if (reResolveFn) {
+    try {
+      const fresh = await reResolveFn();
+      if (fresh) {
+        resolved = fresh;
+      }
+    } catch {
+      // Use original state if re-resolution fails
+    }
+  }
+
+  const { transcriptPath, preHeartbeatSize, fileExistedBefore } = resolved;
+  if (!transcriptPath) {
     return;
   }
+
   try {
-    const stat = await fs.stat(transcriptPath);
-    // Only truncate if the file has grown during the heartbeat run
-    if (stat.size > preHeartbeatSize) {
-      await fs.truncate(transcriptPath, preHeartbeatSize);
+    if (fileExistedBefore && typeof preHeartbeatSize === "number" && preHeartbeatSize >= 0) {
+      const stat = await fs.stat(transcriptPath);
+      // Only truncate if the file has grown during the heartbeat run
+      if (stat.size > preHeartbeatSize) {
+        await fs.truncate(transcriptPath, preHeartbeatSize);
+      }
+    } else if (!fileExistedBefore) {
+      // File was created by this heartbeat run – remove it entirely.
+      // Only do this when we're sure the file didn't exist before (ENOENT).
+      await fs.unlink(transcriptPath).catch(() => {});
     }
-  } catch {
-    // File may not exist or may have been removed - ignore errors
+  } catch (pruneErr) {
+    const code = (pruneErr as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return; // Already gone, nothing to do
+    }
+    log.warn("heartbeat: failed to prune session transcript", {
+      error: formatErrorMessage(pruneErr),
+    });
   }
 }
 
 /**
  * Get the transcript file path and its current size before a heartbeat run.
  * Returns undefined values if the session or transcript doesn't exist yet.
+ * Also tracks whether the transcript file existed (for safe deletion).
  */
 async function captureTranscriptState(params: {
   storePath: string;
   sessionKey: string;
   agentId?: string;
-}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number }> {
+}): Promise<{ transcriptPath?: string; preHeartbeatSize?: number; fileExistedBefore?: boolean }> {
   const { storePath, sessionKey, agentId } = params;
   try {
     const store = loadSessionStore(storePath);
     const entry = store[sessionKey];
     if (!entry?.sessionId) {
-      return {};
+      return { fileExistedBefore: false };
     }
     const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
       agentId,
       sessionsDir: path.dirname(storePath),
     });
     const stat = await fs.stat(transcriptPath);
-    return { transcriptPath, preHeartbeatSize: stat.size };
-  } catch {
-    // Session or transcript doesn't exist yet - nothing to prune
+    return { transcriptPath, preHeartbeatSize: stat.size, fileExistedBefore: true };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      // Transcript doesn't exist yet - may be created during this run
+      return { fileExistedBefore: false };
+    }
+    // Transient error (lock contention, permissions, etc.) - don't assume file is missing
+    log.warn("heartbeat: failed to capture transcript state", {
+      error: formatErrorMessage(err),
+    });
     return {};
   }
 }
@@ -743,7 +785,9 @@ export async function runHeartbeatOnce(opts: {
         updatedAt: previousUpdatedAt,
       });
       // Prune the transcript to remove HEARTBEAT_OK turns
-      await pruneHeartbeatTranscript(transcriptState);
+      await pruneHeartbeatTranscript(transcriptState, () =>
+        captureTranscriptState({ storePath: runStorePath, sessionKey: runSessionKey, agentId }),
+      );
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-empty",
@@ -773,13 +817,18 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
+      // Roll back session transcript – the heartbeat exchange (prompt +
+      // HEARTBEAT_OK) must not persist, otherwise the model sees accumulated
+      // HEARTBEAT_OK turns and keeps repeating them.
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
       // Prune the transcript to remove HEARTBEAT_OK turns
-      await pruneHeartbeatTranscript(transcriptState);
+      await pruneHeartbeatTranscript(transcriptState, () =>
+        captureTranscriptState({ storePath: runStorePath, sessionKey: runSessionKey, agentId }),
+      );
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
@@ -816,7 +865,9 @@ export async function runHeartbeatOnce(opts: {
         updatedAt: previousUpdatedAt,
       });
       // Prune the transcript to remove duplicate heartbeat turns
-      await pruneHeartbeatTranscript(transcriptState);
+      await pruneHeartbeatTranscript(transcriptState, () =>
+        captureTranscriptState({ storePath: runStorePath, sessionKey: runSessionKey, agentId }),
+      );
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
