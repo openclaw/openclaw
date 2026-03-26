@@ -42,7 +42,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       type: (item.type as MessageContentItem["type"]) || "text",
       text: item.text as string | undefined,
       name: item.name as string | undefined,
-      args: item.args || item.arguments,
+      args: item.args || item.arguments || item.input,
     }));
   } else if (typeof m.text === "string") {
     content = [{ type: "text", text: m.text }];

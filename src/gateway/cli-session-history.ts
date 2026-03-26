@@ -33,6 +33,7 @@ type ClaudeCliMessage = NonNullable<ClaudeCliProjectEntry["message"]>;
 type ClaudeCliUsage = ClaudeCliMessage["usage"];
 
 type TranscriptLikeMessage = Record<string, unknown>;
+type ToolNameRegistry = Map<string, string>;
 
 function resolveHistoryHomeDir(homeDir?: string): string {
   return homeDir?.trim() || process.env.HOME || os.homedir();
@@ -93,6 +94,137 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
 
 function cloneJsonValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function normalizeClaudeCliContent(
+  content: string | unknown[],
+  toolNameRegistry: ToolNameRegistry,
+): string | unknown[] {
+  if (!Array.isArray(content)) {
+    return cloneJsonValue(content);
+  }
+
+  const normalized: Array<Record<string, unknown>> = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") {
+      normalized.push(cloneJsonValue(item as Record<string, unknown>));
+      continue;
+    }
+    const block = cloneJsonValue(item as Record<string, unknown>);
+    const type = typeof block.type === "string" ? block.type : "";
+    if (type === "tool_use") {
+      const id = typeof block.id === "string" ? block.id.trim() : "";
+      const name = typeof block.name === "string" ? block.name.trim() : "";
+      if (id && name) {
+        toolNameRegistry.set(id, name);
+      }
+      if (block.input !== undefined && block.arguments === undefined) {
+        block.arguments = cloneJsonValue(block.input);
+      }
+      block.type = "toolcall";
+      delete block.input;
+      normalized.push(block);
+      continue;
+    }
+    if (type === "tool_result") {
+      const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+      if (!block.name && toolUseId) {
+        const toolName = toolNameRegistry.get(toolUseId);
+        if (toolName) {
+          block.name = toolName;
+        }
+      }
+      normalized.push(block);
+      continue;
+    }
+    normalized.push(block);
+  }
+  return normalized;
+}
+
+function getMessageBlocks(message: unknown): Array<Record<string, unknown>> | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const content = (message as { content?: unknown }).content;
+  return Array.isArray(content) ? (content as Array<Record<string, unknown>>) : null;
+}
+
+function isToolCallBlock(block: Record<string, unknown>): boolean {
+  const type = typeof block.type === "string" ? block.type.toLowerCase() : "";
+  return type === "toolcall" || type === "tool_call" || type === "tooluse" || type === "tool_use";
+}
+
+function isToolResultBlock(block: Record<string, unknown>): boolean {
+  const type = typeof block.type === "string" ? block.type.toLowerCase() : "";
+  return type === "toolresult" || type === "tool_result";
+}
+
+function resolveToolUseId(block: Record<string, unknown>): string | undefined {
+  const id =
+    (typeof block.id === "string" && block.id.trim()) ||
+    (typeof block.tool_use_id === "string" && block.tool_use_id.trim()) ||
+    (typeof block.toolUseId === "string" && block.toolUseId.trim());
+  return id || undefined;
+}
+
+function isAssistantToolCallMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role !== "assistant") {
+    return false;
+  }
+  const blocks = getMessageBlocks(message);
+  return Boolean(blocks && blocks.length > 0 && blocks.every(isToolCallBlock));
+}
+
+function isUserToolResultMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const role = (message as { role?: unknown }).role;
+  if (role !== "user") {
+    return false;
+  }
+  const blocks = getMessageBlocks(message);
+  return Boolean(blocks && blocks.length > 0 && blocks.every(isToolResultBlock));
+}
+
+function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
+  const coalesced: TranscriptLikeMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const current = messages[index];
+    const next = messages[index + 1];
+    if (!isAssistantToolCallMessage(current) || !isUserToolResultMessage(next)) {
+      coalesced.push(current);
+      continue;
+    }
+
+    const callBlocks = getMessageBlocks(current) ?? [];
+    const resultBlocks = getMessageBlocks(next) ?? [];
+    const callIds = new Set(
+      callBlocks.map(resolveToolUseId).filter((id): id is string => Boolean(id)),
+    );
+    const allResultsMatch =
+      resultBlocks.length > 0 &&
+      resultBlocks.every((block) => {
+        const toolUseId = resolveToolUseId(block);
+        return Boolean(toolUseId && callIds.has(toolUseId));
+      });
+    if (!allResultsMatch) {
+      coalesced.push(current);
+      continue;
+    }
+
+    coalesced.push({
+      ...current,
+      content: [...callBlocks.map(cloneJsonValue), ...resultBlocks.map(cloneJsonValue)],
+    });
+    index += 1;
+  }
+  return coalesced;
 }
 
 function extractComparableText(message: unknown): string | undefined {
@@ -203,6 +335,7 @@ function compareHistoryMessages(
 function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
+  toolNameRegistry: ToolNameRegistry,
 ): TranscriptLikeMessage | null {
   if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
     return null;
@@ -226,7 +359,7 @@ function parseClaudeCliHistoryEntry(
   if (type === "user") {
     const content =
       typeof entry.message.content === "string" || Array.isArray(entry.message.content)
-        ? cloneJsonValue(entry.message.content)
+        ? normalizeClaudeCliContent(entry.message.content, toolNameRegistry)
         : undefined;
     if (content === undefined) {
       return null;
@@ -243,7 +376,7 @@ function parseClaudeCliHistoryEntry(
 
   const content =
     typeof entry.message.content === "string" || Array.isArray(entry.message.content)
-      ? cloneJsonValue(entry.message.content)
+      ? normalizeClaudeCliContent(entry.message.content, toolNameRegistry)
       : undefined;
   if (content === undefined) {
     return null;
@@ -310,13 +443,14 @@ export function readClaudeCliSessionMessages(params: {
   }
 
   const messages: TranscriptLikeMessage[] = [];
+  const toolNameRegistry: ToolNameRegistry = new Map();
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
     }
     try {
       const parsed = JSON.parse(line) as ClaudeCliProjectEntry;
-      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId);
+      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
       if (message) {
         messages.push(message);
       }
@@ -324,7 +458,7 @@ export function readClaudeCliSessionMessages(params: {
       // Ignore malformed external history entries.
     }
   }
-  return messages;
+  return coalesceClaudeCliToolMessages(messages);
 }
 
 export function mergeImportedChatHistoryMessages(params: {
