@@ -12,6 +12,10 @@
       {
         "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
+      },
+      {
+        "file": "src/auto-reply/reply/followup-runner.test.ts",
+        "reason": "This followup-runner suite is green under direct base-thread runs but can hang when targeted through the wrapper's default base fork lane; pin it to base threads so wrapper-targeted reruns match the stable raw-threads behavior."
       }
     ]
   },
@@ -75,12 +79,32 @@
         "reason": "This Chrome helper suite is green alone but can inherit stale fetch, websocket, or timer state from the shared channel lane; keep it isolated so its CDP timeout assertions stay deterministic."
       },
       {
+        "file": "src/browser/server-context.remote-tab-ops.test.ts",
+        "reason": "This browser remote-tab aggregate wrapper measured ~1.03 GiB RSS growth locally even after explicit Playwright teardown; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
         "file": "extensions/telegram/src/bot.create-telegram-bot.test.ts",
         "reason": "This Telegram bot bootstrap suite is green alone but can inherit stale command-registration spies and bot runtime state from the shared channel lane; keep it isolated for deterministic command assertions."
       },
       {
+        "file": "extensions/telegram/src/bot.test.ts",
+        "reason": "This Telegram bot runtime suite measured ~819.9 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
+        "file": "extensions/telegram/src/fetch.test.ts",
+        "reason": "This Telegram transport suite measured ~759.3 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
+        "file": "extensions/telegram/src/monitor.test.ts",
+        "reason": "This Telegram monitor suite measured ~748.4 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
         "file": "extensions/telegram/src/webhook.test.ts",
         "reason": "This Telegram webhook suite hoists grammY bot and InputFile mocks; keep it in its own forked channel lane so shared workers do not reuse telegram runtime modules with mismatched constructors."
+      },
+      {
+        "file": "extensions/slack/src/action-runtime.test.ts",
+        "reason": "This Slack action runtime suite measured ~766.2 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
       }
     ]
   },

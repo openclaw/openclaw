@@ -109,18 +109,18 @@ Per-agent override: `agents.list[].tools.profile`.
 
 Use `group:*` shorthands in allow/deny lists:
 
-| Group              | Tools                                                                          |
-| ------------------ | ------------------------------------------------------------------------------ |
-| `group:runtime`    | exec, bash, process                                                            |
-| `group:fs`         | read, write, edit, apply_patch                                                 |
-| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, session_status |
-| `group:memory`     | memory_search, memory_get                                                      |
-| `group:web`        | web_search, web_fetch                                                          |
-| `group:ui`         | browser, canvas                                                                |
-| `group:automation` | cron, gateway                                                                  |
-| `group:messaging`  | message                                                                        |
-| `group:nodes`      | nodes                                                                          |
-| `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                            |
+| Group              | Tools                                                                                                     |
+| ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | exec, bash, process                                                                                       |
+| `group:fs`         | read, write, edit, apply_patch                                                                            |
+| `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
+| `group:memory`     | memory_search, memory_get                                                                                 |
+| `group:web`        | web_search, web_fetch                                                                                     |
+| `group:ui`         | browser, canvas                                                                                           |
+| `group:automation` | cron, gateway                                                                                             |
+| `group:messaging`  | message                                                                                                   |
+| `group:nodes`      | nodes                                                                                                     |
+| `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 
 ### Provider-specific restrictions
 

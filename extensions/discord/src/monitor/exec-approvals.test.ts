@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
@@ -273,8 +273,7 @@ beforeEach(() => {
   mockCreateOperatorApprovalsGatewayClient.mockReset();
 });
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     buildExecApprovalCustomId,
     extractDiscordChannelId,

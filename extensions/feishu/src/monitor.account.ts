@@ -20,6 +20,7 @@ import {
   warmupDedupFromDisk,
 } from "./dedup.js";
 import { isMentionForwardRequest } from "./mention.js";
+import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
@@ -641,15 +642,12 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     botOpenIdSource.kind === "prefetched"
       ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
-  const botOpenId = botIdentity.botOpenId;
-  const botName = botIdentity.botName?.trim();
-  botOpenIds.set(accountId, botOpenId ?? "");
-  if (botName) {
-    botNames.set(accountId, botName);
-  } else {
-    botNames.delete(accountId);
-  }
+  const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
+
+  if (!botOpenId && !abortSignal?.aborted) {
+    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
+  }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
   if (connectionMode === "webhook" && !account.verificationToken?.trim()) {

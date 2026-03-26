@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSafeBins } from "./exec-approvals-allowlist.js";
+import {
+  makeMockCommandResolution,
+  makeMockExecutableResolution,
+} from "./exec-approvals-test-helpers.js";
 import { evaluateExecAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
 describe("exec approvals allowlist evaluation", () => {
@@ -9,11 +13,7 @@ describe("exec approvals allowlist evaluation", () => {
       segments: Array<{
         raw: string;
         argv: string[];
-        resolution: {
-          rawExecutable: string;
-          executableName: string;
-          resolvedPath?: string;
-        };
+        resolution: ReturnType<typeof makeMockCommandResolution>;
       }>;
     };
     resolvedPath: string;
@@ -40,11 +40,13 @@ describe("exec approvals allowlist evaluation", () => {
         {
           raw: "tool",
           argv: ["tool"],
-          resolution: {
-            rawExecutable: "tool",
-            resolvedPath: "/usr/bin/tool",
-            executableName: "tool",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "tool",
+              resolvedPath: "/usr/bin/tool",
+              executableName: "tool",
+            }),
+          }),
         },
       ],
     };
@@ -66,11 +68,13 @@ describe("exec approvals allowlist evaluation", () => {
         {
           raw: "jq .foo",
           argv: ["jq", ".foo"],
-          resolution: {
-            rawExecutable: "jq",
-            resolvedPath: "/usr/bin/jq",
-            executableName: "jq",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "jq",
+              resolvedPath: "/usr/bin/jq",
+              executableName: "jq",
+            }),
+          }),
         },
       ],
     };
@@ -96,11 +100,13 @@ describe("exec approvals allowlist evaluation", () => {
         {
           raw: "skill-bin",
           argv: ["skill-bin", "--help"],
-          resolution: {
-            rawExecutable: "skill-bin",
-            resolvedPath: "/opt/skills/skill-bin",
-            executableName: "skill-bin",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "skill-bin",
+              resolvedPath: "/opt/skills/skill-bin",
+              executableName: "skill-bin",
+            }),
+          }),
         },
       ],
     };
@@ -118,11 +124,13 @@ describe("exec approvals allowlist evaluation", () => {
         {
           raw: "./skill-bin",
           argv: ["./skill-bin", "--help"],
-          resolution: {
-            rawExecutable: "./skill-bin",
-            resolvedPath: "/tmp/skill-bin",
-            executableName: "skill-bin",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "./skill-bin",
+              resolvedPath: "/tmp/skill-bin",
+              executableName: "skill-bin",
+            }),
+          }),
         },
       ],
     };
@@ -140,10 +148,12 @@ describe("exec approvals allowlist evaluation", () => {
         {
           raw: "skill-bin --help",
           argv: ["skill-bin", "--help"],
-          resolution: {
-            rawExecutable: "skill-bin",
-            executableName: "skill-bin",
-          },
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "skill-bin",
+              executableName: "skill-bin",
+            }),
+          }),
         },
       ],
     };
@@ -158,11 +168,13 @@ describe("exec approvals allowlist evaluation", () => {
     const segment = {
       raw: "tool",
       argv: ["tool"],
-      resolution: {
-        rawExecutable: "tool",
-        resolvedPath: "/usr/bin/tool",
-        executableName: "tool",
-      },
+      resolution: makeMockCommandResolution({
+        execution: makeMockExecutableResolution({
+          rawExecutable: "tool",
+          resolvedPath: "/usr/bin/tool",
+          executableName: "tool",
+        }),
+      }),
     };
     const analysis = {
       ok: true,
@@ -184,20 +196,24 @@ describe("exec approvals allowlist evaluation", () => {
     const allowlistSegment = {
       raw: "tool",
       argv: ["tool"],
-      resolution: {
-        rawExecutable: "tool",
-        resolvedPath: "/usr/bin/tool",
-        executableName: "tool",
-      },
+      resolution: makeMockCommandResolution({
+        execution: makeMockExecutableResolution({
+          rawExecutable: "tool",
+          resolvedPath: "/usr/bin/tool",
+          executableName: "tool",
+        }),
+      }),
     };
     const safeBinSegment = {
       raw: "jq .foo",
       argv: ["jq", ".foo"],
-      resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/usr/bin/jq",
-        executableName: "jq",
-      },
+      resolution: makeMockCommandResolution({
+        execution: makeMockExecutableResolution({
+          rawExecutable: "jq",
+          resolvedPath: "/usr/bin/jq",
+          executableName: "jq",
+        }),
+      }),
     };
     const analysis = {
       ok: true,

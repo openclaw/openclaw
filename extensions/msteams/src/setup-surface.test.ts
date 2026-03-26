@@ -1,4 +1,6 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { msteamsSetupAdapter } from "./setup-core.js";
 
 const resolveMSTeamsUserAllowlist = vi.hoisted(() => vi.fn());
 const resolveMSTeamsChannelAllowlist = vi.hoisted(() => vi.fn());
@@ -35,6 +37,35 @@ describe("msteams setup surface", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();
+  });
+
+  it("always resolves to the default account", () => {
+    expect(msteamsSetupAdapter.resolveAccountId?.({ accountId: "work" } as never)).toBe(
+      DEFAULT_ACCOUNT_ID,
+    );
+  });
+
+  it("enables the msteams channel without dropping existing config", () => {
+    expect(
+      msteamsSetupAdapter.applyAccountConfig?.({
+        cfg: {
+          channels: {
+            msteams: {
+              appId: "existing-app",
+            },
+          },
+        },
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {},
+      } as never),
+    ).toEqual({
+      channels: {
+        msteams: {
+          appId: "existing-app",
+          enabled: true,
+        },
+      },
+    });
   });
 
   it("reports configured status from resolved credentials", async () => {

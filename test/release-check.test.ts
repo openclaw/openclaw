@@ -137,8 +137,13 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
+        "dist/extensions/matrix/helper-api.js",
+        "dist/extensions/matrix/runtime-api.js",
+        "dist/extensions/matrix/thread-bindings-runtime.js",
         "dist/extensions/matrix/openclaw.plugin.json",
         "dist/extensions/matrix/package.json",
+        "dist/extensions/whatsapp/light-runtime-api.js",
+        "dist/extensions/whatsapp/runtime-api.js",
         "dist/extensions/whatsapp/openclaw.plugin.json",
         "dist/extensions/whatsapp/package.json",
       ]),
@@ -158,6 +163,18 @@ describe("collectMissingPackPaths", () => {
         "dist/channel-catalog.json",
       ]),
     ).toEqual([]);
+  });
+
+  it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
+    expect(requiredBundledPluginPackPaths).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/matrix/helper-api.js",
+        "dist/extensions/matrix/runtime-api.js",
+        "dist/extensions/matrix/thread-bindings-runtime.js",
+        "dist/extensions/whatsapp/light-runtime-api.js",
+        "dist/extensions/whatsapp/runtime-api.js",
+      ]),
+    );
   });
 });
 
