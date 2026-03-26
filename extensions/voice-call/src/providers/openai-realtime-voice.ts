@@ -333,13 +333,17 @@ export class OpenAIRealtimeVoiceBridge {
 
       if (cfg.azureEndpoint && cfg.azureDeployment) {
         // Azure OpenAI Realtime — different URL shape and uses api-key auth
-        const base = cfg.azureEndpoint.replace(/\/$/, "").replace(/^https:/, "wss:");
+        const base = cfg.azureEndpoint
+          .replace(/\/$/, "")
+          .replace(/^http(s?):/, (_, s: string) => `ws${s}:`);
         const apiVersion = cfg.azureApiVersion ?? "2024-10-01-preview";
         url = `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(cfg.azureDeployment)}`;
         headers = { "api-key": cfg.apiKey };
       } else if (cfg.azureEndpoint) {
         // Generic OpenAI-compatible proxy — custom base URL, standard Bearer auth
-        const base = cfg.azureEndpoint.replace(/\/$/, "").replace(/^https:/, "wss:");
+        const base = cfg.azureEndpoint
+          .replace(/\/$/, "")
+          .replace(/^http(s?):/, (_, s: string) => `ws${s}:`);
         url = `${base}/v1/realtime?model=${encodeURIComponent(this.model)}`;
         headers = { Authorization: `Bearer ${cfg.apiKey}`, "OpenAI-Beta": "realtime=v1" };
       } else {
@@ -790,7 +794,7 @@ export class OpenAIRealtimeVoiceProvider {
     callConfig: Omit<RealtimeVoiceConfig, "apiKey"> & Partial<Pick<RealtimeVoiceConfig, "apiKey">>,
   ): OpenAIRealtimeVoiceBridge {
     const merged: RealtimeVoiceConfig = {
-      apiKey: this.defaults.apiKey,
+      apiKey: callConfig.apiKey ?? this.defaults.apiKey,
       model: callConfig.model ?? this.defaults.model,
       voice: callConfig.voice ?? this.defaults.voice,
       instructions: callConfig.instructions ?? this.defaults.instructions,
