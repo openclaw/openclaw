@@ -102,11 +102,6 @@ USER.md
 package-lock.json
 .claude/
 .agent/
-!.agent/
-!.agent/workflows/
-!.agents/
-!ui/src/ui/__screenshots__/
-!ui/src/ui/__screenshots__/**
 skills-lock.json
 
 # Local iOS signing overrides
@@ -137,10 +132,6 @@ test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
-!ui/src/ui/__screenshots__/
-!ui/src/ui/__screenshots__/**
-!ui/src/ui/views/__screenshots__/
-!ui/src/ui/views/__screenshots__/**
 ui/.vitest-attachments
 docs/superpowers
 
