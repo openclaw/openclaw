@@ -247,6 +247,15 @@ export class EpisodicStore {
     };
   }
 
+  /** Return the number of episodes already stored for a given agent + session. */
+  countBySession(agentId: string, sessionKey: string): number {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) AS cnt FROM episodes WHERE agent_id = ? AND session_key = ?",
+    );
+    const row = stmt.get(agentId, sessionKey) as { cnt: number } | undefined;
+    return row?.cnt ?? 0;
+  }
+
   close(): void {
     try {
       this.db.close();

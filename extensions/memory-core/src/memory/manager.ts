@@ -28,7 +28,7 @@ import {
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { EpisodeEncoder } from "./episodic/encoder.js";
+import { createEpisodeEncoder } from "./episodic/encoder.js";
 import { EpisodicSearch } from "./episodic/search.js";
 import { EpisodicStore } from "./episodic/store.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
@@ -465,7 +465,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
     const store = new EpisodicStore(dbPath);
     try {
-      const encoder = new EpisodeEncoder();
+      const encoder = createEpisodeEncoder(this.cfg, this.agentId);
       const minScore = opts?.minScore ?? this.settings.query.minScore;
       const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
 

@@ -115,6 +115,10 @@ function switchChatAgent(host: ChatHost, targetAgentId: string): boolean {
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
   );
+  // Clear any in-flight run state from the previous agent session so the new
+  // session does not inherit a "busy" status that can never be cleared.
+  host.chatRunId = null;
+  host.chatSending = false;
   return true;
 }
 
