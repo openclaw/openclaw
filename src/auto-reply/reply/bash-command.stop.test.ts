@@ -1,27 +1,24 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 
-const { getSessionMock, getFinishedSessionMock, markExitedMock, killProcessTreeMock } = vi.hoisted(
-  () => ({
-    getSessionMock: vi.fn(),
-    getFinishedSessionMock: vi.fn(),
-    markExitedMock: vi.fn(),
-    killProcessTreeMock: vi.fn(),
-  }),
-);
+const { getSessionMock, getFinishedSessionMock, killProcessTreeMock } = vi.hoisted(() => ({
+  getSessionMock: vi.fn(),
+  getFinishedSessionMock: vi.fn(),
+  killProcessTreeMock: vi.fn(),
+}));
 
 vi.mock("../../agents/bash-process-registry.js", () => ({
   getSession: getSessionMock,
   getFinishedSession: getFinishedSessionMock,
-  markExited: markExitedMock,
+  markExited: vi.fn(),
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
   killProcessTree: killProcessTreeMock,
 }));
 
-const { handleBashChatCommand, BASH_STOP_CONFIRM_DELAY_MS } = await import("./bash-command.js");
+const { handleBashChatCommand } = await import("./bash-command.js");
 
 function buildParams(commandBody: string) {
   const cfg = {
@@ -52,6 +49,7 @@ function buildRunningSession(overrides?: Record<string, unknown>) {
     scopeKey: "chat:bash",
     backgrounded: true,
     pid: 4242,
+    exited: false,
     startedAt: Date.now(),
     tail: "",
     ...overrides,
@@ -60,43 +58,41 @@ function buildRunningSession(overrides?: Record<string, unknown>) {
 
 describe("handleBashChatCommand stop", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     getSessionMock.mockReset();
     getFinishedSessionMock.mockReset();
-    markExitedMock.mockReset();
     killProcessTreeMock.mockReset();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("does not report stopped or mark exited until after the confirm delay", async () => {
+  it("returns immediately with a stopping message and fires killProcessTree", async () => {
     const session = buildRunningSession();
     getSessionMock.mockReturnValue(session);
     getFinishedSessionMock.mockReturnValue(undefined);
 
-    const pending = handleBashChatCommand(buildParams("/bash stop session-1"));
+    const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
 
-    let resolved = false;
-    void pending.then(() => {
-      resolved = true;
-    });
-
-    // Advance to just before the delay expires.
-    await vi.advanceTimersByTimeAsync(BASH_STOP_CONFIRM_DELAY_MS - 1);
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-    expect(markExitedMock).not.toHaveBeenCalled();
-
-    // Let the delay expire.
-    await vi.advanceTimersByTimeAsync(2);
-    const result = await pending;
-
-    expect(result.text).toContain("bash stopped");
+    expect(result.text).toContain("bash stopping");
+    expect(result.text).toContain("!poll session-1");
     expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
-    expect(markExitedMock).toHaveBeenCalledTimes(1);
-    expect(markExitedMock).toHaveBeenCalledWith(session, null, "SIGKILL", "failed");
+  });
+
+  it("includes the full session ID so the user can poll after starting a new job", async () => {
+    const session = buildRunningSession({ id: "deep-forest-42" });
+    getSessionMock.mockReturnValue(session);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    const result = await handleBashChatCommand(buildParams("/bash stop deep-forest-42"));
+
+    expect(result.text).toContain("!poll deep-forest-42");
+  });
+
+  it("does not call markExited synchronously (defers to supervisor lifecycle)", async () => {
+    const session = buildRunningSession();
+    getSessionMock.mockReturnValue(session);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    await handleBashChatCommand(buildParams("/bash stop session-1"));
+
+    expect(session.exited).toBe(false);
   });
 
   it("returns no-running-job when session is not found", async () => {
@@ -107,7 +103,6 @@ describe("handleBashChatCommand stop", () => {
 
     expect(result.text).toContain("No running bash job found");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(markExitedMock).not.toHaveBeenCalled();
   });
 
   it("skips killProcessTree when session has no pid", async () => {
@@ -115,12 +110,9 @@ describe("handleBashChatCommand stop", () => {
     getSessionMock.mockReturnValue(session);
     getFinishedSessionMock.mockReturnValue(undefined);
 
-    const pending = handleBashChatCommand(buildParams("/bash stop session-1"));
-    await vi.advanceTimersByTimeAsync(BASH_STOP_CONFIRM_DELAY_MS + 1);
-    const result = await pending;
+    const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
 
-    expect(result.text).toContain("bash stopped");
+    expect(result.text).toContain("bash stopping");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expect(markExitedMock).toHaveBeenCalledWith(session, null, "SIGKILL", "failed");
   });
 });

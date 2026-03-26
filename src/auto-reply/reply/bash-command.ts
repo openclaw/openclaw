@@ -1,12 +1,12 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getFinishedSession, getSession, markExited } from "../../agents/bash-process-registry.js";
+import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import { clampInt, sleep } from "../../utils.js";
+import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
@@ -16,8 +16,6 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
 const MAX_FOREGROUND_MS = 30_000;
-/** Exported for tests — must exceed kill-tree DEFAULT_GRACE_MS (3000). */
-export const BASH_STOP_CONFIRM_DELAY_MS = 3200;
 
 type BashRequest =
   | { action: "help" }
@@ -303,13 +301,8 @@ export async function handleBashChatCommand(params: {
     if (pid) {
       killProcessTree(pid);
     }
-    if (activeJob?.state === "running" && activeJob.sessionId === sessionId) {
-      activeJob = null;
-    }
-    await sleep(BASH_STOP_CONFIRM_DELAY_MS);
-    markExited(running, null, "SIGKILL", "failed");
     return {
-      text: `⚙️ bash stopped (session ${formatSessionSnippet(sessionId)}).`,
+      text: `⚙️ bash stopping (session ${formatSessionSnippet(sessionId)}). Use !poll ${sessionId} to confirm exit.`,
     };
   }
 
