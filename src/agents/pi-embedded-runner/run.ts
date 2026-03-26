@@ -507,7 +507,13 @@ export async function runEmbeddedPiAgent(
         clearCopilotRefreshTimer();
         const now = Date.now();
         const refreshAt = copilotTokenState.expiresAt - COPILOT_REFRESH_MARGIN_MS;
-        const delayMs = Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        // Clamp to Node.js max safe timeout (2^31-1 ms ≈ 24.8 days) to prevent
+        // TimeoutOverflowWarning hot loop when expiresAt is far in the future.
+        const MAX_SAFE_TIMEOUT = 2_147_483_647;
+        const delayMs = Math.min(
+          MAX_SAFE_TIMEOUT,
+          Math.max(COPILOT_REFRESH_MIN_DELAY_MS, refreshAt - now),
+        );
         const timer = setTimeout(() => {
           if (copilotRefreshCancelled) {
             return;
