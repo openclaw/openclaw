@@ -20,6 +20,7 @@ export type BootstrapContextMode = "full" | "lightweight";
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
+
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 export function makeBootstrapWarn(params: {

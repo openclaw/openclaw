@@ -147,7 +147,7 @@ export type AgentDefaultsConfig = {
    * - continuation-skip: skip injection on continuation turns when a session
    *   file already exists, re-inject only on first message and after compaction
    */
-  contextInjection?: "always" | "continuation-skip";
+  contextInjection?: AgentContextInjection;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
