@@ -100,7 +100,7 @@ function describeMattermostMessageTool({
       enabledAccounts.length > 0
         ? {
             properties: {
-              buttons: Type.Optional(createMessageToolButtonsSchema()),
+              buttons: createMessageToolButtonsSchema(),
             },
           }
         : null,

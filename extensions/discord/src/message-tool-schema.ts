@@ -89,26 +89,28 @@ const discordComponentModalSchema = Type.Object({
 });
 
 export function createDiscordMessageToolComponentsSchema() {
-  return Type.Object(
-    {
-      text: Type.Optional(Type.String()),
-      reusable: Type.Optional(
-        Type.Boolean({
-          description: "Allow components to be used multiple times until they expire.",
-        }),
-      ),
-      container: Type.Optional(
-        Type.Object({
-          accentColor: Type.Optional(Type.String()),
-          spoiler: Type.Optional(Type.Boolean()),
-        }),
-      ),
-      blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
-      modal: Type.Optional(discordComponentModalSchema),
-    },
-    {
-      description:
-        "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
-    },
+  return Type.Optional(
+    Type.Object(
+      {
+        text: Type.Optional(Type.String()),
+        reusable: Type.Optional(
+          Type.Boolean({
+            description: "Allow components to be used multiple times until they expire.",
+          }),
+        ),
+        container: Type.Optional(
+          Type.Object({
+            accentColor: Type.Optional(Type.String()),
+            spoiler: Type.Optional(Type.Boolean()),
+          }),
+        ),
+        blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+        modal: Type.Optional(discordComponentModalSchema),
+      },
+      {
+        description:
+          "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
+      },
+    ),
   );
 }

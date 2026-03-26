@@ -22,7 +22,7 @@ type MessageToolDiscoveryContext = Parameters<DescribeMessageTool>[0];
 type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
 function createDiscordMessageToolComponentsSchema() {
-  return Type.Object({ type: Type.Literal("discord-components") });
+  return Type.Optional(Type.Object({ type: Type.Literal("discord-components") }));
 }
 
 function createSlackMessageToolBlocksSchema() {
@@ -544,6 +544,24 @@ describe("message tool schema scoping", () => {
 
     expect(schema.properties?.buttons).toBeDefined();
     expect(schema.required ?? []).not.toContain("buttons");
+  });
+
+  it("keeps components schema optional so plain sends do not require components", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.components).toBeDefined();
+    expect(schema.required ?? []).not.toContain("components");
   });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
