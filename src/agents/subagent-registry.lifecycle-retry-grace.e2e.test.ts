@@ -426,6 +426,20 @@ describe("subagent registry lifecycle error grace", () => {
     expect(afterGen).toBeGreaterThan(beforeGen);
   });
 
+  it("bumps registry generation when markSubagentRunTerminated kills a live run", () => {
+    registerCompletionRun("run-generation-kill", "generation-kill", "generation kill test");
+    const beforeGen = mod.getSubagentRegistryGeneration();
+
+    const killed = mod.markSubagentRunTerminated({
+      runId: "run-generation-kill",
+      reason: "killed",
+    });
+
+    expect(killed).toBe(1);
+    const afterGen = mod.getSubagentRegistryGeneration();
+    expect(afterGen).toBeGreaterThan(beforeGen);
+  });
+
   it("freezes completion result at run termination across deferred announce retries", async () => {
     // Regression guard: late lifecycle noise must never overwrite the frozen completion reply.
     registerCompletionRun("run-freeze", "freeze", "freeze test");

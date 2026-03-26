@@ -136,6 +136,19 @@ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "ex
   );
 }
 
+/**
+ * Persist the current subagent-runs map to disk.
+ *
+ * IMPORTANT: If the preceding mutation changed any field that affects
+ * `sessions.list` row rendering, you MUST bump `subagentRegistryGeneration += 1`
+ * BEFORE calling this function. List-visible fields:
+ *   endedAt, outcome, endedReason, startedAt, sessionStartedAt, phase,
+ *   and Map .set() / .delete() operations.
+ *
+ * Bookkeeping-only fields (cleanupHandled, announceRetryCount,
+ * suppressAnnounceReason, wakeOnDescendantSettle, lastAnnounceRetryAt,
+ * cleanupCompletedAt) do NOT require a generation bump.
+ */
 function persistSubagentRuns() {
   persistSubagentRunsToDisk(subagentRuns);
 }
