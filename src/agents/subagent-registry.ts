@@ -1344,7 +1344,7 @@ export function replaceSubagentRunAfterSteer(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? undefined;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
   const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
