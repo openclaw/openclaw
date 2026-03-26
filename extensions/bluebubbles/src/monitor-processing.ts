@@ -938,6 +938,7 @@ export async function processMessage(
           baseUrl,
           password,
           target: resolveTarget,
+          allowPrivateNetwork: account.config.allowPrivateNetwork === true,
         })) ?? undefined;
     }
   }
