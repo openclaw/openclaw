@@ -821,7 +821,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           message: `typed hook "${hookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false — messages/systemPrompt mutations will be stripped; block/tools/toolCalls still allowed`,
         });
         const original = handler as PluginHookHandlerMap["before_llm_call"];
-        effectiveHandler = (async (event: PluginHookBeforeLlmCallEvent, ctx: PluginHookAgentContext) => {
+        effectiveHandler = (async (
+          event: PluginHookBeforeLlmCallEvent,
+          ctx: PluginHookAgentContext,
+        ) => {
           // Deep-clone messages and systemPrompt so the constrained handler
           // cannot bypass the policy by mutating the event in place.
           const sandboxedEvent: PluginHookBeforeLlmCallEvent = {
