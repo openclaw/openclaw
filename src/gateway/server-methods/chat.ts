@@ -1456,12 +1456,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             aliasIndex,
           });
           imageModelProvider = imageModelResolved?.ref.provider;
-        } else if (usedPrimaryFromFallback) {
-          // Primary was promoted from fallback without an explicit provider.
+        } else if (!primaryHasProvider) {
+          // Primary has no explicit provider (providerless).
           // Scan the fallback chain to find the first entry with an explicit provider.
-          // This handles configs like: fallbacks: ["gpt-4o", "openai/gpt-4.1", "gpt-4.1-mini"]
-          // where "gpt-4o" is promoted to primary, but the provider context should come from
-          // "openai/gpt-4.1" so subsequent providerless fallbacks resolve correctly.
+          // This handles two cases:
+          // 1. Primary was promoted from fallback (usedPrimaryFromFallback=true) - e.g., fallbacks: ["gpt-4o", "openai/gpt-4.1"]
+          // 2. Primary was explicitly set to providerless (usedPrimaryFromFallback=false) - e.g., imageModel.primary: "gpt-4o"
+          // In both cases, the provider context should come from an explicit fallback so that
+          // subsequent providerless fallbacks resolve correctly against the right provider.
 
           // First pass: find first fallback with explicit provider prefix
           for (const fb of imageModelConfigFallbacks) {
