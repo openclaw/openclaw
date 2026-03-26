@@ -12,10 +12,10 @@ import {
   MAIN_SESSION_KEY,
   makeWhatsAppDirectiveConfig,
   replyText,
-  runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeModelDefinition(id: string, name: string): ModelDefinitionConfig {
@@ -57,7 +57,7 @@ function makeMoonshotConfig(home: string, storePath: string) {
       providers: {
         moonshot: {
           baseUrl: "https://api.moonshot.ai/v1",
-          apiKey: "sk-test",
+          apiKey: "sk-test", // pragma: allowlist secret
           api: "openai-completions",
           models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
         },
@@ -92,7 +92,7 @@ describe("directive behavior", () => {
       provider: "moonshot",
       model: "kimi-k2-0905-preview",
     });
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   }
 
   it("supports unambiguous fuzzy model matches across /model forms", async () => {
@@ -107,7 +107,7 @@ describe("directive behavior", () => {
         });
         expectMoonshotSelectionFromResponse({ response: res, storePath });
       }
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("picks the best fuzzy match for global and provider-scoped minimax queries", async () => {
@@ -116,14 +116,15 @@ describe("directive behavior", () => {
         {
           body: "/model minimax",
           storePath: path.join(home, "sessions-global-fuzzy.json"),
+          expectedSelection: {},
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
-                  "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.7": {},
+                  "minimax/MiniMax-M2.7-highspeed": {},
                   "lmstudio/minimax-m2.5-gs32": {},
                 },
               },
@@ -133,13 +134,16 @@ describe("directive behavior", () => {
               providers: {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
-                  apiKey: "sk-test",
+                  apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
-                  models: [makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5")],
+                  models: [
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
+                    makeModelDefinition("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed"),
+                  ],
                 },
                 lmstudio: {
                   baseUrl: "http://127.0.0.1:1234/v1",
-                  apiKey: "lmstudio",
+                  apiKey: "lmstudio", // pragma: allowlist secret
                   api: "openai-responses",
                   models: [makeModelDefinition("minimax-m2.5-gs32", "MiniMax M2.5 GS32")],
                 },
@@ -148,16 +152,20 @@ describe("directive behavior", () => {
           },
         },
         {
-          body: "/model minimax/m2.5",
+          body: "/model minimax/highspeed",
           storePath: path.join(home, "sessions-provider-fuzzy.json"),
+          expectedSelection: {
+            provider: "minimax",
+            model: "MiniMax-M2.7-highspeed",
+          },
           config: {
             agents: {
               defaults: {
-                model: { primary: "minimax/MiniMax-M2.5" },
+                model: { primary: "minimax/MiniMax-M2.7" },
                 workspace: path.join(home, "openclaw"),
                 models: {
-                  "minimax/MiniMax-M2.5": {},
-                  "minimax/MiniMax-M2.5-Lightning": {},
+                  "minimax/MiniMax-M2.7": {},
+                  "minimax/MiniMax-M2.7-highspeed": {},
                 },
               },
             },
@@ -166,11 +174,11 @@ describe("directive behavior", () => {
               providers: {
                 minimax: {
                   baseUrl: "https://api.minimax.io/anthropic",
-                  apiKey: "sk-test",
+                  apiKey: "sk-test", // pragma: allowlist secret
                   api: "anthropic-messages",
                   models: [
-                    makeModelDefinition("MiniMax-M2.5", "MiniMax M2.5"),
-                    makeModelDefinition("MiniMax-M2.5-Lightning", "MiniMax M2.5 Lightning"),
+                    makeModelDefinition("MiniMax-M2.7", "MiniMax M2.7"),
+                    makeModelDefinition("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed"),
                   ],
                 },
               },
@@ -186,9 +194,9 @@ describe("directive behavior", () => {
             session: { store: testCase.storePath },
           } as unknown as OpenClawConfig,
         );
-        assertModelSelection(testCase.storePath);
+        assertModelSelection(testCase.storePath, testCase.expectedSelection);
       }
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("prefers alias matches when fuzzy selection is ambiguous", async () => {
@@ -215,13 +223,13 @@ describe("directive behavior", () => {
             providers: {
               moonshot: {
                 baseUrl: "https://api.moonshot.ai/v1",
-                apiKey: "sk-test",
+                apiKey: "sk-test", // pragma: allowlist secret
                 api: "openai-completions",
                 models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2")],
               },
               lmstudio: {
                 baseUrl: "http://127.0.0.1:1234/v1",
-                apiKey: "lmstudio",
+                apiKey: "lmstudio", // pragma: allowlist secret
                 api: "openai-responses",
                 models: [makeModelDefinition("kimi-k2-0905-preview", "Kimi K2 (Local)")],
               },
@@ -237,7 +245,7 @@ describe("directive behavior", () => {
         provider: "moonshot",
         model: "kimi-k2-0905-preview",
       });
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("stores auth profile overrides on /model directive", async () => {
@@ -274,7 +282,7 @@ describe("directive behavior", () => {
       const store = loadSessionStore(storePath);
       const entry = store["agent:main:main"];
       expect(entry.authProfileOverride).toBe("anthropic:work");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("queues system events for model, elevated, and reasoning directives", async () => {
@@ -326,7 +334,7 @@ describe("directive behavior", () => {
 
       events = drainSystemEvents(MAIN_SESSION_KEY);
       expect(events.some((e) => e.includes("Reasoning STREAM"))).toBe(true);
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 });

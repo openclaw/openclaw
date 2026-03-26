@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot.js";
 
 type Tab = { targetId: string; url: string };
@@ -8,6 +8,10 @@ function staticListTabs(tabs: Tab[]): () => Promise<Tab[]> {
 }
 
 describe("resolveTargetIdAfterNavigate", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns original targetId when old target still exists (no swap)", async () => {
     const result = await resolveTargetIdAfterNavigate({
       oldTargetId: "old-123",
@@ -38,8 +42,8 @@ describe("resolveTargetIdAfterNavigate", () => {
         { targetId: "fresh-777", url: "https://example.com" },
       ]),
     });
-    // Both differ from old targetId; the first non-stale match wins.
-    expect(result).toBe("preexisting-000");
+    // Ambiguous replacement; prefer staying on the old target rather than guessing wrong.
+    expect(result).toBe("old-123");
   });
 
   it("retries and resolves targetId when first listTabs has no URL match", async () => {
@@ -113,5 +117,25 @@ describe("resolveTargetIdAfterNavigate", () => {
       },
     });
     expect(result).toBe("old-123");
+  });
+
+  it("keeps the old target when multiple replacement candidates still match after retry", async () => {
+    vi.useFakeTimers();
+
+    const result$ = resolveTargetIdAfterNavigate({
+      oldTargetId: "old-123",
+      navigatedUrl: "https://example.com",
+      listTabs: staticListTabs([
+        { targetId: "preexisting-000", url: "https://example.com" },
+        { targetId: "fresh-777", url: "https://example.com" },
+      ]),
+    });
+
+    await vi.advanceTimersByTimeAsync(800);
+    const result = await result$;
+
+    expect(result).toBe("old-123");
+
+    vi.useRealTimers();
   });
 });

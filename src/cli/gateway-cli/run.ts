@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
@@ -17,6 +18,8 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
+import { cleanStaleGatewayProcessesSync } from "../../infra/restart-stale-pids.js";
+import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -39,6 +42,7 @@ type GatewayRunOpts = {
   token?: unknown;
   auth?: unknown;
   password?: unknown;
+  passwordFile?: unknown;
   tailscale?: unknown;
   tailscaleResetOnExit?: boolean;
   allowUnconfigured?: boolean;
@@ -61,6 +65,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "token",
   "auth",
   "password",
+  "passwordFile",
   "tailscale",
   "wsLog",
   "rawStreamPath",
@@ -78,6 +83,8 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "rawStream",
 ] as const;
 
+const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
+
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
   "token",
@@ -85,6 +92,24 @@ const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "trusted-proxy",
 ];
 const GATEWAY_TAILSCALE_MODES: readonly GatewayTailscaleMode[] = ["off", "serve", "funnel"];
+
+function warnInlinePasswordFlag() {
+  defaultRuntime.error(
+    "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+  );
+}
+
+function resolveGatewayPasswordOption(opts: GatewayRunOpts): string | undefined {
+  const direct = toOptionString(opts.password);
+  const file = toOptionString(opts.passwordFile);
+  if (direct && file) {
+    throw new Error("Use either --password or --password-file.");
+  }
+  if (file) {
+    return readSecretFromFile(file, "Gateway password");
+  }
+  return direct;
+}
 
 function parseEnumOption<T extends string>(
   raw: string | undefined,
@@ -201,6 +226,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    const stale = cleanStaleGatewayProcessesSync(port);
+    if (stale.length > 0) {
+      gatewayLog.info(
+        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+      );
+    }
+  }
   if (opts.force) {
     try {
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
@@ -268,13 +301,24 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  const passwordRaw = toOptionString(opts.password);
+  let passwordRaw: string | undefined;
+  try {
+    passwordRaw = resolveGatewayPasswordOption(opts);
+  } catch (err) {
+    defaultRuntime.error(err instanceof Error ? err.message : String(err));
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (toOptionString(opts.password)) {
+    warnInlinePasswordFlag();
+  }
   const tokenRaw = toOptionString(opts.token);
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
-  const mode = cfg.gateway?.mode;
+  const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
+  const mode = effectiveCfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
@@ -378,7 +422,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
       : undefined;
 
-  try {
+  const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
@@ -389,6 +433,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
           tailscale: tailscaleOverride,
         }),
     });
+
+  try {
+    const supervisor = detectRespawnSupervisor(process.env);
+    while (true) {
+      try {
+        await startLoop();
+        break;
+      } catch (err) {
+        const isGatewayAlreadyRunning =
+          err instanceof GatewayLockError &&
+          typeof err.message === "string" &&
+          err.message.includes("gateway already running");
+        if (!supervisor || !isGatewayAlreadyRunning) {
+          throw err;
+        }
+        gatewayLog.warn(
+          `gateway already running under ${supervisor}; waiting ${SUPERVISED_GATEWAY_LOCK_RETRY_MS}ms before retrying startup`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, SUPERVISED_GATEWAY_LOCK_RETRY_MS));
+      }
+    }
   } catch (err) {
     if (
       err instanceof GatewayLockError ||
@@ -430,6 +495,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     )
     .option("--auth <mode>", `Gateway auth mode (${formatModeChoices(GATEWAY_AUTH_MODES)})`)
     .option("--password <password>", "Password for auth mode=password")
+    .option("--password-file <path>", "Read gateway password from file")
     .option(
       "--tailscale <mode>",
       `Tailscale exposure mode (${formatModeChoices(GATEWAY_TAILSCALE_MODES)})`,

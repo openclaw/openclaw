@@ -87,15 +87,14 @@ class DeviceHandlerTest {
         "camera",
         "microphone",
         "location",
-        "backgroundLocation",
         "sms",
         "notificationListener",
         "notifications",
         "photos",
         "contacts",
         "calendar",
+        "callLog",
         "motion",
-        "screenCapture",
       )
     for (key in expected) {
       val state = permissions.getValue(key).jsonObject

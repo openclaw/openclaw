@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
   applyConfig,
+  ensureAgentConfigEntry,
+  findAgentConfigEntryIndex,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -146,6 +148,89 @@ describe("updateConfigFormValue", () => {
   });
 });
 
+describe("agent config helpers", () => {
+  it("finds explicit agent entries", () => {
+    expect(
+      findAgentConfigEntryIndex(
+        {
+          agents: {
+            list: [{ id: "main" }, { id: "assistant" }],
+          },
+        },
+        "assistant",
+      ),
+    ).toBe(1);
+  });
+
+  it("creates an agent override entry when editing an inherited agent", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-5" },
+        },
+        tools: { profile: "messaging" },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        defaults: { model: "openai/gpt-5" },
+        list: [{ id: "main" }],
+      },
+      tools: { profile: "messaging" },
+    });
+  });
+
+  it("reuses the existing agent entry instead of duplicating it", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "main", model: "openai/gpt-5" }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
+  });
+
+  it("reuses an agent entry that already exists in the pending form state", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {},
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    updateConfigFormValue(state, ["agents", "list", 0, "id"], "main");
+
+    const index = ensureAgentConfigEntry(state, "main");
+
+    expect(index).toBe(0);
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [{ id: "main" }],
+      },
+    });
+  });
+});
+
 describe("applyConfig", () => {
   it("sends config.apply with raw and session key", async () => {
     const request = vi.fn().mockResolvedValue({});
@@ -285,5 +370,20 @@ describe("runUpdate", () => {
     expect(request).toHaveBeenCalledWith("update.run", {
       sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
+  });
+
+  it("surfaces update errors returned in response payload", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "error", reason: "network unavailable" },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "main";
+
+    await runUpdate(state);
+
+    expect(state.lastError).toBe("Update error: network unavailable");
   });
 });

@@ -1,18 +1,21 @@
-// Narrow plugin-sdk surface for the bundled tlon plugin.
+// Private helper surface for the bundled tlon plugin.
 // Keep this list additive and scoped to symbols used under extensions/tlon.
+
+import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 export type { ReplyPayload } from "../auto-reply/types.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export type { ChannelOnboardingAdapter } from "../channels/plugins/onboarding-types.js";
-export { promptAccountId } from "../channels/plugins/onboarding/helpers.js";
-export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+export {
+  applyAccountNameToChannelSection,
+  patchScopedAccountConfig,
+} from "../channels/plugins/setup-helpers.js";
 export type {
   ChannelAccountSnapshot,
   ChannelOutboundAdapter,
   ChannelSetupInput,
 } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -23,6 +26,17 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export type { RuntimeEnv } from "../runtime.js";
+export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createLoggerBackedRuntime } from "./runtime.js";
+
+const tlonSetup = createOptionalChannelSetupSurface({
+  channel: "tlon",
+  label: "Tlon",
+  npmSpec: "@openclaw/tlon",
+  docsPath: "/channels/tlon",
+});
+
+export const tlonSetupAdapter = tlonSetup.setupAdapter;
+export const tlonSetupWizard = tlonSetup.setupWizard;

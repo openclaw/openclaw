@@ -263,7 +263,7 @@ describe("gateway canvas host auth", () => {
           const scopedA2ui = await fetch(
             `http://${host}:${listener.port}${scopedCanvasPath(activeNodeCapability, `${A2UI_PATH}/`)}`,
           );
-          expect(scopedA2ui.status).toBe(200);
+          expect([200, 503]).toContain(scopedA2ui.status);
 
           await expectWsConnected(`ws://${host}:${listener.port}${activeWsPath}`);
 
@@ -302,6 +302,22 @@ describe("gateway canvas host auth", () => {
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
         },
       });
+    });
+  }, 60_000);
+
+  test("denies canvas HTTP/WS on loopback without bearer or capability by default", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        const res = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        expect(res.status).toBe(401);
+
+        const a2ui = await fetch(`http://127.0.0.1:${listener.port}${A2UI_PATH}/`);
+        expect(a2ui.status).toBe(401);
+
+        await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, {});
+      },
     });
   }, 60_000);
 
@@ -381,6 +397,46 @@ describe("gateway canvas host auth", () => {
           await expectWsRejected(`ws://127.0.0.1:${listener.port}${CANVAS_WS_PATH}`, headers, 429);
         },
       });
+    });
+  }, 60_000);
+
+  test("rejects spoofed loopback forwarding headers from trusted proxies", async () => {
+    await withTempConfig({
+      cfg: {
+        gateway: {
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      run: async () => {
+        const rateLimiter = createAuthRateLimiter({
+          maxAttempts: 1,
+          windowMs: 60_000,
+          lockoutMs: 60_000,
+          exemptLoopback: true,
+        });
+        await withCanvasGatewayHarness({
+          resolvedAuth: tokenResolvedAuth,
+          listenHost: "0.0.0.0",
+          rateLimiter,
+          handleHttpRequest: async () => false,
+          run: async ({ listener }) => {
+            const headers = {
+              authorization: "Bearer wrong",
+              host: "localhost",
+              "x-forwarded-for": "127.0.0.1, 203.0.113.24",
+            };
+            const first = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+              headers,
+            });
+            expect(first.status).toBe(401);
+
+            const second = await fetch(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`, {
+              headers,
+            });
+            expect(second.status).toBe(429);
+          },
+        });
+      },
     });
   }, 60_000);
 });

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { spawnWithFallbackMock, killProcessTreeMock } = vi.hoisted(() => ({
   spawnWithFallbackMock: vi.fn(),
@@ -49,13 +49,22 @@ async function createAdapterHarness(params?: {
 }
 
 describe("createChildAdapter", () => {
-  beforeAll(async () => {
-    ({ createChildAdapter } = await import("./child.js"));
-  });
+  const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ createChildAdapter } = await import("./child.js"));
     spawnWithFallbackMock.mockClear();
     killProcessTreeMock.mockClear();
+    delete process.env.OPENCLAW_SERVICE_MARKER;
+  });
+
+  afterAll(() => {
+    if (originalServiceMarker === undefined) {
+      delete process.env.OPENCLAW_SERVICE_MARKER;
+    } else {
+      process.env.OPENCLAW_SERVICE_MARKER = originalServiceMarker;
+    }
   });
 
   it("uses process-tree kill for default SIGKILL", async () => {
@@ -78,7 +87,7 @@ describe("createChildAdapter", () => {
     adapter.kill();
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321);
-    expect(killMock).not.toHaveBeenCalled();
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("uses direct child.kill for non-SIGKILL signals", async () => {
@@ -88,6 +97,19 @@ describe("createChildAdapter", () => {
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("disables detached mode in service-managed runtime", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+
+    await createAdapterHarness({ pid: 7777 });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { detached?: boolean };
+      fallbacks?: Array<{ options?: { detached?: boolean } }>;
+    };
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.fallbacks ?? []).toEqual([]);
   });
 
   it("keeps inherited env when no override env is provided", async () => {

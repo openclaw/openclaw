@@ -91,7 +91,7 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("redacts image data from options and messages before writing", () => {
+  it("sanitizes cache-trace payloads before writing", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
       cfg: {
@@ -109,12 +109,31 @@ describe("createCacheTrace", () => {
     });
 
     trace?.recordStage("stream:context", {
+      system: {
+        provider: { apiKey: "sk-system-secret", baseUrl: "https://api.example.com" },
+      },
+      model: {
+        id: "test-model",
+        apiKey: "sk-model-secret",
+        tokenCount: 8192,
+      },
       options: {
+        apiKey: "sk-options-secret",
+        nested: {
+          password: "super-secret-password",
+          safe: "keep-me",
+          tokenCount: 42,
+        },
         images: [{ type: "image", mimeType: "image/png", data: "QUJDRA==" }],
       },
       messages: [
         {
           role: "user",
+          token: "message-secret-token",
+          metadata: {
+            secretKey: "message-secret-key",
+            label: "preserve-me",
+          },
           content: [
             {
               type: "image",
@@ -126,6 +145,31 @@ describe("createCacheTrace", () => {
     });
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.system).toEqual({
+      provider: {
+        baseUrl: "https://api.example.com",
+      },
+    });
+    expect(event.model).toEqual({
+      id: "test-model",
+      tokenCount: 8192,
+    });
+    expect(event.options).toEqual({
+      nested: {
+        safe: "keep-me",
+        tokenCount: 42,
+      },
+      images: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: "<redacted>",
+          bytes: 4,
+          sha256: crypto.createHash("sha256").update("QUJDRA==").digest("hex"),
+        },
+      ],
+    });
+
     const optionsImages = (
       ((event.options as { images?: unknown[] } | undefined)?.images ?? []) as Array<
         Record<string, unknown>
@@ -138,10 +182,49 @@ describe("createCacheTrace", () => {
     );
 
     const firstMessage = ((event.messages as Array<Record<string, unknown>> | undefined) ?? [])[0];
+    expect(firstMessage).not.toHaveProperty("token");
+    expect(firstMessage).not.toHaveProperty("metadata.secretKey");
+    expect(firstMessage).toMatchObject({
+      role: "user",
+      metadata: {
+        label: "preserve-me",
+      },
+    });
     const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+  });
+
+  it("handles circular references in messages without stack overflow", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const parent: Record<string, unknown> = { role: "user", content: "hello" };
+    const child: Record<string, unknown> = { ref: parent };
+    parent.child = child; // circular reference
+
+    trace?.recordStage("prompt:images", {
+      messages: [parent] as unknown as [],
+    });
+
+    expect(lines.length).toBe(1);
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.messageCount).toBe(1);
+    expect(event.messageFingerprints).toHaveLength(1);
   });
 });

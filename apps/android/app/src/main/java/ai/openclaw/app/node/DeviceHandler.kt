@@ -25,6 +25,8 @@ import kotlinx.serialization.json.put
 
 class DeviceHandler(
   private val appContext: Context,
+  private val smsEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_SMS,
+  private val callLogEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
 ) {
   private data class BatterySnapshot(
     val status: Int,
@@ -171,17 +173,10 @@ class DeviceHandler(
             ),
           )
           put(
-            "backgroundLocation",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
             "sms",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
-              promptableWhenDenied = canSendSms,
+              granted = smsEnabled && hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
+              promptableWhenDenied = smsEnabled && canSendSms,
             ),
           )
           put(
@@ -220,17 +215,16 @@ class DeviceHandler(
             ),
           )
           put(
+            "callLog",
+            permissionStateJson(
+              granted = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
+              promptableWhenDenied = callLogEnabled,
+            ),
+          )
+          put(
             "motion",
             permissionStateJson(
               granted = motionGranted,
-              promptableWhenDenied = true,
-            ),
-          )
-          // Screen capture on Android is interactive per-capture consent, not a sticky app permission.
-          put(
-            "screenCapture",
-            permissionStateJson(
-              granted = false,
               promptableWhenDenied = true,
             ),
           )

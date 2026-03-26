@@ -5,20 +5,22 @@ import ai.openclaw.app.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
+import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
-import ai.openclaw.app.protocol.OpenClawScreenCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 
 data class NodeRuntimeFlags(
   val cameraEnabled: Boolean,
   val locationEnabled: Boolean,
-  val smsAvailable: Boolean,
+  val sendSmsAvailable: Boolean,
+  val readSmsAvailable: Boolean,
+  val callLogAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
@@ -29,7 +31,9 @@ enum class InvokeCommandAvailability {
   Always,
   CameraEnabled,
   LocationEnabled,
-  SmsAvailable,
+  SendSmsAvailable,
+  ReadSmsAvailable,
+  CallLogAvailable,
   MotionActivityAvailable,
   MotionPedometerAvailable,
   DebugBuild,
@@ -40,6 +44,7 @@ enum class NodeCapabilityAvailability {
   CameraEnabled,
   LocationEnabled,
   SmsAvailable,
+  CallLogAvailable,
   VoiceWakeEnabled,
   MotionAvailable,
 }
@@ -59,11 +64,9 @@ object InvokeCommandRegistry {
   val capabilityManifest: List<NodeCapabilitySpec> =
     listOf(
       NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.Screen.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.AppUpdate.rawValue),
       NodeCapabilitySpec(
         name = OpenClawCapability.Camera.rawValue,
         availability = NodeCapabilityAvailability.CameraEnabled,
@@ -86,6 +89,10 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.Motion.rawValue,
         availability = NodeCapabilityAvailability.MotionAvailable,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.CallLog.rawValue,
+        availability = NodeCapabilityAvailability.CallLogAvailable,
       ),
     )
 
@@ -121,10 +128,6 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawCanvasA2UICommand.Reset.rawValue,
-        requiresForeground = true,
-      ),
-      InvokeCommandSpec(
-        name = OpenClawScreenCommand.Record.rawValue,
         requiresForeground = true,
       ),
       InvokeCommandSpec(
@@ -192,7 +195,15 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Send.rawValue,
-        availability = InvokeCommandAvailability.SmsAvailable,
+        availability = InvokeCommandAvailability.SendSmsAvailable,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawSmsCommand.Search.rawValue,
+        availability = InvokeCommandAvailability.ReadSmsAvailable,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawCallLogCommand.Search.rawValue,
+        availability = InvokeCommandAvailability.CallLogAvailable,
       ),
       InvokeCommandSpec(
         name = "debug.logs",
@@ -202,7 +213,6 @@ object InvokeCommandRegistry {
         name = "debug.ed25519",
         availability = InvokeCommandAvailability.DebugBuild,
       ),
-      InvokeCommandSpec(name = "app.update"),
     )
 
   private val byNameInternal: Map<String, InvokeCommandSpec> = all.associateBy { it.name }
@@ -216,7 +226,8 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.Always -> true
           NodeCapabilityAvailability.CameraEnabled -> flags.cameraEnabled
           NodeCapabilityAvailability.LocationEnabled -> flags.locationEnabled
-          NodeCapabilityAvailability.SmsAvailable -> flags.smsAvailable
+          NodeCapabilityAvailability.SmsAvailable -> flags.sendSmsAvailable || flags.readSmsAvailable
+          NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
         }
@@ -231,7 +242,9 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.Always -> true
           InvokeCommandAvailability.CameraEnabled -> flags.cameraEnabled
           InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
-          InvokeCommandAvailability.SmsAvailable -> flags.smsAvailable
+          InvokeCommandAvailability.SendSmsAvailable -> flags.sendSmsAvailable
+          InvokeCommandAvailability.ReadSmsAvailable -> flags.readSmsAvailable
+          InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild

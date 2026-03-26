@@ -1,8 +1,10 @@
-import type {
-  AllowlistMatch,
-  ChannelGroupContext,
-  GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk/feishu";
+import {
+  normalizeAccountId,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { AllowlistMatch, ChannelGroupContext, GroupToolPolicyConfig } from "../runtime-api.js";
+import { evaluateSenderGroupAccessForPolicy } from "../runtime-api.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
@@ -98,27 +100,51 @@ export function isFeishuGroupAllowed(params: {
   senderIds?: Array<string | null | undefined>;
   senderName?: string | null;
 }): boolean {
-  const { groupPolicy } = params;
-  if (groupPolicy === "disabled") {
-    return false;
-  }
-  if (groupPolicy === "open" || groupPolicy === "allowall") {
-    return true;
-  }
-  return resolveFeishuAllowlistMatch(params).allowed;
+  return evaluateSenderGroupAccessForPolicy({
+    groupPolicy: params.groupPolicy === "allowall" ? "open" : params.groupPolicy,
+    groupAllowFrom: params.allowFrom.map((entry) => String(entry)),
+    senderId: params.senderId,
+    isSenderAllowed: () => resolveFeishuAllowlistMatch(params).allowed,
+  }).allowed;
 }
 
 export function resolveFeishuReplyPolicy(params: {
   isDirectMessage: boolean;
-  globalConfig?: FeishuConfig;
-  groupConfig?: FeishuGroupConfig;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  groupId?: string | null;
+  /**
+   * Effective group policy resolved for this chat. When "open", requireMention
+   * defaults to false so that non-text messages (e.g. images) that cannot carry
+   * @-mentions are still delivered to the agent.
+   */
+  groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
 }): { requireMention: boolean } {
   if (params.isDirectMessage) {
     return { requireMention: false };
   }
 
-  const requireMention =
-    params.groupConfig?.requireMention ?? params.globalConfig?.requireMention ?? true;
+  const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
+  const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
+    channelConfig: feishuCfg,
+    accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,
+    accountId: normalizeAccountId(params.accountId),
+    normalizeAccountId,
+    omitKeys: ["defaultAccount"],
+  });
+  const groupRequireMention = resolveFeishuGroupConfig({
+    cfg: resolvedCfg,
+    groupId: params.groupId,
+  })?.requireMention;
 
-  return { requireMention };
+  return {
+    requireMention:
+      typeof groupRequireMention === "boolean"
+        ? groupRequireMention
+        : typeof resolvedCfg.requireMention === "boolean"
+          ? resolvedCfg.requireMention
+          : params.groupPolicy === "open"
+            ? false
+            : true,
+  };
 }

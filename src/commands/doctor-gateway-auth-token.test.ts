@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempHome, writeStateDirDotEnv } from "../config/test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   resolveGatewayAuthTokenForService,
   shouldRequireGatewayTokenForInstall,
 } from "./doctor-gateway-auth-token.js";
+
+const envVar = (...parts: string[]) => parts.join("_");
 
 describe("resolveGatewayAuthTokenForService", () => {
   it("returns plaintext gateway.auth.token when configured", async () => {
@@ -27,7 +30,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -71,7 +78,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -93,7 +104,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -116,7 +131,11 @@ describe("resolveGatewayAuthTokenForService", () => {
       {
         gateway: {
           auth: {
-            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
           },
         },
         secrets: {
@@ -163,17 +182,21 @@ describe("shouldRequireGatewayTokenForInstall", () => {
   });
 
   it("requires token in inferred mode when password env exists only in shell", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "password-from-env" }, async () => {
-      const required = shouldRequireGatewayTokenForInstall(
-        {
-          gateway: {
-            auth: {},
-          },
-        } as OpenClawConfig,
-        process.env,
-      );
-      expect(required).toBe(true);
-    });
+    await withEnvAsync(
+      { [envVar("OPENCLAW", "GATEWAY", "PASSWORD")]: "password-from-env" },
+      async () => {
+        // pragma: allowlist secret
+        const required = shouldRequireGatewayTokenForInstall(
+          {
+            gateway: {
+              auth: {},
+            },
+          } as OpenClawConfig,
+          process.env,
+        );
+        expect(required).toBe(true);
+      },
+    );
   });
 
   it("does not require token in inferred mode when password is configured", () => {
@@ -181,7 +204,11 @@ describe("shouldRequireGatewayTokenForInstall", () => {
       {
         gateway: {
           auth: {
-            password: { source: "env", provider: "default", id: "CUSTOM_GATEWAY_PASSWORD" },
+            password: {
+              source: "env",
+              provider: "default",
+              id: "CUSTOM_GATEWAY_PASSWORD",
+            },
           },
         },
         secrets: {
@@ -203,13 +230,31 @@ describe("shouldRequireGatewayTokenForInstall", () => {
         },
         env: {
           vars: {
-            OPENCLAW_GATEWAY_PASSWORD: "configured-password",
+            OPENCLAW_GATEWAY_PASSWORD: "configured-password", // pragma: allowlist secret
           },
         },
       } as OpenClawConfig,
       {} as NodeJS.ProcessEnv,
     );
     expect(required).toBe(false);
+  });
+
+  it("does not require token in inferred mode when password env exists in state-dir .env", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("OPENCLAW_GATEWAY_PASSWORD=dotenv-password\n", {
+        env: process.env,
+      });
+
+      const required = shouldRequireGatewayTokenForInstall(
+        {
+          gateway: {
+            auth: {},
+          },
+        } as OpenClawConfig,
+        process.env,
+      );
+      expect(required).toBe(false);
+    });
   });
 
   it("requires token in inferred mode when no password candidate exists", () => {

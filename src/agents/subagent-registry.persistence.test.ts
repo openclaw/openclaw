@@ -1,18 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
-import { captureEnv } from "../test-utils/env.js";
-import {
-  addSubagentRunForTests,
-  clearSubagentRunSteerRestart,
-  initSubagentRegistry,
-  listSubagentRunsForRequester,
-  registerSubagentRun,
-  resetSubagentRegistryForTests,
-} from "./subagent-registry.js";
-import { loadSubagentRegistryFromDisk } from "./subagent-registry.store.js";
+import { captureEnv, withEnv } from "../test-utils/env.js";
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -20,6 +11,31 @@ const { announceSpy } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
+
+let addSubagentRunForTests: typeof import("./subagent-registry.js").addSubagentRunForTests;
+let clearSubagentRunSteerRestart: typeof import("./subagent-registry.js").clearSubagentRunSteerRestart;
+let getSubagentRunByChildSessionKey: typeof import("./subagent-registry.js").getSubagentRunByChildSessionKey;
+let getLatestSubagentRunByChildSessionKey: typeof import("./subagent-registry.js").getLatestSubagentRunByChildSessionKey;
+let initSubagentRegistry: typeof import("./subagent-registry.js").initSubagentRegistry;
+let listSubagentRunsForRequester: typeof import("./subagent-registry.js").listSubagentRunsForRequester;
+let registerSubagentRun: typeof import("./subagent-registry.js").registerSubagentRun;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let loadSubagentRegistryFromDisk: typeof import("./subagent-registry.store.js").loadSubagentRegistryFromDisk;
+
+async function loadSubagentRegistryModules(): Promise<void> {
+  vi.resetModules();
+  ({
+    addSubagentRunForTests,
+    clearSubagentRunSteerRestart,
+    getLatestSubagentRunByChildSessionKey,
+    getSubagentRunByChildSessionKey,
+    initSubagentRegistry,
+    listSubagentRunsForRequester,
+    registerSubagentRun,
+    resetSubagentRegistryForTests,
+  } = await import("./subagent-registry.js"));
+  ({ loadSubagentRegistryFromDisk } = await import("./subagent-registry.store.js"));
+}
 
 describe("subagent registry persistence", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -153,6 +169,7 @@ describe("subagent registry persistence", () => {
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 25));
   };
 
   const restartRegistryAndFlush = async () => {
@@ -160,6 +177,10 @@ describe("subagent registry persistence", () => {
     initSubagentRegistry();
     await flushQueuedRegistryWork();
   };
+
+  beforeEach(async () => {
+    await loadSubagentRegistryModules();
+  });
 
   afterEach(async () => {
     announceSpy.mockClear();
@@ -174,6 +195,23 @@ describe("subagent registry persistence", () => {
   it("persists runs to disk and resumes after restart", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    let releaseInitialWait:
+      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
+      | undefined;
+    vi.mocked(callGateway)
+      .mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            releaseInitialWait = resolve as typeof releaseInitialWait;
+          }),
+      )
+      .mockResolvedValueOnce({
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+      });
 
     registerSubagentRun({
       runId: "run-1",
@@ -210,6 +248,11 @@ describe("subagent registry persistence", () => {
     // and trigger the announce flow once the run resolves.
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
+    releaseInitialWait?.({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
 
     // allow queued async wait/cleanup to execute
     await flushQueuedRegistryWork();
@@ -234,6 +277,45 @@ describe("subagent registry persistence", () => {
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
     expect(first.requesterOrigin?.channel).toBe("whatsapp");
     expect(first.requesterOrigin?.accountId).toBe("acct-main");
+  });
+
+  it("persists completed subagent timing into the child session entry", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const { callGateway } = await import("../gateway/call.js");
+    const now = Date.now();
+    const startedAt = now;
+    const endedAt = now + 500;
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      status: "ok",
+      startedAt,
+      endedAt,
+    });
+
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:timing",
+      sessionId: "sess-timing",
+      updatedAt: startedAt - 1,
+    });
+    registerSubagentRun({
+      runId: "run-session-timing",
+      childSessionKey: "agent:main:subagent:timing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist timing",
+      cleanup: "keep",
+    });
+
+    await flushQueuedRegistryWork();
+
+    const store = await readSessionStore(storePath);
+    const persisted = store["agent:main:subagent:timing"];
+    expect(persisted?.endedAt).toBe(endedAt);
+    expect(persisted?.runtimeMs).toBe(500);
+    expect(persisted?.status).toBe("done");
+    expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
   });
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
@@ -343,6 +425,35 @@ describe("subagent registry persistence", () => {
     expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
   });
 
+  it("retries cleanup announce after announce flow rejects", async () => {
+    const persisted = createPersistedEndedRun({
+      runId: "run-reject",
+      childSessionKey: "agent:main:subagent:reject",
+      task: "reject announce",
+      cleanup: "keep",
+    });
+    const registryPath = await writePersistedRegistry(persisted);
+
+    announceSpy.mockRejectedValueOnce(new Error("announce boom"));
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupHandled?: boolean; cleanupCompletedAt?: number }>;
+    };
+    expect(afterFirst.runs["run-reject"].cleanupHandled).toBe(false);
+    expect(afterFirst.runs["run-reject"].cleanupCompletedAt).toBeUndefined();
+
+    announceSpy.mockResolvedValueOnce(true);
+    await restartRegistryAndFlush();
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupCompletedAt?: number }>;
+    };
+    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toBeDefined();
+  });
+
   it("keeps delete-mode runs retryable when announce is deferred", async () => {
     const persisted = createPersistedEndedRun({
       runId: "run-4",
@@ -388,6 +499,137 @@ describe("subagent registry persistence", () => {
     };
     expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("removes attachments when pruning orphaned restored runs", async () => {
+    const persisted = createPersistedEndedRun({
+      runId: "run-orphan-attachments",
+      childSessionKey: "agent:main:subagent:ghost-attachments",
+      task: "orphan attachments",
+      cleanup: "delete",
+    });
+    const registryPath = await writePersistedRegistry(persisted, {
+      seedChildSessions: false,
+    });
+    if (!tempStateDir) {
+      throw new Error("tempStateDir not initialized");
+    }
+    const attachmentsRootDir = path.join(tempStateDir, "attachments");
+    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
+    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, Record<string, unknown>>;
+    };
+    if (!parsed.runs?.["run-orphan-attachments"]) {
+      throw new Error("expected orphaned run in persisted registry");
+    }
+    parsed.runs["run-orphan-attachments"] = {
+      ...parsed.runs["run-orphan-attachments"],
+      attachmentsRootDir,
+      attachmentsDir,
+    };
+    await fs.writeFile(registryPath, `${JSON.stringify(parsed)}\n`, "utf8");
+
+    await restartRegistryAndFlush();
+
+    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs?: Record<string, unknown>;
+    };
+    expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
+  });
+
+  it("prefers active runs and can resolve them from persisted registry snapshots", async () => {
+    const childSessionKey = "agent:main:subagent:disk-active";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-complete": {
+            runId: "run-complete",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "completed first",
+            cleanup: "keep",
+            createdAt: 200,
+            startedAt: 210,
+            endedAt: 220,
+            outcome: { status: "ok" },
+          },
+          "run-active": {
+            runId: "run-active",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "still running",
+            cleanup: "keep",
+            createdAt: 100,
+            startedAt: 110,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    resetSubagentRegistryForTests({ persist: false });
+
+    const resolved = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () =>
+      getSubagentRunByChildSessionKey(childSessionKey),
+    );
+
+    expect(resolved).toMatchObject({
+      runId: "run-active",
+      childSessionKey,
+    });
+    expect(resolved?.endedAt).toBeUndefined();
+  });
+
+  it("can resolve the newest child-session row even when an older stale row is still active", async () => {
+    const childSessionKey = "agent:main:subagent:disk-latest";
+    await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-current-ended": {
+            runId: "run-current-ended",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "completed latest",
+            cleanup: "keep",
+            createdAt: 200,
+            startedAt: 210,
+            endedAt: 220,
+            outcome: { status: "ok" },
+          },
+          "run-stale-active": {
+            runId: "run-stale-active",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "stale active",
+            cleanup: "keep",
+            createdAt: 100,
+            startedAt: 110,
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    resetSubagentRegistryForTests({ persist: false });
+
+    const resolved = withEnv({ VITEST: undefined, NODE_ENV: "development" }, () =>
+      getLatestSubagentRunByChildSessionKey(childSessionKey),
+    );
+
+    expect(resolved).toMatchObject({
+      runId: "run-current-ended",
+      childSessionKey,
+    });
+    expect(resolved?.endedAt).toBe(220);
   });
 
   it("resume guard prunes orphan runs before announce retry", async () => {

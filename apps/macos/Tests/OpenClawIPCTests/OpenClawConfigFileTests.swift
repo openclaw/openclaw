@@ -12,8 +12,8 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func configPathRespectsEnvOverride() async {
-        let override = makeConfigOverridePath()
+    func `config path respects env override`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             #expect(OpenClawConfigFile.url().path == override)
@@ -22,8 +22,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func remoteGatewayPortParsesAndMatchesHost() async {
-        let override = makeConfigOverridePath()
+    func `remote gateway port parses and matches host`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -42,8 +42,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func setRemoteGatewayUrlPreservesScheme() async {
-        let override = makeConfigOverridePath()
+    func `set remote gateway url preserves scheme`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -62,8 +62,8 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func clearRemoteGatewayUrlRemovesOnlyUrlField() async {
-        let override = makeConfigOverridePath()
+    func `clear remote gateway url removes only url field`() async {
+        let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             OpenClawConfigFile.saveDict([
@@ -83,7 +83,7 @@ struct OpenClawConfigFileTests {
     }
 
     @Test
-    func stateDirOverrideSetsConfigPath() async {
+    func `state dir override sets config path`() async {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
             .path
@@ -99,7 +99,7 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func saveDictAppendsConfigAuditLog() async throws {
+    func `save dict appends config audit log`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
@@ -133,6 +133,71 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["event"] as? String == "config.write")
             #expect(auditRoot?["result"] as? String == "success")
             #expect(auditRoot?["configPath"] as? String == configPath.path)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `load dict audits suspicious out-of-band clobbers`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "update": ["channel": "beta"],
+                "browser": ["enabled": true],
+                "gateway": ["mode": "local"],
+                "channels": [
+                    "discord": [
+                        "enabled": true,
+                        "dmPolicy": "pairing",
+                    ],
+                ],
+            ])
+            _ = OpenClawConfigFile.loadDict()
+
+            let clobbered = """
+            {
+              "update": {
+                "channel": "beta"
+              }
+            }
+            """
+            try clobbered.write(to: configPath, atomically: true, encoding: .utf8)
+
+            let loaded = OpenClawConfigFile.loadDict()
+            #expect((loaded["gateway"] as? [String: Any]) == nil)
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let lines = rawAudit
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+            let observeLine = lines.reversed().first { $0.contains("\"event\":\"config.observe\"") }
+            #expect(observeLine != nil)
+            guard let observeLine else {
+                Issue.record("Missing config.observe audit line")
+                return
+            }
+            let auditRoot = try JSONSerialization.jsonObject(with: Data(observeLine.utf8)) as? [String: Any]
+            #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
+            #expect(auditRoot?["configPath"] as? String == configPath.path)
+            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
+            #expect(suspicious.contains("gateway-mode-missing-vs-last-good"))
+            #expect(suspicious.contains("update-channel-only-root"))
+
+            let clobberedPath = auditRoot?["clobberedPath"] as? String
+            #expect(clobberedPath != nil)
+            if let clobberedPath {
+                let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
+                #expect(preserved == clobbered)
+            }
         }
     }
 }

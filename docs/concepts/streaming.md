@@ -90,7 +90,7 @@ more natural.
 - Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
-## “Stream chunks or everything”
+## "Stream chunks or everything"
 
 This maps to:
 
@@ -138,7 +138,7 @@ Legacy key migration:
 
 Telegram:
 
-- Uses Bot API `sendMessageDraft` in DMs when available, and `sendMessage` + `editMessageText` for group/topic preview updates.
+- Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to preview.
 

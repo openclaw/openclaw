@@ -7,6 +7,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
@@ -49,14 +50,6 @@ export function renderGatewayServiceCleanupHints(
   }
 }
 
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) {
-    throw new Error("Missing HOME");
-  }
-  return home;
-}
-
 type Marker = (typeof EXTRA_MARKERS)[number];
 
 function detectMarker(content: string): Marker | null {
@@ -64,6 +57,22 @@ function detectMarker(content: string): Marker | null {
   for (const marker of EXTRA_MARKERS) {
     if (lower.includes(marker)) {
       return marker;
+    }
+  }
+  return null;
+}
+
+export function detectMarkerLineWithGateway(contents: string): Marker | null {
+  // Join line continuations (trailing backslash) into single lines
+  const lower = contents.replace(/\\\r?\n\s*/g, " ").toLowerCase();
+  for (const line of lower.split(/\r?\n/)) {
+    if (!line.includes("gateway")) {
+      continue;
+    }
+    for (const marker of EXTRA_MARKERS) {
+      if (line.includes(marker)) {
+        return marker;
+      }
     }
   }
   return null;
@@ -244,7 +253,7 @@ async function scanSystemdDir(params: {
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarkerLineWithGateway(contents);
     if (!marker) {
       continue;
     }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { loadConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
@@ -9,10 +10,10 @@ import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
+const LIVE = isLiveTestEnabled();
 const LIVE_ANDROID_NODE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ANDROID_NODE);
 const describeLive = LIVE && LIVE_ANDROID_NODE ? describe : describe.skip;
-const SKIPPED_INTERACTIVE_COMMANDS = new Set<string>(["screen.record"]);
+const SKIPPED_INTERACTIVE_COMMANDS = new Set<string>();
 
 type CommandOutcome = "success" | "error";
 
@@ -119,15 +120,6 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     buildParams: () => ({}),
     timeoutMs: 30_000,
     outcome: "success",
-  },
-  "screen.record": {
-    buildParams: () => ({ durationMs: 1500, fps: 8, includeAudio: false }),
-    timeoutMs: 60_000,
-    outcome: "success",
-    onSuccess: (payload) => {
-      const obj = assertObjectPayload("screen.record", payload);
-      expect(readString(obj.base64)).not.toBeNull();
-    },
   },
   "camera.list": {
     buildParams: () => ({}),
@@ -240,12 +232,6 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
       expect(readString(obj.diagnostics)).not.toBeNull();
     },
   },
-  "app.update": {
-    buildParams: () => ({}),
-    timeoutMs: 20_000,
-    outcome: "error",
-    allowedErrorCodes: ["INVALID_REQUEST"],
-  },
 };
 
 function resolveGatewayConnection() {
@@ -295,7 +281,7 @@ async function connectGatewayClient(params: {
       url: params.url,
       token: params.token,
       password: params.password,
-      connectDelayMs: 0,
+      connectChallengeTimeoutMs: 0,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: "android-live-test",
       clientVersion: "dev",
