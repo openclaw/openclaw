@@ -366,9 +366,7 @@ export type DiscordExecApprovalHandlerOpts = {
   onResolve?: (id: string, decision: ExecApprovalDecision) => Promise<void>;
   __testing?: {
     createGatewayClient?: typeof gatewayRuntime.createOperatorApprovalsGatewayClient;
-    createDiscordClient?: (
-      ...args: Parameters<typeof sendShared.createDiscordClient>
-    ) => {
+    createDiscordClient?: (...args: Parameters<typeof sendShared.createDiscordClient>) => {
       rest: {
         post: (...args: unknown[]) => Promise<unknown>;
         patch: (...args: unknown[]) => Promise<unknown>;

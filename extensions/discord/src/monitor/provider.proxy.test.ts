@@ -128,6 +128,30 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  function createProxyTestingOverrides() {
+    return {
+      HttpsProxyAgentCtor:
+        HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
+      ProxyAgentCtor: class {
+        proxyUrl: string;
+        constructor(proxyUrl: string) {
+          this.proxyUrl = proxyUrl;
+          undiciProxyAgentSpy(proxyUrl);
+          restProxyAgentSpy(proxyUrl);
+        }
+      } as unknown as typeof import("undici").ProxyAgent,
+      undiciFetch: undiciFetchMock,
+      webSocketCtor: class {
+        constructor(url: string, options?: { agent?: unknown }) {
+          webSocketSpy(url, options);
+        }
+      } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
+      registerClient: async (_plugin: unknown, client: unknown) => {
+        baseRegisterClientSpy(client);
+      },
+    };
+  }
+
   async function registerGatewayClient(plugin: unknown) {
     await (
       plugin as {
@@ -243,30 +267,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
-      __testing: {
-        HttpsProxyAgentCtor:
-          HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
-        ProxyAgentCtor: class {
-          proxyUrl: string;
-          constructor(proxyUrl: string) {
-            this.proxyUrl = proxyUrl;
-            undiciProxyAgentSpy(proxyUrl);
-            restProxyAgentSpy(proxyUrl);
-          }
-        } as unknown as typeof import("undici").ProxyAgent,
-        undiciFetch: undiciFetchMock,
-        webSocketCtor: class {
-          constructor(url: string, options?: { agent?: unknown }) {
-            webSocketSpy(url, options);
-          }
-        } as unknown as new (
-          url: string,
-          options?: { agent?: unknown },
-        ) => import("ws").WebSocket,
-        registerClient: async (_plugin, client) => {
-          baseRegisterClientSpy(client);
-        },
-      },
+      __testing: createProxyTestingOverrides(),
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
@@ -302,30 +303,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
-      __testing: {
-        HttpsProxyAgentCtor:
-          HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
-        ProxyAgentCtor: class {
-          proxyUrl: string;
-          constructor(proxyUrl: string) {
-            this.proxyUrl = proxyUrl;
-            undiciProxyAgentSpy(proxyUrl);
-            restProxyAgentSpy(proxyUrl);
-          }
-        } as unknown as typeof import("undici").ProxyAgent,
-        undiciFetch: undiciFetchMock,
-        webSocketCtor: class {
-          constructor(url: string, options?: { agent?: unknown }) {
-            webSocketSpy(url, options);
-          }
-        } as unknown as new (
-          url: string,
-          options?: { agent?: unknown },
-        ) => import("ws").WebSocket,
-        registerClient: async (_plugin, client) => {
-          baseRegisterClientSpy(client);
-        },
-      },
+      __testing: createProxyTestingOverrides(),
     });
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
