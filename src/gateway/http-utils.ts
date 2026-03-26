@@ -313,11 +313,13 @@ export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;
   user?: string | undefined;
+  agentId?: string;
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
-  const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  const agentId =
+    params.agentId ?? resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
     req: params.req,
     agentId,

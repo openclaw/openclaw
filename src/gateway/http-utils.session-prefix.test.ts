@@ -71,7 +71,14 @@ describe("resolveSessionKey session prefix (#53158)", () => {
   });
 
   it("resolveProviderForAgent resolves provider from config defaults", () => {
-    const prefix = resolveProviderForAgent("main", "api");
+    const prefix = resolveProviderForAgent("main", "api", {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-5" },
+          models: { "anthropic/claude-3-7-sonnet": {} },
+        },
+      },
+    } as never);
     expect(prefix).toBe("anthropic");
   });
 });
