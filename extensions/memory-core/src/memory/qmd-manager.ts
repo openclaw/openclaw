@@ -2,38 +2,39 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
-import { writeFileWithinRoot } from "../infra/fs-safe.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { resolveCliSpawnInvocation, runCliCommand } from "./qmd-process.js";
-import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
 import {
-  listSessionFilesForAgent,
   buildSessionEntry,
+  createSubsystemLogger,
+  deriveQmdScopeChannel,
+  deriveQmdScopeChatType,
+  extractKeywords,
+  isFileMissingError,
+  isQmdScopeAllowed,
+  listSessionFilesForAgent,
+  parseQmdQueryJson,
+  requireNodeSqlite,
+  resolveAgentWorkspaceDir,
+  resolveCliSpawnInvocation,
+  resolveGlobalSingleton,
+  resolveStateDir,
+  runCliCommand,
+  statRegularFile,
+  type MemoryEmbeddingProbeResult,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySearchResult,
+  type MemorySource,
+  type MemorySyncProgressUpdate,
+  type OpenClawConfig,
+  type QmdQueryResult,
+  type ResolvedMemoryBackendConfig,
+  type ResolvedQmdConfig,
+  type ResolvedQmdMcporterConfig,
   type SessionFileEntry,
-} from "./session-files.js";
-import { requireNodeSqlite } from "./sqlite.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySearchResult,
-  MemorySource,
-  MemorySyncProgressUpdate,
-} from "./types.js";
+  writeFileWithinRoot,
+} from "../api.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
-import type {
-  ResolvedMemoryBackendConfig,
-  ResolvedQmdConfig,
-  ResolvedQmdMcporterConfig,
-} from "./backend-config.js";
-import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
-import { extractKeywords } from "./query-expansion.js";
 
 const log = createSubsystemLogger("memory");
 

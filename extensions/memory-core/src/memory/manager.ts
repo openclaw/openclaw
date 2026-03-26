@@ -1,11 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -16,20 +10,25 @@ import {
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
-} from "./embeddings.js";
+  extractKeywords,
+  readMemoryFile,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveGlobalSingleton,
+  resolveMemorySearchConfig,
+  type MemoryEmbeddingProbeResult,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySearchResult,
+  type MemorySource,
+  type MemorySyncProgressUpdate,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+  createSubsystemLogger,
+} from "../api.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
-import { extractKeywords } from "./query-expansion.js";
-import { readMemoryFile } from "./read-file.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySearchResult,
-  MemorySource,
-  MemorySyncProgressUpdate,
-} from "./types.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";

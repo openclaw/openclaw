@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runDetachedMemorySync } from "./manager-sync-ops.js";
+import { runDetachedMemorySync } from "../../extensions/memory-core/src/memory/manager-sync-ops.js";
 
 describe("memory manager sync failures", () => {
   beforeEach(() => {

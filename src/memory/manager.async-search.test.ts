@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
+import { closeAllMemorySearchManagers } from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MemoryIndexManager } from "./index.js";
-import { closeAllMemorySearchManagers } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 

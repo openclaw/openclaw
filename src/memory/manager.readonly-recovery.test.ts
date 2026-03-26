@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryIndexManager } from "../../extensions/memory-core/src/memory/manager.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { MemoryIndexManager } from "./manager.js";
 import { getRequiredMemoryIndexManager } from "./test-manager-helpers.js";
 
 type ReadonlyRecoveryHarness = {

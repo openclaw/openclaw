@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MemoryIndexManager } from "./index.js";
 
 let shouldFail = false;
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
 type TestManagerHelpersModule = typeof import("./test-manager-helpers.js");
-type MemoryIndexModule = typeof import("./index.js");
+type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
 
 describe("memory manager atomic reindex", () => {
   let fixtureRoot = "";
@@ -32,7 +32,8 @@ describe("memory manager atomic reindex", () => {
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
-    ({ closeAllMemorySearchManagers } = await import("./index.js"));
+    ({ closeAllMemorySearchManagers } =
+      await import("../../extensions/memory-core/src/memory/index.js"));
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     resetEmbeddingMocks();
     shouldFail = false;
