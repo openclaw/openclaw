@@ -52,7 +52,8 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
         _logger = logger;
     }
 
-    public async Task<ErrorOr<Success>> StartServerAsync(CancellationToken ct)
+    public async Task<ErrorOr<Success>> StartServerAsync(
+        Func<NamedPipeFrame, Task<bool>> handler, CancellationToken ct)
     {
         // Validates that we can create the pipe (permissions check) before entering the accept loop.
         try
@@ -61,13 +62,16 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
                 PipeName, PipeDirection.InOut,
                 maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
                 PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-            return Result.Success;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Cannot create named pipe '{Name}'", PipeName);
             return Error.Failure("PIPE_UNAVAILABLE", ex.Message);
         }
+
+        // Probe succeeded — launch the accept loop on a background thread.
+        _ = Task.Run(() => StartListeningAsync(handler, ct), CancellationToken.None);
+        return Result.Success;
     }
 
     public async Task StartListeningAsync(

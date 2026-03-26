@@ -13,8 +13,9 @@ namespace OpenClawWindows.Infrastructure.ExecApprovals;
 
 /// <summary>
 /// Listens for "exec.approval.requested" gateway push events and presents an approval dialog.
+/// Also implements IExecApprovalPromptHandler for the named-pipe server path.
 /// </summary>
-internal sealed class GatewayExecApprovalOrchestrator : IHostedService
+internal sealed class GatewayExecApprovalOrchestrator : IHostedService, IExecApprovalPromptHandler
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -146,6 +147,31 @@ internal sealed class GatewayExecApprovalOrchestrator : IHostedService
             tcs.TrySetResult(ExecApprovalDecision.Deny);
 
         return tcs.Task;
+    }
+
+    // ── IExecApprovalPromptHandler ────────────────────────────────────────────
+
+    // Named-pipe path: parse the frame's PayloadJson, build a request, and delegate to
+    // the same dialog shown for gateway push events.
+    public async Task<bool> PromptAsync(NamedPipeFrame frame, CancellationToken ct)
+    {
+        string? command = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(frame.PayloadJson);
+            if (doc.RootElement.TryGetProperty("command", out var c))
+                command = c.GetString();
+        }
+        catch (JsonException) { }
+
+        var req = new GatewayApprovalRequest
+        {
+            Id      = frame.CorrelationId,
+            Request = new ApprovalRequest { Command = command },
+        };
+
+        var decision = await ShowDialogOnUiThreadAsync(req, ct);
+        return decision != ExecApprovalDecision.Deny;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

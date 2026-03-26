@@ -185,7 +185,12 @@ public static class DependencyInjection
         // ── Exec approval gateway prompter (GAP-013) ─────────────────────────
         // Subscribes to "exec.approval.requested" push events, shows Allow Once / Allow Always / Deny
         // dialog, and calls exec.approval.resolve.
-        services.AddHostedService<GatewayExecApprovalOrchestrator>();
+        // Also implements IExecApprovalPromptHandler for the named-pipe server path.
+        services.AddSingleton<GatewayExecApprovalOrchestrator>();
+        services.AddSingleton<IExecApprovalPromptHandler>(
+            sp => sp.GetRequiredService<GatewayExecApprovalOrchestrator>());
+        services.AddHostedService(
+            sp => sp.GetRequiredService<GatewayExecApprovalOrchestrator>());
 
         // ── Deep links ───────────────────────────────────────────────────────
         services.AddSingleton<IDeepLinkKeyStore, FileSystemDeepLinkKeyStore>();

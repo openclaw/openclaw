@@ -10,6 +10,6 @@ namespace OpenClawWindows.Application.Ports;
 public interface IExecApprovalIpc
 {
     Task<bool> RequestApprovalAsync(NamedPipeFrame request, CancellationToken ct);
-    Task<ErrorOr<Success>> StartServerAsync(CancellationToken ct);
+    Task<ErrorOr<Success>> StartServerAsync(Func<NamedPipeFrame, Task<bool>> handler, CancellationToken ct);
     Task StartListeningAsync(Func<NamedPipeFrame, Task<bool>> handler, CancellationToken ct);
 }
