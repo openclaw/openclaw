@@ -71,18 +71,19 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
+  // Guard: prevent recursive calls to patched console.* from re-entering
+  // when loadConfig() or loadConfigFallback() themselves emit warnings.
+  if (loggingState.resolvingConsoleSettings) {
+    return { level: envLevel ?? "info", style: normalizeConsoleStyle(undefined) };
+  }
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
-    if (loggingState.resolvingConsoleSettings) {
-      cfg = undefined;
-    } else {
-      loggingState.resolvingConsoleSettings = true;
-      try {
-        cfg = loadConfigFallback();
-      } finally {
-        loggingState.resolvingConsoleSettings = false;
-      }
+    loggingState.resolvingConsoleSettings = true;
+    try {
+      cfg = loadConfigFallback();
+    } finally {
+      loggingState.resolvingConsoleSettings = false;
     }
   }
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
