@@ -116,7 +116,7 @@ async function runBochaSearch(params: {
       const content = pages
         .map((page) => {
           const text = page.summary || page.snippet || "";
-          return `Title: ${page.name}\nURL: ${page.url}\nContent: ${text}`;
+          return `Title: ${page.name ?? ""}\nURL: ${page.url ?? ""}\nContent: ${text}`;
         })
         .join("\n\n");
       const citations = pages.map((page) => page.url).filter((url): url is string => Boolean(url));
