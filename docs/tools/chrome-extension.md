@@ -2,7 +2,7 @@
 summary: "Legacy Chrome extension relay migration notes for current browser setup"
 read_when:
   - You found older docs or config that mention a Chrome extension relay
-  - You are migrating `browser.profiles.*.driver: \"extension\"`
+  - 'You are migrating `browser.profiles.*.driver: "extension"`'
   - You want to use your real signed-in Chrome tabs with current OpenClaw releases
 title: "Chrome extension (legacy relay)"
 ---

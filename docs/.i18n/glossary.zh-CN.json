@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "Chrome extension (legacy relay)",
+    "target": "Chrome 扩展（旧版 relay）"
+  },
+  {
     "source": "Gateway",
     "target": "Gateway 网关"
   },
