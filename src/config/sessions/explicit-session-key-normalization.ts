@@ -13,18 +13,7 @@ type ExplicitSessionKeyNormalizerEntry = {
   }) => boolean;
 };
 
-const EXPLICIT_SESSION_KEY_NORMALIZERS: ExplicitSessionKeyNormalizerEntry[] = [
-  {
-    provider: "discord",
-    normalize: normalizeExplicitDiscordSessionKey,
-    matches: ({ sessionKey, provider, surface, from }) =>
-      surface === "discord" ||
-      provider === "discord" ||
-      from.startsWith("discord:") ||
-      sessionKey.startsWith("discord:") ||
-      sessionKey.includes(":discord:"),
-  },
-];
+const EXPLICIT_SESSION_KEY_NORMALIZERS: ExplicitSessionKeyNormalizerEntry[] = [];
 
 function resolveExplicitSessionKeyNormalizer(
   sessionKey: string,

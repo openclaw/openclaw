@@ -4,9 +4,9 @@ import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
 import {
   type SubagentsCommandContext,
   resolveChannelAccountId,
-  resolveCommandSurfaceChannel,
   stopWithText,
 } from "./shared.js";
+import { resolveCommandSurfaceChannel } from "../channel-context.js";
 
 function formatConversationBindingText(params: {
   channel: string;

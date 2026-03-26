@@ -8,18 +8,15 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
-import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
@@ -93,13 +90,6 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
-  let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (text && hasLineDirectives(text)) {
-    enrichedPayload = parseLineDirectives(enrichedPayload);
-    text = enrichedPayload.text;
-  }
-
   // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
@@ -114,10 +104,5 @@ export function normalizeReplyPayload(
     text = `${effectivePrefix} ${text}`;
   }
 
-  enrichedPayload = { ...enrichedPayload, text };
-  if (opts.enableSlackInteractiveReplies && text && hasSlackDirectives(text)) {
-    enrichedPayload = parseSlackDirectives(enrichedPayload);
-  }
-
-  return enrichedPayload;
+  return { ...payload, text };
 }

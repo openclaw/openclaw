@@ -1,7 +1,7 @@
-import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
-
-export function isGoogleModelApi(api?: string | null): boolean {
-  return api === "google-gemini-cli" || api === "google-generative-ai";
+export function isGoogleModelApi(modelApi?: string | null): boolean {
+  if (!modelApi) {
+    return false;
+  }
+  const normalized = modelApi.toLowerCase();
+  return normalized.includes("google") || normalized.includes("gemini");
 }
-
-export { sanitizeGoogleTurnOrdering };

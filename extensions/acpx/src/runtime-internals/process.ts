@@ -8,7 +8,7 @@ import type {
 } from "../../runtime-api.js";
 import {
   applyWindowsSpawnProgramPolicy,
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderEnvApiKeyNames,
   materializeWindowsSpawnProgram,
   omitEnvKeysCaseInsensitive,
   resolveWindowsSpawnProgramCandidate,
@@ -207,7 +207,7 @@ export function spawnWithResolvedCommand(
 
   const childEnv = omitEnvKeysCaseInsensitive(
     process.env,
-    params.stripProviderAuthEnvVars ? listKnownProviderAuthEnvVarNames() : [],
+    params.stripProviderAuthEnvVars ? listKnownProviderEnvApiKeyNames() : [],
   );
   childEnv.OPENCLAW_SHELL = "acp";
 

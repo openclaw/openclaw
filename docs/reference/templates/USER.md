@@ -1,23 +1,25 @@
----
-summary: "User profile record"
-read_when:
-  - Bootstrapping a workspace manually
----
+# USER.md - 老板档案
 
-# USER.md - About Your Human
+## 基本信息
+- **称呼**: 老板
+- **身份**: 老板 + 技术专家 
+- **时区**: Asia/Shanghai
 
-_Learn about the person you're helping. Update this as you go._
+## 当前工作
+- **主要目标**: 项目（技术洞察、团队管理）
+- **关键人物**: 小I、小C、小T
 
-- **Name:**
-- **What to call them:**
-- **Pronouns:** _(optional)_
-- **Timezone:**
-- **Notes:**
+## 沟通偏好
+- 汇报方式: 简洁、结论先行
+- 沟通风格: 轻松随意
+- 要避免: 啰嗦、太正式
+- 效率最高时段: 早上
+- 沟通方式: 即时聊天
 
-## Context
-
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
-
----
-
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+## 团队成员
+| 角色 | Agent | 职责 |
+|------|-------|------|
+| 秘书 | 小妲己 | 协调沟通 |
+| 技术洞察 | 小I | 技术选型、架构 |
+| 全栈开发 | 小C | 代码实现 |
+| 测试专家 | 小T | 质量保障 |

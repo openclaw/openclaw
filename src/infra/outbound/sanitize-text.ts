@@ -2,10 +2,10 @@
  * Sanitize model output for plain-text messaging surfaces.
  *
  * LLMs occasionally produce HTML tags (`<br>`, `<b>`, `<i>`, etc.) that render
- * correctly on web but appear as literal text on WhatsApp, Signal, SMS, and IRC.
+ * correctly on web but appear as literal text on some channels.
  *
  * Converts common inline HTML to lightweight-markup equivalents used by
- * WhatsApp/Signal/Telegram and strips any remaining tags.
+ * Telegram and strips any remaining tags.
  *
  * @see https://github.com/openclaw/openclaw/issues/31884
  * @see https://github.com/openclaw/openclaw/issues/18558
@@ -13,13 +13,7 @@
 
 /** Channels where HTML tags should be converted/stripped. */
 const PLAIN_TEXT_SURFACES = new Set([
-  "whatsapp",
-  "signal",
-  "sms",
-  "irc",
   "telegram",
-  "imessage",
-  "googlechat",
 ]);
 
 /** Returns `true` when the channel cannot render raw HTML. */
@@ -34,6 +28,12 @@ export function isPlainTextSurface(channelId: string): boolean {
  * The function is intentionally conservative — it only targets tags that models
  * are known to produce and avoids false positives on angle brackets in normal
  * prose (e.g. `a < b`).
+ *
+ * Markdown markup conventions used:
+ * - Bold: `*text*`
+ * - Italic: `_text_`
+ * - Strikethrough: `~text~`
+ * - Inline code: `` `text` ``
  */
 export function sanitizeForPlainText(text: string): string {
   return (
@@ -44,11 +44,11 @@ export function sanitizeForPlainText(text: string): string {
       .replace(/<br\s*\/?>/gi, "\n")
       // Block elements → newlines
       .replace(/<\/?(p|div)>/gi, "\n")
-      // Bold → WhatsApp/Signal bold
+      // Bold → markdown bold
       .replace(/<(b|strong)>(.*?)<\/\1>/gi, "*$2*")
-      // Italic → WhatsApp/Signal italic
+      // Italic → markdown italic
       .replace(/<(i|em)>(.*?)<\/\1>/gi, "_$2_")
-      // Strikethrough → WhatsApp/Signal strikethrough
+      // Strikethrough → markdown strikethrough
       .replace(/<(s|strike|del)>(.*?)<\/\1>/gi, "~$2~")
       // Inline code
       .replace(/<code>(.*?)<\/code>/gi, "`$1`")

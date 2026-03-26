@@ -8,7 +8,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
-import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleBtwCommand } from "./commands-btw.js";
@@ -189,7 +188,6 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleHelpCommand,
       handleCommandsListCommand,
       handleStatusCommand,
-      handleAllowlistCommand,
       handleApproveCommand,
       handleContextCommand,
       handleExportSessionCommand,

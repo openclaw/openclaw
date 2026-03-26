@@ -1,4 +1,3 @@
-export { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
 export {
   modelsAliasesAddCommand,
   modelsAliasesListCommand,

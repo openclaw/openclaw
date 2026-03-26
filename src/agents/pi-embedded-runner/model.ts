@@ -145,7 +145,6 @@ function applyConfiguredProviderOverrides(params: {
             ...configuredHeaders,
           }
         : undefined,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
   };
 }
 
@@ -416,7 +415,7 @@ export async function resolveModelAsync(
 /**
  * Build a more helpful error when the model is not found.
  *
- * Local providers (ollama, vllm) need a dummy API key to be registered.
+ * Local providers (ollama) need a dummy API key to be registered.
  * Users often configure `agents.defaults.model.primary: "ollama/…"` but
  * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
  * error.  This detects known providers that require opt-in auth and adds
@@ -429,10 +428,6 @@ const LOCAL_PROVIDER_HINTS: Record<string, string> = {
     "Ollama requires authentication to be registered as a provider. " +
     'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
     "See: https://docs.openclaw.ai/providers/ollama",
-  vllm:
-    "vLLM requires authentication to be registered as a provider. " +
-    'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
-    "See: https://docs.openclaw.ai/providers/vllm",
 };
 
 function buildUnknownModelError(provider: string, modelId: string): string {
