@@ -21,7 +21,7 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
-    anthropic)
+    anthropic | claude-cli)
       printf '%s\n' ".claude"
       ;;
     codex-cli | openai-codex)
