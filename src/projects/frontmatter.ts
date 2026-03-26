@@ -1,5 +1,5 @@
-import type { z } from "zod";
 import YAML from "yaml";
+import type { z } from "zod";
 import {
   ProjectFrontmatterSchema,
   QueueFrontmatterSchema,

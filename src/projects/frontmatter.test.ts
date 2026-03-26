@@ -7,21 +7,13 @@ import {
 
 describe("parseProjectFrontmatter", () => {
   it("parses minimal valid frontmatter with defaults", () => {
-    const result = parseProjectFrontmatter(
-      "---\nname: Test\n---\n# Body",
-      "test.md",
-    );
+    const result = parseProjectFrontmatter("---\nname: Test\n---\n# Body", "test.md");
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.name).toBe("Test");
     expect(result.data.status).toBe("active");
     expect(result.data.tags).toEqual([]);
-    expect(result.data.columns).toEqual([
-      "Backlog",
-      "In Progress",
-      "Review",
-      "Done",
-    ]);
+    expect(result.data.columns).toEqual(["Backlog", "In Progress", "Review", "Done"]);
     expect(result.data.dashboard.widgets).toEqual([
       "project-status",
       "task-counts",
@@ -53,10 +45,7 @@ describe("parseProjectFrontmatter", () => {
   });
 
   it("returns error when no frontmatter block found", () => {
-    const result = parseProjectFrontmatter(
-      "no frontmatter here",
-      "bad.md",
-    );
+    const result = parseProjectFrontmatter("no frontmatter here", "bad.md");
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.filePath).toBe("bad.md");
@@ -65,10 +54,7 @@ describe("parseProjectFrontmatter", () => {
   });
 
   it("returns error when required field is missing", () => {
-    const result = parseProjectFrontmatter(
-      "---\nstatus: active\n---\n",
-      "missing-name.md",
-    );
+    const result = parseProjectFrontmatter("---\nstatus: active\n---\n", "missing-name.md");
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.filePath).toBe("missing-name.md");
@@ -76,9 +62,7 @@ describe("parseProjectFrontmatter", () => {
     expect(result.error.issues.length).toBeGreaterThan(0);
     expect(result.error.issues[0].path).toBe("name");
     // Zod reports "Invalid input: expected string, received undefined" for missing required fields
-    expect(result.error.issues[0].message).toMatch(
-      /required|expected string/i,
-    );
+    expect(result.error.issues[0].message).toMatch(/required|expected string/i);
   });
 
   it("returns error with line number for YAML syntax errors", () => {
@@ -107,10 +91,7 @@ describe("parseProjectFrontmatter", () => {
 
 describe("parseTaskFrontmatter", () => {
   it("parses valid task with defaults", () => {
-    const result = parseTaskFrontmatter(
-      "---\nid: TASK-001\ntitle: Do thing\n---\n",
-      "task.md",
-    );
+    const result = parseTaskFrontmatter("---\nid: TASK-001\ntitle: Do thing\n---\n", "task.md");
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.id).toBe("TASK-001");
@@ -144,10 +125,7 @@ describe("parseTaskFrontmatter", () => {
   });
 
   it("returns error for invalid task ID pattern", () => {
-    const result = parseTaskFrontmatter(
-      "---\nid: BAD-ID\ntitle: Test\n---\n",
-      "bad-id.md",
-    );
+    const result = parseTaskFrontmatter("---\nid: BAD-ID\ntitle: Test\n---\n", "bad-id.md");
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error.filePath).toBe("bad-id.md");
@@ -184,10 +162,7 @@ describe("parseQueueFrontmatter", () => {
   });
 
   it("parses empty frontmatter with undefined updated", () => {
-    const result = parseQueueFrontmatter(
-      "---\n---\n## Available",
-      "queue.md",
-    );
+    const result = parseQueueFrontmatter("---\n---\n## Available", "queue.md");
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.data.updated).toBeUndefined();
