@@ -309,13 +309,17 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number): 
  *
  * @param lane - The lane to clear
  */
-export function clearCommandLane(lane: string = CommandLane.Main): void {
-  const state = getLaneState(lane);
-  state.generation++;
-  const toReject = state.queue.splice(0, state.queue.length);
-  for (const entry of toReject) {
+export function clearCommandLane(lane: string = CommandLane.Main): number {
+  const queueState = getQueueState();
+  const state = queueState.lanes.get(lane);
+  if (!state) {
+    return 0;
+  }
+  const removed = state.queue.splice(0, state.queue.length);
+  for (const entry of removed) {
     entry.reject(new CommandLaneClearedError(lane));
   }
+  return removed.length;
 }
 
 /**
