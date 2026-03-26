@@ -36,7 +36,8 @@ RUN apt-get update && \
       libasound2 \
       libssl3 \
       libdbus-1-3 \
-      unzip && \
+      unzip \
+      vim && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
@@ -123,6 +124,19 @@ RUN chmod +x /app/scripts/fly-entrypoint.sh
 
 # Prepare Homebrew install dir with correct ownership before switching to node user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && chown -R node:node /home/linuxbrew
+
+# Set up PATH for interactive SSH sessions (fly ssh console).
+# Docker ENV vars apply to exec'd processes but not to login shells spawned by SSH.
+# /etc/profile.d/ scripts are sourced by bash login shells, fixing the missing PATH.
+RUN printf '%s\n' \
+    'export PATH="/data/npm-global/bin:/data/pnpm-global:/data/go/bin:/data/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/root/.bun/bin:/usr/local/go/bin:${PATH}"' \
+    'export NPM_CONFIG_PREFIX="/data/npm-global"' \
+    'export PNPM_HOME="/data/pnpm-global"' \
+    'export GOPATH="/data/go"' \
+    'export GOBIN="/data/go/bin"' \
+    'export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"' \
+    > /etc/profile.d/openclaw-path.sh && \
+    chmod 644 /etc/profile.d/openclaw-path.sh
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
