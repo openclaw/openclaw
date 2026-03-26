@@ -335,9 +335,9 @@ describe("scripts/test-parallel lane planning", () => {
       },
     );
 
-    expect(output).toContain("channels-batch-1 filters=49");
-    expect(output).toContain("channels-batch-2 filters=51");
-    expect(output).not.toContain("channels-batch-3");
+    expect(output).toContain("channels-batch-1 filters=33");
+    expect(output).toContain("channels-batch-2 filters=33");
+    expect(output).toContain("channels-batch-3 filters=34");
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
