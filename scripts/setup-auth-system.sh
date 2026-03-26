@@ -72,6 +72,11 @@ mkdir -p ~/.config/systemd/user
 cp "$SERVICE_TEMPLATE" "$SERVICE_TARGET"
 cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.timer" "$TIMER_TARGET"
 
+command -v python3 >/dev/null 2>&1 || {
+    echo "ERROR: python3 is required but not found."
+    exit 1
+}
+
 python3 - "$SERVICE_TARGET" "$AUTH_MONITOR_PATH" "$NTFY_TOPIC" "$PHONE_NUMBER" <<'PY'
 from pathlib import Path
 import sys
@@ -81,17 +86,35 @@ auth_monitor_path = sys.argv[2]
 ntfy_topic = sys.argv[3]
 phone_number = sys.argv[4]
 
+
+def replace_required(content: str, old: str, new: str, label: str) -> str:
+    updated = content.replace(old, new)
+    if updated == content:
+        print(f"ERROR: {label} placeholder not found in {service_path}", file=sys.stderr)
+        sys.exit(1)
+    return updated
+
+
 content = service_path.read_text()
-content = content.replace("ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh", f"ExecStart={auth_monitor_path}")
+content = replace_required(
+    content,
+    "ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh",
+    f"ExecStart={auth_monitor_path}",
+    "ExecStart",
+)
 if ntfy_topic:
-    content = content.replace(
+    content = replace_required(
+        content,
         "# Environment=NOTIFY_NTFY=openclaw-alerts",
         f"Environment=NOTIFY_NTFY={ntfy_topic}",
+        "NOTIFY_NTFY",
     )
 if phone_number:
-    content = content.replace(
+    content = replace_required(
+        content,
         "# Environment=NOTIFY_PHONE=+1234567890",
         f"Environment=NOTIFY_PHONE={phone_number}",
+        "NOTIFY_PHONE",
     )
 service_path.write_text(content)
 PY
