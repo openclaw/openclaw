@@ -684,6 +684,83 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history strips inline image source payloads from content blocks", async () => {
+    const inlineImage = `data:image/png;base64,${"A".repeat(90_000)}`;
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "image upload" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: inlineImage },
+          },
+        ],
+        timestamp: 7,
+      },
+    ]);
+
+    expect(historyMessages).toHaveLength(1);
+    const message = historyMessages[0] as { content?: Array<Record<string, unknown>> };
+    expect(Array.isArray(message.content)).toBe(true);
+    const imageBlock = message.content?.[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      omitted: true,
+      bytes: inlineImage.length,
+      source: { type: "base64", media_type: "image/png" },
+    });
+    const sanitizedSource = imageBlock?.source as { data?: unknown } | undefined;
+    expect(sanitizedSource).toBeDefined();
+    expect(sanitizedSource?.data).toBeUndefined();
+    expect(JSON.stringify(historyMessages)).not.toContain(inlineImage.slice(0, 256));
+  });
+
+  test("chat.history accumulates bytes when multiple inline image payload fields are stripped", async () => {
+    const inlineData = `data:image/png;base64,${"A".repeat(30_000)}`;
+    const inlineUrl = `data:image/png;base64,${"B".repeat(20_000)}`;
+    const inlineSource = `data:image/png;base64,${"C".repeat(10_000)}`;
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          {
+            type: "image",
+            data: inlineData,
+            url: inlineUrl,
+            source: { type: "base64", media_type: "image/png", data: inlineSource },
+          },
+        ],
+        timestamp: 8,
+      },
+    ]);
+
+    expect(historyMessages).toHaveLength(1);
+    const message = historyMessages[0] as { content?: Array<Record<string, unknown>> };
+    expect(Array.isArray(message.content)).toBe(true);
+    const imageBlock = message.content?.[0] as
+      | {
+          data?: unknown;
+          url?: unknown;
+          bytes?: unknown;
+          source?: { data?: unknown; type?: unknown; media_type?: unknown };
+        }
+      | undefined;
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      omitted: true,
+      bytes: inlineData.length + inlineUrl.length + inlineSource.length,
+      source: { type: "base64", media_type: "image/png" },
+    });
+    expect(imageBlock?.data).toBeUndefined();
+    expect(imageBlock?.url).toBeUndefined();
+    expect(imageBlock?.source?.data).toBeUndefined();
+    const serialized = JSON.stringify(historyMessages);
+    expect(serialized).not.toContain(inlineData.slice(0, 256));
+    expect(serialized).not.toContain(inlineUrl.slice(0, 256));
+    expect(serialized).not.toContain(inlineSource.slice(0, 256));
+  });
+
   test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";

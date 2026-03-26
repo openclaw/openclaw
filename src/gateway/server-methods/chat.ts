@@ -97,6 +97,7 @@ type ChatAbortRequester = {
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const INLINE_IMAGE_DATA_URL_RE = /^data:image\//i;
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
@@ -445,13 +446,54 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
     delete entry.thinkingSignature;
     changed = true;
   }
+
+  const markImagePayloadOmitted = (bytes: number) => {
+    entry.omitted = true;
+    entry.bytes = (toFiniteNumber(entry.bytes) ?? 0) + bytes;
+    changed = true;
+  };
+
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
     const bytes = Buffer.byteLength(entry.data, "utf8");
     delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
+    markImagePayloadOmitted(bytes);
+  }
+  if (
+    type === "image" &&
+    typeof entry.url === "string" &&
+    INLINE_IMAGE_DATA_URL_RE.test(entry.url)
+  ) {
+    const bytes = Buffer.byteLength(entry.url, "utf8");
+    delete entry.url;
+    markImagePayloadOmitted(bytes);
+  }
+  const source = entry.source;
+  if (
+    type === "image" &&
+    source &&
+    typeof source === "object" &&
+    typeof (source as { data?: unknown }).data === "string"
+  ) {
+    const sourceEntry = { ...(source as Record<string, unknown>) };
+    const bytes = Buffer.byteLength(String(sourceEntry.data), "utf8");
+    delete sourceEntry.data;
+    entry.source = sourceEntry;
+    markImagePayloadOmitted(bytes);
+  }
+  const imageUrl = entry.image_url;
+  if (
+    type === "image_url" &&
+    imageUrl &&
+    typeof imageUrl === "object" &&
+    typeof (imageUrl as { url?: unknown }).url === "string" &&
+    INLINE_IMAGE_DATA_URL_RE.test(String((imageUrl as { url: string }).url))
+  ) {
+    const imageUrlEntry = { ...(imageUrl as Record<string, unknown>) };
+    const bytes = Buffer.byteLength(String(imageUrlEntry.url), "utf8");
+    delete imageUrlEntry.url;
+    entry.image_url = imageUrlEntry;
+    markImagePayloadOmitted(bytes);
   }
   return { block: changed ? entry : block, changed };
 }
