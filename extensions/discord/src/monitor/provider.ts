@@ -1058,14 +1058,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         gateway: lifecycleGateway,
         details: String(err),
       });
-      // Fail-fast: without botUserId, mention gating is bypassed (all guild
-      // messages pass through), self-message filtering is disabled (risk of
-      // self-reply loops), and reply detection is broken. Let auto-restart
-      // retry instead of running in a degraded state. See #42219.
-      throw new Error(`discord: cannot start without bot identity: ${String(err)}`, { cause: err });
+      // Transient REST/proxy failures should not take down the whole channel.
+      // applicationId is the same snowflake as the bot user id and was already
+      // resolved above (with a token-decoding fallback), so we can use it for
+      // mention gating and self-message filtering. botUserName is only used for
+      // logging and is non-critical.
+      botUserId = applicationId;
+      runtime.warn?.(
+        `discord: using applicationId as botUserId fallback (fetchUser failed: ${String(err)})`,
+      );
     }
     if (!botUserId) {
-      // fetchUser succeeded but returned no id — equally unsafe to continue.
+      // fetchUser succeeded but returned no id and applicationId is also missing —
+      // this should not happen in practice.
       throw new Error("discord: fetchUser('@me') returned no user id");
     }
 
