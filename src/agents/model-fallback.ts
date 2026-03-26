@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
@@ -37,8 +38,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError, isRateLimitErrorMessage } from "./pi-embedded-helpers.js";
-import { retryAsync } from "../infra/retry.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -167,6 +167,7 @@ async function runFallbackCandidate<T>(params: {
   retryConfig?: {
     rate_limit?: number;
     overloaded?: number;
+    auth_failure?: number;
   };
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
@@ -178,7 +179,13 @@ async function runFallbackCandidate<T>(params: {
     // Apply internal retry for rate-limiting errors BEFORE giving up and
     // moving to the next candidate model in the fallback chain.
     const result = await retryAsync(runFn, {
-      attempts: 1 + (params.options?.allowTransientCooldownProbe ?? false),
+      attempts:
+        1 +
+        Math.max(
+          params.retryConfig?.rate_limit ?? 1,
+          params.retryConfig?.overloaded ?? 1,
+          params.retryConfig?.auth_failure ?? 0,
+        ),
       minDelayMs: 2000,
       maxDelayMs: 30000,
       jitter: 0.1,
@@ -186,15 +193,15 @@ async function runFallbackCandidate<T>(params: {
         const reason = resolveFailoverReasonFromError(err);
         const retryConfig = params.retryConfig;
         if (reason === "rate_limit") {
-          return attempt <= (1 + (retryConfig?.rate_limit ?? 1));
+          return attempt <= 1 + (retryConfig?.rate_limit ?? 1);
         }
         if (reason === "overloaded") {
-          return attempt <= (1 + (retryConfig?.overloaded ?? 1));
+          return attempt <= 1 + (retryConfig?.overloaded ?? 1);
         }
         if (reason === "auth_failure") {
-          return attempt <= (1 + (retryConfig?.auth_failure ?? 0));
+          return attempt <= 1 + (retryConfig?.auth_failure ?? 0);
         }
-        return reason === "rate_limit" || reason === "overloaded" || reason === "auth_failure";
+        return false;
       },
     });
 
@@ -225,6 +232,7 @@ async function runFallbackAttempt<T>(params: {
   retryConfig?: {
     rate_limit?: number;
     overloaded?: number;
+    auth_failure?: number;
   };
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
@@ -445,43 +453,35 @@ const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
+const probeKeyCache = new Map<string, string>();
+let lastProbeStatePruneAt = 0;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
-  return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+  const base = scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+
+  const cached = probeKeyCache.get(base);
+  if (cached) {
+    return cached;
+  }
+
+  probeKeyCache.set(base, base);
+  return base;
 }
 
 function pruneProbeState(now: number): void {
   // Lazy pruning: only prune if more than 1 second has passed since last prune
   const TTL_PRUNE_MS = 1_000;
-  const lastPruned = (pruneProbeState as any).lastPruned ?? 0;
-  if (now - lastPruned < TTL_PRUNE_MS) {
+  if (now - lastProbeStatePruneAt < TTL_PRUNE_MS) {
     return;
   }
-  (pruneProbeState as any).lastPruned = now;
+  lastProbeStatePruneAt = now;
 
   for (const [key, ts] of lastProbeAttempt) {
     if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
       lastProbeAttempt.delete(key);
     }
   }
-}
-
-// Cache for probe keys to avoid repeated string creation
-const probeKeyCache = new Map<string, string>();
-
-function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = String(agentDir ?? "").trim();
-  const base = scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
-
-  // Return cached key if available
-  if (probeKeyCache.has(base)) {
-    return probeKeyCache.get(base)!;
-  }
-
-  const key = base;
-  probeKeyCache.set(base, key);
-  return key;
 }
 
 function enforceProbeStateCap(): void {
@@ -512,6 +512,8 @@ function markProbeAttempt(now: number, throttleKey: string): void {
   lastProbeAttempt.set(throttleKey, now);
   enforceProbeStateCap();
 }
+
+function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
   now: number;
@@ -673,9 +675,6 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const retryConfig = params.cfg?.agents?.retries;
-  const rateLimitRetryCount = retryConfig?.rate_limit ?? 1;
-  const overloadedRetryCount = retryConfig?.overloaded ?? 1;
-  const authFailureRetryCount = retryConfig?.auth_failure ?? 0;
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -826,6 +825,7 @@ export async function runWithModelFallback<T>(params: {
         log.warn(
           `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
         );
+      }
       return attemptRun.success;
     }
     const err = attemptRun.error;
