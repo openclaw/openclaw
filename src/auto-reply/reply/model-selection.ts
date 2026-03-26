@@ -653,10 +653,18 @@ export async function createModelSelectionState(params: {
       // Providerless imageModel entries match by pure name across providers (case 4 in
       // isImageModel), but this can incorrectly keep a stored override from a different
       // provider whose model may not support vision. Force catalog check to verify.
-      const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
-      const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
-      if (!modelSupportsVision(catalogEntry)) {
-        skipForImageSwitch = true;
+      // However, if the stored model is an explicitly configured provider-qualified entry
+      // (e.g., imageModel.fallbacks: ["openai/gpt-4.1", "anthropic/claude-3"]), skip the
+      // catalog check since the user explicitly configured this cross-provider fallback.
+      const explicitKey = modelKey(storedProvider, storedModel);
+      const isExplicitProviderQualified =
+        imageModelKeys.has(explicitKey) || imageModelKeys.has(`${storedProvider}/${storedModel}`);
+      if (!isExplicitProviderQualified) {
+        const catalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+        const catalogEntry = findModelInCatalog(catalog, storedProvider, storedModel);
+        if (!modelSupportsVision(catalogEntry)) {
+          skipForImageSwitch = true;
+        }
       }
     }
   }

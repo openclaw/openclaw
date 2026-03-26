@@ -426,9 +426,12 @@ export async function getReplyFromConfig(
           defaultProvider: imageModelDefaultProvider,
           aliasIndex: channelAliasIndex,
         });
+        // When channel override can't be resolved (no alias match), use the channel's
+        // provider to construct the key. This prevents providerless fallbacks like
+        // "gpt-4.1" in imageModel from incorrectly matching any provider's gpt-4.1.
         const channelOverrideKey = channelOverrideResolved
           ? modelKey(channelOverrideResolved.ref.provider, channelOverrideResolved.ref.model)
-          : channelModelOverride.model;
+          : modelKey(channelResolved.ref.provider, channelModelOverride.model);
         if (imageModelKeys.has(channelKey) || imageModelKeys.has(channelOverrideKey)) {
           channelModelIsVisionModel = true;
         }
