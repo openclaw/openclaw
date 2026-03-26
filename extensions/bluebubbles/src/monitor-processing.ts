@@ -461,12 +461,6 @@ export async function processMessage(
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
-  if (isGroup && message.participants?.length) {
-    // BlueBubbles only gives us participant handles, so enrich phone numbers from local Contacts.
-    message.participants = await enrichBlueBubblesParticipantsWithContactNames(
-      message.participants,
-    );
-  }
 
   const text = message.text.trim();
   const attachments = message.attachments ?? [];
@@ -788,6 +782,18 @@ export async function processMessage(
   if (isGroup && requireMention && canDetectMention && !wasMentioned && !shouldBypassMention) {
     logVerbose(core, runtime, `bluebubbles: skipping group message (no mention)`);
     return;
+  }
+
+  if (
+    isGroup &&
+    account.config.enrichGroupParticipantsFromContacts === true &&
+    message.participants?.length
+  ) {
+    // BlueBubbles only gives us participant handles, so enrich phone numbers from local Contacts
+    // after access, command, and mention gating have already allowed the message through.
+    message.participants = await enrichBlueBubblesParticipantsWithContactNames(
+      message.participants,
+    );
   }
 
   // Cache allowed inbound messages so later replies can resolve sender/body without

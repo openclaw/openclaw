@@ -499,23 +499,50 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
 
-    it("enriches unnamed phone participants from local contacts before building ctx", async () => {
+    it("does not enrich group participants unless the config flag is enabled", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
       setupWebhookTarget();
       setBlueBubblesParticipantContactDepsForTest({
         platform: "darwin",
-        resolvePhoneNames: vi.fn(
-          async (phoneKeys: string[]) =>
-            new Map(
-              phoneKeys.map((phoneKey) => [
-                phoneKey,
-                phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
-              ]),
-            ),
-        ),
+        resolvePhoneNames,
       });
 
       const payload = createTimestampedNewMessagePayloadForTest({
-        text: "hello group",
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe("+15551234567");
+    });
+
+    it("enriches unnamed phone participants from local contacts after gating passes", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
         isGroup: true,
         chatGuid: "iMessage;+;chat123456",
         chatName: "Family",
@@ -524,10 +551,38 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(payload);
 
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
       const callArgs = getFirstDispatchCall();
       expect(callArgs.ctx.GroupMembers).toBe(
         "Alice Contact (+15551234567), Bob Contact (+15557654321)",
       );
+    });
+
+    it("does not read local contacts before mention gating allows the message", async () => {
+      const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+      mockResolveRequireMention.mockReturnValueOnce(true);
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(resolvePhoneNames).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
   });
 
