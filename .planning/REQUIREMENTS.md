@@ -20,10 +20,10 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 ### Frontmatter Parsing
 
-- [ ] **PARSE-01**: Typed frontmatter parser at `src/projects/frontmatter.ts` returns arrays, nested objects, and typed values (not flat strings)
+- [x] **PARSE-01**: Typed frontmatter parser at `src/projects/frontmatter.ts` returns arrays, nested objects, and typed values (not flat strings)
 - [x] **PARSE-02**: Zod schemas validate PROJECT.md, task file, and queue.md frontmatter
-- [ ] **PARSE-03**: Parse failures use `.safeParse()` -- skip corrupt files, log warning with file path and line number
-- [ ] **PARSE-04**: Existing `parseFrontmatterBlock()` in `src/markdown/frontmatter.ts` is not modified
+- [x] **PARSE-03**: Parse failures use `.safeParse()` -- skip corrupt files, log warning with file path and line number
+- [x] **PARSE-04**: Existing `parseFrontmatterBlock()` in `src/markdown/frontmatter.ts` is not modified
 
 ### Sync Process
 
@@ -140,10 +140,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DATA-06 | Phase 2 | Pending |
 | DATA-07 | Phase 1 | Complete |
 | DATA-08 | Phase 1 | Complete |
-| PARSE-01 | Phase 1 | Pending |
+| PARSE-01 | Phase 1 | Complete |
 | PARSE-02 | Phase 1 | Complete |
-| PARSE-03 | Phase 1 | Pending |
-| PARSE-04 | Phase 1 | Pending |
+| PARSE-03 | Phase 1 | Complete |
+| PARSE-04 | Phase 1 | Complete |
 | SYNC-01 | Phase 3 | Pending |
 | SYNC-02 | Phase 3 | Pending |
 | SYNC-03 | Phase 3 | Pending |

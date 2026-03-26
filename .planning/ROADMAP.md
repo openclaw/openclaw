@@ -33,8 +33,8 @@
 **Plans:** 3 plans
 Plans:
 - [x] 01-01-PLAN.md — Zod schemas, TypeScript types, and error types
-- [ ] 01-02-PLAN.md — Typed frontmatter parser (YAML extraction + Zod validation)
-- [ ] 01-03-PLAN.md — Queue.md section parser and public API barrel
+- [x] 01-02-PLAN.md — Typed frontmatter parser (YAML extraction + Zod validation)
+- [x] 01-03-PLAN.md — Queue.md section parser and public API barrel
 **Estimated complexity**: M
 
 ### Phase 2: File Structure & Scaffolding
