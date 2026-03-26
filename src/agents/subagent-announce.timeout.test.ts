@@ -31,53 +31,110 @@ let fallbackRequesterResolution: {
 } | null = null;
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: vi.fn(async (request: GatewayCall) => {
-    gatewayCalls.push(request);
-    if (request.method === "chat.history") {
-      return { messages: chatHistoryMessages };
-    }
-    return await callGatewayImpl(request);
-  }),
-}));
+function createGatewayCallModuleMock() {
+  return {
+    callGateway: vi.fn(async (request: GatewayCall) => {
+      gatewayCalls.push(request);
+      if (request.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(request);
+    }),
+  };
+}
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+async function createConfigModuleMock(
+  importOriginal: () => Promise<typeof import("../config/config.js")>,
+) {
+  const actual = await importOriginal();
   return {
     ...actual,
     loadConfig: () => configOverride,
   };
-});
+}
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => sessionStore),
-  resolveAgentIdFromSessionKey: () => "main",
-  resolveStorePath: () => "/tmp/sessions-main.json",
-  resolveMainSessionKey: () => "agent:main:main",
-}));
+function createSessionsModuleMock() {
+  return {
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+}
 
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
-}));
+function createSubagentDepthModuleMock() {
+  return {
+    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+  };
+}
 
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
-}));
+async function createPiEmbeddedModuleMock(
+  importOriginal: () => Promise<typeof import("./pi-embedded.js")>,
+) {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: () => false,
+    queueEmbeddedPiMessage: () => false,
+    waitForEmbeddedPiRunEnd: async () => true,
+  };
+}
 
-vi.mock("./subagent-registry.js", () => ({
-  countActiveDescendantRuns: () => 0,
-  countPendingDescendantRuns: () => pendingDescendantRuns,
-  listSubagentRunsForRequester: () => [],
-  isSubagentSessionRunActive: () => subagentSessionRunActive,
-  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-  resolveRequesterForChildSession: () => fallbackRequesterResolution,
-}));
+async function createSubagentRegistryModuleMock(
+  importOriginal: () => Promise<typeof import("./subagent-registry.js")>,
+) {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    countActiveDescendantRuns: () => 0,
+    countPendingDescendantRuns: () => pendingDescendantRuns,
+    listSubagentRunsForRequester: () => [],
+    isSubagentSessionRunActive: () => subagentSessionRunActive,
+    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+    resolveRequesterForChildSession: () => fallbackRequesterResolution,
+  };
+}
 
-import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+function createTimeoutHistoryWithNoReply() {
+  return [
+    { role: "user", content: "do something" },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Still working through the files." },
+        { type: "toolCall", id: "call1", name: "read", arguments: {} },
+      ],
+    },
+    { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+    },
+  ];
+}
 
-type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
+vi.mock("../gateway/call.js", createGatewayCallModuleMock);
+vi.mock("../config/config.js", createConfigModuleMock);
+vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
+vi.mock("./pi-embedded.js", createPiEmbeddedModuleMock);
+vi.mock("./subagent-registry.js", createSubagentRegistryModuleMock);
+
+let runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+type AnnounceFlowParams = Parameters<
+  typeof import("./subagent-announce.js").runSubagentAnnounceFlow
+>[0];
+
+async function loadFreshSubagentAnnounceFlowForTest() {
+  vi.resetModules();
+  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
+  vi.doMock("../config/config.js", createConfigModuleMock);
+  vi.doMock("../config/sessions.js", createSessionsModuleMock);
+  vi.doMock("./subagent-depth.js", createSubagentDepthModuleMock);
+  vi.doMock("./pi-embedded.js", createPiEmbeddedModuleMock);
+  vi.doMock("./subagent-registry.js", createSubagentRegistryModuleMock);
+  ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+}
 
 const defaultSessionConfig = {
   mainKey: "main",
@@ -160,6 +217,10 @@ describe("subagent announce timeout config", () => {
     fallbackRequesterResolution = null;
   });
 
+  beforeEach(async () => {
+    await loadFreshSubagentAnnounceFlowForTest();
+  });
+
   it("uses 90s timeout by default for direct announce agent call", async () => {
     await runAnnounceFlowForTest("run-default-timeout");
 
@@ -195,7 +256,7 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(90_000);
   });
 
-  it("does not retry gateway timeout for externally delivered completion announces", async () => {
+  it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
     vi.useFakeTimers();
     try {
       callGatewayImpl = async (request) => {
@@ -205,20 +266,20 @@ describe("subagent announce timeout config", () => {
         throw new Error("gateway timeout after 90000ms");
       };
 
-      await expect(
-        runAnnounceFlowForTest("run-completion-timeout-no-retry", {
-          requesterOrigin: {
-            channel: "telegram",
-            to: "12345",
-          },
-          expectsCompletionMessage: true,
-        }),
-      ).resolves.toBe(false);
+      const announcePromise = runAnnounceFlowForTest("run-completion-timeout-retry", {
+        requesterOrigin: {
+          channel: "telegram",
+          to: "12345",
+        },
+        expectsCompletionMessage: true,
+      });
+      await vi.runAllTimersAsync();
+      await expect(announcePromise).resolves.toBe(false);
 
       const directAgentCalls = gatewayCalls.filter(
         (call) => call.method === "agent" && call.expectFinal === true,
       );
-      expect(directAgentCalls).toHaveLength(1);
+      expect(directAgentCalls).toHaveLength(4);
     } finally {
       vi.useRealTimers();
     }
@@ -389,19 +450,7 @@ describe("subagent announce timeout config", () => {
 
   it("preserves NO_REPLY when timeout partial-progress history mixes prior text and later silence", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "call2", name: "exec", arguments: {} }],
@@ -418,21 +467,9 @@ describe("subagent announce timeout config", () => {
     ).toBeUndefined();
   });
 
-  it("prefers NO_REPLY partial progress over a longer latest assistant reply", async () => {
+  it("prefers later visible assistant progress over an earlier NO_REPLY marker", async () => {
     chatHistoryMessages = [
-      { role: "user", content: "do something" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Still working through the files." },
-          { type: "toolCall", id: "call1", name: "read", arguments: {} },
-        ],
-      },
-      { role: "toolResult", toolCallId: "call1", content: [{ type: "text", text: "data" }] },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "NO_REPLY" }],
-      },
+      ...createTimeoutHistoryWithNoReply(),
       {
         role: "assistant",
         content: [{ type: "text", text: "A longer partial summary that should stay silent." }],
@@ -444,8 +481,11 @@ describe("subagent announce timeout config", () => {
       roundOneReply: undefined,
     });
 
-    expect(
-      findGatewayCall((call) => call.method === "agent" && call.expectFinal === true),
-    ).toBeUndefined();
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
+    expect(internalEvents[0]?.result).toContain(
+      "A longer partial summary that should stay silent.",
+    );
   });
 });

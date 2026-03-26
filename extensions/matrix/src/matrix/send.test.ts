@@ -1,6 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
 
 const loadWebMediaMock = vi.fn().mockResolvedValue({
   buffer: Buffer.from("media"),
@@ -48,6 +47,33 @@ let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
 let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
 let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
 
+async function loadMatrixSendModules() {
+  vi.resetModules();
+  const runtimeModule = await import("../runtime.js");
+  runtimeModule.setMatrixRuntime(runtimeStub);
+  ({ sendMessageMatrix } = await import("./send.js"));
+  ({ sendTypingMatrix } = await import("./send.js"));
+  ({ voteMatrixPoll } = await import("./actions/polls.js"));
+}
+
+function createEncryptedMediaPayload() {
+  return {
+    buffer: Buffer.from("encrypted"),
+    file: {
+      key: {
+        kty: "oct",
+        key_ops: ["encrypt", "decrypt"],
+        alg: "A256CTR",
+        k: "secret",
+        ext: true,
+      },
+      iv: "iv",
+      hashes: { sha256: "hash" },
+      v: "v2",
+    },
+  };
+}
+
 const makeClient = () => {
   const sendMessage = vi.fn().mockResolvedValue("evt1");
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
@@ -67,15 +93,28 @@ const makeClient = () => {
   return { client, sendMessage, sendEvent, getEvent, uploadContent };
 };
 
+function makeEncryptedMediaClient() {
+  const result = makeClient();
+  (result.client as { crypto?: object }).crypto = {
+    isRoomEncrypted: vi.fn().mockResolvedValue(true),
+    encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
+  };
+  return result;
+}
+
+async function resetMatrixSendRuntimeMocks() {
+  loadConfigMock.mockReset().mockReturnValue({});
+  mediaKindFromMimeMock.mockReset().mockReturnValue("image");
+  isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
+  await loadMatrixSendModules();
+}
+
 describe("sendMessageMatrix media", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     loadWebMediaMock.mockReset().mockResolvedValue({
       buffer: Buffer.from("media"),
       fileName: "photo.png",
@@ -88,7 +127,7 @@ describe("sendMessageMatrix media", () => {
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("uploads media with url payloads", async () => {
@@ -115,25 +154,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uploads encrypted media with file payloads", async () => {
-    const { client, sendMessage, uploadContent } = makeClient();
-    (client as { crypto?: object }).crypto = {
-      isRoomEncrypted: vi.fn().mockResolvedValue(true),
-      encryptMedia: vi.fn().mockResolvedValue({
-        buffer: Buffer.from("encrypted"),
-        file: {
-          key: {
-            kty: "oct",
-            key_ops: ["encrypt", "decrypt"],
-            alg: "A256CTR",
-            k: "secret",
-            ext: true,
-          },
-          iv: "iv",
-          hashes: { sha256: "hash" },
-          v: "v2",
-        },
-      }),
-    };
+    const { client, sendMessage, uploadContent } = makeEncryptedMediaClient();
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
@@ -152,25 +173,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("does not upload plaintext thumbnails for encrypted image sends", async () => {
-    const { client, uploadContent } = makeClient();
-    (client as { crypto?: object }).crypto = {
-      isRoomEncrypted: vi.fn().mockResolvedValue(true),
-      encryptMedia: vi.fn().mockResolvedValue({
-        buffer: Buffer.from("encrypted"),
-        file: {
-          key: {
-            kty: "oct",
-            key_ops: ["encrypt", "decrypt"],
-            alg: "A256CTR",
-            k: "secret",
-            ext: true,
-          },
-          iv: "iv",
-          hashes: { sha256: "hash" },
-          v: "v2",
-        },
-      }),
-    };
+    const { client, uploadContent } = makeEncryptedMediaClient();
     getImageMetadataMock
       .mockResolvedValueOnce({ width: 1600, height: 1200 })
       .mockResolvedValueOnce({ width: 800, height: 600 });
@@ -326,19 +329,9 @@ describe("sendMessageMatrix media", () => {
 });
 
 describe("sendMessageMatrix threads", () => {
-  beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendMessageMatrix } = await import("./send.js"));
-    ({ sendTypingMatrix } = await import("./send.js"));
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    loadConfigMock.mockReset().mockReturnValue({});
-    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
-    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await resetMatrixSendRuntimeMocks();
   });
 
   it("includes thread relation metadata when threadId is set", async () => {
@@ -378,16 +371,12 @@ describe("sendMessageMatrix threads", () => {
 
 describe("voteMatrixPoll", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ voteMatrixPoll } = await import("./actions/polls.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    loadConfigMock.mockReset().mockReturnValue({});
-    mediaKindFromMimeMock.mockReset().mockReturnValue("image");
-    isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await resetMatrixSendRuntimeMocks();
   });
 
   it("maps 1-based option indexes to Matrix poll answer ids", async () => {
@@ -524,16 +513,15 @@ describe("voteMatrixPoll", () => {
 
 describe("sendTypingMatrix", () => {
   beforeAll(async () => {
-    setMatrixRuntime(runtimeStub);
-    ({ sendTypingMatrix } = await import("./send.js"));
+    await loadMatrixSendModules();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     loadConfigMock.mockReset().mockReturnValue({});
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
-    setMatrixRuntime(runtimeStub);
+    await loadMatrixSendModules();
   });
 
   it("normalizes room-prefixed targets before sending typing state", async () => {

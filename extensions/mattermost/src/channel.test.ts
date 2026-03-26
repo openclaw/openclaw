@@ -1,13 +1,23 @@
+import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
-const { sendMessageMattermostMock } = vi.hoisted(() => ({
+const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
+  mockFetchGuard: vi.fn(async (p: { url: string; init?: RequestInit }) => {
+    const response = await globalThis.fetch(p.url, p.init);
+    return { response, release: async () => {}, finalUrl: p.url };
+  }),
 }));
 
 vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return { ...original, fetchWithSsrFGuard: mockFetchGuard };
+});
 
 import { mattermostPlugin } from "./channel.js";
 import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
@@ -179,6 +189,26 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).toEqual([]);
+    });
+
+    it("keeps buttons optional in message tool schema", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
+
+      const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
+      const schema = discovery?.schema;
+      if (!schema || Array.isArray(schema)) {
+        throw new Error("expected mattermost message-tool schema");
+      }
+
+      expect(Type.Object(schema.properties).required).toBeUndefined();
     });
 
     it("hides react when actions.reactions is false", () => {

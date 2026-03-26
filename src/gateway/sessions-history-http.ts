@@ -5,18 +5,19 @@ import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import {
-  sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
   setSseHeaders,
 } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import { getHeader } from "./http-utils.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessages,
+  resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
@@ -154,23 +155,21 @@ export async function handleSessionHistoryHttpRequest(
   }
 
   const cfg = loadConfig();
-  const token = getBearerToken(req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  const ok = await authorizeGatewayBearerRequestOrReply({
     req,
+    res,
+    auth: opts.auth,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (!ok) {
     return true;
   }
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);
-  const entry = target.storeKeys.map((key) => store[key]).find(Boolean);
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,

@@ -164,7 +164,9 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
+    lookupContextTokens(params.modelId, { allowAsyncLoad: false }) ??
+    params.agentCfgContextTokens ??
+    DEFAULT_CONTEXT_TOKENS
   );
 }
 
@@ -213,6 +215,44 @@ export function shouldRunMemoryFlush(params: {
   }
 
   return true;
+}
+
+export function shouldRunPreflightCompaction(params: {
+  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh">;
+  /**
+   * Optional projected token count override for pre-run compaction gating.
+   * When provided, this value is treated as a fresh estimate and used instead
+   * of any cached SessionEntry total.
+   */
+  tokenCount?: number;
+  contextWindowTokens: number;
+  reserveTokensFloor: number;
+  softThresholdTokens: number;
+}): boolean {
+  if (!params.entry) {
+    return false;
+  }
+
+  const override = params.tokenCount;
+  const overrideTokens =
+    typeof override === "number" && Number.isFinite(override) && override > 0
+      ? Math.floor(override)
+      : undefined;
+
+  const totalTokens = overrideTokens ?? resolveFreshSessionTotalTokens(params.entry);
+  if (!totalTokens || totalTokens <= 0) {
+    return false;
+  }
+
+  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
+  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
+  const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
+  const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
+  if (threshold <= 0) {
+    return false;
+  }
+
+  return totalTokens >= threshold;
 }
 
 /**

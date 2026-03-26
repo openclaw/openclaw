@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelMessageActionAdapter,
   ChannelOutboundAdapter,
@@ -70,10 +70,15 @@ vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
   handleWhatsAppAction,
 }));
 
-import { messageCommand } from "./message.js";
+let messageCommand: typeof import("./message.js").messageCommand;
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 const EMPTY_TEST_REGISTRY = createTestRegistry([]);
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ messageCommand } = await import("./message.js"));
+});
 
 beforeEach(() => {
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);

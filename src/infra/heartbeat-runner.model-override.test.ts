@@ -5,8 +5,6 @@ import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../config/ses
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
 }));
@@ -201,7 +199,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
           defaults: {
             heartbeat: {
               every: "30m",
-              model: "openai/gpt-4o-mini",
+              model: "openai/gpt-5.4",
             },
           },
           list: [

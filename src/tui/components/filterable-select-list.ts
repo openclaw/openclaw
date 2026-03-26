@@ -1,11 +1,11 @@
 import type { Component } from "@mariozechner/pi-tui";
 import {
   Input,
+  getKeybindings,
   matchesKey,
   type SelectItem,
   SelectList,
   type SelectListTheme,
-  getKeybindings,
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
 import { fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";

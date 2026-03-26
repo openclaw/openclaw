@@ -4,13 +4,17 @@ import byteplusPlugin from "../../../extensions/byteplus/index.js";
 import chutesPlugin from "../../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
+import deepgramPlugin from "../../../extensions/deepgram/index.js";
+import deepseekPlugin from "../../../extensions/deepseek/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import googlePlugin from "../../../extensions/google/index.js";
+import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
@@ -23,7 +27,6 @@ import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
@@ -36,7 +39,7 @@ import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
-import { resolvePluginProviders } from "../providers.js";
+import { resolvePluginProviders } from "../provider-auth-choice.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -85,7 +88,9 @@ const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPl
 
 const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
   anthropicPlugin,
+  deepgramPlugin,
   googlePlugin,
+  groqPlugin,
   minimaxPlugin,
   mistralPlugin,
   moonshotPlugin,
@@ -135,10 +140,10 @@ function loadBundledProviderRegistry(): ProviderContractEntry[] {
       cache: false,
       activate: false,
     })
-      .filter((provider): provider is ProviderPlugin & { pluginId: string } =>
+      .filter((provider: ProviderPlugin): provider is ProviderPlugin & { pluginId: string } =>
         Boolean(provider.pluginId),
       )
-      .map((provider) => ({
+      .map((provider: ProviderPlugin & { pluginId: string }) => ({
         pluginId: provider.pluginId,
         provider,
       }));
@@ -353,12 +358,14 @@ const bundledProviderPlugins = dedupePlugins([
   chutesPlugin,
   cloudflareAiGatewayPlugin,
   copilotProxyPlugin,
+  deepseekPlugin,
   githubCopilotPlugin,
   falPlugin,
   googlePlugin,
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
+  microsoftFoundryPlugin,
   minimaxPlugin,
   mistralPlugin,
   modelStudioPlugin,
@@ -370,7 +377,6 @@ const bundledProviderPlugins = dedupePlugins([
   opencodeGoPlugin,
   openrouterPlugin,
   qianfanPlugin,
-  qwenPortalAuthPlugin,
   sglangPlugin,
   syntheticPlugin,
   togetherPlugin,

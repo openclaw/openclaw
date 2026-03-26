@@ -5,10 +5,12 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
-import { clearPluginCommands, getPluginCommandSpecs } from "./commands.js";
+import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { clearPluginDiscoveryCache } from "./discovery.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -472,7 +474,6 @@ function createEnvResolvedPluginFixture(pluginId: string) {
     OPENCLAW_HOME: openclawHome,
     HOME: ignoredHome,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
   return { plugin, env };
@@ -522,6 +523,8 @@ function expectEscapingEntryRejected(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -1021,6 +1024,30 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     clearPluginCommands();
   });
 
+  it("can scope bundled provider loads to deepseek without hanging", () => {
+    if (prevBundledDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+    }
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["deepseek"],
+        },
+      },
+      onlyPluginIds: ["deepseek"],
+    });
+
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
+    expect(scoped.plugins[0]?.status).toBe("loaded");
+    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
+  });
+
   it("does not replace the active memory prompt section during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryPromptSection(() => ["active memory section"]);
@@ -1298,7 +1325,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: openclawHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -1310,7 +1336,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: secondHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -2301,7 +2326,7 @@ module.exports = {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({
     prependContext: "legacy",
-    modelOverride: "gpt-4o",
+    modelOverride: "gpt-5.4",
     providerOverride: "anthropic",
   }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
@@ -2330,7 +2355,7 @@ module.exports = {
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
-      modelOverride: "gpt-4o",
+      modelOverride: "gpt-5.4",
       providerOverride: "anthropic",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
@@ -2593,7 +2618,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "feishu");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2635,7 +2660,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "zalouser");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2683,50 +2708,81 @@ module.exports = {
     }
   });
 
-  it("warns about open allowlists for discoverable plugins once per plugin set", () => {
+  it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
     const scenarios = [
       {
-        label: "single load warns",
-        pluginId: "warn-open-allow",
+        label: "explicit config path stays quiet",
+        pluginId: "warn-open-allow-config",
         loads: 1,
-        expectedWarnings: 1,
+        expectedWarnings: 0,
+        loadRegistry: (warnings: string[]) => {
+          const plugin = writePlugin({
+            id: "warn-open-allow-config",
+            body: `module.exports = { id: "warn-open-allow-config", register() {} };`,
+          });
+          return loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+              },
+            },
+          });
+        },
       },
       {
-        label: "repeated identical loads dedupe warning",
-        pluginId: "warn-open-allow-once",
+        label: "workspace discovery warns once",
+        pluginId: "warn-open-allow-workspace",
         loads: 2,
         expectedWarnings: 1,
+        loadRegistry: (() => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "warn-open-allow-workspace",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "warn-open-allow-workspace",
+            body: `module.exports = { id: "warn-open-allow-workspace", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
+          return (warnings: string[]) =>
+            loadOpenClawPlugins({
+              cache: false,
+              workspaceDir,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  enabled: true,
+                },
+              },
+            });
+        })(),
       },
     ] as const;
 
     for (const scenario of scenarios) {
-      const plugin = writePlugin({
-        id: scenario.pluginId,
-        body: `module.exports = { id: "${scenario.pluginId}", register() {} };`,
-      });
       const warnings: string[] = [];
-      const options = {
-        cache: false,
-        logger: createWarningLogger(warnings),
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-          },
-        },
-      };
 
       for (let index = 0; index < scenario.loads; index += 1) {
-        loadOpenClawPlugins(options);
+        scenario.loadRegistry(warnings);
       }
 
       const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
       expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
-      expect(
-        openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
-        scenario.label,
-      ).toBe(true);
+      if (scenario.expectedWarnings > 0) {
+        expect(
+          openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
+          scenario.label,
+        ).toBe(true);
+      }
     }
   });
 
@@ -2934,7 +2990,7 @@ module.exports = {
         label: "warns when loaded non-bundled plugin has no install/load-path provenance",
         loadRegistry: () => {
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
             mkdirSafe(globalDir);
             writePlugin({
