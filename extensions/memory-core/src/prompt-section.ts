@@ -1,4 +1,4 @@
-import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-core";
+import type { MemoryPromptSectionBuilder } from "./api.js";
 
 export const buildPromptSection: MemoryPromptSectionBuilder = ({
   availableTools,

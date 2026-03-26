@@ -1,10 +1,14 @@
 import { Type } from "@sinclair/typebox";
-import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
-import { resolveMemorySearchConfig, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-core";
+import {
+  resolveMemorySearchConfig,
+  resolveSessionAgentId,
+  type AnyAgentTool,
+  type OpenClawConfig,
+} from "./api.js";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<
-  ReturnType<(typeof import("openclaw/plugin-sdk/memory-core"))["getMemorySearchManager"]>
+  ReturnType<(typeof import("./api.js"))["getMemorySearchManager"]>
 >;
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
