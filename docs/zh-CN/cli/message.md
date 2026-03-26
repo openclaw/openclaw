@@ -15,8 +15,10 @@ x-i18n:
 
 # `openclaw message`
 
-用于发送消息和渠道操作的单一出站命令
-（Discord/Google Chat/Slack/Mattermost（插件）/Telegram/WhatsApp/Signal/iMessage/MS Teams）。
+用于发送消息和渠道操作的单一出站命令。
+
+本页主要说明核心内置渠道（Discord/Google Chat/Slack/Mattermost（插件）/Telegram/WhatsApp/Signal/iMessage/MS Teams）。
+如果你的安装中启用了插件提供的渠道，这些渠道也可能通过相同的 action 模型支持 `openclaw message`；具体目标格式和能力请查看对应渠道/插件文档。
 
 ## 用法
 
@@ -28,7 +30,8 @@ openclaw message <subcommand> [flags]
 
 - 如果配置了多个渠道，则必须指定 `--channel`。
 - 如果只配置了一个渠道，则该渠道为默认值。
-- 可选值：`whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams`（Mattermost 需要插件）
+- 核心内置可选值：`whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams`（Mattermost 需要插件）
+- 你的安装中如果启用了插件渠道，也可能出现额外的 channel id。
 
 目标格式（`--target`）：
 

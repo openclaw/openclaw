@@ -8,8 +8,10 @@ title: "message"
 
 # `openclaw message`
 
-Single outbound command for sending messages and channel actions
-(Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/Microsoft Teams).
+Single outbound command for sending messages and channel actions.
+
+This page documents the core built-in channel surfaces (Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/Microsoft Teams).
+Plugin-provided channels may also expose `openclaw message` support through the same action model; see the corresponding channel/plugin docs for channel-specific targeting rules and capabilities.
 
 ## Usage
 
@@ -21,7 +23,8 @@ Channel selection:
 
 - `--channel` required if more than one channel is configured.
 - If exactly one channel is configured, it becomes the default.
-- Values: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
+- Core built-in values: `whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams` (Mattermost requires plugin)
+- Additional plugin-provided channel ids may be available in your installation.
 
 Target formats (`--target`):
 
