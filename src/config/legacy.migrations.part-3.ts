@@ -93,6 +93,57 @@ function mergeLegacyIntoDefaults(params: {
   params.raw[params.rootKey] = root;
 }
 
+function getOrCreateTtsProviders(tts: Record<string, unknown>): Record<string, unknown> {
+  const providers = getRecord(tts.providers) ?? {};
+  tts.providers = providers;
+  return providers;
+}
+
+function mergeLegacyTtsProviderConfig(
+  tts: Record<string, unknown>,
+  legacyKey: string,
+  providerId: string,
+): boolean {
+  const legacyValue = getRecord(tts[legacyKey]);
+  if (!legacyValue) {
+    return false;
+  }
+  const providers = getOrCreateTtsProviders(tts);
+  const existing = getRecord(providers[providerId]) ?? {};
+  const merged = structuredClone(existing);
+  mergeMissing(merged, legacyValue);
+  providers[providerId] = merged;
+  delete tts[legacyKey];
+  return true;
+}
+
+function migrateLegacyTtsConfig(
+  tts: Record<string, unknown> | null | undefined,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (!tts) {
+    return;
+  }
+  const movedOpenAI = mergeLegacyTtsProviderConfig(tts, "openai", "openai");
+  const movedElevenLabs = mergeLegacyTtsProviderConfig(tts, "elevenlabs", "elevenlabs");
+  const movedMicrosoft = mergeLegacyTtsProviderConfig(tts, "microsoft", "microsoft");
+  const movedEdge = mergeLegacyTtsProviderConfig(tts, "edge", "microsoft");
+
+  if (movedOpenAI) {
+    changes.push(`Moved ${pathLabel}.openai → ${pathLabel}.providers.openai.`);
+  }
+  if (movedElevenLabs) {
+    changes.push(`Moved ${pathLabel}.elevenlabs → ${pathLabel}.providers.elevenlabs.`);
+  }
+  if (movedMicrosoft) {
+    changes.push(`Moved ${pathLabel}.microsoft → ${pathLabel}.providers.microsoft.`);
+  }
+  if (movedEdge) {
+    changes.push(`Moved ${pathLabel}.edge → ${pathLabel}.providers.microsoft.`);
+  }
+}
+
 // NOTE: tools.alsoAllow was introduced after legacy migrations; no legacy migration needed.
 
 // tools.alsoAllow legacy migration intentionally omitted (field not shipped in prod).
@@ -225,6 +276,36 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       tts.auto = tts.enabled ? "always" : "off";
       delete tts.enabled;
       changes.push(`Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`);
+    },
+  },
+  {
+    id: "tts.providers-generic-shape",
+    describe: "Move legacy bundled TTS config keys into messages.tts.providers",
+    apply: (raw, changes) => {
+      const messages = getRecord(raw.messages);
+      migrateLegacyTtsConfig(getRecord(messages?.tts), "messages.tts", changes);
+
+      const channels = getRecord(raw.channels);
+      const discord = getRecord(channels?.discord);
+      const discordVoice = getRecord(discord?.voice);
+      migrateLegacyTtsConfig(getRecord(discordVoice?.tts), "channels.discord.voice.tts", changes);
+
+      const discordAccounts = getRecord(discord?.accounts);
+      if (!discordAccounts) {
+        return;
+      }
+      for (const [accountId, accountValue] of Object.entries(discordAccounts)) {
+        if (isBlockedObjectKey(accountId)) {
+          continue;
+        }
+        const account = getRecord(accountValue);
+        const voice = getRecord(account?.voice);
+        migrateLegacyTtsConfig(
+          getRecord(voice?.tts),
+          `channels.discord.accounts.${accountId}.voice.tts`,
+          changes,
+        );
+      }
     },
   },
   {
