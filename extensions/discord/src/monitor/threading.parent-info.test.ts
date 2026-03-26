@@ -8,8 +8,7 @@ vi.mock("@buape/carbon", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@buape/carbon")>();
   return {
     ...actual,
-    ChannelType: {
-      ...actual?.ChannelType,
+    ChannelType: actual?.ChannelType ?? {
       GuildText: 0,
       GuildForum: 15,
       GuildMedia: 16,
