@@ -130,6 +130,19 @@ describe("web_fetch SSRF protection", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("allows RFC 2544 benchmark range IPs (198.18.0.0/15) used by DNS proxy tools", async () => {
+    lookupMock.mockResolvedValue([{ address: "198.18.1.5", family: 4 }]);
+
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = await createWebFetchToolForTest();
+
+    const result = await tool?.execute?.("call", { url: "https://example.com" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+  });
+
   it("allows public hosts", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
