@@ -258,6 +258,24 @@
           }
         },
         {
+          "declaration": "export type CliBackendConfig = CliBackendConfig;",
+          "exportName": "CliBackendConfig",
+          "kind": "type",
+          "source": {
+            "line": 47,
+            "path": "src/config/types.agent-defaults.ts"
+          }
+        },
+        {
+          "declaration": "export type CliBackendPlugin = CliBackendPlugin;",
+          "exportName": "CliBackendPlugin",
+          "kind": "type",
+          "source": {
+            "line": 1292,
+            "path": "src/plugins/types.ts"
+          }
+        },
+        {
           "declaration": "export type CompiledConfiguredBinding = CompiledConfiguredBinding;",
           "exportName": "CompiledConfiguredBinding",
           "kind": "type",
@@ -415,7 +433,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1314,
+            "line": 1336,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3414,7 +3432,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1314,
+            "line": 1336,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3441,7 +3459,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1296,
+            "line": 1318,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3920,7 +3938,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1314,
+            "line": 1336,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3947,7 +3965,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1296,
+            "line": 1318,
             "path": "src/plugins/types.ts"
           }
         },

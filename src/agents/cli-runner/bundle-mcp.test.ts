@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("prepareCliBundleMcpConfig", () => {
-  it("injects a merged --mcp-config overlay for claude-cli", async () => {
+  it("injects a merged --mcp-config overlay for bundle-MCP-enabled backends", async () => {
     const env = captureEnv(["HOME"]);
     try {
       const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-home-");
@@ -33,7 +33,7 @@ describe("prepareCliBundleMcpConfig", () => {
       };
 
       const prepared = await prepareCliBundleMcpConfig({
-        backendId: "claude-cli",
+        enabled: true,
         backend: {
           command: "node",
           args: ["./fake-claude.mjs"],
@@ -56,5 +56,19 @@ describe("prepareCliBundleMcpConfig", () => {
     } finally {
       env.restore();
     }
+  });
+
+  it("leaves args untouched when bundle MCP is disabled", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: false,
+      backend: {
+        command: "node",
+        args: ["./fake-cli.mjs"],
+      },
+      workspaceDir: "/tmp/openclaw-bundle-mcp-disabled",
+    });
+
+    expect(prepared.backend.args).toEqual(["./fake-cli.mjs"]);
+    expect(prepared.cleanup).toBeUndefined();
   });
 });
