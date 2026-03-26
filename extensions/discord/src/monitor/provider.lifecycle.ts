@@ -18,6 +18,27 @@ type ExecApprovalsHandler = {
 
 const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
+const DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
+const DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
+
+type GatewaySocketListener = (...args: unknown[]) => void;
+
+type DiscordGatewaySocket = {
+  on: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
+  listeners: (event: "close" | "error") => GatewaySocketListener[];
+  removeListener: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
+  terminate?: () => void;
+};
+
+type MutableGateway = GatewayPlugin & {
+  state?: {
+    sessionId?: string | null;
+    resumeGatewayUrl?: string | null;
+    sequence?: number | null;
+  };
+  sequence?: number | null;
+  ws?: DiscordGatewaySocket | null;
+};
 
 type GatewayReadyWaitResult = "ready" | "timeout" | "stopped";
 
@@ -163,16 +184,7 @@ export async function runDiscordGatewayLifecycle(params: {
     return Number.isFinite(code) ? code : undefined;
   };
   const clearResumeState = () => {
-    const mutableGateway = gateway as
-      | (GatewayPlugin & {
-          state?: {
-            sessionId?: string | null;
-            resumeGatewayUrl?: string | null;
-            sequence?: number | null;
-          };
-          sequence?: number | null;
-        })
-      | undefined;
+    const mutableGateway = gateway as MutableGateway | undefined;
     if (!mutableGateway?.state) {
       return;
     }
@@ -180,6 +192,182 @@ export async function runDiscordGatewayLifecycle(params: {
     mutableGateway.state.resumeGatewayUrl = null;
     mutableGateway.state.sequence = null;
     mutableGateway.sequence = null;
+  };
+  const disconnectGatewaySocketWithoutAutoReconnect = async () => {
+    if (!gateway) {
+      return;
+    }
+    const mutableGateway = gateway as MutableGateway;
+    const socket = mutableGateway.ws;
+    if (!socket) {
+      gateway.disconnect();
+      return;
+    }
+
+    // Carbon reconnects from the socket close handler even for intentional
+    // disconnects. Drop the current socket's close/error listeners so a forced
+    // reconnect does not race the old socket's automatic resume path.
+    for (const listener of socket.listeners("close")) {
+      socket.removeListener("close", listener);
+    }
+    for (const listener of socket.listeners("error")) {
+      socket.removeListener("error", listener);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+      let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
+      const ignoreSocketError = () => {};
+      const shouldStopWaiting = () => lifecycleStopping || params.abortSignal?.aborted;
+      const clearPendingTimers = () => {
+        if (drainTimeout) {
+          clearTimeout(drainTimeout);
+          drainTimeout = undefined;
+        }
+        if (terminateCloseTimeout) {
+          clearTimeout(terminateCloseTimeout);
+          terminateCloseTimeout = undefined;
+        }
+      };
+      const cleanup = () => {
+        clearPendingTimers();
+        socket.removeListener("close", onClose);
+        socket.removeListener("error", ignoreSocketError);
+      };
+      const onClose = () => {
+        cleanup();
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve();
+      };
+      const resolveStoppedWait = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearPendingTimers();
+
+        // Keep suppressing late ws errors until the socket actually closes.
+        // The original Carbon listeners were removed above, and `terminate()`
+        // can still asynchronously emit "error" before "close".
+        resolve();
+      };
+      const rejectClose = (error: Error) => {
+        if (shouldStopWaiting()) {
+          resolveStoppedWait();
+          return;
+        }
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearPendingTimers();
+
+        // Keep suppressing late ws errors until the socket actually closes.
+        // The original Carbon listeners were removed above, and `terminate()`
+        // can still asynchronously emit "error" before "close".
+        reject(error);
+      };
+
+      drainTimeout = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        if (shouldStopWaiting()) {
+          resolveStoppedWait();
+          return;
+        }
+        params.runtime.error?.(
+          danger(
+            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; attempting forced terminate before giving up`,
+          ),
+        );
+
+        let terminateStarted = false;
+        try {
+          if (typeof socket.terminate === "function") {
+            socket.terminate();
+            terminateStarted = true;
+          }
+        } catch {
+          // Best-effort only. If terminate fails, fail closed instead of
+          // opening another socket on top of an unknown old one.
+        }
+
+        if (!terminateStarted) {
+          params.runtime.error?.(
+            danger(
+              `discord: gateway socket did not expose a working terminate() after ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms; force-stopping instead of opening a parallel socket`,
+            ),
+          );
+          rejectClose(
+            new Error(
+              `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
+            ),
+          );
+          return;
+        }
+
+        terminateCloseTimeout = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          if (shouldStopWaiting()) {
+            resolveStoppedWait();
+            return;
+          }
+          params.runtime.error?.(
+            danger(
+              `discord: gateway socket did not close ${DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS}ms after forced terminate; force-stopping instead of opening a parallel socket`,
+            ),
+          );
+          rejectClose(
+            new Error(
+              `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
+            ),
+          );
+        }, DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS);
+        terminateCloseTimeout.unref?.();
+      }, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
+      drainTimeout.unref?.();
+      socket.on("error", ignoreSocketError);
+      socket.on("close", onClose);
+      gateway.disconnect();
+    });
+  };
+  let reconnectInFlight: Promise<void> | undefined;
+  const reconnectGateway = async (reconnectParams: {
+    resume: boolean;
+    forceFreshIdentify?: boolean;
+  }) => {
+    if (reconnectInFlight) {
+      return await reconnectInFlight;
+    }
+    reconnectInFlight = (async () => {
+      if (reconnectParams.forceFreshIdentify) {
+        // Carbon still sends RESUME on HELLO when session state is populated,
+        // even after connect(false). Clear cached session data first so this
+        // path truly forces a fresh IDENTIFY.
+        clearResumeState();
+      }
+      if (lifecycleStopping || params.abortSignal?.aborted) {
+        return;
+      }
+      await disconnectGatewaySocketWithoutAutoReconnect();
+      if (lifecycleStopping || params.abortSignal?.aborted) {
+        return;
+      }
+      gateway?.connect(reconnectParams.resume);
+    })().finally(() => {
+      reconnectInFlight = undefined;
+    });
+    return await reconnectInFlight;
+  };
+  const reconnectGatewayFresh = async () => {
+    await reconnectGateway({ resume: false, forceFreshIdentify: true });
   };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
@@ -234,40 +422,55 @@ export async function runDiscordGatewayLifecycle(params: {
     }, HELLO_CONNECTED_POLL_MS);
 
     helloTimeoutId = setTimeout(() => {
-      if (helloConnectedPollId) {
-        clearInterval(helloConnectedPollId);
-        helloConnectedPollId = undefined;
-      }
-      if (sawConnected || gateway?.isConnected) {
-        resetHelloStallCounter();
-      } else {
-        consecutiveHelloStalls += 1;
-        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
-        const stalledAt = Date.now();
-        reconnectStallWatchdog.arm(stalledAt);
-        pushStatus({
-          connected: false,
-          lastEventAt: stalledAt,
-          lastDisconnect: {
-            at: stalledAt,
-            error: "hello-timeout",
-          },
-        });
-        params.runtime.log?.(
-          danger(
-            forceFreshIdentify
-              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
-              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
-          ),
-        );
-        if (forceFreshIdentify) {
-          clearResumeState();
-          resetHelloStallCounter();
-        }
-        gateway?.disconnect();
-        gateway?.connect(!forceFreshIdentify);
-      }
       helloTimeoutId = undefined;
+      void (async () => {
+        try {
+          if (helloConnectedPollId) {
+            clearInterval(helloConnectedPollId);
+            helloConnectedPollId = undefined;
+          }
+          if (sawConnected || gateway?.isConnected) {
+            resetHelloStallCounter();
+            return;
+          }
+
+          consecutiveHelloStalls += 1;
+          const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
+          const stalledAt = Date.now();
+          reconnectStallWatchdog.arm(stalledAt);
+          pushStatus({
+            connected: false,
+            lastEventAt: stalledAt,
+            lastDisconnect: {
+              at: stalledAt,
+              error: "hello-timeout",
+            },
+          });
+          params.runtime.log?.(
+            danger(
+              forceFreshIdentify
+                ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
+                : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
+            ),
+          );
+          if (forceFreshIdentify) {
+            resetHelloStallCounter();
+          }
+          if (lifecycleStopping || params.abortSignal?.aborted) {
+            return;
+          }
+          if (forceFreshIdentify) {
+            await reconnectGatewayFresh();
+            return;
+          }
+          await reconnectGateway({ resume: true });
+        } catch (err) {
+          params.runtime.error?.(
+            danger(`discord: failed to restart stalled gateway socket: ${String(err)}`),
+          );
+          triggerForceStop(err);
+        }
+      })();
     }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
@@ -336,8 +539,7 @@ export async function runDiscordGatewayLifecycle(params: {
             error: "startup-not-ready",
           },
         });
-        gateway?.disconnect();
-        gateway?.connect(false);
+        await reconnectGatewayFresh();
         const reconnected = await waitForDiscordGatewayReady({
           gateway,
           abortSignal: params.abortSignal,
