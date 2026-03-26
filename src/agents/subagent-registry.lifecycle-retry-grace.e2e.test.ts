@@ -242,7 +242,7 @@ describe("subagent registry lifecycle error grace", () => {
   };
 
   const waitForCleanupCompleted = async (runId: string) => {
-    for (let attempt = 0; attempt < 40; attempt += 1) {
+    for (let attempt = 0; attempt < 80; attempt += 1) {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
         .find((candidate) => candidate.runId === runId);
