@@ -21,6 +21,10 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
+type DiscordGatewayWebSocketCtor = new (
+  url: string,
+  options?: { agent?: unknown },
+) => ws.WebSocket;
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
@@ -233,7 +237,7 @@ function createGatewayPlugin(params: {
       plugin: carbonGateway.GatewayPlugin,
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) => Promise<void>;
-    webSocketCtor?: new (url: string, options?: { agent?: unknown }) => unknown;
+    webSocketCtor?: DiscordGatewayWebSocketCtor;
   };
 }): carbonGateway.GatewayPlugin {
   class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
@@ -286,7 +290,7 @@ export function createDiscordGatewayPlugin(params: {
     HttpsProxyAgentCtor?: typeof httpsProxyAgent.HttpsProxyAgent;
     ProxyAgentCtor?: typeof undici.ProxyAgent;
     undiciFetch?: typeof undici.fetch;
-    webSocketCtor?: new (url: string, options?: { agent?: unknown }) => unknown;
+    webSocketCtor?: DiscordGatewayWebSocketCtor;
     registerClient?: (
       plugin: carbonGateway.GatewayPlugin,
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
