@@ -905,8 +905,10 @@ async function agentCommandInternal(
       });
     }
 
-    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot ||
+      (sessionEntry?.skillsSnapshot?.snapshotVersion !== undefined &&
+       sessionEntry.skillsSnapshot.snapshotVersion < skillsSnapshotVersion);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
