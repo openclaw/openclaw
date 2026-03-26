@@ -58,7 +58,7 @@ describe("speech provider registry", () => {
 
     const providers = listSpeechProviders();
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openai", "elevenlabs", "microsoft"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -76,22 +76,14 @@ describe("speech provider registry", () => {
 
     const cfg = {} as OpenClawConfig;
 
-    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual([
-      "openai",
-      "elevenlabs",
-      "microsoft",
-    ]);
+    expect(listSpeechProviders(cfg).map((provider) => provider.id)).toEqual(["microsoft"]);
     expect(getSpeechProvider("edge", cfg)?.id).toBe("microsoft");
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({ config: cfg });
   });
 
-  it("returns builtin providers when neither plugins nor active registry provide speech support", () => {
-    expect(listSpeechProviders().map((provider) => provider.id)).toEqual([
-      "openai",
-      "elevenlabs",
-      "microsoft",
-    ]);
-    expect(getSpeechProvider("openai")?.id).toBe("openai");
+  it("returns no providers when neither plugins nor active registry provide speech support", () => {
+    expect(listSpeechProviders()).toEqual([]);
+    expect(getSpeechProvider("openai")).toBeUndefined();
   });
 
   it("normalizes the legacy edge alias to microsoft", () => {

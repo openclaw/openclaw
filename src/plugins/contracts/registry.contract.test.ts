@@ -120,6 +120,53 @@ describe("plugin contract registry", () => {
     expect(providerContractPluginIds).toEqual(bundledProviderPluginIds);
   });
 
+  it("covers every bundled speech plugin discovered from manifests", () => {
+    const bundledSpeechPluginIds = loadPluginManifestRegistry({})
+      .plugins.filter(
+        (plugin) => plugin.origin === "bundled" && (plugin.speechProviders?.length ?? 0) > 0,
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      [...new Set(speechProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
+        (left, right) => left.localeCompare(right),
+      ),
+    ).toEqual(bundledSpeechPluginIds);
+  });
+
+  it("covers every bundled media-understanding plugin discovered from manifests", () => {
+    const bundledMediaPluginIds = loadPluginManifestRegistry({})
+      .plugins.filter(
+        (plugin) =>
+          plugin.origin === "bundled" && (plugin.mediaUnderstandingProviders?.length ?? 0) > 0,
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      [
+        ...new Set(mediaUnderstandingProviderContractRegistry.map((entry) => entry.pluginId)),
+      ].toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(bundledMediaPluginIds);
+  });
+
+  it("covers every bundled image-generation plugin discovered from manifests", () => {
+    const bundledImagePluginIds = loadPluginManifestRegistry({})
+      .plugins.filter(
+        (plugin) =>
+          plugin.origin === "bundled" && (plugin.imageGenerationProviders?.length ?? 0) > 0,
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    expect(
+      [...new Set(imageGenerationProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
+        (left, right) => left.localeCompare(right),
+      ),
+    ).toEqual(bundledImagePluginIds);
+  });
+
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
 

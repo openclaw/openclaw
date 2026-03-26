@@ -7,6 +7,7 @@ export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 import { Type } from "@sinclair/typebox";
 import type { TSchema } from "@sinclair/typebox";
 import { stringEnum } from "../agents/schema/typebox.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 
 /** Schema helper for channels that expose button rows on the shared `message` tool. */
 export function createMessageToolButtonsSchema(): TSchema {
