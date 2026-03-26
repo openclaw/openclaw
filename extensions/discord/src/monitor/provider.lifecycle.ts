@@ -271,6 +271,16 @@ export async function runDiscordGatewayLifecycle(params: {
     }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
+  const onGatewayEmitterError = (err: unknown) => {
+    // Safety net: absorb errors emitted on the gateway emitter so they do not
+    // propagate as an uncaught process exception. A Node.js EventEmitter throws
+    // on an unhandled "error" event, which would crash the entire gateway and
+    // take down all channels — not just Discord. Log the error here; the
+    // gateway supervisor routes classifiable errors through the lifecycle
+    // handler separately.
+    params.runtime.error?.(danger(`discord: caught gateway emitter error: ${String(err)}`));
+  };
+  gatewayEmitter?.on("error", onGatewayEmitterError);
 
   let sawDisallowedIntents = false;
   const handleGatewayEvent = (event: DiscordGatewayEvent): "continue" | "stop" => {
@@ -413,6 +423,7 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    gatewayEmitter?.removeListener("error", onGatewayEmitterError);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();
