@@ -362,11 +362,21 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("force-terminates stale sockets and continues reconnecting after drain timeout", async () => {
+  it("waits for forced terminate to close the old socket before reconnecting", async () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const socket = Object.assign(new EventEmitter(), { terminate: vi.fn() });
+      const socket = Object.assign(new EventEmitter(), {
+        terminate: vi.fn(() => {
+          setTimeout(() => {
+            socket.emit(
+              "error",
+              new Error("WebSocket was closed before the connection was established"),
+            );
+            socket.emit("close", 1006, "");
+          }, 1);
+        }),
+      });
       const { emitter, gateway } = createGatewayHarness({ ws: socket });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
       gateway.connect.mockImplementation((_resume?: boolean) => {
@@ -377,15 +387,64 @@ describe("runDiscordGatewayLifecycle", () => {
 
       const { lifecycleParams, runtimeError } = createLifecycleHarness({ gateway });
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_000);
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_500);
       await expect(lifecyclePromise).resolves.toBeUndefined();
 
       expect(socket.terminate).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledWith(false);
       expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("attempting forced terminate and reconnect"),
+        expect.stringContaining("attempting forced terminate before giving up"),
       );
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when forced terminate still does not close the old socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = Object.assign(new EventEmitter(), {
+        terminate: vi.fn(() => {
+          setTimeout(() => {
+            socket.emit(
+              "error",
+              new Error("WebSocket was closed before the connection was established"),
+            );
+          }, 1);
+        }),
+      });
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
+        createLifecycleHarness({ gateway });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      lifecyclePromise.catch(() => {});
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_500);
+      await expect(lifecyclePromise).rejects.toThrow(
+        "discord gateway socket did not close within 5000ms before reconnect",
+      );
+
+      expect(socket.terminate).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("force-stopping instead of opening a parallel socket"),
+      );
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("WebSocket was closed before the connection was established"),
+      );
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 0,
+        gatewaySupervisor,
+      });
     } finally {
       vi.useRealTimers();
     }

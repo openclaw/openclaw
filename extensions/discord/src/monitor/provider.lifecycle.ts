@@ -19,6 +19,7 @@ type ExecApprovalsHandler = {
 const DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DISCORD_GATEWAY_READY_POLL_MS = 250;
 const DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
+const DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 
 type GatewaySocketListener = (...args: unknown[]) => void;
 
@@ -213,44 +214,104 @@ export async function runDiscordGatewayLifecycle(params: {
       socket.removeListener("error", listener);
     }
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
+      let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+      let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
       const ignoreSocketError = () => {};
       const cleanup = () => {
+        if (drainTimeout) {
+          clearTimeout(drainTimeout);
+          drainTimeout = undefined;
+        }
+        if (terminateCloseTimeout) {
+          clearTimeout(terminateCloseTimeout);
+          terminateCloseTimeout = undefined;
+        }
         socket.removeListener("close", onClose);
         socket.removeListener("error", ignoreSocketError);
       };
-      const resolveClose = () => {
+      const onClose = () => {
+        cleanup();
         if (settled) {
-          cleanup();
           return;
         }
         settled = true;
-        clearTimeout(timeout);
-        cleanup();
         resolve();
       };
-      const onClose = () => {
-        resolveClose();
+      const rejectClose = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (drainTimeout) {
+          clearTimeout(drainTimeout);
+          drainTimeout = undefined;
+        }
+        if (terminateCloseTimeout) {
+          clearTimeout(terminateCloseTimeout);
+          terminateCloseTimeout = undefined;
+        }
+
+        // Keep suppressing late ws errors until the socket actually closes.
+        // The original Carbon listeners were removed above, and `terminate()`
+        // can still asynchronously emit "error" before "close".
+        reject(error);
       };
-      const timeout = setTimeout(() => {
+
+      drainTimeout = setTimeout(() => {
         if (settled) {
           return;
         }
         params.runtime.error?.(
           danger(
-            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; attempting forced terminate and reconnect`,
+            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; attempting forced terminate before giving up`,
           ),
         );
+
+        let terminateStarted = false;
         try {
-          socket.terminate?.();
+          if (typeof socket.terminate === "function") {
+            socket.terminate();
+            terminateStarted = true;
+          }
         } catch {
-          // Best-effort only: if terminate is unavailable or fails, continue
-          // with the reconnect attempt rather than hard-stopping the monitor.
+          // Best-effort only. If terminate fails, fail closed instead of
+          // opening another socket on top of an unknown old one.
         }
-        resolveClose();
+
+        if (!terminateStarted) {
+          params.runtime.error?.(
+            danger(
+              `discord: gateway socket did not expose a working terminate() after ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms; force-stopping instead of opening a parallel socket`,
+            ),
+          );
+          rejectClose(
+            new Error(
+              `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
+            ),
+          );
+          return;
+        }
+
+        terminateCloseTimeout = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          params.runtime.error?.(
+            danger(
+              `discord: gateway socket did not close ${DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS}ms after forced terminate; force-stopping instead of opening a parallel socket`,
+            ),
+          );
+          rejectClose(
+            new Error(
+              `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
+            ),
+          );
+        }, DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS);
+        terminateCloseTimeout.unref?.();
       }, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
-      timeout.unref?.();
+      drainTimeout.unref?.();
       socket.on("error", ignoreSocketError);
       socket.on("close", onClose);
       gateway.disconnect();
