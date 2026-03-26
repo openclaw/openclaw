@@ -57,6 +57,7 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("getMessageFeishu", () => {
@@ -67,6 +68,7 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendCardFeishu,
       sendMessageFeishu,
     } = await import("./send.js"));
   });
@@ -393,6 +395,40 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+  });
+
+  it("rejects empty card edits before patching", async () => {
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_card",
+        card: {},
+      }),
+    ).rejects.toThrow("Feishu edit card payload cannot be empty.");
+
+    expect(mockClientPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendCardFeishu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+    });
+  });
+
+  it("rejects empty cards before resolving the Feishu target", async () => {
+    await expect(
+      sendCardFeishu({
+        cfg: {} as ClawdbotConfig,
+        to: "chat:oc_group_1",
+        card: {},
+      }),
+    ).rejects.toThrow("Feishu card payload cannot be empty.");
+
+    expect(mockCreateFeishuClient).not.toHaveBeenCalled();
   });
 });
 
