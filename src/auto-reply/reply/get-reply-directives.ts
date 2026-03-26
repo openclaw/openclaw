@@ -252,6 +252,8 @@ export async function resolveReplyDirectives(params: {
       parsedDirectives = clearExecInlineDirectives(parsedDirectives);
     }
   }
+  // Queue directives are intentionally excluded here: /queue <mode> <prompt> is always
+  // paired with content, so they must survive the "directive with trailing text" clearing below.
   const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
@@ -259,8 +261,15 @@ export async function resolveReplyDirectives(params: {
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
     parsedDirectives.hasExecDirective ||
-    parsedDirectives.hasModelDirective ||
-    parsedDirectives.hasQueueDirective;
+    parsedDirectives.hasModelDirective;
+  // Save queue state before the clearing block so it can be restored if other directives
+  // triggered the clear path.
+  const savedQueueDirective = parsedDirectives.hasQueueDirective;
+  const savedQueueMode = parsedDirectives.queueMode;
+  const savedQueueReset = parsedDirectives.queueReset;
+  const savedDropPolicy = parsedDirectives.dropPolicy;
+  const savedDebounceMs = parsedDirectives.debounceMs;
+  const savedCap = parsedDirectives.cap;
   if (hasInlineDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
@@ -277,6 +286,18 @@ export async function resolveReplyDirectives(params: {
               hasStatusDirective: true,
             }
           : clearInlineDirectives(parsedDirectives.cleaned);
+        // Restore queue directives — they are designed to accompany a prompt, not standalone.
+        if (savedQueueDirective) {
+          parsedDirectives = {
+            ...parsedDirectives,
+            hasQueueDirective: savedQueueDirective,
+            queueMode: savedQueueMode,
+            queueReset: savedQueueReset,
+            dropPolicy: savedDropPolicy,
+            debounceMs: savedDebounceMs,
+            cap: savedCap,
+          };
+        }
       }
     }
   }
