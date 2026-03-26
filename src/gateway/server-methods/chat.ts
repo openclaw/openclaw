@@ -1514,6 +1514,17 @@ export const chatHandlers: GatewayRequestHandlers = {
             ? buildModelAliasIndex({ cfg, defaultProvider: imageModelProvider })
             : aliasIndex;
 
+        // Normalize imageModelPrimary to full provider/model format using the inferred imageModelProvider.
+        // This ensures providerless primaries like "gpt-4o" are resolved against the correct provider
+        // (from fallback chain inference) instead of the agent default provider.
+        // For example, with imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"] },
+        // imageModelProvider would be "openai" and resolvedImageModelPrimary would be "openai/gpt-4o".
+        const resolvedImageModelPrimary = primaryHasProvider
+          ? imageModelPrimary
+          : imageModelProvider
+            ? modelKey(imageModelProvider, imageModelPrimary.trim())
+            : imageModelPrimary;
+
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
         const sessionModelOverride = entry?.modelOverride;
@@ -1584,7 +1595,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           } else if (storedModelIsImageModel && !storedModelInAllowlist) {
             // User's stored model is an image model but NOT in allowlist
             // The stored model will be cleared anyway, switch to configured imageModel
-            imageModelOverride = imageModelPrimary;
+            imageModelOverride = resolvedImageModelPrimary;
             if (effectiveImageModelFallbacks.length > 0) {
               const filtered = filterFallbacksByAllowlist({
                 fallbacks: effectiveImageModelFallbacks,
@@ -1610,7 +1621,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           } else {
             // User's stored model is not an image model
             // Switch to imageModel
-            imageModelOverride = imageModelPrimary;
+            imageModelOverride = resolvedImageModelPrimary;
             if (effectiveImageModelFallbacks.length > 0) {
               const filtered = filterFallbacksByAllowlist({
                 fallbacks: effectiveImageModelFallbacks,
@@ -1636,7 +1647,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
         } else {
           // No stored override, switch to imageModel
-          imageModelOverride = imageModelPrimary;
+          imageModelOverride = resolvedImageModelPrimary;
           // Filter fallbacks against agent allowlist
           if (effectiveImageModelFallbacks.length > 0) {
             const filtered = filterFallbacksByAllowlist({
