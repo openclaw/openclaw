@@ -870,8 +870,11 @@ export async function runEmbeddedPiAgent(
       const contextEngine = await resolveContextEngine(params.config);
       // Reuse MCP runtime across turns within the same session so stateful MCP servers
       // (e.g. patchright browser) stay alive between message turns.
-      const mcpCacheKey = params.sessionId;
-      let sharedMcpRuntime = sessionMcpRuntimes.get(mcpCacheKey);
+      // Skip caching for ephemeral callers (probe sessions, slug-generator, etc.) that
+      // never call disposeSessionMcpRuntime — caching them would leak runtimes indefinitely.
+      const isEphemeralSession = isProbeSession || params.sessionId.startsWith("slug-generator-");
+      const mcpCacheKey = isEphemeralSession ? null : params.sessionId;
+      let sharedMcpRuntime = mcpCacheKey ? sessionMcpRuntimes.get(mcpCacheKey) : undefined;
       if (!sharedMcpRuntime) {
         // Note: reservedToolNames (built-in tool names) are not passed here because
         // the built-in tool list is assembled later in attempt.ts and varies per attempt.
@@ -881,7 +884,9 @@ export async function runEmbeddedPiAgent(
           workspaceDir: resolvedWorkspace,
           cfg: params.config,
         });
-        sessionMcpRuntimes.set(mcpCacheKey, sharedMcpRuntime);
+        if (mcpCacheKey) {
+          sessionMcpRuntimes.set(mcpCacheKey, sharedMcpRuntime);
+        }
       }
       try {
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
@@ -1900,8 +1905,12 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         await contextEngine.dispose?.();
-        // sharedMcpRuntime is kept alive in sessionMcpRuntimes cache across turns.
-        // It is disposed by disposeSessionMcpRuntime() on /new or /reset, or when the process exits.
+        // Cached runtimes (mcpCacheKey !== null) are kept alive across turns and disposed
+        // by disposeSessionMcpRuntime() on /new or /reset, or when the process exits.
+        // Uncached (ephemeral) runtimes must be disposed here to avoid resource leaks.
+        if (!mcpCacheKey) {
+          await sharedMcpRuntime.dispose().catch(() => {});
+        }
         stopRuntimeAuthRefreshTimer();
       }
     }),

@@ -319,6 +319,12 @@ export class PersistentMcpManager {
       const pid = transport.pid ?? null;
       handle.pid = pid;
       handle.state = "ready";
+      // Clear startPromise so getReadyClient() uses the state check path after
+      // startup, not the "await in-flight start" path. Without this, a handle
+      // that transitions to "failed" (e.g. transport disconnect) would keep a
+      // settled startPromise and getReadyClient() would return null forever
+      // instead of triggering a lazy reconnect.
+      handle.startPromise = null;
 
       if (pid !== null && pid > 0) {
         const starttime = getProcessStartTime(pid) ?? undefined;
@@ -335,6 +341,7 @@ export class PersistentMcpManager {
       );
     } catch (err) {
       handle.state = "failed";
+      handle.startPromise = null;
       handle.detachStderr?.();
       await client.close().catch(() => {});
       await transport.close().catch(() => {});
