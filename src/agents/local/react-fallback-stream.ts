@@ -234,6 +234,7 @@ export function wrapStreamFnWithReActFallback(
             model: model,
             providerId: config.providerId,
             configDir,
+            options,
           }),
         );
       }

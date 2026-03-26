@@ -10,8 +10,10 @@ export async function runBackgroundCapabilityProbe(params: {
   model: unknown;
   providerId: string;
   configDir: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  options?: any; // Propagate AbortSignal and other request options
 }): Promise<void> {
-  const { streamFn, model, providerId, configDir } = params;
+  const { streamFn, model, providerId, configDir, options } = params;
   const modelId = (model as Record<string, unknown>).id as string;
 
   try {
@@ -45,7 +47,7 @@ export async function runBackgroundCapabilityProbe(params: {
       model as any,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       context as unknown as any,
-      {},
+      options || {},
     );
 
     let finalStatus: CapabilityStatus = "unknown";
