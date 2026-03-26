@@ -8541,6 +8541,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.bluebubbles.accounts.*.enrichGroupParticipantsFromContacts",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -9073,6 +9083,16 @@
     },
     {
       "path": "channels.bluebubbles.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.enrichGroupParticipantsFromContacts",
       "kind": "channel",
       "type": "boolean",
       "required": false,
