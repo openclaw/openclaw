@@ -4,7 +4,6 @@ import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
-  readQwenCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
