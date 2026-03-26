@@ -977,6 +977,7 @@
                   "channels/googlechat",
                   "channels/imessage",
                   "channels/irc",
+                  "channels/kudosity-sms",
                   "channels/line",
                   "channels/matrix",
                   "channels/mattermost",

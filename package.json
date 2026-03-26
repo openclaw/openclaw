@@ -529,6 +529,10 @@
       "types": "./dist/plugin-sdk/keyed-async-queue.d.ts",
       "default": "./dist/plugin-sdk/keyed-async-queue.js"
     },
+    "./plugin-sdk/kudosity-sms": {
+      "types": "./dist/plugin-sdk/kudosity-sms.d.ts",
+      "default": "./dist/plugin-sdk/kudosity-sms.js"
+    },
     "./plugin-sdk/line": {
       "types": "./dist/plugin-sdk/line.d.ts",
       "default": "./dist/plugin-sdk/line.js"
