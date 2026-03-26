@@ -1572,6 +1572,57 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
   });
 
+  it("preserves valid tool arguments when a closing delta completes valid JSON", async () => {
+    const parsedArgs = { path: "/tmp/report.txt" };
+    const partialToolCall = { type: "toolCall", name: "read", arguments: parsedArgs };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: parsedArgs };
+    const endMessageToolCall = { type: "toolCall", name: "read", arguments: parsedArgs };
+    const finalToolCall = { type: "toolCall", name: "read", arguments: parsedArgs };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"',
+            partial: partialMessage,
+            message: finalMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+            message: finalMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual(parsedArgs);
+    expect(streamedToolCall.arguments).toEqual(parsedArgs);
+    expect(endMessageToolCall.arguments).toEqual(parsedArgs);
+    expect(finalToolCall.arguments).toEqual(parsedArgs);
+    expect(result).toBe(finalMessage);
+  });
+
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
     const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
     const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };

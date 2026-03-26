@@ -1145,6 +1145,15 @@ type ToolCallArgumentRepair = {
   trailingSuffix: string;
 };
 
+function isValidJsonObject(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
 function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
@@ -1298,7 +1307,8 @@ function wrapStreamRepairMalformedToolCallArguments(
                       `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
-                } else {
+                } else if (!isValidJsonObject(nextPartialJson)) {
+                  // Leave already-parsed arguments intact when the accumulated JSON is valid.
                   repairedArgsByIndex.delete(event.contentIndex);
                   clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
                   clearToolCallArgumentsInMessage(event.message, event.contentIndex);
