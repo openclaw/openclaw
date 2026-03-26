@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
 import plugin, {
@@ -52,25 +53,16 @@ describe("buildPromptSection", () => {
 });
 
 describe("plugin registration", () => {
-  it("registers memory tools independently so one unavailable tool does not suppress the other", () => {
+  it("registers memory tools + cli through extension-local modules", () => {
     const registerTool = vi.fn();
     const registerMemoryPromptSection = vi.fn();
     const registerMemoryFlushPlan = vi.fn();
     const registerCli = vi.fn();
-    const searchTool = { name: "memory_search" };
-    const getTool = null;
     const api = {
       registerTool,
       registerMemoryPromptSection,
       registerMemoryFlushPlan,
       registerCli,
-      runtime: {
-        tools: {
-          createMemorySearchTool: vi.fn(() => searchTool),
-          createMemoryGetTool: vi.fn(() => getTool),
-          registerMemoryCli: vi.fn(),
-        },
-      },
     };
 
     plugin.register(api as never);
@@ -80,15 +72,30 @@ describe("plugin registration", () => {
     expect(registerTool).toHaveBeenCalledTimes(2);
     expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
     expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+      descriptors: [
+        {
+          name: "memory",
+          description: "Search, inspect, and reindex memory files",
+          hasSubcommands: true,
+        },
+      ],
+    });
 
     const searchFactory = registerTool.mock.calls[0]?.[0] as
       | ((ctx: unknown) => unknown)
       | undefined;
     const getFactory = registerTool.mock.calls[1]?.[0] as ((ctx: unknown) => unknown) | undefined;
+    const cliRegistrar = registerCli.mock.calls[0]?.[0] as
+      | ((ctx: { program: unknown }) => void)
+      | undefined;
     const ctx = { config: { plugins: {} }, sessionKey: "agent:main:slack:dm:u123" };
+    const program = new Command();
 
-    expect(searchFactory?.(ctx)).toBe(searchTool);
-    expect(getFactory?.(ctx)).toBeNull();
+    expect((searchFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_search");
+    expect((getFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_get");
+    expect(() => cliRegistrar?.({ program } as never)).not.toThrow();
+    expect(program.commands.map((command) => command.name())).toContain("memory");
   });
 });
 

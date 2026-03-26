@@ -37,7 +37,6 @@ describe("tsdown config", () => {
         "agents/auth-profiles.runtime",
         "agents/pi-model-discovery-runtime",
         "index",
-        "cli/memory-cli",
         "commands/status.summary.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
