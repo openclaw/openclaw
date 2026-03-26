@@ -906,18 +906,31 @@ export function resolveGroupToolPolicy(params: {
         groupId: params.groupId,
         accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
         alternateDirectId: undefined,
+        requiresResolvedAccount:
+          params.accountId !== undefined
+            ? true
+            : (sessionContext.requiresResolvedAccount ?? spawnedContext.requiresResolvedAccount),
       }
     : sessionContext.groupId
       ? {
           groupId: sessionContext.groupId,
           accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
           alternateDirectId: sessionContext.alternate?.directId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (sessionContext.requiresResolvedAccount ?? spawnedContext.requiresResolvedAccount),
         }
       : spawnedContext.groupId
         ? {
             groupId: spawnedContext.groupId,
             accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
             alternateDirectId: spawnedContext.alternate?.directId,
+            requiresResolvedAccount:
+              params.accountId !== undefined
+                ? true
+                : (spawnedContext.requiresResolvedAccount ??
+                  sessionContext.requiresResolvedAccount),
           }
         : undefined;
   const preferredScopeKind = params.groupId
@@ -941,6 +954,7 @@ export function resolveGroupToolPolicy(params: {
       ? resolveGroupCandidatePolicy({
           groupId: preferredGroupCandidate.groupId,
           accountId: preferredGroupCandidate.accountId,
+          requiresResolvedAccount: preferredGroupCandidate.requiresResolvedAccount,
         })
       : undefined;
     const bestGroupPolicy = resolveBestGroupPolicy();

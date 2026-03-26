@@ -1027,6 +1027,50 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read"] });
   });
 
+  it("does not let explicit account-scoped group lookups fall through to top-level groups when the account is absent", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        messageProvider: "feishu",
+        groupId: "abc",
+        accountId: "ops",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not let account-scoped group session keys fall through to top-level groups when the account is absent", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:ops:group:abc",
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not cross over from direct parsing into unrelated group policies", () => {
     const cfg = {
       channels: {
