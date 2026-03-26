@@ -27,6 +27,7 @@ import {
   buildCliArgs,
   buildSystemPrompt,
   enqueueCliRun,
+  loadPromptRefImages,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
@@ -222,8 +223,12 @@ export async function runCliAgent(params: {
     let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
       preserveExactPrompt: heartbeatPrompt,
     });
-    if (params.images && params.images.length > 0) {
-      const imagePayload = await writeCliImages(params.images);
+    const resolvedImages =
+      params.images && params.images.length > 0
+        ? params.images
+        : await loadPromptRefImages({ prompt, workspaceDir });
+    if (resolvedImages.length > 0) {
+      const imagePayload = await writeCliImages(resolvedImages);
       imagePaths = imagePayload.paths;
       cleanupImages = imagePayload.cleanup;
       if (!backend.imageArg) {
