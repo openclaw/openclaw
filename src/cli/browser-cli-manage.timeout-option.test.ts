@@ -1,16 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
-import { createBrowserProgram } from "./browser-cli-test-helpers.js";
-import type { CliRuntimeCapture } from "./test-runtime-capture.js";
-
-const runtimeState = vi.hoisted(() => ({ capture: null as CliRuntimeCapture | null }));
-
-function getRuntimeCapture(): CliRuntimeCapture {
-  if (!runtimeState.capture) {
-    throw new Error("runtime capture not initialized");
-  }
-  return runtimeState.capture;
-}
+import { createBrowserProgram, getBrowserCliRuntimeCapture } from "./browser-cli-test-helpers.js";
 
 const mocks = vi.hoisted(() => {
   return {
@@ -36,19 +26,15 @@ vi.mock("./browser-cli-shared.js", () => ({
   callBrowserRequest: mocks.callBrowserRequest,
 }));
 
-vi.mock("./cli-utils.js", () => ({
-  runCommandWithRuntime: async (
-    _runtime: unknown,
-    action: () => Promise<void>,
-    onError: (err: unknown) => void,
-  ) => await action().catch(onError),
+vi.mock("./cli-utils.js", async () => ({
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliUtilsMockModule()),
 }));
 
-vi.mock("../runtime.js", async () => {
-  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
-  runtimeState.capture ??= createCliRuntimeCapture();
-  return { defaultRuntime: runtimeState.capture.defaultRuntime };
-});
+vi.mock(
+  "../runtime.js",
+  async () =>
+    await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule(),
+);
 
 describe("browser manage start timeout option", () => {
   function createProgram() {
@@ -60,7 +46,7 @@ describe("browser manage start timeout option", () => {
 
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
-    getRuntimeCapture().resetRuntimeCapture();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
   it("uses parent --timeout for browser start instead of hardcoded 15s", async () => {
