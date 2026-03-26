@@ -8,13 +8,13 @@ import { updateModelCapability, type CapabilityStatus } from "./capabilities-cac
 export async function runBackgroundCapabilityProbe(params: {
   streamFn: StreamFn;
   model: unknown;
+  modelId: string; // The user-configured model ID (stable key)
   providerId: string;
   configDir: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   options?: any; // Propagate AbortSignal and other request options
 }): Promise<void> {
-  const { streamFn, model, providerId, configDir, options } = params;
-  const modelId = (model as Record<string, unknown>).id as string;
+  const { streamFn, model, modelId, providerId, configDir, options } = params;
 
   try {
     const dummyTools = [

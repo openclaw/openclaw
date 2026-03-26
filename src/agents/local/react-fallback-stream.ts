@@ -233,6 +233,7 @@ export function wrapStreamFnWithReActFallback(
           runBackgroundCapabilityProbe({
             streamFn: nativeStreamFn,
             model: model,
+            modelId: config.modelId,
             providerId: config.providerId,
             configDir,
             options,
