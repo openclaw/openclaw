@@ -58,6 +58,7 @@ export { inspectSlackAccount } from "../../extensions/slack/api.js";
 export { parseSlackTarget, resolveSlackChannelId } from "./slack-targets.js";
 export { extractSlackToolSend, listSlackMessageActions } from "../../extensions/slack/api.js";
 export { buildSlackThreadingToolContext } from "../../extensions/slack/api.js";
+export { resolveSlackAutoThreadId } from "../../extensions/slack/src/action-threading.js";
 export { parseSlackBlocksInput } from "../../extensions/slack/api.js";
 export { handleSlackHttpRequest } from "../../extensions/slack/api.js";
 export { createSlackWebClient } from "../../extensions/slack/src/client.js";
