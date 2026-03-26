@@ -479,11 +479,15 @@ function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
     "input",
     "output",
     "totalTokens",
+    "total_tokens",
     "inputTokens",
+    "prompt_tokens",
     "outputTokens",
+    "completion_tokens",
     "cacheRead",
     "cacheWrite",
     "cache_read_input_tokens",
+    "cached_tokens",
     "cache_creation_input_tokens",
   ];
 
