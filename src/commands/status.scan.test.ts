@@ -1,107 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loggingState } from "../logging/state.js";
 import {
   applyStatusScanDefaults,
-  createStatusGatewayCallModuleMock,
-  createStatusGatewayProbeModuleMock,
   createStatusMemorySearchConfig,
   createStatusMemorySearchManager,
+  createStatusScanSharedMocks,
   createStatusScanConfig,
-  createStatusScanDepsRuntimeModuleMock,
-  createStatusOsSummaryModuleMock,
-  createStatusPluginRegistryModuleMock,
-  createStatusPluginStatusModuleMock,
   createStatusSummary,
+  loadStatusScanModuleForTest,
   withTemporaryEnv,
 } from "./status.scan.test-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  resolveConfigPath: vi.fn(() => `/tmp/openclaw-status-scan-missing-${process.pid}.json`),
-  hasPotentialConfiguredChannels: vi.fn(),
-  readBestEffortConfig: vi.fn(),
-  resolveCommandSecretRefsViaGateway: vi.fn(),
-  getUpdateCheckResult: vi.fn(),
-  getAgentLocalStatuses: vi.fn(),
-  getStatusSummary: vi.fn(),
-  getMemorySearchManager: vi.fn(),
-  buildGatewayConnectionDetails: vi.fn(),
-  probeGateway: vi.fn(),
-  resolveGatewayProbeAuthResolution: vi.fn(),
-  ensurePluginRegistryLoaded: vi.fn(),
-  buildPluginCompatibilityNotices: vi.fn(() => []),
+const mocks = {
+  ...createStatusScanSharedMocks("status-scan"),
   buildChannelsTable: vi.fn(),
   callGateway: vi.fn(),
-}));
+};
 
 let originalForceStderr: boolean;
+let loggingStateRef: typeof import("../logging/state.js").loggingState;
+let scanStatus: typeof import("./status.scan.js").scanStatus;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
-  originalForceStderr = loggingState.forceConsoleToStderr;
-  loggingState.forceConsoleToStderr = false;
   configureScanStatus();
+  ({ scanStatus } = await loadStatusScanModuleForTest(mocks));
+  ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+  originalForceStderr = loggingStateRef.forceConsoleToStderr;
+  loggingStateRef.forceConsoleToStderr = false;
 });
 
 afterEach(() => {
-  loggingState.forceConsoleToStderr = originalForceStderr;
+  loggingStateRef.forceConsoleToStderr = originalForceStderr;
 });
-
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
-}));
-
-vi.mock("../cli/progress.js", () => ({
-  withProgress: vi.fn(async (_opts, run) => await run({ setLabel: vi.fn(), tick: vi.fn() })),
-}));
-
-vi.mock("../config/config.js", () => ({
-  readBestEffortConfig: mocks.readBestEffortConfig,
-}));
-
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    resolveConfigPath: mocks.resolveConfigPath,
-  };
-});
-
-vi.mock("../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
-}));
-
-vi.mock("./status-all/channels.js", () => ({
-  buildChannelsTable: mocks.buildChannelsTable,
-}));
-
-vi.mock("./status.scan.runtime.js", () => ({
-  statusScanRuntime: {
-    buildChannelsTable: mocks.buildChannelsTable,
-    collectChannelStatusIssues: vi.fn(() => []),
-  },
-}));
-
-vi.mock("./status.update.js", () => ({ getUpdateCheckResult: mocks.getUpdateCheckResult }));
-vi.mock("./status.agent-local.js", () => ({ getAgentLocalStatuses: mocks.getAgentLocalStatuses }));
-vi.mock("./status.summary.js", () => ({ getStatusSummary: mocks.getStatusSummary }));
-vi.mock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
-vi.mock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
-vi.mock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
-
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: mocks.probeGateway,
-}));
-
-vi.mock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
-
-vi.mock("../process/exec.js", () => ({
-  runExec: vi.fn(),
-}));
-
-vi.mock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
-vi.mock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
-
-import { scanStatus } from "./status.scan.js";
 
 function configureScanStatus(
   options: {
@@ -272,7 +202,7 @@ describe("scanStatus", () => {
       scope: "configured-channels",
     });
     // Verify plugin logs were routed to stderr during loading and restored after
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ detailLevel: "presence" }),
     );

@@ -88,6 +88,7 @@ function buildTelegramSendOptions(params: {
   threadId?: string | number | null;
   silent?: boolean | null;
   forceDocument?: boolean | null;
+  gatewayClientScopes?: readonly string[] | null;
 }): TelegramSendOptions {
   return {
     verbose: false,
@@ -99,6 +100,9 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
+    ...(Array.isArray(params.gatewayClientScopes)
+      ? { gatewayClientScopes: [...params.gatewayClientScopes] }
+      : {}),
   };
 }
 
@@ -113,6 +117,7 @@ async function sendTelegramOutbound(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
+  gatewayClientScopes?: readonly string[] | null;
 }) {
   const send =
     resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ??
@@ -128,6 +133,7 @@ async function sendTelegramOutbound(params: {
       replyToId: params.replyToId,
       threadId: params.threadId,
       silent: params.silent,
+      gatewayClientScopes: params.gatewayClientScopes,
     }),
   );
 }
@@ -710,6 +716,7 @@ export const telegramPlugin = createChatChannelPlugin({
         threadId,
         silent,
         forceDocument,
+        gatewayClientScopes,
       }) => {
         const send =
           resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
@@ -726,6 +733,7 @@ export const telegramPlugin = createChatChannelPlugin({
             threadId,
             silent,
             forceDocument,
+            gatewayClientScopes,
           }),
         });
         return attachChannelToResult("telegram", result);
@@ -733,7 +741,17 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     attachedResults: {
       channel: "telegram",
-      sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) =>
+      sendText: async ({
+        cfg,
+        to,
+        text,
+        accountId,
+        deps,
+        replyToId,
+        threadId,
+        silent,
+        gatewayClientScopes,
+      }) =>
         await sendTelegramOutbound({
           cfg,
           to,
@@ -743,6 +761,7 @@ export const telegramPlugin = createChatChannelPlugin({
           replyToId,
           threadId,
           silent,
+          gatewayClientScopes,
         }),
       sendMedia: async ({
         cfg,
@@ -755,6 +774,7 @@ export const telegramPlugin = createChatChannelPlugin({
         replyToId,
         threadId,
         silent,
+        gatewayClientScopes,
       }) =>
         await sendTelegramOutbound({
           cfg,
@@ -767,14 +787,25 @@ export const telegramPlugin = createChatChannelPlugin({
           replyToId,
           threadId,
           silent,
+          gatewayClientScopes,
         }),
-      sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, isAnonymous }) =>
+      sendPoll: async ({
+        cfg,
+        to,
+        poll,
+        accountId,
+        threadId,
+        silent,
+        isAnonymous,
+        gatewayClientScopes,
+      }) =>
         await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {
           cfg,
           accountId: accountId ?? undefined,
           messageThreadId: parseTelegramThreadId(threadId),
           silent: silent ?? undefined,
           isAnonymous: isAnonymous ?? undefined,
+          gatewayClientScopes,
         }),
     },
   },

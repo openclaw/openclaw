@@ -133,6 +133,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unknown channel/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
@@ -568,6 +569,43 @@ function dedupeLatestChildCompletionRows(
     }
   }
   return [...latestByChildSessionKey.values()];
+}
+
+function filterCurrentDirectChildCompletionRows(
+  children: Array<{
+    runId: string;
+    childSessionKey: string;
+    requesterSessionKey: string;
+    task: string;
+    label?: string;
+    createdAt: number;
+    endedAt?: number;
+    frozenResultText?: string | null;
+    outcome?: SubagentRunOutcome;
+  }>,
+  params: {
+    requesterSessionKey: string;
+    getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
+      | {
+          runId: string;
+          requesterSessionKey: string;
+        }
+      | null
+      | undefined;
+  },
+) {
+  if (typeof params.getLatestSubagentRunByChildSessionKey !== "function") {
+    return children;
+  }
+  return children.filter((child) => {
+    const latest = params.getLatestSubagentRunByChildSessionKey?.(child.childSessionKey);
+    if (!latest) {
+      return true;
+    }
+    return (
+      latest.runId === child.runId && latest.requesterSessionKey === params.requesterSessionKey
+    );
+  });
 }
 
 function formatDurationShort(valueMs?: number) {
@@ -1418,7 +1456,13 @@ export async function runSubagentAnnounceFlow(params: {
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
           childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(directChildren),
+            dedupeLatestChildCompletionRows(
+              filterCurrentDirectChildCompletionRows(directChildren, {
+                requesterSessionKey: params.childSessionKey,
+                getLatestSubagentRunByChildSessionKey:
+                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+              }),
+            ),
           );
         }
       }

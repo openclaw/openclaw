@@ -7531,6 +7531,16 @@
       "hasChildren": true
     },
     {
+      "path": "auth.profiles.*.displayName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "auth.profiles.*.email",
       "kind": "core",
       "type": "string",
@@ -17107,8 +17117,7 @@
       "path": "channels.feishu.requireMention",
       "kind": "channel",
       "type": "boolean",
-      "required": true,
-      "defaultValue": true,
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -24610,6 +24619,36 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.feedbackEnabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflection",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflectionCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -24640,6 +24679,16 @@
         "allowlist"
       ],
       "defaultValue": "allowlist",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.groupWelcomeCard",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -24784,6 +24833,26 @@
       "path": "channels.msteams.mediaMaxMb",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.promptStarters",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.msteams.promptStarters.*",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25266,6 +25335,16 @@
       "path": "channels.msteams.webhook.port",
       "kind": "channel",
       "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.welcomeCard",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -64599,6 +64678,21 @@
       ],
       "label": "Web Fetch Max Redirects",
       "help": "Maximum redirects allowed for web_fetch (default: 3).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.maxResponseBytes",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Web Fetch Max Download Size (bytes)",
+      "help": "Max download size before truncation.",
       "hasChildren": false
     },
     {
