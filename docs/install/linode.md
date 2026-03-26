@@ -185,7 +185,7 @@ Since the Gateway binds to loopback by default, no additional port rules are nee
 Linode offers automated backups for $2/month on the Nanode plan. Alternatively, back up manually:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
+tar -czvf openclaw-backup.tar.gz ~/.openclaw
 ```
 
 ### Resize
@@ -208,7 +208,7 @@ apt install -y s3cmd
 s3cmd --configure
 
 # Create a backup and upload
-openclaw backup create -o /tmp/openclaw-backup.tar.gz
+openclaw backup create --output /tmp/openclaw-backup.tar.gz
 s3cmd put /tmp/openclaw-backup.tar.gz s3://your-bucket/openclaw/$(date +%F).tar.gz
 ```
 
@@ -274,7 +274,7 @@ These survive reboots. Back them up periodically.
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl -u openclaw --no-pager -n 50
+journalctl --user -u openclaw-gateway.service --no-pager -n 50
 ```
 
 ### Port already in use
