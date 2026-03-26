@@ -158,6 +158,7 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 | ------------------------------------------ | ------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
 
 ### Events and lifecycle
 
