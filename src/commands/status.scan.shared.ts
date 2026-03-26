@@ -123,7 +123,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
-  if (!memoryPlugin.enabled || memoryPlugin.slot !== "memory-core") {
+  if (!memoryPlugin.enabled || !memoryPlugin.slot) {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";

@@ -14,7 +14,11 @@ import { registerPluginCommand, validatePluginCommandDefinition } from "./comman
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import { registerPluginInteractiveHandler } from "./interactive.js";
-import { registerMemoryFlushPlanResolver, registerMemoryPromptSection } from "./memory-state.js";
+import {
+  registerMemoryFlushPlanResolver,
+  registerMemoryPromptSection,
+  registerMemoryRuntime,
+} from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
@@ -1078,6 +1082,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           return;
         }
         registerMemoryFlushPlanResolver(resolver);
+      },
+      registerMemoryRuntime: (runtime) => {
+        if (registrationMode !== "full") {
+          return;
+        }
+        if (record.kind !== "memory") {
+          pushDiagnostic({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: "only memory plugins can register a memory runtime",
+          });
+          return;
+        }
+        registerMemoryRuntime(runtime);
       },
       resolvePath: (input: string) => resolveUserPath(input),
       on: (hookName, handler, opts) =>

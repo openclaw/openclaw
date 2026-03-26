@@ -1433,6 +1433,8 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
   registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
+  /** Register the active memory runtime adapter for this memory plugin (exclusive slot). */
+  registerMemoryRuntime: (runtime: import("./memory-state.js").MemoryPluginRuntime) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
