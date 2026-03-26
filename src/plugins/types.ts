@@ -1397,6 +1397,10 @@ export type OpenClawPluginApi = {
   registerMemoryPromptSection: (
     builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
   ) => void;
+  /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
+  registerMemoryFlushPlan: (
+    resolver: import("../memory/flush-plan.js").MemoryFlushPlanResolver,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

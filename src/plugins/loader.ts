@@ -9,6 +9,11 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  clearMemoryFlushPlanResolver,
+  getMemoryFlushPlanResolver,
+  restoreMemoryFlushPlanResolver,
+} from "../memory/flush-plan.js";
+import {
   clearMemoryPromptSection,
   getMemoryPromptSectionBuilder,
   restoreMemoryPromptSection,
@@ -97,6 +102,7 @@ export class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
+  memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
 };
 
@@ -124,6 +130,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
+  clearMemoryFlushPlanResolver();
   clearMemoryPromptSection();
 }
 
@@ -709,6 +716,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
       restoreMemoryPromptSection(cached.memoryPromptBuilder);
+      restoreMemoryFlushPlanResolver(cached.memoryFlushPlanResolver);
       if (shouldActivate) {
         activatePluginRegistry(cached.registry, cacheKey);
       }
@@ -721,6 +729,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (shouldActivate) {
     clearPluginCommands();
     clearPluginInteractiveHandlers();
+    clearMemoryFlushPlanResolver();
     clearMemoryPromptSection();
   }
 
@@ -1219,6 +1228,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
 
     try {
@@ -1234,11 +1244,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // Snapshot loads should not replace process-global runtime prompt state.
       if (!shouldActivate) {
         restoreMemoryPromptSection(previousMemoryPromptBuilder);
+        restoreMemoryFlushPlanResolver(previousMemoryFlushPlanResolver);
       }
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
       restoreMemoryPromptSection(previousMemoryPromptBuilder);
+      restoreMemoryFlushPlanResolver(previousMemoryFlushPlanResolver);
       recordPluginError({
         logger,
         registry,
@@ -1274,6 +1286,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     setCachedPluginRegistry(cacheKey, {
       registry,
+      memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
     });
   }
