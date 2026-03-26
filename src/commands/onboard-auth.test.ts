@@ -381,6 +381,24 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order).toBeUndefined();
   });
+
+  it("stores display metadata without overloading email", () => {
+    const next = applyAuthProfileConfig(
+      {},
+      {
+        profileId: "openai-codex:id-abc",
+        provider: "openai-codex",
+        mode: "oauth",
+        displayName: "Work account",
+      },
+    );
+
+    expect(next.auth?.profiles?.["openai-codex:id-abc"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+      displayName: "Work account",
+    });
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {
@@ -538,8 +556,8 @@ describe("primary model defaults", () => {
   it("sets correct primary model", () => {
     const configCases = [
       {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
-        primaryModel: "minimax/MiniMax-M2.5-highspeed",
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7-highspeed"),
+        primaryModel: "minimax/MiniMax-M2.7-highspeed",
       },
       {
         getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),

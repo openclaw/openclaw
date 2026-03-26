@@ -312,6 +312,8 @@ export type AgentToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
@@ -502,6 +504,8 @@ export type ToolsConfig = {
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
@@ -606,6 +610,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

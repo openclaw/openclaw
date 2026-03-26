@@ -744,6 +744,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 email: {
                   type: "string",
                 },
+                displayName: {
+                  type: "string",
+                },
               },
               required: ["provider", "mode"],
               additionalProperties: false,
@@ -5691,6 +5694,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     maximum: 9007199254740991,
                   },
                   maxCharsCap: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxResponseBytes: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
@@ -13042,6 +13050,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.fetch.maxCharsCap": {
       label: "Web Fetch Hard Max Chars",
       help: "Hard cap for web_fetch maxChars (applies to config and tool calls).",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.fetch.maxResponseBytes": {
+      label: "Web Fetch Max Download Size (bytes)",
+      help: "Max download size before truncation.",
       tags: ["performance", "tools"],
     },
     "tools.web.fetch.timeoutSeconds": {

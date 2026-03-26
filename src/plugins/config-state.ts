@@ -53,7 +53,6 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "openrouter",
   "phone-control",
   "qianfan",
-  "qwen-portal-auth",
   "sglang",
   "synthetic",
   "talk-voice",
