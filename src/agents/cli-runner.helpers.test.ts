@@ -1,42 +1,20 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-
-const mocks = vi.hoisted(() => ({
-  loadImageFromRef: vi.fn(),
-  sanitizeImageBlocks: vi.fn(),
-}));
-
-vi.mock("./pi-embedded-runner/run/images.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/images.js")>();
-  return {
-    ...actual,
-    loadImageFromRef: (...args: unknown[]) => mocks.loadImageFromRef(...args),
-  };
-});
-
-vi.mock("./tool-images.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./tool-images.js")>();
-  return {
-    ...actual,
-    sanitizeImageBlocks: (...args: unknown[]) => mocks.sanitizeImageBlocks(...args),
-  };
-});
-
 import { loadPromptRefImages } from "./cli-runner/helpers.js";
+import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
   beforeEach(() => {
-    mocks.loadImageFromRef.mockReset();
-    mocks.sanitizeImageBlocks.mockReset();
-    mocks.sanitizeImageBlocks.mockImplementation(async (images: ImageContent[]) => ({
-      images,
-      dropped: 0,
-    }));
+    vi.restoreAllMocks();
   });
 
   it("returns empty results when the prompt has no image refs", async () => {
+    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
+
     await expect(
       loadPromptRefImages({
         prompt: "just text",
@@ -44,8 +22,8 @@ describe("loadPromptRefImages", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(mocks.loadImageFromRef).not.toHaveBeenCalled();
-    expect(mocks.sanitizeImageBlocks).not.toHaveBeenCalled();
+    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
 
   it("passes the max-byte guardrail through load and sanitize", async () => {
@@ -64,8 +42,12 @@ describe("loadPromptRefImages", () => {
       bridge: {} as SandboxFsBridge,
     };
 
-    mocks.loadImageFromRef.mockResolvedValueOnce(loadedImage);
-    mocks.sanitizeImageBlocks.mockResolvedValueOnce({ images: [sanitizedImage], dropped: 0 });
+    const loadImageFromRefSpy = vi
+      .spyOn(promptImageUtils, "loadImageFromRef")
+      .mockResolvedValueOnce(loadedImage);
+    const sanitizeImageBlocksSpy = vi
+      .spyOn(toolImages, "sanitizeImageBlocks")
+      .mockResolvedValueOnce({ images: [sanitizedImage], dropped: 0 });
 
     const result = await loadPromptRefImages({
       prompt: "Look at /tmp/photo.png",
@@ -74,7 +56,7 @@ describe("loadPromptRefImages", () => {
       sandbox,
     });
 
-    const [ref, workspaceDir, options] = mocks.loadImageFromRef.mock.calls[0] ?? [];
+    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
     expect(ref).toMatchObject({ resolved: "/tmp/photo.png", type: "path" });
     expect(workspaceDir).toBe("/workspace");
     expect(options).toEqual({
@@ -82,7 +64,7 @@ describe("loadPromptRefImages", () => {
       workspaceOnly: true,
       sandbox,
     });
-    expect(mocks.sanitizeImageBlocks).toHaveBeenCalledWith([loadedImage], "prompt:images", {
+    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
       maxBytes: MAX_IMAGE_BYTES,
     });
     expect(result).toEqual([sanitizedImage]);
@@ -95,20 +77,26 @@ describe("loadPromptRefImages", () => {
       mimeType: "image/png",
     };
 
-    mocks.loadImageFromRef.mockResolvedValueOnce(loadedImage).mockResolvedValueOnce(null);
+    const loadImageFromRefSpy = vi
+      .spyOn(promptImageUtils, "loadImageFromRef")
+      .mockResolvedValueOnce(loadedImage)
+      .mockResolvedValueOnce(null);
+    const sanitizeImageBlocksSpy = vi
+      .spyOn(toolImages, "sanitizeImageBlocks")
+      .mockResolvedValueOnce({ images: [loadedImage], dropped: 0 });
 
     const result = await loadPromptRefImages({
       prompt: "Compare /tmp/a.png with /tmp/a.png and /tmp/b.png",
       workspaceDir: "/workspace",
     });
 
-    expect(mocks.loadImageFromRef).toHaveBeenCalledTimes(2);
+    expect(loadImageFromRefSpy).toHaveBeenCalledTimes(2);
     expect(
-      mocks.loadImageFromRef.mock.calls.map(
-        (call: unknown[]) => (call[0] as { resolved?: string } | undefined)?.resolved,
+      loadImageFromRefSpy.mock.calls.map(
+        (call) => (call[0] as { resolved?: string } | undefined)?.resolved,
       ),
     ).toEqual(["/tmp/a.png", "/tmp/b.png"]);
-    expect(mocks.sanitizeImageBlocks).toHaveBeenCalledWith([loadedImage], "prompt:images", {
+    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
       maxBytes: MAX_IMAGE_BYTES,
     });
     expect(result).toEqual([loadedImage]);
