@@ -245,11 +245,23 @@ function getLastRouteUpdate():
 }
 
 function getLastDispatchCtx():
-  | { SessionKey?: string; MessageThreadId?: string | number }
+  | {
+      SessionKey?: string;
+      MessageThreadId?: string | number;
+      MessageSid?: string;
+      MessageSidFull?: string;
+    }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
-    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | {
+        ctx?: {
+          SessionKey?: string;
+          MessageThreadId?: string | number;
+          MessageSid?: string;
+          MessageSidFull?: string;
+        };
+      }
     | undefined;
   return params?.ctx;
 }
@@ -441,6 +453,27 @@ describe("processDiscordMessage ack reactions", () => {
     const emojis = getReactionEmojis();
     expect(emojis).toContain(DEFAULT_EMOJIS.compacting);
     expect(emojis).toContain(DEFAULT_EMOJIS.thinking);
+  });
+
+  it("uses the PluralKit original message id as canonical inbound message id", async () => {
+    const ctx = await createBaseContext({
+      canonicalMessageId: "orig-123",
+      message: {
+        id: "proxy-456",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchCtx()).toEqual(
+      expect.objectContaining({
+        MessageSid: "orig-123",
+        MessageSidFull: "proxy-456",
+      }),
+    );
   });
 
   it("clears status reactions when dispatch aborts and removeAckAfterReply is enabled", async () => {

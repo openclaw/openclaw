@@ -61,6 +61,7 @@ export function createDiscordMessage(params: {
     bot: boolean;
     username?: string;
   };
+  webhookId?: string;
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
   attachments?: Array<Record<string, unknown>>;
@@ -70,6 +71,7 @@ export function createDiscordMessage(params: {
     content: params.content,
     timestamp: new Date().toISOString(),
     channelId: params.channelId,
+    webhookId: params.webhookId,
     attachments: params.attachments ?? [],
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],

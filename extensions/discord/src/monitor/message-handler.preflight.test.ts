@@ -2,6 +2,11 @@ import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
+const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../pluralkit.js", () => ({
+  fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
+}));
 
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -34,6 +39,10 @@ beforeAll(async () => {
   } = await import("./message-handler.preflight.js"));
   ({ __testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
+});
+
+beforeEach(() => {
+  fetchPluralKitMessageInfoMock.mockReset();
 });
 
 function createThreadBinding(
@@ -263,6 +272,45 @@ describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     transcribeFirstAudioMock.mockReset();
+  });
+
+  it("looks up PluralKit info for webhook-authored messages and preserves canonical original id", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-456",
+      original: "orig-123",
+      member: { id: "member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "proxy-456",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        author: {
+          id: "webhook-author",
+          bot: true,
+          username: "PluralKit",
+        },
+        webhookId: "wh-pk-1",
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        allowBots: true,
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "proxy-456",
+        config: expect.objectContaining({ enabled: true }),
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.canonicalMessageId).toBe("orig-123");
   });
 
   it("drops bound-thread bot system messages to prevent ACP self-loop", async () => {
