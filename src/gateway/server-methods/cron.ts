@@ -93,21 +93,87 @@ export const cronHandlers: GatewayRequestHandlers = {
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
         : undefined;
+
+    // Auto-populate missing required fields with sensible defaults
+    const autoPopulated =
+      typeof params === "object" && params !== null
+        ? {
+            ...params,
+            // Auto-populate name if missing (use UUID snippet)
+            name:
+              typeof (params as { name?: unknown }).name === "string"
+                ? (params as { name: string }).name
+                : `cron-${Date.now().toString(36)}`,
+            // Auto-populate schedule kind if missing
+            schedule: {
+              ...(typeof (params as { schedule?: unknown }).schedule === "object" &&
+                (params as { schedule?: unknown }).schedule !== null
+                ? (params as { schedule: unknown }).schedule
+                : {}),
+              // Default to hourly if no schedule kind is specified
+              kind:
+                typeof (
+                  (params as { schedule?: { kind?: unknown } | null)?.schedule ?? {}
+                ).kind === "string"
+                  ? ((params as { schedule: { kind?: unknown } }).schedule as { kind: string })
+                      .kind
+                  : "every",
+              everyMs:
+                typeof (
+                  (params as { schedule?: { everyMs?: unknown } | null)?.schedule ?? {}
+                ).everyMs === "number"
+                  ? ((params as { schedule: { everyMs?: unknown } }).schedule as { everyMs: number })
+                      .everyMs
+                  : 3600000, // 1 hour default
+            },
+            // Auto-populate payload with default system event if missing
+            payload:
+              typeof (params as { payload?: unknown }).payload === "object" &&
+              (params as { payload: unknown }).payload !== null
+                ? (params as { payload: unknown }).payload
+                : {
+                    kind: "systemEvent",
+                    text: "Scheduled cron job execution",
+                  },
+          }
+        : params;
+
     const normalized =
-      normalizeCronJobCreate(params, {
+      normalizeCronJobCreate(autoPopulated, {
         sessionContext: { sessionKey },
-      }) ?? params;
+      }) ?? autoPopulated;
+
     if (!validateCronAddParams(normalized)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid cron.add params: ${formatValidationErrors(validateCronAddParams.errors)}`,
-        ),
-      );
+      // Provide cleaner, more specific error messages
+      const errors = validateCronAddParams.errors ?? [];
+      let errorMessage =
+        "Invalid cron job configuration. Please provide: ";
+      const missingFields: string[] = [];
+
+      for (const error of errors) {
+        const dataPath = error.instancePath || "";
+        if (
+          error.keyword === "required" &&
+          typeof error.params === "object" &&
+          "missingProperty" in error.params
+        ) {
+          const missing = (error.params as { missingProperty: string }).missingProperty;
+          if (!missingFields.includes(missing)) {
+            missingFields.push(missing);
+          }
+        }
+      }
+
+      if (missingFields.length > 0) {
+        errorMessage += missingFields.join(", ");
+      } else {
+        errorMessage += formatValidationErrors(errors);
+      }
+
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, errorMessage));
       return;
     }
+
     const jobCreate = normalized as unknown as CronJobCreate;
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
