@@ -175,6 +175,20 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       "webhook",
     );
   }
+  if (
+    entry.id === "agents.defaults.memorySearch.agentmemo.apiKey" ||
+    entry.id === "agents.list[].memorySearch.agentmemo.apiKey"
+  ) {
+    setPathCreateStrict(
+      config,
+      toConcretePathSegments(
+        entry.id.startsWith("agents.list")
+          ? "agents.list[].memorySearch.provider"
+          : "agents.defaults.memorySearch.provider",
+      ),
+      "agentmemo",
+    );
+  }
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }

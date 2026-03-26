@@ -137,6 +137,22 @@ function collectAgentMemorySearchAssignments(params: {
     });
   }
 
+  if (defaultsMemorySearch && isRecord(defaultsMemorySearch.agentmemo)) {
+    const agentmemo = defaultsMemorySearch.agentmemo;
+    collectSecretInputAssignment({
+      value: agentmemo.apiKey,
+      path: "agents.defaults.memorySearch.agentmemo.apiKey",
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: defaultsEnabled && defaultsMemorySearch.provider === "agentmemo",
+      inactiveReason: 'memorySearch.provider is not "agentmemo".',
+      apply: (value) => {
+        agentmemo.apiKey = value;
+      },
+    });
+  }
+
   list.forEach((rawAgent, index) => {
     if (!isRecord(rawAgent)) {
       return;
@@ -145,23 +161,37 @@ function collectAgentMemorySearchAssignments(params: {
     if (!memorySearch) {
       return;
     }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
-      return;
-    }
     const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: `agents.list.${index}.memorySearch.remote.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: "agent or memorySearch override is disabled.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
+    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
+    if (remote && Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
+      collectSecretInputAssignment({
+        value: remote.apiKey,
+        path: `agents.list.${index}.memorySearch.remote.apiKey`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled,
+        inactiveReason: "agent or memorySearch override is disabled.",
+        apply: (value) => {
+          remote.apiKey = value;
+        },
+      });
+    }
+    const agentmemoOverride = isRecord(memorySearch.agentmemo) ? memorySearch.agentmemo : undefined;
+    if (agentmemoOverride && Object.prototype.hasOwnProperty.call(agentmemoOverride, "apiKey")) {
+      collectSecretInputAssignment({
+        value: agentmemoOverride.apiKey,
+        path: `agents.list.${index}.memorySearch.agentmemo.apiKey`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled && memorySearch.provider === "agentmemo",
+        inactiveReason: 'agent memorySearch.provider is not "agentmemo".',
+        apply: (value) => {
+          agentmemoOverride.apiKey = value;
+        },
+      });
+    }
   });
 }
 
