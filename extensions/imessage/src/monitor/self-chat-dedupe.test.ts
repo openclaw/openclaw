@@ -78,6 +78,28 @@ describe("echo cache — message ID type canary (#47830)", () => {
     // The original GUID should still match
     expect(echoCache.has(scope, { text: "different", messageId: "p:0/abc-def-123" })).toBe(true);
   });
+
+  it('falls back to text when outbound messageId was junk ("ok")', () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    // "ok" is normalized out and should not populate the ID cache.
+    echoCache.remember(scope, { text: "text-only fallback", messageId: "ok" });
+
+    // Inbound has a numeric SQLite ID that does not exist in cache. Since this
+    // scope has no real cached IDs, has() must still fall through to text match.
+    expect(echoCache.has(scope, { text: "text-only fallback", messageId: "200" })).toBe(true);
+  });
+
+  it("keeps ID short-circuit when scope has real outbound GUID IDs", () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "guid-backed", messageId: "p:0/abc-def-123" });
+
+    // Different inbound numeric ID should still short-circuit to false.
+    expect(echoCache.has(scope, { text: "guid-backed", messageId: "200" })).toBe(false);
+  });
 });
 
 describe("echo cache — backward compat for channels without messageId", () => {

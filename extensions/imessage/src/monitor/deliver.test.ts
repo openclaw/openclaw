@@ -141,6 +141,9 @@ describe("deliverReplies", () => {
     // Pre-send population widened the false-positive window in self-chat.
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    sendMessageIMessageMock
+      .mockResolvedValueOnce({ messageId: "imsg-1" })
+      .mockResolvedValueOnce({ messageId: "imsg-2" });
 
     await deliverReplies({
       replies: [{ text: "first|second" }],
@@ -161,7 +164,7 @@ describe("deliverReplies", () => {
     });
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "second",
-      messageId: "imsg-1",
+      messageId: "imsg-2",
     });
   });
 });

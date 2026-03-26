@@ -67,17 +67,18 @@ class DefaultSentMessageCache implements SentMessageCache {
         return true;
       }
       // If the inbound message has a valid message id that doesn't match any
-      // cached id, skip the text fallback — the message is not an echo.
-      //
-      // In practice, inbound message.id is a numeric SQLite row ID (e.g. "200")
-      // while outbound sent.messageId is a GUID string (e.g. "p:0/abc-def-...").
-      // These formats never collide, so this early return effectively disables
-      // text-based echo matching for all messages that arrive with a DB row ID.
+      // cached id, short-circuit only when we actually cached real message IDs
+      // for this scope. If remember() only cached text (outbound messageId was
+      // junk like "ok"/"unknown" and got normalized out), text fallback must
+      // still run.
       //
       // Exception: when skipIdShortCircuit=true (self-chat is_from_me=true
-      // messages), we skip this early return so text matching can still identify
-      // agent reply echoes even though IDs never match in this scenario.
-      if (!skipIdShortCircuit) {
+      // messages), we always skip this early return so text matching can still
+      // identify agent reply echoes even though IDs never match in this scenario.
+      const hasAnyIdForScope = [...this.messageIdCache.keys()].some((key) =>
+        key.startsWith(`${scope}:`),
+      );
+      if (!skipIdShortCircuit && hasAnyIdForScope) {
         return false;
       }
     }
