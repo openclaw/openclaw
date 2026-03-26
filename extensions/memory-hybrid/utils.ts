@@ -45,7 +45,7 @@ export function parseDate(dateStr: string | null | undefined): number {
  * Retry a function with exponential backoff.
  */
 export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay = 1000): Promise<T> {
-  let lastError: any;
+  let lastError: unknown;
   for (let i = 0; i <= maxRetries; i++) {
     try {
       return await fn();

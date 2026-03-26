@@ -344,8 +344,6 @@ export class MemoryDB {
     if (discoveredEntities.size === 0) return initialResults;
 
     // Phase 3: Fetch Associative Memories
-    if (discoveredEntities.size === 0) return initialResults;
-
     const associativeResults: MemorySearchResult[] = [];
 
     await this.ensureInitialized();
@@ -497,8 +495,8 @@ export class MemoryDB {
           recallCount: (row.recallCount ?? 0) + delta,
         };
 
-        delete (updatedRow as any)._distance;
-        delete (updatedRow as any)["vector.isValid"];
+        delete (updatedRow as Record<string, unknown>)._distance;
+        delete (updatedRow as Record<string, unknown>)["vector.isValid"];
 
         updatedRows.push(updatedRow as unknown as Record<string, unknown>);
         successfullyFlushedIds.push(id);
@@ -517,13 +515,27 @@ export class MemoryDB {
         try {
           await this.safeAdd(updatedRows);
         } catch (addErr) {
-          // BUG 3 FIX: Critical failure! We deleted but couldn't add.
-          // This is a data loss state. Try to restore if possible or log fatal error.
-          this.recallCountDeltas.clear(); // Clear to prevent further corrupted flushes
-          throw new Error(
-            `CRITICAL DATA LOSS RISK: memories deleted but could not be re-added: ${idList}. ` +
-              `Error: ${String(addErr)}`,
+          // CRITICAL: We deleted rows but couldn't re-add them.
+          // Emergency recovery: retry the add ONE more time before giving up.
+          console.error(
+            `[memory-hybrid] CRITICAL: safeAdd failed after delete for ${idList}. Retrying...`,
           );
+          try {
+            await this.safeAdd(updatedRows);
+          } catch (retryErr) {
+            // Total failure. DO NOT clear recallCountDeltas — preserve them
+            // so the next flush cycle can attempt recovery.
+            // The rows are lost from DB but deltas remain in memory.
+            tracer.trace(
+              "flush_recall_critical",
+              { ids: successfullyFlushedIds, error: String(retryErr) },
+              `CRITICAL DATA LOSS: memories deleted but could not be re-added.`,
+            );
+            throw new Error(
+              `CRITICAL DATA LOSS: memories deleted but could not be re-added: ${idList}. ` +
+                `Deltas preserved in memory for recovery. Error: ${String(retryErr)}`,
+            );
+          }
         }
       } catch (dbErr) {
         // If it was the delete that failed, we haven't lost anything yet.

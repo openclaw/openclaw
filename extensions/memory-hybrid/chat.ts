@@ -10,6 +10,7 @@
  */
 
 import OpenAI from "openai";
+import { ApiRateLimiter, TaskPriority } from "./limiter.js";
 import { tracer } from "./tracer.js";
 import { withRetry } from "./utils.js";
 
@@ -28,6 +29,7 @@ export class ChatModel {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly provider: ChatProvider,
+    private readonly limiter?: ApiRateLimiter,
   ) {
     if (this.provider === "openai") {
       this.openai = new OpenAI({ apiKey });
@@ -37,11 +39,25 @@ export class ChatModel {
   /**
    * Send a chat completion request to the LLM.
    * @param messages - Chat messages (role + content)
-   * @param jsonMode - If true, request JSON output format
+   * @param priority - Priority of the task (defaults to NORMAL)
    * @returns The LLM response text
    */
-  async complete(messages: { role: string; content: string }[], jsonMode = false): Promise<string> {
+  async complete(
+    messages: { role: string; content: string }[],
+    jsonMode = false,
+    priority = TaskPriority.NORMAL,
+  ): Promise<string> {
     return this.executeWithRetry(() => {
+      if (this.limiter) {
+        return this.limiter.execute(
+          () =>
+            this.provider === "openai"
+              ? this.completeOpenAI(messages, jsonMode)
+              : this.completeGoogle(messages, jsonMode),
+          priority,
+          "chat_complete",
+        );
+      }
       if (this.provider === "openai") {
         return this.completeOpenAI(messages, jsonMode);
       }

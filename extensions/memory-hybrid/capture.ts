@@ -14,6 +14,7 @@
 
 import type { ChatModel } from "./chat.js";
 import type { MemoryCategory } from "./config.js";
+import { TaskPriority } from "./limiter.js";
 
 export const DEFAULT_CAPTURE_MAX_CHARS = 1000;
 /** Minimum message length to be worth remembering or summarizing */
@@ -164,6 +165,7 @@ export async function smartCapture(
   userMessage: string,
   assistantMessage: string | undefined,
   chatModel: ChatModel,
+  priority = TaskPriority.NORMAL,
 ): Promise<SmartCaptureResult> {
   const today = new Date().toISOString().split("T")[0];
   // Use JSON.stringify for robust escaping (handles newlines, quotes, special chars)
@@ -211,7 +213,7 @@ Rules:
 - If nothing worth remembering, return {"should_store": false, "facts": []}`;
 
   try {
-    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true, priority);
 
     const cleanJson = response
       .replace(/```json\s*/g, "")
@@ -323,7 +325,11 @@ Rules:
  * Generates a concise summary (max 150 chars) of a longer memory text.
  * Used for building the "Star Map" (Context Radar) without overflowing tokens.
  */
-export async function generateMemorySummary(text: string, chatModel: ChatModel): Promise<string> {
+export async function generateMemorySummary(
+  text: string,
+  chatModel: ChatModel,
+  priority = TaskPriority.LOW,
+): Promise<string> {
   if (text.length < 100) return text; // Too short to summarize, keep it as is.
 
   const prompt = `Condense the following memory into a single short sentence (maximum 150 characters) that captures its core meaning. Focus on the factual or emotional essence.
@@ -333,7 +339,7 @@ Original memory: "${text.slice(0, 5000)}" // Truncate if insanely long
 Return ONLY the summary text, nothing else.`;
 
   try {
-    const response = await chatModel.complete([{ role: "user", content: prompt }], false);
+    const response = await chatModel.complete([{ role: "user", content: prompt }], false, priority);
     return response.trim().slice(0, 150);
   } catch (error) {
     console.warn(`[memory-hybrid][summary] Failed to generate summary:`, String(error));

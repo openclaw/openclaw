@@ -16,6 +16,7 @@
 import { readFile, writeFile, appendFile, access, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { ChatModel } from "./chat.js";
+import { TaskPriority } from "./limiter.js";
 import { tracer } from "./tracer.js";
 
 // ============================================================================
@@ -325,9 +326,14 @@ export class GraphDB {
    */
   getConnectedNodes(nodeId: string): string[] {
     const connected = new Set<string>();
-    for (const edge of this.edges) {
-      if (edge.source === nodeId) connected.add(edge.target);
-      if (edge.target === nodeId) connected.add(edge.source);
+    // O(1) lookup via adjacency list instead of O(N) full edge scan
+    const indices = this.adjacencyList.get(nodeId);
+    if (indices) {
+      for (const idx of indices) {
+        const edge = this.edges[idx];
+        if (edge.source === nodeId) connected.add(edge.target);
+        if (edge.target === nodeId) connected.add(edge.source);
+      }
     }
     return Array.from(connected);
   }
@@ -357,8 +363,11 @@ export class GraphDB {
         const nextFrontier: string[] = [];
 
         for (const nodeId of frontier) {
-          const neighbors = this.edges.filter((e) => e.source === nodeId || e.target === nodeId);
-          for (const edge of neighbors) {
+          // O(1) neighbor lookup via adjacency list instead of O(N) full edge scan
+          const neighborIndices = this.adjacencyList.get(nodeId);
+          if (!neighborIndices) continue;
+          for (const edgeIdx of neighborIndices) {
+            const edge = this.edges[edgeIdx];
             // Avoid collecting duplicate edges
             if (
               !collectedEdges.some(
@@ -403,6 +412,7 @@ export class GraphDB {
 export async function extractGraphFromText(
   text: string,
   chatModel: ChatModel,
+  priority = TaskPriority.NORMAL,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   // Skip very short text — not enough for meaningful extraction
   if (text.length < 25) {
@@ -429,7 +439,7 @@ Rules:
 Text: "${JSON.stringify(text).slice(1, -1)}"`;
 
   try {
-    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true, priority);
 
     // Clean potential markdown wrapper
     const cleanJson = response
@@ -525,9 +535,10 @@ Text: "${JSON.stringify(text).slice(1, -1)}"`;
 export async function extractGraphFromBatch(
   facts: string[],
   chatModel: ChatModel,
+  priority = TaskPriority.NORMAL,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   if (facts.length === 0) return { nodes: [], edges: [] };
-  if (facts.length === 1) return extractGraphFromText(facts[0], chatModel);
+  if (facts.length === 1) return extractGraphFromText(facts[0], chatModel, priority);
 
   const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
   const prompt = `Extract a unified knowledge graph from the multiple facts provided below.
@@ -549,7 +560,7 @@ Facts:
 ${factList}`;
 
   try {
-    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true, priority);
     const cleanJson = response
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")
@@ -570,16 +581,16 @@ ${factList}`;
     ]);
 
     const nodes: GraphNode[] = (data.nodes || [])
-      .filter((n: any) => n.id && n.type)
-      .map((n: any) => ({
+      .filter((n: Record<string, unknown>) => n.id && n.type)
+      .map((n: Record<string, unknown>) => ({
         id: String(n.id).toLowerCase().trim(),
         type: String(n.type),
         description: n.description ? String(n.description) : undefined,
       }));
 
     const edges: GraphEdge[] = (data.edges || [])
-      .filter((e: any) => e.source && e.target && e.relation)
-      .map((e: any) => ({
+      .filter((e: Record<string, unknown>) => e.source && e.target && e.relation)
+      .map((e: Record<string, unknown>) => ({
         source: String(e.source).toLowerCase().trim(),
         target: String(e.target).toLowerCase().trim(),
         relation: allowedRelations.has(String(e.relation).toUpperCase())

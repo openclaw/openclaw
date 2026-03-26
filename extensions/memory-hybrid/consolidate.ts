@@ -16,6 +16,7 @@
 import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import type { Embeddings } from "./embeddings.js";
+import { TaskPriority } from "./limiter.js";
 
 // ============================================================================
 // Types
@@ -114,7 +115,11 @@ function cosineSimilarity(a: number[], b: number[]): number {
  *   Input: ["User likes coffee", "User drinks coffee every morning", "User prefers black coffee"]
  *   Output: "User drinks black coffee every morning (strong preference)"
  */
-export async function mergeFacts(facts: string[], chatModel: ChatModel): Promise<string | null> {
+export async function mergeFacts(
+  facts: string[],
+  chatModel: ChatModel,
+  priority = TaskPriority.LOW,
+): Promise<string | null> {
   if (facts.length < 2) return null;
 
   const numberedFacts = facts.map((f, i) => `${i + 1}. "${escapeMemoryForPrompt(f)}"`).join("\n");
@@ -131,6 +136,7 @@ Return ONLY the merged fact as a single plain text string (no JSON, no quotes, n
     const response = await chatModel.complete(
       [{ role: "user", content: prompt }],
       false, // plain text, not JSON
+      priority,
     );
 
     const merged = response.trim();
@@ -152,9 +158,10 @@ Return ONLY the merged fact as a single plain text string (no JSON, no quotes, n
 export async function mergeFactsBatch(
   clusters: string[][],
   chatModel: ChatModel,
+  priority = TaskPriority.LOW,
 ): Promise<Array<string | null>> {
   if (clusters.length === 0) return [];
-  if (clusters.length === 1) return [await mergeFacts(clusters[0], chatModel)];
+  if (clusters.length === 1) return [await mergeFacts(clusters[0], chatModel, priority)];
 
   const formattedClusters = clusters
     .map((facts, i) => {
@@ -172,7 +179,7 @@ Clusters to merge:
 ${formattedClusters}`;
 
   try {
-    const response = await chatModel.complete([{ role: "user", content: prompt }], true);
+    const response = await chatModel.complete([{ role: "user", content: prompt }], true, priority);
     const cleanJson = response
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")

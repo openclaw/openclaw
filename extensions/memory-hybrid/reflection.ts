@@ -20,6 +20,7 @@
 
 import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
+import { TaskPriority } from "./limiter.js";
 
 // ============================================================================
 // Types
@@ -59,6 +60,7 @@ export interface MemoryFact {
 export async function generateReflection(
   memories: MemoryFact[],
   chatModel: ChatModel,
+  priority = TaskPriority.LOW,
 ): Promise<ReflectionResult> {
   if (memories.length < 5) {
     return {
@@ -136,6 +138,7 @@ Return ONLY valid JSON:
     const response = await chatModel.complete(
       [{ role: "user", content: prompt }],
       true, // JSON mode
+      priority,
     );
 
     const cleanJson = response

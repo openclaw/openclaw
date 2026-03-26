@@ -15,6 +15,7 @@ import { DreamService } from "./dream.js";
 import { Embeddings, vectorDimsForModel } from "./embeddings.js";
 import { GraphDB } from "./graph.js";
 import { registerHooks } from "./hooks.js";
+import { ApiRateLimiter } from "./limiter.js";
 import { ConversationStack } from "./stack.js";
 import { registerTools } from "./tools.js";
 
@@ -31,13 +32,19 @@ const memoryPlugin = {
     const vectorDim = cfg.embedding.outputDimensionality ?? vectorDimsForModel(cfg.embedding.model);
 
     // 1. Initialize Core Engines
+    const limiter = new ApiRateLimiter({
+      minDelayMs: 2000,
+      maxRequestsPerMinute: 15,
+    });
+
     const db = new MemoryDB(resolvedDbPath, vectorDim);
     const embeddings = new Embeddings(
       cfg.embedding.apiKey,
       cfg.embedding.model,
       cfg.embedding.outputDimensionality,
+      limiter,
     );
-    const chatModel = new ChatModel(cfg.chatApiKey, cfg.chatModel, cfg.chatProvider);
+    const chatModel = new ChatModel(cfg.chatApiKey, cfg.chatModel, cfg.chatProvider, limiter);
     const graphDB = new GraphDB(resolvedDbPath);
 
     // 2. Initialize State Buffers
@@ -71,7 +78,7 @@ const memoryPlugin = {
 
     registerTools(api, deps);
     registerCli(api, deps);
-    registerHooks(api, deps);
+    const hooksHandle = registerHooks(api, deps);
 
     // 6. Define Plugin Service
     api.registerService({
@@ -82,6 +89,7 @@ const memoryPlugin = {
       },
       stop: () => {
         dreamService.stop();
+        hooksHandle.cleanup();
         workingMemory.save(bufferPath).catch((err) => {
           api.logger.warn(`memory-hybrid: save working memory failed: ${String(err)}`);
         });

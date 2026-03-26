@@ -9,7 +9,7 @@ import {
   escapeMemoryForPrompt,
 } from "./capture.js";
 import type { ChatModel } from "./chat.js";
-import type { MemoryCategory } from "./config.js";
+import type { MemoryCategory, MemoryConfig } from "./config.js";
 import type { MemoryDB } from "./database.js";
 import type { DreamService } from "./dream.js";
 import type { Embeddings } from "./embeddings.js";
@@ -30,10 +30,10 @@ export interface HookDeps {
   dreamService: DreamService;
   conversationStack: ConversationStack;
   workingMemory: WorkingMemoryBuffer;
-  cfg: any;
+  cfg: MemoryConfig;
 }
 
-export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
+export function registerHooks(api: OpenClawPluginApi, deps: HookDeps): { cleanup: () => void } {
   const {
     db,
     embeddings,
@@ -357,7 +357,7 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
   let lastPruneTime = 0;
 
   // Background Periodic Tasks (Flush & Prune)
-  setInterval(
+  const periodicTimer = setInterval(
     async () => {
       const now = Date.now();
 
@@ -389,4 +389,10 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
     },
     5 * 60 * 1000,
   ); // Check every 5 minutes
+
+  return {
+    cleanup() {
+      clearInterval(periodicTimer);
+    },
+  };
 }

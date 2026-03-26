@@ -5,6 +5,7 @@ import { clusterBySimilarity, mergeFacts, mergeFactsBatch } from "./consolidate.
 import type { Embeddings } from "./embeddings.js";
 import type { GraphDB } from "./graph.js";
 import type { MemoryDB } from "./index.js";
+import { TaskPriority } from "./limiter.js";
 
 const IDLE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes idle
 const LOOP_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
@@ -111,19 +112,16 @@ export class DreamService {
 
     const prompt = `Analyze these facts about the user and generate a concise 2-sentence Empathy Profile summarizing their current mental state, core interests, and communication preferences. Return ONLY the 2 sentences.\n\nFacts:\n${facts}`;
 
-    const profileText = await this.chat.complete([{ role: "user", content: prompt }], false);
+    const profileText = await this.chat.complete(
+      [{ role: "user", content: prompt }],
+      false,
+      TaskPriority.LOW,
+    );
     if (!profileText || profileText.length < 10) return;
 
-    // Delete old profile(s) to prevent accumulating hundreds of them over time
-    const oldProfiles = await this.db.getMemoriesByCategory(["preference"], 200);
-    for (const m of oldProfiles) {
-      if (m.text.startsWith("[EMPATHY PROFILE]")) {
-        await this.db.delete(m.id);
-      }
-    }
+    const vector = await this.embeddings.embed(profileText, TaskPriority.LOW);
 
-    const vector = await this.embeddings.embed(profileText);
-
+    // Store-Before-Delete: create new profile first, then clean up old ones
     await this.db.store({
       text: `[EMPATHY PROFILE] ${profileText.trim()}`,
       importance: 0.95,
@@ -135,6 +133,17 @@ export class DreamService {
       emotionalTone: "neutral",
       emotionScore: 0,
     });
+
+    // Now safe to delete old profiles (new one is already persisted)
+    const oldProfiles = await this.db.getMemoriesByCategory(["preference"], 200);
+    for (const m of oldProfiles) {
+      if (
+        m.text.startsWith("[EMPATHY PROFILE]") &&
+        m.text !== `[EMPATHY PROFILE] ${profileText.trim()}`
+      ) {
+        await this.db.delete(m.id);
+      }
+    }
   }
 
   private async consolidateKnowledge(): Promise<void> {
@@ -148,7 +157,7 @@ export class DreamService {
 
     // 2. High-threshold clustering (0.92+ for safety)
     const clusters = clusterBySimilarity(all, 0.92);
-    const validClusters: Array<Array<{ id: string; text: string; category: any }>> = [];
+    const validClusters: Array<Array<{ id: string; text: string; category: string }>> = [];
 
     for (const cluster of clusters) {
       if (cluster.length < 2) continue;
@@ -178,7 +187,7 @@ export class DreamService {
         if (!hasOverlap) continue;
       }
 
-      validClusters.push(cluster.map((c) => ({ ...c, category: cats[0] })));
+      validClusters.push(cluster.map((c) => ({ ...c, category: cats[0] ?? "other" })));
     }
 
     if (validClusters.length === 0) return;
@@ -198,7 +207,7 @@ export class DreamService {
     }
 
     if (textsToEmbed.length === 0) return;
-    const vectors = await this.embeddings.embedBatch(textsToEmbed);
+    const vectors = await this.embeddings.embedBatch(textsToEmbed, TaskPriority.LOW);
 
     let mergedCount = 0;
     for (let i = 0; i < validMergedIndices.length; i++) {

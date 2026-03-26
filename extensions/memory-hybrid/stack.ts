@@ -21,6 +21,7 @@
 
 import { MIN_MESSAGE_LENGTH } from "./capture.js";
 import { type ChatModel } from "./chat.js";
+import { TaskPriority } from "./limiter.js";
 import { tracer } from "./tracer.js";
 
 /** A single compressed conversation turn */
@@ -107,7 +108,11 @@ ${turnsText}
 
 Return ONLY the compressed summary, nothing else.`;
 
-      let summary = await chatModel.complete([{ role: "user", content: prompt }], false);
+      let summary = await chatModel.complete(
+        [{ role: "user", content: prompt }],
+        false,
+        TaskPriority.NORMAL,
+      );
       summary = summary.trim().slice(0, 400); // Safety cap
 
       tracer.traceSummary(this.pendingTurns.length, summary);
