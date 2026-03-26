@@ -7,6 +7,30 @@ import {
 } from "./test-report-utils.mjs";
 import { unitTimingManifestPath } from "./test-runner-manifest.mjs";
 
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-update-timings.mjs [options]",
+      "",
+      "Generate or refresh the unit test timing manifest from a Vitest JSON report.",
+      "",
+      "Options:",
+      "  --config <path>                Vitest config to run when no report is supplied",
+      "  --report <path>                Reuse an existing Vitest JSON report",
+      "  --out <path>                   Output manifest path (default: test/fixtures/test-timings.unit.json)",
+      "  --limit <count>                Max number of file timings to retain (default: 256)",
+      "  --default-duration-ms <ms>     Fallback duration for unknown files (default: 250)",
+      "  --help                         Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-update-timings.mjs",
+      "  node scripts/test-update-timings.mjs --config vitest.unit.config.ts --limit 128",
+      "  node scripts/test-update-timings.mjs --report /tmp/vitest-report.json --out /tmp/timings.json",
+    ].join("\n"),
+  );
+  process.exit(0);
+}
+
 function parseArgs(argv) {
   return parseFlagArgs(
     argv,
