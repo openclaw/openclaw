@@ -1,4 +1,5 @@
 import {
+  getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../../extensions/telegram/api.js";
@@ -127,25 +128,46 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
   const isPluginId = parsed.id.startsWith("plugin:");
 
-  if (params.command.channel === "telegram" && !isPluginId) {
-    if (
-      !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-    ) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-      };
+  if (params.command.channel === "telegram") {
+    const telegramApproverContext = {
+      cfg: params.cfg,
+      accountId: params.ctx.AccountId,
+      senderId: params.command.senderId,
+    };
+
+    if (!isPluginId) {
+      if (
+        !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
+      ) {
+        return {
+          shouldContinue: false,
+          reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
+        };
+      }
+      if (!isTelegramExecApprovalApprover(telegramApproverContext)) {
+        return {
+          shouldContinue: false,
+          reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+        };
+      }
     }
-    if (
-      !isTelegramExecApprovalApprover({
+
+    // Keep plugin-ID routing independent from exec approval client enablement so
+    // forwarded plugin approvals remain resolvable, but still honor explicit
+    // Telegram approver policy when it is configured.
+    const hasTelegramApproverPolicy =
+      getTelegramExecApprovalApprovers({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
-        senderId: params.command.senderId,
-      })
+      }).length > 0;
+    if (
+      isPluginId &&
+      hasTelegramApproverPolicy &&
+      !isTelegramExecApprovalApprover(telegramApproverContext)
     ) {
       return {
         shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+        reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
       };
     }
   }
