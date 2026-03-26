@@ -50,7 +50,10 @@ describe("redactConfigSnapshot", () => {
           signingSecret: "slack-signing-secret-value-1234",
           token: "secret-slack-token-value-here",
         },
-        feishu: { appSecret: "feishu-app-secret-value-here-1234" },
+        feishu: {
+          appSecret: "feishu-app-secret-value-here-1234",
+          encryptKey: "feishu-encrypt-key-value-here-1234",
+        },
       },
       models: {
         providers: {
@@ -70,6 +73,7 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.channels.slack.signingSecret).toBe(REDACTED_SENTINEL);
     expect(cfg.channels.slack.token).toBe(REDACTED_SENTINEL);
     expect(cfg.channels.feishu.appSecret).toBe(REDACTED_SENTINEL);
+    expect(cfg.channels.feishu.encryptKey).toBe(REDACTED_SENTINEL);
     expect(cfg.models.providers.openai.apiKey).toBe(REDACTED_SENTINEL);
     expect(cfg.models.providers.openai.baseUrl).toBe("https://api.openai.com");
     expect(cfg.shortSecret.token).toBe(REDACTED_SENTINEL);
