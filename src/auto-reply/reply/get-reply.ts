@@ -164,6 +164,8 @@ export async function getReplyFromConfig(
   let hasResolvedHeartbeatModelOverride = false;
   // Handle modelOverride from Gateway (e.g., image model when images detected)
   let hasAppliedImageModelOverride = false;
+  // Track if a fallback was used when primary override was blocked by allowlist
+  let fallbackAppliedForImageModel = false;
   if (opts?.modelOverride?.trim()) {
     const modelRef = resolveModelRefFromString({
       raw: opts.modelOverride.trim(),
@@ -184,7 +186,7 @@ export async function getReplyFromConfig(
         const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
         if (!allowedKeys.has(modelKeyStr)) {
           // Model not in allowlist, try fallbacks before skipping
-          let fallbackApplied = false;
+          fallbackAppliedForImageModel = false;
           if (opts?.modelOverrideFallbacks?.length) {
             for (const fallbackRaw of opts.modelOverrideFallbacks) {
               const fallbackRef = resolveModelRefFromString({
@@ -198,13 +200,13 @@ export async function getReplyFromConfig(
                   provider = fallbackRef.ref.provider;
                   model = fallbackRef.ref.model;
                   hasAppliedImageModelOverride = true;
-                  fallbackApplied = true;
+                  fallbackAppliedForImageModel = true;
                   break;
                 }
               }
             }
           }
-          if (!fallbackApplied) {
+          if (!fallbackAppliedForImageModel) {
             // No allowlisted fallback, skip the override and let default model be used
             // This prevents Dashboard images from bypassing agent model restrictions
           }
@@ -547,8 +549,10 @@ export async function getReplyFromConfig(
     });
     if (overrideRef) {
       const overrideKey = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
-      if (finalModelKey !== overrideKey) {
-        // Final model differs from image model override, reset the flags
+      if (finalModelKey !== overrideKey && !fallbackAppliedForImageModel) {
+        // Final model differs from image model override and no fallback was applied,
+        // reset the flags. When a fallback WAS applied, the run is still an image-model
+        // override and we should keep the flags to preserve the fallback chain.
         finalHasAppliedImageModelOverride = false;
         finalModelOverrideFallbacks = undefined;
       }

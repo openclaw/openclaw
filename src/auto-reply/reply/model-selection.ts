@@ -120,18 +120,34 @@ function collectImageModelKeys(
   // should resolve providerless "gpt-4o" as OpenAI, not Anthropic).
   // Also handles the case where imageModelPrimary is providerless like "gpt-4o"
   // with fallbacks ["openai/gpt-4.1"] — the provider "openai" should be derived from fallbacks.
+  // Scan all fallbacks to find the first one with an explicit provider.
+  // Only if no fallback has an explicit provider, use alias resolution against defaultProvider.
   if ((!imageModelPrimary || !primaryHasProvider) && aliasIndex && !imageModelDefaultProvider) {
-    const fb =
+    const fallbacks =
       typeof imageModelConfig === "string"
-        ? imageModelConfig
-        : Array.isArray(imageModelConfig.fallbacks)
-          ? imageModelConfig.fallbacks[0]
-          : undefined;
-    if (fb?.trim()) {
+        ? [imageModelConfig]
+        : Array.isArray(imageModelConfig?.fallbacks)
+          ? imageModelConfig.fallbacks
+          : [];
+
+    // First pass: find the first fallback with an explicit provider
+    for (const fb of fallbacks) {
+      if (typeof fb !== "string" || !fb.trim()) {
+        continue;
+      }
       const slash = fb.indexOf("/");
       if (slash > 0) {
         imageModelDefaultProvider = fb.slice(0, slash).trim();
-      } else if (aliasIndex && defaultProvider) {
+        break;
+      }
+    }
+
+    // Second pass: if no fallback had an explicit provider, use alias resolution
+    if (!imageModelDefaultProvider && defaultProvider) {
+      for (const fb of fallbacks) {
+        if (typeof fb !== "string" || !fb.trim()) {
+          continue;
+        }
         const resolved = resolveModelRefFromString({
           raw: fb.trim(),
           defaultProvider,
@@ -139,6 +155,7 @@ function collectImageModelKeys(
         });
         if (resolved) {
           imageModelDefaultProvider = resolved.ref.provider;
+          break;
         }
       }
     }
