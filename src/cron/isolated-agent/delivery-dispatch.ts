@@ -3,12 +3,17 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import {
+  deliverOutboundPayloads,
+  type OutboundDeliveryResult,
+} from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { logWarn } from "../../logger.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
@@ -125,11 +130,157 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unknown channel/i,
   /chat not found/i,
   /user not found/i,
+  /bot.*not.*member/i,
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
 ];
+
+const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
+
+type CompletedDirectCronDelivery = {
+  ts: number;
+  results: OutboundDeliveryResult[];
+};
+
+const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+function cloneDeliveryResults(
+  results: readonly OutboundDeliveryResult[],
+): OutboundDeliveryResult[] {
+  return results.map((result) => ({
+    ...result,
+    ...(result.meta ? { meta: { ...result.meta } } : {}),
+  }));
+}
+
+function pruneCompletedDirectCronDeliveries(now: number) {
+  const ttlMs = process.env.OPENCLAW_TEST_FAST === "1" ? 60_000 : 24 * 60 * 60 * 1000;
+  for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
+    if (now - entry.ts >= ttlMs) {
+      COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
+    }
+  }
+  const maxEntries = 2000;
+  if (COMPLETED_DIRECT_CRON_DELIVERIES.size <= maxEntries) {
+    return;
+  }
+  const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
+    (a, b) => a[1].ts - b[1].ts,
+  );
+  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
+  for (let i = 0; i < toDelete; i += 1) {
+    const oldest = entries[i];
+    if (!oldest) {
+      break;
+    }
+    COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
+  }
+}
+
+function resolveCronDeliveryScheduledAtMs(params: { job: CronJob; runStartedAt: number }): number {
+  const scheduledAt = params.job.state?.nextRunAtMs;
+  return typeof scheduledAt === "number" && Number.isFinite(scheduledAt)
+    ? scheduledAt
+    : params.runStartedAt;
+}
+
+function resolveCronDeliveryStartDelayMs(params: { job: CronJob; runStartedAt: number }): number {
+  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
+}
+
+function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
+  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+}
+
+function rememberCompletedDirectCronDelivery(
+  idempotencyKey: string,
+  results: readonly OutboundDeliveryResult[],
+) {
+  const now = Date.now();
+  COMPLETED_DIRECT_CRON_DELIVERIES.set(idempotencyKey, {
+    ts: now,
+    results: cloneDeliveryResults(results),
+  });
+  pruneCompletedDirectCronDeliveries(now);
+}
+
+function getCompletedDirectCronDelivery(
+  idempotencyKey: string,
+): OutboundDeliveryResult[] | undefined {
+  const now = Date.now();
+  pruneCompletedDirectCronDeliveries(now);
+  const cached = COMPLETED_DIRECT_CRON_DELIVERIES.get(idempotencyKey);
+  if (!cached) {
+    return undefined;
+  }
+  return cloneDeliveryResults(cached.results);
+}
+
+function buildDirectCronDeliveryIdempotencyKey(params: {
+  runSessionId: string;
+  delivery: SuccessfulDeliveryTarget;
+}): string {
+  const threadId =
+    params.delivery.threadId == null || params.delivery.threadId === ""
+      ? ""
+      : String(params.delivery.threadId);
+  const accountId = params.delivery.accountId?.trim() ?? "";
+  const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
+  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+}
+
+function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
+  // Keep issue #52136 scoped to isolated runs. Session-bound cron jobs keep
+  // their existing behavior, and best-effort sends may only partially deliver.
+  return job.sessionTarget === "isolated" && !deliveryBestEffort;
+}
+
+function resolveCronAwarenessMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): string {
+  return params.cfg.session?.scope === "global"
+    ? resolveMainSessionKey(params.cfg)
+    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+}
+
+function queueCronAwarenessSystemEvent(params: {
+  cfg: OpenClawConfig;
+  jobId: string;
+  agentId: string;
+  deliveryIdempotencyKey: string;
+  outputText?: string;
+  synthesizedText?: string;
+}): void {
+  const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
+  if (!text) {
+    return;
+  }
+
+  try {
+    enqueueSystemEvent(text, {
+      sessionKey: resolveCronAwarenessMainSessionKey({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
+      contextKey: params.deliveryIdempotencyKey,
+    });
+  } catch (err) {
+    logWarn(
+      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+export function resetCompletedDirectCronDeliveriesForTests() {
+  COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+}
+
+export function getCompletedDirectCronDeliveriesCountForTests(): number {
+  return COMPLETED_DIRECT_CRON_DELIVERIES.size;
+}
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
   if (error instanceof Error) {
@@ -221,6 +372,10 @@ export async function dispatchCronDelivery(
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+      runSessionId: params.runSessionId,
+      delivery,
+    });
     try {
       const payloadsForDelivery =
         deliveryPayloads.length > 0
@@ -239,12 +394,60 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      if (
+        params.deliveryRequested &&
+        isStaleCronDelivery({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        })
+      ) {
+        deliveryAttempted = true;
+        const nowMs = Date.now();
+        const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        const startDelayMs = resolveCronDeliveryStartDelayMs({
+          job: params.job,
+          runStartedAt: params.runStartedAt,
+        });
+        logWarn(
+          `[cron:${params.job.id}] skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`,
+        );
+        return params.withRunSession({
+          status: "ok",
+          summary,
+          outputText,
+          deliveryAttempted,
+          delivered: false,
+          ...params.telemetry,
+        });
+      }
       deliveryAttempted = true;
+      const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);
+      if (cachedResults) {
+        // Cached entries are only recorded after a successful non-empty delivery.
+        delivered = true;
+        return null;
+      }
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         sessionKey: params.agentSessionKey,
       });
+
+      // Track bestEffort partial failures so we can log them and avoid
+      // marking the job as delivered when payloads were silently dropped.
+      let hadPartialFailure = false;
+      const onError = params.deliveryBestEffort
+        ? (err: unknown, _payload: unknown) => {
+            hadPartialFailure = true;
+            logError(
+              `[cron:${params.job.id}] delivery payload failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        : undefined;
+
       const runDelivery = async () =>
         await deliverOutboundPayloads({
           cfg: params.cfgWithAgentDefaults,
@@ -258,6 +461,7 @@ export async function dispatchCronDelivery(
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
+          onError,
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
           // late-successful first send cannot leave behind a failed queue
@@ -272,7 +476,24 @@ export async function dispatchCronDelivery(
             run: runDelivery,
           })
         : await runDelivery();
-      delivered = deliveryResults.length > 0;
+      // Only mark delivered when ALL payloads succeeded (no partial failure).
+      delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Intentionally leave partial success uncached: replay may duplicate the
+      // successful subset, but caching it here would permanently drop the
+      // failed payloads by converting the replay into delivered=true.
+      if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
+        queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey,
+          outputText,
+          synthesizedText,
+        });
+      }
+      if (delivered) {
+        rememberCompletedDirectCronDelivery(deliveryIdempotencyKey, deliveryResults);
+      }
       return null;
     } catch (err) {
       if (!params.deliveryBestEffort) {
@@ -285,6 +506,9 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      logError(
+        `[cron:${params.job.id}] delivery failed (bestEffort): ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     }
   };
@@ -391,11 +615,12 @@ export async function dispatchCronDelivery(
       });
     }
     if (synthesizedText.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
+      await cleanupDirectCronSessionIfNeeded();
       return params.withRunSession({
         status: "ok",
         summary,
         outputText,
-        delivered: true,
+        delivered: false,
         ...params.telemetry,
       });
     }

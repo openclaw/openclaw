@@ -1,4 +1,4 @@
-import { createConfigIO, loadConfig } from "../config/config.js";
+import { createConfigIO, getRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import type { BrowserServerState } from "./server-context.types.js";
 
@@ -22,6 +22,9 @@ function changedProfileInvariants(
   if (current.cdpIsLoopback !== next.cdpIsLoopback) {
     changed.push("cdpIsLoopback");
   }
+  if ((current.userDataDir ?? "") !== (next.userDataDir ?? "")) {
+    changed.push("userDataDir");
+  }
   return changed;
 }
 
@@ -29,7 +32,13 @@ function applyResolvedConfig(
   current: BrowserServerState,
   freshResolved: BrowserServerState["resolved"],
 ) {
-  current.resolved = freshResolved;
+  current.resolved = {
+    ...freshResolved,
+    // Keep the runtime evaluate gate stable across request-time profile refreshes.
+    // Security-sensitive behavior should only change via full runtime config reload,
+    // not as a side effect of resolving profiles/tabs during a request.
+    evaluateEnabled: current.resolved.evaluateEnabled,
+  };
   for (const [name, runtime] of current.profiles) {
     const nextProfile = resolveProfile(freshResolved, name);
     if (nextProfile) {
@@ -63,7 +72,11 @@ export function refreshResolvedBrowserConfigFromDisk(params: {
   if (!params.refreshConfigFromDisk) {
     return;
   }
-  const cfg = params.mode === "fresh" ? createConfigIO().loadConfig() : loadConfig();
+
+  // Route-level browser config hot reload should observe on-disk changes immediately.
+  // The shared loadConfig() helper may return a cached snapshot for the configured TTL,
+  // which can leave request-time browser guards stale (for example evaluateEnabled).
+  const cfg = getRuntimeConfigSnapshot() ?? createConfigIO().loadConfig();
   const freshResolved = resolveBrowserConfig(cfg.browser, cfg);
   applyResolvedConfig(params.current, freshResolved);
 }

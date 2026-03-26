@@ -7,6 +7,9 @@ concurrency:
   group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 permissions:
   actions: read
   contents: read
@@ -67,7 +70,7 @@ jobs:
             config_file: ""
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: false
 
@@ -76,17 +79,17 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "true"
+          use-sticky-disk: "false"
 
       - name: Setup Python
         if: matrix.needs_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Setup Java
         if: matrix.needs_java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
@@ -113,7 +116,7 @@ jobs:
       - name: Build Android for CodeQL
         if: matrix.language == 'java-kotlin'
         working-directory: apps/android
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assemblePlayDebug
 
       - name: Build Swift for CodeQL
         if: matrix.language == 'swift'

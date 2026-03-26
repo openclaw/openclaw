@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
+  createSeededSandboxFsBridge,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenBoundaryFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
@@ -140,16 +142,8 @@ describe("sandbox fs bridge shell compatibility", () => {
 
   it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
     await withTempDir("openclaw-fs-bridge-shell-write-", async (stateDir) => {
-      const workspaceDir = path.join(stateDir, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
-      await fs.writeFile(path.join(workspaceDir, "a.txt"), "hello", "utf8");
-      await fs.writeFile(path.join(workspaceDir, "nested", "file.txt"), "bye", "utf8");
-
-      const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootFileName: "a.txt",
       });
 
       await bridge.mkdirp({ filePath: "nested" });
@@ -165,7 +159,6 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("re-validates target before the pinned write helper runs", async () => {
-    const { mockedOpenBoundaryFile } = await import("./fs-bridge.test-helpers.js");
     mockedOpenBoundaryFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
       .mockImplementationOnce(async () => ({

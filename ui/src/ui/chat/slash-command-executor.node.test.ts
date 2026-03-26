@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  createResolvedModelPatch,
+  createModelCatalog,
+  DEEPSEEK_CHAT_MODEL,
+  OPENAI_GPT5_MINI_MODEL,
+} from "../chat-model.test-helpers.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 import { executeSlashCommand } from "./slash-command-executor.ts";
@@ -235,7 +241,7 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          defaults: { model: "default-model" },
+          defaults: { modelProvider: "openai", model: "default-model" },
           sessions: [
             row("agent:main:main", {
               model: "gpt-4.1-mini",
@@ -265,6 +271,141 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
   });
 
+  it("mirrors resolved provider-qualified model refs after /model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      if (method === "models.list") {
+        return { models: createModelCatalog(OPENAI_GPT5_MINI_MODEL) };
+      }
+      if (method === "models.list") {
+        return { models: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-5-mini",
+      {
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+      },
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      model: "gpt-5-mini",
+    });
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
+  });
+
+  it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return {
+          ok: true,
+          key: "main",
+          resolved: {
+            model: "gpt-5-mini",
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-5-mini",
+      {
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+      },
+    );
+
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
+  });
+
+  it("corrects stale patched providers with the catalog after /model", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("deepseek-chat", "zai");
+      }
+      if (method === "models.list") {
+        return { models: createModelCatalog(DEEPSEEK_CHAT_MODEL) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "deepseek-chat",
+    );
+
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "deepseek/deepseek-chat",
+    });
+  });
+
+  it("falls back to the patched server provider when catalog lookup fails", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      if (method === "models.list") {
+        throw new Error("models unavailable");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-5-mini",
+    );
+
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
+  });
+
+  it("reuses a provided model catalog for /model updates without refetching", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "gpt-5-mini",
+      { modelCatalog: createModelCatalog(OPENAI_GPT5_MINI_MODEL) },
+    );
+
+    expect(result.sessionPatch?.modelOverride).toEqual({
+      kind: "qualified",
+      value: "openai/gpt-5-mini",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalledWith("models.list", {});
+  });
   it("resolves the legacy main alias for /usage", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {

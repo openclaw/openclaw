@@ -234,6 +234,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "image_generate",
+    label: "image_generate",
+    description: "Image generation",
+    sectionId: "media",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "video_generate",
+    label: "video_generate",
+    description: "Video generation",
+    sectionId: "media",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "tts",
     label: "tts",
     description: "Text-to-speech conversion",

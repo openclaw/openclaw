@@ -7,9 +7,9 @@ import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
-import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import type { ProgramContext } from "./context.js";
-import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
+import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
+import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
 const CLI_NAME = resolveCliName();
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
@@ -49,6 +49,10 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .name(CLI_NAME)
     .description("")
     .version(ctx.programVersion)
+    .option(
+      "--container <name>",
+      "Run the CLI inside a running Podman/Docker container named <name> (default: env OPENCLAW_CONTAINER)",
+    )
     .option(
       "--dev",
       "Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)",

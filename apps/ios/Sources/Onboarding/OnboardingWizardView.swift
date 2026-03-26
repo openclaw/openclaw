@@ -6,6 +6,7 @@ import SwiftUI
 import UIKit
 
 private enum OnboardingStep: Int, CaseIterable {
+    case intro
     case welcome
     case mode
     case connect
@@ -29,7 +30,8 @@ private enum OnboardingStep: Int, CaseIterable {
 
     var title: String {
         switch self {
-        case .welcome: "Welcome"
+        case .intro: "Welcome"
+        case .welcome: "Connect Gateway"
         case .mode: "Connection Mode"
         case .connect: "Connect"
         case .auth: "Authentication"
@@ -38,7 +40,7 @@ private enum OnboardingStep: Int, CaseIterable {
     }
 
     var canGoBack: Bool {
-        self != .welcome && self != .success
+        self != .intro && self != .welcome && self != .success
     }
 }
 
@@ -49,7 +51,7 @@ struct OnboardingWizardView: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
-    @State private var step: OnboardingStep = .welcome
+    @State private var step: OnboardingStep
     @State private var selectedMode: OnboardingConnectionMode?
     @State private var manualHost: String = ""
     @State private var manualPort: Int = 18789
@@ -58,11 +60,10 @@ struct OnboardingWizardView: View {
     @State private var gatewayToken: String = ""
     @State private var gatewayPassword: String = ""
     @State private var connectMessage: String?
-    @State private var statusLine: String = "Scan the QR code from your gateway to connect."
+    @State private var statusLine: String = "In your OpenClaw chat, run /pair qr, then scan the code here."
     @State private var connectingGatewayID: String?
     @State private var issue: GatewayConnectionIssue = .none
     @State private var didMarkCompleted = false
-    @State private var didAutoPresentQR = false
     @State private var pairingRequestId: String?
     @State private var discoveryRestartTask: Task<Void, Never>?
     @State private var showQRScanner: Bool = false
@@ -74,14 +75,23 @@ struct OnboardingWizardView: View {
     let allowSkip: Bool
     let onClose: () -> Void
 
+    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+        self.allowSkip = allowSkip
+        self.onClose = onClose
+        _step = State(
+            initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
+    }
+
     private var isFullScreenStep: Bool {
-        self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .welcome || self.step == .success
     }
 
     var body: some View {
         NavigationStack {
             Group {
                 switch self.step {
+                case .intro:
+                    self.introStep
                 case .welcome:
                     self.welcomeStep
                 case .success:
@@ -294,6 +304,83 @@ struct OnboardingWizardView: View {
     }
 
     @ViewBuilder
+    private var introStep: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            Image(systemName: "iphone.gen3")
+                .font(.system(size: 60, weight: .semibold))
+                .foregroundStyle(.tint)
+                .padding(.bottom, 18)
+
+            Text("Welcome to OpenClaw")
+                .font(.largeTitle.weight(.bold))
+                .multilineTextAlignment(.center)
+                .padding(.bottom, 10)
+
+            Text("Turn this iPhone into a secure OpenClaw node for chat, voice, camera, and device tools.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 24)
+
+            VStack(alignment: .leading, spacing: 14) {
+                Label("Connect to your gateway", systemImage: "link")
+                Label("Choose device permissions", systemImage: "hand.raised")
+                Label("Use OpenClaw from your phone", systemImage: "message.fill")
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
+
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .frame(width: 24)
+                    .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Security notice")
+                        .font(.headline)
+                    Text(
+                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .background {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+
+            Spacer()
+
+            Button {
+                self.advanceFromIntro()
+            } label: {
+                Text("Continue")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 48)
+        }
+    }
+
+    @ViewBuilder
     private var welcomeStep: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -303,15 +390,36 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(.tint)
                 .padding(.bottom, 20)
 
-            Text("Welcome")
+            Text("Connect Gateway")
                 .font(.largeTitle.weight(.bold))
                 .padding(.bottom, 8)
 
-            Text("Connect to your OpenClaw gateway")
+            Text("Scan a QR code from your OpenClaw gateway or continue with manual setup.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("How to pair")
+                    .font(.headline)
+                Text("In your OpenClaw chat, run")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("/pair qr")
+                    .font(.system(.footnote, design: .monospaced).weight(.semibold))
+                Text("Then scan the QR code here to connect this iPhone.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemBackground))
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
 
             Spacer()
 
@@ -342,8 +450,7 @@ struct OnboardingWizardView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 48)
+                .padding(.bottom, 48)
         }
     }
 
@@ -500,7 +607,7 @@ struct OnboardingWizardView: View {
     private var authStep: some View {
         Group {
             Section("Authentication") {
-                TextField("Gateway Auth Token", text: self.$gatewayToken)
+                SecureField("Gateway Auth Token", text: self.$gatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                 SecureField("Gateway Password", text: self.$gatewayPassword)
@@ -617,6 +724,12 @@ struct OnboardingWizardView: View {
             TextField("Discovery Domain (optional)", text: self.$discoveryDomain)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            if self.selectedMode == .remoteDomain {
+                SecureField("Gateway Auth Token", text: self.$gatewayToken)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Gateway Password", text: self.$gatewayPassword)
+            }
             self.manualConnectButton
         }
     }
@@ -727,6 +840,12 @@ struct OnboardingWizardView: View {
         return nil
     }
 
+    private func advanceFromIntro() {
+        OnboardingStateStore.markFirstRunIntroSeen()
+        self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
+        self.step = .welcome
+    }
+
     private func navigateBack() {
         guard let target = self.step.previous else { return }
         self.connectingGatewayID = nil
@@ -775,10 +894,8 @@ struct OnboardingWizardView: View {
         let hasSavedGateway = GatewaySettingsStore.loadLastGatewayConnection() != nil
         let hasToken = !self.gatewayToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasPassword = !self.gatewayPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if !self.didAutoPresentQR, !hasSavedGateway, !hasToken, !hasPassword {
-            self.didAutoPresentQR = true
-            self.statusLine = "No saved pairing found. Scan QR code to connect."
-            self.showQRScanner = true
+        if !hasSavedGateway, !hasToken, !hasPassword {
+            self.statusLine = "No saved pairing found. In your OpenClaw chat, run /pair qr, then scan the code here."
         }
     }
 

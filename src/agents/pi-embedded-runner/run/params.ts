@@ -1,11 +1,11 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import type { AgentStreamParams } from "../../../commands/agent/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { AgentStreamParams } from "../../command/types.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
@@ -20,6 +20,8 @@ export type ClientToolDefinition = {
   };
 };
 
+export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -27,8 +29,8 @@ export type RunEmbeddedPiAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
-  /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
-  trigger?: string;
+  /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
+  trigger?: EmbeddedRunTrigger;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
@@ -63,6 +65,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Allow runtime plugins for this run to late-bind the gateway subagent. */
+  allowGatewaySubagentBinding?: boolean;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;

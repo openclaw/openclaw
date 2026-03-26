@@ -1,11 +1,14 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
+import { createConnection } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
 } from "./monitor.test-mocks.js";
+import {
+  buildWebhookConfig,
+  getFreePort,
+  withRunningWebhookMonitor,
+} from "./monitor.webhook.test-helpers.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -33,96 +36,45 @@ import {
   stopFeishuMonitor,
 } from "./monitor.js";
 
-async function getFreePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return address.port;
-}
-
-async function waitUntilServerReady(url: string): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
-    try {
-      const response = await fetch(url, { method: "GET" });
-      if (response.status >= 200 && response.status < 500) {
-        return;
-      }
-    } catch {
-      // retry
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`server did not start: ${url}`);
-}
-
-function buildConfig(params: {
-  accountId: string;
-  path: string;
-  port: number;
-  verificationToken?: string;
-  encryptKey?: string;
-}): ClawdbotConfig {
-  return {
-    channels: {
-      feishu: {
-        enabled: true,
-        accounts: {
-          [params.accountId]: {
-            enabled: true,
-            appId: "cli_test",
-            appSecret: "secret_test", // pragma: allowlist secret
-            connectionMode: "webhook",
-            webhookHost: "127.0.0.1",
-            webhookPort: params.port,
-            webhookPath: params.path,
-            encryptKey: params.encryptKey,
-            verificationToken: params.verificationToken,
-          },
-        },
+async function waitForSlowBodyTimeoutResponse(
+  url: string,
+  timeoutMs: number,
+): Promise<{ body: string; elapsedMs: number }> {
+  return await new Promise<{ body: string; elapsedMs: number }>((resolve, reject) => {
+    const target = new URL(url);
+    const startedAt = Date.now();
+    let response = "";
+    const socket = createConnection(
+      {
+        host: target.hostname,
+        port: Number(target.port),
       },
-    },
-  } as ClawdbotConfig;
-}
+      () => {
+        socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
+        socket.write(`Host: ${target.hostname}\r\n`);
+        socket.write("Content-Type: application/json\r\n");
+        socket.write("Content-Length: 65536\r\n");
+        socket.write("\r\n");
+        socket.write('{"type":"url_verification"');
+      },
+    );
 
-async function withRunningWebhookMonitor(
-  params: {
-    accountId: string;
-    path: string;
-    verificationToken: string;
-    encryptKey: string;
-  },
-  run: (url: string) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const cfg = buildConfig({
-    accountId: params.accountId,
-    path: params.path,
-    port,
-    encryptKey: params.encryptKey,
-    verificationToken: params.verificationToken,
+    socket.setEncoding("utf8");
+    socket.on("error", () => {});
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.includes("Request body timeout")) {
+        clearTimeout(failTimer);
+        socket.destroy();
+        resolve({ body: response, elapsedMs: Date.now() - startedAt });
+      }
+    });
+
+    const failTimer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`timeout response did not arrive within ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-
-  const abortController = new AbortController();
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const monitorPromise = monitorFeishuProvider({
-    config: cfg,
-    runtime,
-    abortSignal: abortController.signal,
-  });
-
-  const url = `http://127.0.0.1:${port}${params.path}`;
-  await waitUntilServerReady(url);
-
-  try {
-    await run(url);
-  } finally {
-    abortController.abort();
-    await monitorPromise;
-  }
 }
 
 afterEach(() => {
@@ -134,7 +86,7 @@ describe("Feishu webhook security hardening", () => {
   it("rejects webhook mode without verificationToken", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
-    const cfg = buildConfig({
+    const cfg = buildWebhookConfig({
       accountId: "missing-token",
       path: "/hook-missing-token",
       port: await getFreePort(),
@@ -148,7 +100,7 @@ describe("Feishu webhook security hardening", () => {
   it("rejects webhook mode without encryptKey", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
-    const cfg = buildConfig({
+    const cfg = buildWebhookConfig({
       accountId: "missing-encrypt-key",
       path: "/hook-missing-encrypt",
       port: await getFreePort(),
@@ -167,6 +119,7 @@ describe("Feishu webhook security hardening", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         const response = await fetch(url, {
           method: "POST",
@@ -180,6 +133,48 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
+  it("rejects oversized unsigned webhook bodies with 413 before signature verification", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "payload-too-large",
+        path: "/hook-payload-too-large",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ payload: "x".repeat(70 * 1024) }),
+        });
+
+        expect(response.status).toBe(413);
+        expect(await response.text()).toBe("Payload too large");
+      },
+    );
+  });
+
+  it("drops slow-body webhook requests within the tightened pre-auth timeout", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "slow-body-timeout",
+        path: "/hook-slow-body-timeout",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const result = await waitForSlowBodyTimeoutResponse(url, 15_000);
+        expect(result.body).toContain("408 Request Timeout");
+        expect(result.body).toContain("Request body timeout");
+        expect(result.elapsedMs).toBeLessThan(12_000);
+      },
+    );
+  });
+
   it("rate limits webhook burst traffic with 429", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     await withRunningWebhookMonitor(
@@ -189,6 +184,7 @@ describe("Feishu webhook security hardening", () => {
         verificationToken: "verify_token",
         encryptKey: "encrypt_key",
       },
+      monitorFeishuProvider,
       async (url) => {
         let saw429 = false;
         for (let i = 0; i < 130; i += 1) {

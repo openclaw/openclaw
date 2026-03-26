@@ -57,7 +57,7 @@ OpenClaw's shared `/fast` toggle also supports direct Anthropic API-key traffic.
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-sonnet-4-5": {
+        "anthropic/claude-sonnet-4-6": {
           params: { fastMode: true },
         },
       },
@@ -213,7 +213,7 @@ openclaw models auth paste-token --provider anthropic
 ### CLI setup (setup-token)
 
 ```bash
-# Paste a setup-token during onboarding
+# Paste a setup-token during setup
 openclaw onboard --auth-choice setup-token
 ```
 
@@ -228,7 +228,7 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
-- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting](/gateway/troubleshooting).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting

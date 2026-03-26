@@ -2,6 +2,8 @@
 
 FROM node:24-bookworm-slim@sha256:b4687aef2571c632a1953695ce4d61d6462a7eda471fe6e272eebf0418f276ba
 
+# Smoke images are pinned and short-lived, so skip distro upgrades here and
+# spend the time budget on installer coverage instead.
 RUN --mount=type=cache,id=openclaw-install-sh-smoke-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=openclaw-install-sh-smoke-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \

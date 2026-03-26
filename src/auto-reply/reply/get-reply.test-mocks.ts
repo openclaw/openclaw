@@ -1,15 +1,23 @@
 import { vi } from "vitest";
 
 export function registerGetReplyCommonMocks(): void {
-  vi.mock("../../agents/agent-scope.js", () => ({
-    resolveAgentDir: vi.fn(() => "/tmp/agent"),
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-    resolveSessionAgentId: vi.fn(() => "main"),
-    resolveAgentSkillsFilter: vi.fn(() => undefined),
-  }));
-  vi.mock("../../agents/model-selection.js", () => ({
-    resolveModelRefFromString: vi.fn(() => null),
-  }));
+  vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+    return {
+      ...actual,
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveSessionAgentId: vi.fn(() => "main"),
+      resolveAgentSkillsFilter: vi.fn(() => undefined),
+    };
+  });
+  vi.mock("../../agents/model-selection.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+    return {
+      ...actual,
+      resolveModelRefFromString: vi.fn(() => null),
+    };
+  });
   vi.mock("../../agents/timeout.js", () => ({
     resolveAgentTimeoutMs: vi.fn(() => 60000),
   }));
@@ -24,12 +32,12 @@ export function registerGetReplyCommonMocks(): void {
     loadConfig: vi.fn(() => ({})),
   }));
   vi.mock("../../runtime.js", () => ({
-    defaultRuntime: { log: vi.fn() },
+    defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   }));
   vi.mock("../command-auth.js", () => ({
     resolveCommandAuthorization: vi.fn(() => ({ isAuthorizedSender: true })),
   }));
-  vi.mock("./directive-handling.js", () => ({
+  vi.mock("./directive-handling.defaults.js", () => ({
     resolveDefaultModel: vi.fn(() => ({
       defaultProvider: "openai",
       defaultModel: "gpt-4o-mini",

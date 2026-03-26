@@ -1,19 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
+import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -128,6 +132,16 @@ type ChatSendOriginatingRoute = {
   accountId?: string;
   messageThreadId?: string | number;
   explicitDeliverRoute: boolean;
+};
+
+type SideResultPayload = {
+  kind: "btw";
+  runId: string;
+  sessionKey: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  ts: number;
 };
 
 function resolveChatSendOriginatingRoute(params: {
@@ -273,6 +287,121 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
+}
+
+async function persistChatSendImages(params: {
+  images: ChatImageContent[];
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: GatewayRequestContext["logGateway"];
+}): Promise<SavedMedia[]> {
+  if (params.images.length === 0 || isAcpBridgeClient(params.client)) {
+    return [];
+  }
+  const saved: SavedMedia[] = [];
+  for (const img of params.images) {
+    try {
+      saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
+    } catch (err) {
+      params.logGateway.warn(
+        `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
+      );
+    }
+  }
+  return saved;
+}
+
+function buildChatSendTranscriptMessage(params: {
+  message: string;
+  savedImages: SavedMedia[];
+  timestamp: number;
+}) {
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  return {
+    role: "user" as const,
+    content: params.message,
+    timestamp: params.timestamp,
+    ...mediaFields,
+  };
+}
+
+function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
+  const mediaPaths = savedImages.map((entry) => entry.path);
+  if (mediaPaths.length === 0) {
+    return {};
+  }
+  const mediaTypes = savedImages.map((entry) => entry.contentType ?? "application/octet-stream");
+  return {
+    MediaPath: mediaPaths[0],
+    MediaPaths: mediaPaths,
+    MediaType: mediaTypes[0],
+    MediaTypes: mediaTypes,
+  };
+}
+
+function extractTranscriptUserText(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const textBlocks = content
+    .map((block) =>
+      block && typeof block === "object" && "text" in block ? block.text : undefined,
+    )
+    .filter((text): text is string => typeof text === "string");
+  return textBlocks.length > 0 ? textBlocks.join("") : undefined;
+}
+
+async function rewriteChatSendUserTurnMediaPaths(params: {
+  transcriptPath: string;
+  sessionKey: string;
+  message: string;
+  savedImages: SavedMedia[];
+}) {
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  if (!("MediaPath" in mediaFields)) {
+    return;
+  }
+  const sessionManager = SessionManager.open(params.transcriptPath);
+  const branch = sessionManager.getBranch();
+  const target = [...branch].toReversed().find((entry) => {
+    if (entry.type !== "message" || entry.message.role !== "user") {
+      return false;
+    }
+    const existingPaths = Array.isArray((entry.message as { MediaPaths?: unknown }).MediaPaths)
+      ? (entry.message as { MediaPaths?: unknown[] }).MediaPaths
+      : undefined;
+    if (
+      (typeof (entry.message as { MediaPath?: unknown }).MediaPath === "string" &&
+        (entry.message as { MediaPath?: string }).MediaPath) ||
+      (existingPaths && existingPaths.length > 0)
+    ) {
+      return false;
+    }
+    return (
+      extractTranscriptUserText((entry.message as { content?: unknown }).content) === params.message
+    );
+  });
+  if (!target || target.type !== "message") {
+    return;
+  }
+  const rewrittenMessage = {
+    ...target.message,
+    ...mediaFields,
+  };
+  await rewriteTranscriptEntriesInSessionFile({
+    sessionFile: params.transcriptPath,
+    sessionKey: params.sessionKey,
+    request: {
+      replacements: [
+        {
+          entryId: target.id,
+          message: rewrittenMessage,
+        },
+      ],
+    },
+  });
 }
 
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
@@ -756,6 +885,7 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
     chatDeltaSentAt: context.chatDeltaSentAt,
+    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
     chatAbortedRuns: context.chatAbortedRuns,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
@@ -898,6 +1028,33 @@ function broadcastChatFinal(params: {
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
+}
+
+function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
+  btw: { question: string };
+  text: string;
+} {
+  return (
+    typeof payload?.btw?.question === "string" &&
+    payload.btw.question.trim().length > 0 &&
+    typeof payload.text === "string" &&
+    payload.text.trim().length > 0
+  );
+}
+
+function broadcastSideResult(params: {
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  payload: SideResultPayload;
+}) {
+  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
+  params.context.broadcast("chat.side_result", {
+    ...params.payload,
+    seq,
+  });
+  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", {
+    ...params.payload,
+    seq,
+  });
 }
 
 function broadcastChatError(params: {
@@ -1222,6 +1379,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+      const persistedImagesPromise = persistChatSendImages({
+        images: parsedImages,
+        client,
+        logGateway: context.logGateway,
+      });
 
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
@@ -1279,26 +1441,80 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKey,
         config: cfg,
       });
-      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const finalReplyParts: string[] = [];
+      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
+      let userTranscriptUpdateEmitted = false;
+      const emitUserTranscriptUpdate = async () => {
+        if (userTranscriptUpdateEmitted) {
+          return;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        if (!resolvedSessionId) {
+          return;
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return;
+        }
+        userTranscriptUpdateEmitted = true;
+        const persistedImages = await persistedImagesPromise;
+        emitSessionTranscriptUpdate({
+          sessionFile: transcriptPath,
+          sessionKey,
+          message: buildChatSendTranscriptMessage({
+            message: parsedMessage,
+            savedImages: persistedImages,
+            timestamp: now,
+          }),
+        });
+      };
+      let transcriptMediaRewriteDone = false;
+      const rewriteUserTranscriptMedia = async () => {
+        if (transcriptMediaRewriteDone) {
+          return;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        if (!resolvedSessionId) {
+          return;
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return;
+        }
+        transcriptMediaRewriteDone = true;
+        await rewriteChatSendUserTurnMediaPaths({
+          transcriptPath,
+          sessionKey,
+          message: parsedMessage,
+          savedImages: await persistedImagesPromise,
+        });
+      };
       const dispatcher = createReplyDispatcher({
-        ...prefixOptions,
+        ...replyPipeline,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "block" && info.kind !== "final") {
             return;
           }
-          const text = payload.text?.trim() ?? "";
-          if (!text) {
-            return;
-          }
-          finalReplyParts.push(text);
+          deliveredReplies.push({ payload, kind: info.kind });
         },
       });
 
@@ -1313,6 +1529,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            void emitUserTranscriptUpdate();
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -1333,50 +1550,84 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
+        .then(async () => {
+          await rewriteUserTranscriptMedia();
           if (!agentRunStarted) {
-            const combinedReply = finalReplyParts
-              .map((part) => part.trim())
+            await emitUserTranscriptUpdate();
+            const btwReplies = deliveredReplies
+              .map((entry) => entry.payload)
+              .filter(isBtwReplyPayload);
+            const btwText = btwReplies
+              .map((payload) => payload.text.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
-            let message: Record<string, unknown> | undefined;
-            if (combinedReply) {
-              const { storePath: latestStorePath, entry: latestEntry } =
-                loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-              const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
-                sessionId,
-                storePath: latestStorePath,
-                sessionFile: latestEntry?.sessionFile,
-                agentId,
-                createIfMissing: true,
+            if (btwReplies.length > 0 && btwText) {
+              broadcastSideResult({
+                context,
+                payload: {
+                  kind: "btw",
+                  runId: clientRunId,
+                  sessionKey: rawSessionKey,
+                  question: btwReplies[0].btw.question.trim(),
+                  text: btwText,
+                  isError: btwReplies.some((payload) => payload.isError),
+                  ts: Date.now(),
+                },
               });
-              if (appended.ok) {
-                message = appended.message;
-              } else {
-                context.logGateway.warn(
-                  `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+              });
+            } else {
+              const combinedReply = deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload)
+                .map((part) => part.text?.trim() ?? "")
+                .filter(Boolean)
+                .join("\n\n")
+                .trim();
+              let message: Record<string, unknown> | undefined;
+              if (combinedReply) {
+                const { storePath: latestStorePath, entry: latestEntry } =
+                  loadSessionEntry(sessionKey);
+                const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+                const appended = appendAssistantTranscriptMessage({
+                  message: combinedReply,
+                  sessionId,
+                  storePath: latestStorePath,
+                  sessionFile: latestEntry?.sessionFile,
+                  agentId,
+                  createIfMissing: true,
+                });
+                if (appended.ok) {
+                  message = appended.message;
+                } else {
+                  context.logGateway.warn(
+                    `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
+                  );
+                  const now = Date.now();
+                  message = {
+                    role: "assistant",
+                    content: [{ type: "text", text: combinedReply }],
+                    timestamp: now,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
+              broadcastChatFinal({
+                context,
+                runId: clientRunId,
+                sessionKey: rawSessionKey,
+                message,
+              });
             }
-            broadcastChatFinal({
-              context,
-              runId: clientRunId,
-              sessionKey: rawSessionKey,
-              message,
-            });
+          } else {
+            void emitUserTranscriptUpdate();
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
@@ -1471,7 +1722,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg }),
-      createIfMissing: false,
+      createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

@@ -2,21 +2,33 @@ import { html, nothing } from "lit";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
   renderChatControls,
+  renderChatMobileToggle,
   renderChatSessionSelect,
   renderTab,
+  renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/agents.ts";
+import {
+  buildToolsEffectiveRequestKey,
+  loadAgents,
+  loadToolsCatalog,
+  loadToolsEffective,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  saveAgentsConfig,
+} from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -66,7 +78,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -179,7 +191,7 @@ type DismissedUpdateBanner = {
 
 function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
   try {
-    const raw = localStorage.getItem(UPDATE_BANNER_DISMISS_KEY);
+    const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
     if (!raw) {
       return null;
     }
@@ -223,7 +235,7 @@ function dismissUpdateBanner(updateAvailable: unknown) {
     dismissedAtMs: Date.now(),
   };
   try {
-    localStorage.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
+    getSafeLocalStorage()?.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
   } catch {
     // ignore
   }
@@ -249,6 +261,8 @@ const INFRASTRUCTURE_SECTION_KEYS = [
   "canvasHost",
   "discovery",
   "media",
+  "acp",
+  "mcp",
 ] as const;
 const AI_AGENTS_SECTION_KEYS = [
   "agents",
@@ -263,33 +277,6 @@ type AppearanceSectionKey = (typeof APPEARANCE_SECTION_KEYS)[number];
 type AutomationSectionKey = (typeof AUTOMATION_SECTION_KEYS)[number];
 type InfrastructureSectionKey = (typeof INFRASTRUCTURE_SECTION_KEYS)[number];
 type AiAgentsSectionKey = (typeof AI_AGENTS_SECTION_KEYS)[number];
-
-const NAV_WIDTH_MIN = 200;
-const NAV_WIDTH_MAX = 400;
-
-function handleNavResizeStart(e: MouseEvent, state: AppViewState) {
-  e.preventDefault();
-  const startX = e.clientX;
-  const startWidth = state.settings.navWidth;
-
-  const onMove = (ev: MouseEvent) => {
-    const delta = ev.clientX - startX;
-    const next = Math.round(Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, startWidth + delta)));
-    state.applySettings({ ...state.settings, navWidth: next });
-  };
-
-  const onUp = () => {
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-  };
-
-  document.body.style.cursor = "col-resize";
-  document.body.style.userSelect = "none";
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -330,7 +317,10 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const navDrawerOpen = Boolean(state.navDrawerOpen && !chatFocus && !state.onboarding);
+  const navCollapsed = Boolean(state.settings.navCollapsed && !navDrawerOpen);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
+  const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
@@ -341,6 +331,10 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const toolsPanelUsesActiveSession = Boolean(
+    resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
+  );
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -423,144 +417,169 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
-      style="--shell-nav-width: ${state.settings.navWidth}px"
+      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
     >
+      <button
+        type="button"
+        class="shell-nav-backdrop"
+        aria-label="${t("nav.collapse")}"
+        @click=${() => {
+          state.navDrawerOpen = false;
+        }}
+      ></button>
       <header class="topbar">
-        <dashboard-header .tab=${state.tab}></dashboard-header>
-        <button
-          class="topbar-search"
-          @click=${() => {
-            state.paletteOpen = !state.paletteOpen;
-          }}
-          title="Search or jump to… (⌘K)"
-          aria-label="Open command palette"
-        >
-          <span class="topbar-search__label">${t("common.search")}</span>
-          <kbd class="topbar-search__kbd">⌘K</kbd>
-        </button>
-        <div class="topbar-status">
-          ${renderTopbarThemeModeToggle(state)}
+        <div class="topnav-shell">
+          <button
+            type="button"
+            class="topbar-nav-toggle"
+            @click=${() => {
+              state.navDrawerOpen = !navDrawerOpen;
+            }}
+            title="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
+            aria-label="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
+            aria-expanded=${navDrawerOpen}
+          >
+            <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
+          </button>
+          <div class="topnav-shell__content">
+            <dashboard-header .tab=${state.tab}></dashboard-header>
+          </div>
+          <div class="topnav-shell__actions">
+            <button
+              class="topbar-search"
+              @click=${() => {
+                state.paletteOpen = !state.paletteOpen;
+              }}
+              title="Search or jump to… (⌘K)"
+              aria-label="Open command palette"
+            >
+              <span class="topbar-search__label">${t("common.search")}</span>
+              <kbd class="topbar-search__kbd">⌘K</kbd>
+            </button>
+            <div class="topbar-status">
+              ${isChat ? renderChatMobileToggle(state) : nothing}
+              ${renderTopbarThemeModeToggle(state)}
+            </div>
+          </div>
         </div>
       </header>
       <div class="shell-nav">
-      <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
-      <div class="sidebar-header">
-        ${
-          state.settings.navCollapsed
-            ? nothing
-            : html`
-          <div class="sidebar-brand">
-            <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
-            <span class="sidebar-brand__title">OpenClaw</span>
-          </div>
-        `
-        }
-        <button
-          type="button"
-          class="nav-collapse-toggle"
-          @click=${() =>
-            state.applySettings({
-              ...state.settings,
-              navCollapsed: !state.settings.navCollapsed,
-            })}
-          title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-          aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-        >
-          <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
-        </button>
-      </div>
- 
-          
-          <nav class="sidebar-nav">
-          ${TAB_GROUPS.map((group) => {
-            const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-            const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-            const showItems = hasActiveTab || !isGroupCollapsed;
-
-            return html`
-              <div class="nav-group ${!showItems ? "nav-group--collapsed" : ""}">
+        <aside class="sidebar ${navCollapsed ? "sidebar--collapsed" : ""}">
+          <div class="sidebar-shell">
+            <div class="sidebar-shell__header">
+              <div class="sidebar-brand">
                 ${
-                  !state.settings.navCollapsed
-                    ? html`
-                  <button
-                    class="nav-group__label"
-                    @click=${() => {
-                      const next = { ...state.settings.navGroupsCollapsed };
-                      next[group.label] = !isGroupCollapsed;
-                      state.applySettings({
-                        ...state.settings,
-                        navGroupsCollapsed: next,
-                      });
-                    }}
-                    aria-expanded=${showItems}
-                  >
-                    <span class="nav-group__label-text">${t(`nav.${group.label}`)}</span>
-                    <span class="nav-group__chevron">${showItems ? icons.chevronDown : icons.chevronRight}</span>
-                  </button>
-                `
-                    : nothing
+                  navCollapsed
+                    ? nothing
+                    : html`
+                        <img class="sidebar-brand__logo" src="${agentLogoUrl(basePath)}" alt="OpenClaw" />
+                        <span class="sidebar-brand__copy">
+                          <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
+                          <span class="sidebar-brand__title">OpenClaw</span>
+                        </span>
+                      `
                 }
-                <div class="nav-group__items">
-                  ${group.tabs.map((tab) => renderTab(state, tab))}
-                </div>
               </div>
-            `;
-          })}
-        </nav>
+              <button
+                type="button"
+                class="nav-collapse-toggle"
+                @click=${() =>
+                  state.applySettings({
+                    ...state.settings,
+                    navCollapsed: !state.settings.navCollapsed,
+                  })}
+                title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+                aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+              >
+                <span class="nav-collapse-toggle__icon" aria-hidden="true">${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span>
+              </button>
+            </div>
+            <div class="sidebar-shell__body">
+              <nav class="sidebar-nav">
+                ${TAB_GROUPS.map((group) => {
+                  const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
+                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                  const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
-        <div class="sidebar-footer">
-          <div class="sidebar-footer__docs-block">
-            <a
-              class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
-              target=${EXTERNAL_LINK_TARGET}
-              rel=${buildExternalLinkRel()}
-              title="${t("common.docs")} (opens in new tab)"
-            >
-              <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              ${
-                !state.settings.navCollapsed
-                  ? html`
-              <span class="nav-item__text">${t("common.docs")}</span>
-              <span class="nav-item__external-icon">${icons.externalLink}</span>
-            `
-                  : nothing
-              }
-            </a>
-            ${(() => {
-              const version = state.hello?.server?.version ?? "";
-              return version
-                ? html`
-                  <div class="sidebar-version" title=${`v${version}`}>
-                    ${
-                      !state.settings.navCollapsed
-                        ? html`<span class="sidebar-version__text">v${version}</span>`
-                        : html`
-                            <span class="sidebar-version__dot"></span>
-                          `
-                    }
-                  </div>
-                `
-                : nothing;
-            })()}
+                  return html`
+                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
+                      ${
+                        !navCollapsed
+                          ? html`
+                              <button
+                                class="nav-section__label"
+                                @click=${() => {
+                                  const next = { ...state.settings.navGroupsCollapsed };
+                                  next[group.label] = !isGroupCollapsed;
+                                  state.applySettings({
+                                    ...state.settings,
+                                    navGroupsCollapsed: next,
+                                  });
+                                }}
+                                aria-expanded=${showItems}
+                              >
+                                <span class="nav-section__label-text">${t(`nav.${group.label}`)}</span>
+                                <span class="nav-section__chevron">
+                                  ${icons.chevronDown}
+                                </span>
+                              </button>
+                            `
+                          : nothing
+                      }
+                      <div class="nav-section__items">
+                        ${group.tabs.map((tab) => renderTab(state, tab, { collapsed: navCollapsed }))}
+                      </div>
+                    </section>
+                  `;
+                })}
+              </nav>
+            </div>
+            <div class="sidebar-shell__footer">
+              <div class="sidebar-utility-group">
+                <a
+                  class="nav-item nav-item--external sidebar-utility-link"
+                  href="https://docs.openclaw.ai"
+                  target=${EXTERNAL_LINK_TARGET}
+                  rel=${buildExternalLinkRel()}
+                  title="${t("common.docs")} (opens in new tab)"
+                >
+                  <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+                  ${
+                    !navCollapsed
+                      ? html`
+                          <span class="nav-item__text">${t("common.docs")}</span>
+                          <span class="nav-item__external-icon">${icons.externalLink}</span>
+                        `
+                      : nothing
+                  }
+                </a>
+                <div class="sidebar-mode-switch">
+                  ${renderTopbarThemeModeToggle(state)}
+                </div>
+                ${(() => {
+                  const version = state.hello?.server?.version ?? "";
+                  return version
+                    ? html`
+                        <div class="sidebar-version" title=${`v${version}`}>
+                          ${
+                            !navCollapsed
+                              ? html`
+                                  <span class="sidebar-version__label">${t("common.version")}</span>
+                                  <span class="sidebar-version__text">v${version}</span>
+                                  ${renderSidebarConnectionStatus(state)}
+                                `
+                              : html`
+                                  ${renderSidebarConnectionStatus(state)}
+                                `
+                          }
+                        </div>
+                      `
+                    : nothing;
+                })()}
+              </div>
+            </div>
           </div>
-        </div>
-      </aside>
-      ${
-        !state.settings.navCollapsed && !chatFocus
-          ? html`
-          <div
-            class="sidebar-resizer"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="${t("nav.resize")}"
-            title="${t("nav.resize")}"
-            @mousedown=${(ev: MouseEvent) => handleNavResizeStart(ev, state)}
-          ></div>
-        `
-          : nothing
-      }
+        </aside>
       </div>
       <main class="content ${isChat ? "content--chat" : ""}">
         ${
@@ -732,7 +751,7 @@ export function renderApp(state: AppViewState) {
                   sortDir: state.sessionsSortDir,
                   page: state.sessionsPage,
                   pageSize: state.sessionsPageSize,
-                  actionsOpenKey: state.sessionsActionsOpenKey,
+                  selectedKeys: state.sessionsSelectedKeys,
                   onFiltersChange: (next) => {
                     state.sessionsFilterActive = next.activeMinutes;
                     state.sessionsFilterLimit = next.limit;
@@ -755,12 +774,49 @@ export function renderApp(state: AppViewState) {
                     state.sessionsPageSize = s;
                     state.sessionsPage = 0;
                   },
-                  onActionsOpenChange: (key) => {
-                    state.sessionsActionsOpenKey = key;
-                  },
                   onRefresh: () => loadSessions(state),
                   onPatch: (key, patch) => patchSession(state, key, patch),
-                  onDelete: (key) => deleteSessionAndRefresh(state, key),
+                  onToggleSelect: (key) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    if (next.has(key)) {
+                      next.delete(key);
+                    } else {
+                      next.add(key);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onSelectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.add(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onDeselectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.delete(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onDeselectAll: () => {
+                    state.sessionsSelectedKeys = new Set();
+                  },
+                  onDeleteSelected: async () => {
+                    const keys = [...state.sessionsSelectedKeys];
+                    const deleted = await deleteSessionsAndRefresh(state, keys);
+                    if (deleted.length > 0) {
+                      const next = new Set(state.sessionsSelectedKeys);
+                      for (const k of deleted) {
+                        next.delete(k);
+                      }
+                      state.sessionsSelectedKeys = next;
+                    }
+                  },
+                  onNavigateToChat: (sessionKey) => {
+                    switchChatSession(state, sessionKey);
+                    state.setTab("chat" as import("./navigation.ts").Tab);
+                  },
                 }),
               )
             : nothing
@@ -861,6 +917,10 @@ export function renderApp(state: AppViewState) {
                     }
                     await loadCronRuns(state, state.cronRunsJobId);
                   },
+                  onNavigateToChat: (sessionKey) => {
+                    switchChatSession(state, sessionKey);
+                    state.setTab("chat" as import("./navigation.ts").Tab);
+                  },
                 }),
               )
             : nothing
@@ -918,6 +978,14 @@ export function renderApp(state: AppViewState) {
                     error: state.toolsCatalogError,
                     result: state.toolsCatalogResult,
                   },
+                  toolsEffective: {
+                    loading: state.toolsEffectiveLoading,
+                    error: state.toolsEffectiveError,
+                    result: state.toolsEffectiveResult,
+                  },
+                  runtimeSessionKey: state.sessionKey,
+                  runtimeSessionMatchesSelectedAgent: toolsPanelUsesActiveSession,
+                  modelCatalog: state.chatModelCatalog ?? [],
                   onRefresh: async () => {
                     await loadAgents(state);
                     const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
@@ -929,8 +997,26 @@ export function renderApp(state: AppViewState) {
                       state.agentsList?.defaultId ??
                       state.agentsList?.agents?.[0]?.id ??
                       null;
+                    if (state.agentsPanel === "files" && refreshedAgentId) {
+                      void loadAgentFiles(state, refreshedAgentId);
+                    }
+                    if (state.agentsPanel === "skills" && refreshedAgentId) {
+                      void loadAgentSkills(state, refreshedAgentId);
+                    }
                     if (state.agentsPanel === "tools" && refreshedAgentId) {
                       void loadToolsCatalog(state, refreshedAgentId);
+                      if (refreshedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId: refreshedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
+                    }
+                    if (state.agentsPanel === "channels") {
+                      void loadChannels(state, false);
+                    }
+                    if (state.agentsPanel === "cron") {
+                      void state.loadCron();
                     }
                   },
                   onSelectAgent: (agentId) => {
@@ -950,12 +1036,23 @@ export function renderApp(state: AppViewState) {
                     state.toolsCatalogResult = null;
                     state.toolsCatalogError = null;
                     state.toolsCatalogLoading = false;
+                    state.toolsEffectiveResult = null;
+                    state.toolsEffectiveResultKey = null;
+                    state.toolsEffectiveError = null;
+                    state.toolsEffectiveLoading = false;
+                    state.toolsEffectiveLoadingKey = null;
                     void loadAgentIdentity(state, agentId);
                     if (state.agentsPanel === "files") {
                       void loadAgentFiles(state, agentId);
                     }
                     if (state.agentsPanel === "tools") {
                       void loadToolsCatalog(state, agentId);
+                      if (agentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        void loadToolsEffective(state, {
+                          agentId,
+                          sessionKey: state.sessionKey,
+                        });
+                      }
                     }
                     if (state.agentsPanel === "skills") {
                       void loadAgentSkills(state, agentId);
@@ -984,6 +1081,27 @@ export function renderApp(state: AppViewState) {
                         state.toolsCatalogError
                       ) {
                         void loadToolsCatalog(state, resolvedAgentId);
+                      }
+                      if (resolvedAgentId === resolveAgentIdFromSessionKey(state.sessionKey)) {
+                        const toolsRequestKey = buildToolsEffectiveRequestKey(state, {
+                          agentId: resolvedAgentId,
+                          sessionKey: state.sessionKey,
+                        });
+                        if (
+                          state.toolsEffectiveResultKey !== toolsRequestKey ||
+                          state.toolsEffectiveError
+                        ) {
+                          void loadToolsEffective(state, {
+                            agentId: resolvedAgentId,
+                            sessionKey: state.sessionKey,
+                          });
+                        }
+                      } else {
+                        state.toolsEffectiveResult = null;
+                        state.toolsEffectiveResultKey = null;
+                        state.toolsEffectiveError = null;
+                        state.toolsEffectiveLoading = false;
+                        state.toolsEffectiveLoadingKey = null;
                       }
                     }
                     if (panel === "channels") {
@@ -1124,22 +1242,23 @@ export function renderApp(state: AppViewState) {
                     const basePath = ["agents", "list", index, "model"];
                     if (!modelId) {
                       removeConfigFormValue(state, basePath);
-                      return;
-                    }
-                    const entry = Array.isArray(list)
-                      ? (list[index] as { model?: unknown })
-                      : undefined;
-                    const existing = entry?.model;
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state, basePath, next);
                     } else {
-                      updateConfigFormValue(state, basePath, modelId);
+                      const entry = Array.isArray(list)
+                        ? (list[index] as { model?: unknown })
+                        : undefined;
+                      const existing = entry?.model;
+                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                        const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                        const next = {
+                          primary: modelId,
+                          ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                        };
+                        updateConfigFormValue(state, basePath, next);
+                      } else {
+                        updateConfigFormValue(state, basePath, modelId);
+                      }
                     }
+                    void refreshVisibleToolsEffectiveForCurrentSession(state);
                   },
                   onModelFallbacksChange: (agentId, fallbacks) => {
                     const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
@@ -1218,16 +1337,21 @@ export function renderApp(state: AppViewState) {
                   report: state.skillsReport,
                   error: state.skillsError,
                   filter: state.skillsFilter,
+                  statusFilter: state.skillsStatusFilter,
                   edits: state.skillEdits,
                   messages: state.skillMessages,
                   busyKey: state.skillsBusyKey,
+                  detailKey: state.skillsDetailKey,
                   onFilterChange: (next) => (state.skillsFilter = next),
+                  onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
                   onRefresh: () => loadSkills(state, { clearMessages: true }),
                   onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
                   onEdit: (key, value) => updateSkillEdit(state, key, value),
                   onSaveKey: (key) => saveSkillApiKey(state, key),
                   onInstall: (skillKey, name, installId) =>
                     installSkill(state, skillKey, name, installId),
+                  onDetailOpen: (key) => (state.skillsDetailKey = key),
+                  onDetailClose: () => (state.skillsDetailKey = null),
                 }),
               )
             : nothing
@@ -1339,6 +1463,7 @@ export function renderApp(state: AppViewState) {
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
+                showToolCalls,
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
@@ -1415,10 +1540,7 @@ export function renderApp(state: AppViewState) {
                   state.setTab("agents" as import("./navigation.ts").Tab);
                 },
                 onSessionSelect: (key: string) => {
-                  state.setSessionKey(key);
-                  state.chatMessages = [];
-                  void loadChatHistory(state);
-                  void state.loadAssistantIdentity();
+                  switchChatSession(state, key);
                 },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
@@ -1498,6 +1620,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.configFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.configSearchQuery = query),
@@ -1516,6 +1639,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1568,6 +1693,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.communicationsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.communicationsSearchQuery = query),
@@ -1586,6 +1712,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1632,6 +1760,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.appearanceFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.appearanceSearchQuery = query),
@@ -1650,6 +1779,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1696,6 +1827,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.automationFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.automationSearchQuery = query),
@@ -1714,6 +1846,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1760,6 +1894,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.infrastructureFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.infrastructureSearchQuery = query),
@@ -1778,6 +1913,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
@@ -1824,6 +1961,7 @@ export function renderApp(state: AppViewState) {
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
+                onRequestUpdate: requestHostUpdate,
                 onFormModeChange: (mode) => (state.aiAgentsFormMode = mode),
                 onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSearchChange: (query) => (state.aiAgentsSearchQuery = query),
@@ -1842,6 +1980,8 @@ export function renderApp(state: AppViewState) {
                 themeMode: state.themeMode,
                 setTheme: (t, ctx) => state.setTheme(t, ctx),
                 setThemeMode: (m, ctx) => state.setThemeMode(m, ctx),
+                borderRadius: state.settings.borderRadius,
+                setBorderRadius: (v) => state.setBorderRadius(v),
                 gatewayUrl: state.settings.gatewayUrl,
                 assistantName: state.assistantName,
                 configPath: state.configSnapshot?.path ?? null,
