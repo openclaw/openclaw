@@ -11,7 +11,7 @@
     "opusscript": "^0.1.1"
   },
   "devDependencies": {
-    "openclaw": "^2026.3.22"
+    "openclaw": "workspace:*"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.22"
