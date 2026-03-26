@@ -69,6 +69,7 @@ export default defineConfig({
       "extensions/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/app-settings.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
       "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",

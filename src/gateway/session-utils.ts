@@ -37,6 +37,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { looksLikeSessionId } from "../sessions/session-id.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
@@ -631,6 +632,9 @@ function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }
+  if (looksLikeSessionId(lowered)) {
+    return lowered;
+  }
   if (lowered.startsWith("agent:")) {
     return lowered;
   }
@@ -651,6 +655,9 @@ export function resolveSessionStoreKey(params: {
   }
   const rawLower = raw.toLowerCase();
   if (rawLower === "global" || rawLower === "unknown") {
+    return rawLower;
+  }
+  if (looksLikeSessionId(rawLower)) {
     return rawLower;
   }
 
