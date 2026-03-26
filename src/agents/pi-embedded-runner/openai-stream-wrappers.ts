@@ -154,9 +154,19 @@ function shouldStripResponsesStore(
   return OPENAI_RESPONSES_APIS.has(model.api) && model.compat?.supportsStore === false;
 }
 
-function shouldStripResponsesPromptCache(model: { api?: unknown; baseUrl?: unknown }): boolean {
+function shouldStripResponsesPromptCache(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
   if (typeof model.api !== "string" || !OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
+  }
+  if (typeof model.provider === "string") {
+    const provider = model.provider.toLowerCase();
+    if (provider.includes("openai") || provider.includes("codex")) {
+      return false;
+    }
   }
   // Missing baseUrl means pi-ai will use the default OpenAI endpoint, so keep
   // prompt cache fields for that direct path.
