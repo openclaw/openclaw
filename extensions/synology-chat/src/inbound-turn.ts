@@ -38,6 +38,7 @@ function resolveSynologyChatInboundRoute(params: {
       agentId: route.agentId,
       accountId: params.account.accountId,
       userId: isGroup ? peerId : params.userId,
+      peerKind: isGroup ? "group" : "direct",
       identityLinks: params.cfg.session?.identityLinks,
     }),
   };
