@@ -367,16 +367,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod(
-        "sessions.delete",
-        {
-          key: params.sessionKey,
-          deleteTranscript: params.deleteTranscript ?? true,
-        },
-        {
-          syntheticScopes: [ADMIN_SCOPE],
-        },
-      );
+      await dispatchGatewayMethod("sessions.delete", {
+        key: params.sessionKey,
+        deleteTranscript: params.deleteTranscript ?? true,
+      });
     },
   };
 }

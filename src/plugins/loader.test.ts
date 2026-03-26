@@ -1745,6 +1745,24 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           ).toBe(true);
         },
       },
+      {
+        label: "requires cli backend ids",
+        pluginId: "cli-backend-missing-id",
+        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
+  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends).toHaveLength(0);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "cli-backend-missing-id" &&
+                diag.message === "cli backend registration missing id",
+            ),
+          ).toBe(true);
+        },
+      },
     ] as const;
 
     for (const scenario of scenarios) {
@@ -1862,6 +1880,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+        },
+      },
+      {
+        label: "plugin cli backend ids",
+        ownerA: "cli-backend-owner-a",
+        ownerB: "cli-backend-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.cliBackends?.length ?? 0,
+        duplicateMessage:
+          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
       },
     ] as const;
@@ -2708,50 +2741,81 @@ module.exports = {
     }
   });
 
-  it("warns about open allowlists for discoverable plugins once per plugin set", () => {
+  it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
     const scenarios = [
       {
-        label: "single load warns",
-        pluginId: "warn-open-allow",
+        label: "explicit config path stays quiet",
+        pluginId: "warn-open-allow-config",
         loads: 1,
-        expectedWarnings: 1,
+        expectedWarnings: 0,
+        loadRegistry: (warnings: string[]) => {
+          const plugin = writePlugin({
+            id: "warn-open-allow-config",
+            body: `module.exports = { id: "warn-open-allow-config", register() {} };`,
+          });
+          return loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+              },
+            },
+          });
+        },
       },
       {
-        label: "repeated identical loads dedupe warning",
-        pluginId: "warn-open-allow-once",
+        label: "workspace discovery warns once",
+        pluginId: "warn-open-allow-workspace",
         loads: 2,
         expectedWarnings: 1,
+        loadRegistry: (() => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "warn-open-allow-workspace",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "warn-open-allow-workspace",
+            body: `module.exports = { id: "warn-open-allow-workspace", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
+          return (warnings: string[]) =>
+            loadOpenClawPlugins({
+              cache: false,
+              workspaceDir,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  enabled: true,
+                },
+              },
+            });
+        })(),
       },
     ] as const;
 
     for (const scenario of scenarios) {
-      const plugin = writePlugin({
-        id: scenario.pluginId,
-        body: `module.exports = { id: "${scenario.pluginId}", register() {} };`,
-      });
       const warnings: string[] = [];
-      const options = {
-        cache: false,
-        logger: createWarningLogger(warnings),
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-          },
-        },
-      };
 
       for (let index = 0; index < scenario.loads; index += 1) {
-        loadOpenClawPlugins(options);
+        scenario.loadRegistry(warnings);
       }
 
       const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
       expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
-      expect(
-        openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
-        scenario.label,
-      ).toBe(true);
+      if (scenario.expectedWarnings > 0) {
+        expect(
+          openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
+          scenario.label,
+        ).toBe(true);
+      }
     }
   });
 
