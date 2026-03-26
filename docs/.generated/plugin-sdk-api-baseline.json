@@ -2395,7 +2395,7 @@
           "exportName": "buildCommandsPaginationKeyboard",
           "kind": "function",
           "source": {
-            "line": 196,
+            "line": 175,
             "path": "src/auto-reply/reply/commands-info.ts"
           }
         },
