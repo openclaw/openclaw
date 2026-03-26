@@ -357,6 +357,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const mergedMediaUrls = Array.from(
       new Set([...(filteredMediaUrls ?? []), ...structuredMediaUrls]),
     );
+    const structuredUrlsInMerged = structuredMediaUrls.length > 0;
     if (!cleanedText && mergedMediaUrls.length === 0) {
       return;
     }
@@ -364,7 +365,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       void params.onToolResult({
         text: cleanedText,
         mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
-        ...(structuredArtifact?.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(structuredUrlsInMerged && structuredArtifact?.audioAsVoice === true
+          ? { audioAsVoice: true }
+          : {}),
       });
     } catch {
       // ignore tool result delivery failures

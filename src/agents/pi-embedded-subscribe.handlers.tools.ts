@@ -243,15 +243,6 @@ async function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
-  const hasStructuredMedia =
-    result &&
-    typeof result === "object" &&
-    (result as { details?: unknown }).details &&
-    typeof (result as { details?: unknown }).details === "object" &&
-    !Array.isArray((result as { details?: unknown }).details) &&
-    typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
-      "object" &&
-    !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
   const approvalPending = readExecApprovalPendingDetails(result);
   if (!isToolError && approvalPending) {
     if (!ctx.params.onToolResult) {
@@ -303,9 +294,8 @@ async function emitToolResultOutput(params: {
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText, result);
     }
-    if (hasStructuredMedia) {
-      return;
-    }
+    // In verbose/full mode, emitToolOutput handles media delivery.
+    // Do not also queue pending media to avoid duplicate sends.
     return;
   }
 
