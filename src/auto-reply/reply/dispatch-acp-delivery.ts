@@ -49,6 +49,8 @@ type AcpDispatchDeliveryState = {
   deliveredFinalReply: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
+  queuedDirectVisibleTextDeliveries: number;
+  settledDirectVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -62,6 +64,7 @@ export type AcpDispatchDeliveryCoordinator = {
   ) => Promise<boolean>;
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
+  settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
   hasFailedVisibleTextDelivery: () => boolean;
@@ -88,6 +91,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliveredFinalReply: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
+    queuedDirectVisibleTextDeliveries: 0,
+    settledDirectVisibleText: false,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -97,6 +102,22 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
   const directChannel = normalizeDeliveryChannel(params.ctx.Surface ?? params.ctx.Provider);
   const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
+
+  const settleDirectVisibleText = async () => {
+    if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
+      return;
+    }
+    state.settledDirectVisibleText = true;
+    await params.dispatcher.waitForIdle();
+    const failedCounts = params.dispatcher.getFailedCounts();
+    const failedVisibleCount = failedCounts.block + failedCounts.final;
+    if (failedVisibleCount > 0) {
+      state.failedVisibleTextDelivery = true;
+    }
+    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
+      state.deliveredVisibleText = true;
+    }
+  };
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
@@ -240,7 +261,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.deliveredFinalReply = true;
     }
     if (delivered && tracksVisibleText) {
-      state.deliveredVisibleText = true;
+      state.queuedDirectVisibleTextDeliveries += 1;
+      state.settledDirectVisibleText = false;
     } else if (!delivered && tracksVisibleText) {
       state.failedVisibleTextDelivery = true;
     }
@@ -252,6 +274,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     deliver,
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
+    settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,

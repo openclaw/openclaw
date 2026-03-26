@@ -22,6 +22,7 @@ function createDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -57,6 +58,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
 
     await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hello" });
@@ -70,6 +72,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
 
     await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(true);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
@@ -91,6 +94,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     });
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
@@ -102,6 +106,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const coordinator = createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
     expect(coordinator.hasDeliveredVisibleText()).toBe(false);
@@ -116,6 +121,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       sendFinalReply: vi.fn(() => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     };
     const coordinator = createAcpDispatchDeliveryCoordinator({
