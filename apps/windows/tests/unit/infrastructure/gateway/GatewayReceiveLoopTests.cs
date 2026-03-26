@@ -154,7 +154,7 @@ public sealed class GatewayReceiveLoopTests
         // Respond with hello-ok; ApplyHelloOk calls SetMainSessionKey so we can use it as sentinel.
         // Raw string interpolation can't embed consecutive `}` — use concat to avoid CS9007
         var helloOk = "{\"type\":\"res\",\"id\":\"" + connectRequestId
-            + "\",\"ok\":true,\"payload\":{\"snapshot\":{\"sessiondefaults\":{\"mainSessionKey\":\"global\"}}}}";
+            + "\",\"ok\":true,\"payload\":{\"snapshot\":{\"sessionDefaults\":{\"mainSessionKey\":\"global\"}}}}";
         await ch.Writer.WriteAsync(helloOk);
 
         // Poll until the session key propagates (SetMainSessionKey is called inside ApplyHelloOk).

@@ -304,10 +304,10 @@ internal sealed class GatewayReceiveLoopHostedService : IHostedService
     {
         _logger.LogInformation("hello-ok raw payload: {Payload}", payload.GetRawText());
 
-        // Extract mainSessionKey from snapshot.sessiondefaults
+        // Extract mainSessionKey from snapshot.sessionDefaults
         var sessionKey = "main";
         if (payload.TryGetProperty("snapshot", out var snapshot) &&
-            snapshot.TryGetProperty("sessiondefaults", out var defaults) &&
+            snapshot.TryGetProperty("sessionDefaults", out var defaults) &&
             defaults.TryGetProperty("mainSessionKey", out var mkProp))
         {
             var mk = mkProp.GetString()?.Trim();

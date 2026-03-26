@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using OpenClawWindows.Application.Behaviors;
+using OpenClawWindows.Domain.Config;
 
 namespace OpenClawWindows.Application.NodeMode;
 
@@ -12,10 +13,10 @@ public sealed record BrowserProxyCommand(string? ParamsJson) : IRequest<ErrorOr<
 internal sealed class BrowserProxyHandler : IRequestHandler<BrowserProxyCommand, ErrorOr<string>>
 {
     // Tunables
-    private const int ControlPortOffset  = 2;              // gatewayPort() + 2 (18789 + 2 = 18791)
-    private const int GatewayBasePort    = 18789;
-    private const int MaxFileSizeBytes   = 10 * 1024 * 1024;
-    private const int DefaultTimeoutSec  = 5;
+    private const int ControlPortOffset   = 2;              // gatewayPort() + 2
+    private const int DefaultGatewayPort  = 18789;
+    private const int MaxFileSizeBytes    = 10 * 1024 * 1024;
+    private const int DefaultTimeoutSec   = 5;
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<BrowserProxyHandler> _logger;
@@ -52,7 +53,7 @@ internal sealed class BrowserProxyHandler : IRequestHandler<BrowserProxyCommand,
         var normalizedPath = path.StartsWith('/') ? path : $"/{path}";
 
         // Build URL with query string
-        var baseUrl = $"http://127.0.0.1:{GatewayBasePort + ControlPortOffset}";
+        var baseUrl = $"http://127.0.0.1:{ResolveGatewayPort() + ControlPortOffset}";
         var uriBuilder = new UriBuilder(baseUrl + normalizedPath);
 
         var queryParts = new List<string>();
@@ -184,7 +185,7 @@ internal sealed class BrowserProxyHandler : IRequestHandler<BrowserProxyCommand,
             try
             {
                 var info = new FileInfo(path);
-                if (!info.Exists || !info.Attributes.HasFlag(FileAttributes.Normal | FileAttributes.Archive))
+                if (!info.Exists || info.Attributes.HasFlag(FileAttributes.Directory))
                     continue;
 
                 if (info.Length > MaxFileSizeBytes)
@@ -223,6 +224,17 @@ internal sealed class BrowserProxyHandler : IRequestHandler<BrowserProxyCommand,
             JsonValueKind.Null    => null,
             _                     => null,
         };
+    }
+
+    // Reads gateway port from env var or openclaw.json config, matching GatewayEnvironment.GatewayPort().
+    private static int ResolveGatewayPort()
+    {
+        var envRaw = Environment.GetEnvironmentVariable("OPENCLAW_GATEWAY_PORT")?.Trim();
+        if (envRaw is not null && int.TryParse(envRaw, out var envPort) && envPort > 0)
+            return envPort;
+        var configPort = OpenClawConfigFile.GatewayPort();
+        if (configPort is > 0) return configPort.Value;
+        return DefaultGatewayPort;
     }
 
     // Basic MIME type map (subset)
