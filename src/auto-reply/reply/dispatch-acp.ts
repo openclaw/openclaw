@@ -196,7 +196,7 @@ async function finalizeAcpTurnOutput(params: {
   ttsChannel?: string;
   shouldEmitResolvedIdentityNotice: boolean;
 }): Promise<boolean> {
-  let queuedFinal = false;
+  let queuedFinal = params.delivery.hasDeliveredVisibleText();
   const ttsMode = resolveTtsConfig(params.cfg).mode ?? "final";
   const accumulatedBlockText = params.delivery.getAccumulatedBlockText();
   const hasAccumulatedBlockText = accumulatedBlockText.trim().length > 0;

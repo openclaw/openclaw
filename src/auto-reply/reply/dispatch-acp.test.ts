@@ -504,6 +504,29 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("treats visible telegram ACP block delivery as a successful final response", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
