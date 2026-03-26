@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFields } from "./shared.js";
+import { readFields } from "../../../extensions/browser/src/cli/browser-cli-actions-input/shared.js";
 
 describe("readFields", () => {
   it.each([

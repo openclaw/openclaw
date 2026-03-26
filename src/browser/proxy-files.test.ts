@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { persistBrowserProxyFiles } from "../../extensions/browser/src/browser/proxy-files.js";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { persistBrowserProxyFiles } from "./proxy-files.js";
 
 describe("persistBrowserProxyFiles", () => {
   let tempHome: TempHomeEnv;

@@ -17,7 +17,7 @@ vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
 }));
 
-import { browserHandlers } from "./browser.js";
+import { browserHandlers } from "../../plugin-sdk/browser.js";
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 

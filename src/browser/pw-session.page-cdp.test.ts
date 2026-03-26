@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { withPageScopedCdpClient } from "../../extensions/browser/src/browser/pw-session.page-cdp.js";
 
 describe("pw-session page-scoped CDP client", () => {
   beforeEach(() => {

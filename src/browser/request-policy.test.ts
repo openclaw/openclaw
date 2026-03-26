@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPersistentBrowserProfileMutation } from "./request-policy.js";
+import { isPersistentBrowserProfileMutation } from "../../extensions/browser/src/browser/request-policy.js";
 
 describe("isPersistentBrowserProfileMutation", () => {
   it.each([

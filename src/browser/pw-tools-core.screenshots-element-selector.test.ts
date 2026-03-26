@@ -2,17 +2,17 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
+import { DEFAULT_UPLOAD_DIR } from "../../extensions/browser/src/browser/paths.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
-} from "./pw-tools-core.test-harness.js";
+} from "../../extensions/browser/src/browser/pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
-let mod: typeof import("./pw-tools-core.js");
+let mod: typeof import("../../extensions/browser/src/browser/pw-tools-core.js");
 
 function createFileChooserPageMocks() {
   const fileChooser = { setFiles: vi.fn(async () => {}) };
@@ -28,7 +28,7 @@ function createFileChooserPageMocks() {
 describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.resetModules();
-    mod = await import("./pw-tools-core.js");
+    mod = await import("../../extensions/browser/src/browser/pw-tools-core.js");
   });
 
   beforeEach(() => {

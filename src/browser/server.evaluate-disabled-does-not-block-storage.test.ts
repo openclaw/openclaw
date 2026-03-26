@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBrowserTestFetch } from "./test-fetch.js";
-import { getFreePort } from "./test-port.js";
+import { getBrowserTestFetch } from "../../extensions/browser/src/browser/test-fetch.js";
+import { getFreePort } from "../../extensions/browser/src/browser/test-port.js";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;
@@ -53,26 +53,27 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./pw-ai-module.js", () => ({
+vi.mock("../../extensions/browser/src/browser/pw-ai-module.js", () => ({
   getPwAiModule: vi.fn(async () => pwMocks),
 }));
 
-vi.mock("./server-context.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-context.js")>();
+vi.mock("../../extensions/browser/src/browser/server-context.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../extensions/browser/src/browser/server-context.js")>();
   return {
     ...actual,
     createBrowserRouteContext: routeCtxMocks.createBrowserRouteContext,
   };
 });
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
+let startBrowserControlServerFromConfig: typeof import("../../extensions/browser/src/browser/server.js").startBrowserControlServerFromConfig;
+let stopBrowserControlServer: typeof import("../../extensions/browser/src/browser/server.js").stopBrowserControlServer;
 
 describe("browser control evaluate gating", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
+      await import("../../extensions/browser/src/browser/server.js"));
   });
 
   beforeEach(async () => {

@@ -1,7 +1,10 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as chromeModule from "./chrome.js";
-import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+import * as chromeModule from "../../extensions/browser/src/browser/chrome.js";
+import {
+  closePlaywrightBrowserConnection,
+  getPageForTargetId,
+} from "../../extensions/browser/src/browser/pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");

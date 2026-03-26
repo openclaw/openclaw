@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as cdpModule from "../../extensions/browser/src/browser/cdp.js";
+import { createBrowserRouteContext } from "../../extensions/browser/src/browser/server-context.js";
+import {
+  makeState,
+  originalFetch,
+} from "../../extensions/browser/src/browser/server-context.remote-tab-ops.harness.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import * as cdpModule from "./cdp.js";
-import { createBrowserRouteContext } from "./server-context.js";
-import { makeState, originalFetch } from "./server-context.remote-tab-ops.harness.js";
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
