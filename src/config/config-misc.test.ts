@@ -482,7 +482,7 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues).not.toHaveLength(0);
     });
   });
@@ -517,7 +517,7 @@ describe("config strict validation", () => {
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(false);
+      expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
     });
   });

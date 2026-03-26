@@ -86,7 +86,6 @@ const {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
-  resolveOutputFormat,
   getResolvedSpeechProviderConfig,
 } = _test;
 
@@ -234,65 +233,6 @@ describe("tts", () => {
     });
   });
 
-  describe("resolveOutputFormat", () => {
-    it("selects opus for opus channels (telegram/feishu/whatsapp/matrix) and mp3 for others", () => {
-      const cases = [
-        {
-          channel: "telegram",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "feishu",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "whatsapp",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "matrix",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "discord",
-          expected: {
-            openai: "mp3",
-            elevenlabs: "mp3_44100_128",
-            extension: ".mp3",
-            voiceCompatible: false,
-          },
-        },
-      ] as const;
-      for (const testCase of cases) {
-        const output = resolveOutputFormat(testCase.channel);
-        expect(output.openai, testCase.channel).toBe(testCase.expected.openai);
-        expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
-        expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
-        expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
-      }
-    });
-  });
-
   describe("resolveEdgeOutputFormat", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -383,9 +323,11 @@ describe("tts", () => {
     it("accepts custom voices and models when openaiBaseUrl is a non-default endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-      const customBaseUrl = "http://localhost:8880/v1";
-
-      const result = parseTtsDirectives(input, policy, customBaseUrl);
+      const result = parseTtsDirectives(input, policy, {
+        providerConfigs: {
+          openai: { baseUrl: "http://localhost:8880/v1" },
+        },
+      });
       const openaiOverrides = result.overrides.providerOverrides?.openai as
         | { voice?: string; model?: string }
         | undefined;
@@ -398,9 +340,11 @@ describe("tts", () => {
     it("rejects unknown voices and models when openaiBaseUrl is the default OpenAI endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-      const defaultBaseUrl = "https://api.openai.com/v1";
-
-      const result = parseTtsDirectives(input, policy, defaultBaseUrl);
+      const result = parseTtsDirectives(input, policy, {
+        providerConfigs: {
+          openai: { baseUrl: "https://api.openai.com/v1" },
+        },
+      });
       const openaiOverrides = result.overrides.providerOverrides?.openai as
         | { voice?: string }
         | undefined;

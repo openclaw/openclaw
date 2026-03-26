@@ -48,22 +48,6 @@ const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 
-const OPUS_OUTPUT = {
-  openai: "opus" as const,
-  // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice message tradeoff.
-  elevenlabs: "opus_48000_64",
-  extension: ".opus",
-  voiceCompatible: true,
-};
-
-const DEFAULT_OUTPUT = {
-  openai: "mp3" as const,
-  elevenlabs: "mp3_44100_128",
-  extension: ".mp3",
-  voiceCompatible: false,
-};
-
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
   mode: TtsMode;
@@ -418,15 +402,8 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio */
+/** Channels that require voice-note-compatible audio */
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
-
-function resolveOutputFormat(channelId?: string | null) {
-  if (channelId && OPUS_CHANNELS.has(channelId)) {
-    return OPUS_OUTPUT;
-  }
-  return DEFAULT_OUTPUT;
-}
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -876,6 +853,5 @@ export const _test = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
-  resolveOutputFormat,
   getResolvedSpeechProviderConfig,
 };
