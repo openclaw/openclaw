@@ -47,11 +47,12 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 function normalizeOpenAIProviderConfig(
   rawConfig: Record<string, unknown>,
 ): OpenAITtsProviderConfig {
-  const raw = asObject(rawConfig.openai);
+  const providers = asObject(rawConfig.providers);
+  const raw = asObject(providers?.openai) ?? asObject(rawConfig.openai);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.openai.apiKey",
+      path: "messages.tts.providers.openai.apiKey",
     }),
     baseUrl: normalizeOpenAITtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??

@@ -24,6 +24,7 @@ export {
   browserTabAction,
   browserTabs,
 } from "./browser/client.js";
+export { runBrowserProxyCommand } from "./node-host/invoke-browser.js";
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,

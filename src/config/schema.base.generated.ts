@@ -8195,292 +8195,109 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 additionalProperties: false,
               },
-              elevenlabs: {
+              providers: {
                 type: "object",
-                properties: {
-                  apiKey: {
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    apiKey: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                  additionalProperties: {
                     anyOf: [
                       {
                         type: "string",
                       },
                       {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
-                    ],
-                  },
-                  baseUrl: {
-                    type: "string",
-                  },
-                  voiceId: {
-                    type: "string",
-                  },
-                  modelId: {
-                    type: "string",
-                  },
-                  seed: {
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 4294967295,
-                  },
-                  applyTextNormalization: {
-                    type: "string",
-                    enum: ["auto", "on", "off"],
-                  },
-                  languageCode: {
-                    type: "string",
-                  },
-                  voiceSettings: {
-                    type: "object",
-                    properties: {
-                      stability: {
                         type: "number",
-                        minimum: 0,
-                        maximum: 1,
                       },
-                      similarityBoost: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 1,
-                      },
-                      style: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 1,
-                      },
-                      useSpeakerBoost: {
+                      {
                         type: "boolean",
                       },
-                      speed: {
-                        type: "number",
-                        minimum: 0.5,
-                        maximum: 2,
-                      },
-                    },
-                    additionalProperties: false,
-                  },
-                },
-                additionalProperties: false,
-              },
-              openai: {
-                type: "object",
-                properties: {
-                  apiKey: {
-                    anyOf: [
                       {
-                        type: "string",
+                        type: "null",
                       },
                       {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
+                        type: "array",
+                        items: {},
+                      },
+                      {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
                       },
                     ],
                   },
-                  baseUrl: {
-                    type: "string",
-                  },
-                  model: {
-                    type: "string",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  speed: {
-                    type: "number",
-                    minimum: 0.25,
-                    maximum: 4,
-                  },
-                  instructions: {
-                    type: "string",
-                  },
                 },
-                additionalProperties: false,
-              },
-              edge: {
-                type: "object",
-                properties: {
-                  enabled: {
-                    type: "boolean",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  lang: {
-                    type: "string",
-                  },
-                  outputFormat: {
-                    type: "string",
-                  },
-                  pitch: {
-                    type: "string",
-                  },
-                  rate: {
-                    type: "string",
-                  },
-                  volume: {
-                    type: "string",
-                  },
-                  saveSubtitles: {
-                    type: "boolean",
-                  },
-                  proxy: {
-                    type: "string",
-                  },
-                  timeoutMs: {
-                    type: "integer",
-                    minimum: 1000,
-                    maximum: 120000,
-                  },
-                },
-                additionalProperties: false,
-              },
-              microsoft: {
-                type: "object",
-                properties: {
-                  enabled: {
-                    type: "boolean",
-                  },
-                  voice: {
-                    type: "string",
-                  },
-                  lang: {
-                    type: "string",
-                  },
-                  outputFormat: {
-                    type: "string",
-                  },
-                  pitch: {
-                    type: "string",
-                  },
-                  rate: {
-                    type: "string",
-                  },
-                  volume: {
-                    type: "string",
-                  },
-                  saveSubtitles: {
-                    type: "boolean",
-                  },
-                  proxy: {
-                    type: "string",
-                  },
-                  timeoutMs: {
-                    type: "integer",
-                    minimum: 1000,
-                    maximum: 120000,
-                  },
-                },
-                additionalProperties: false,
               },
               prefsPath: {
                 type: "string",
@@ -15184,6 +15001,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
       tags: ["media"],
     },
+    "messages.tts.providers": {
+      label: "TTS Provider Settings",
+      help: "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
+      tags: ["media"],
+    },
+    "messages.tts.providers.*": {
+      label: "TTS Provider Config",
+      help: "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
+      tags: ["media"],
+    },
+    "messages.tts.providers.*.apiKey": {
+      label: "TTS Provider API Key",
+      help: "Provider API key used by that speech provider when its plugin requires authenticated TTS access.",
+      tags: ["security", "auth", "media"],
+      sensitive: true,
+    },
     "talk.provider": {
       label: "Talk Active Provider",
       help: 'Active Talk provider id (for example "elevenlabs").',
@@ -16190,14 +16023,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "messages.tts.elevenlabs.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "media"],
-    },
-    "messages.tts.openai.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "media"],
-    },
     "channels.telegram.webhookSecret": {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
@@ -16210,11 +16035,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
     },
-    "channels.discord.voice.tts.elevenlabs.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.voice.tts.openai.apiKey": {
+    "channels.discord.voice.tts.providers.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "network", "media", "channels"],
     },
@@ -16222,11 +16043,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "network", "channels"],
     },
-    "channels.discord.accounts.*.voice.tts.elevenlabs.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "network", "media", "channels"],
-    },
-    "channels.discord.accounts.*.voice.tts.openai.apiKey": {
+    "channels.discord.accounts.*.voice.tts.providers.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "network", "media", "channels"],
     },

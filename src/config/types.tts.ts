@@ -25,6 +25,8 @@ export type TtsModelOverrideConfig = {
   allowSeed?: boolean;
 };
 
+export type TtsProviderConfigMap = Record<string, Record<string, unknown>>;
+
 export type TtsConfig = {
   /** Auto-TTS mode (preferred). */
   auto?: TtsAutoMode;
@@ -38,6 +40,8 @@ export type TtsConfig = {
   summaryModel?: string;
   /** Allow the model to override TTS parameters. */
   modelOverrides?: TtsModelOverrideConfig;
+  /** Provider-specific TTS settings keyed by speech provider id. */
+  providers?: TtsProviderConfigMap;
   /** ElevenLabs configuration. */
   elevenlabs?: {
     apiKey?: SecretInput;
