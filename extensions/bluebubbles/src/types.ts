@@ -33,7 +33,7 @@ export type BlueBubblesAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message handling policy. */
   groupPolicy?: GroupPolicy;
-  /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: false. */
+  /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: true. */
   enrichGroupParticipantsFromContacts?: boolean;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
