@@ -116,24 +116,27 @@ export function registerLazyLaneConcurrency(lane: string, resolver: LazyConcurre
  * If the lane was explicitly configured (maxConcurrent != 1), this is a no-op.
  * If a lazy resolver is registered, it will be called and the result applied.
  */
-async function ensureLaneConcurrency(lane: string): Promise<void> {
-  const state = getLaneState(lane);
-
-  // Check if we have a lazy resolver — always run it on first call to initialize
-  const resolver = getQueueState().lazyResolvers.get(lane);
+/**
+ * Ensure a lane's concurrency is initialized.
+ * Synchronous-only: only handles sync resolvers (async resolvers are skipped —
+ * they must be explicitly initialized via setCommandLaneConcurrency before use).
+ * After first sync init, the lazy resolver is removed so subsequent calls are no-ops.
+ */
+function ensureLaneConcurrency(lane: string): void {
+  const queueState = getQueueState();
+  const resolver = queueState.lazyResolvers.get(lane);
   if (!resolver) {
-    // No lazy resolver; nothing to do unless someone explicitly configured the lane
-    return;
+    return; // No lazy resolver — lane was either not configured or already initialized
   }
-
-  // Resolve and apply concurrency
+  // Sync resolver: call it and apply. Remove from map so subsequent calls are no-ops.
   try {
-    const maxConcurrent = await resolver();
+    const maxConcurrent = (resolver as unknown as () => number)();
+    const state = getLaneState(lane);
     state.maxConcurrent = Math.max(1, maxConcurrent);
+    queueState.lazyResolvers.delete(lane);
     diag.debug(`Lazy-initialized lane "${lane}" with maxConcurrent: ${state.maxConcurrent}`);
-  } catch (err) {
-    diag.warn(`Failed to lazy-initialize lane "${lane}": ${String(err)}`);
-    // Keep default maxConcurrent: 1 on failure
+  } catch {
+    // Async resolver or sync throw — skip; caller must use setCommandLaneConcurrency
   }
 }
 
@@ -231,20 +234,19 @@ export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
 }
 
-export async function enqueueCommandInLane<T>(
+export function enqueueCommandInLane<T>(
   lane: string,
   task: () => Promise<T>,
   opts?: { warnAfterMs?: number; onWait?: (waitMs: number, queuedAhead: number) => void },
 ): Promise<T> {
   const state = getQueueState();
   if (state.gatewayDraining) {
-    throw new GatewayDrainingError();
+    return Promise.reject(new GatewayDrainingError());
   }
 
   const cleaned = lane.trim() || CommandLane.Main;
 
-  // Ensure lane concurrency is initialized (supports lazy loading)
-  await ensureLaneConcurrency(cleaned);
+  ensureLaneConcurrency(cleaned);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const laneState = getLaneState(cleaned);
 
@@ -300,6 +302,8 @@ export function getQueueSize(lane: string = CommandLane.Main) {
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number): void {
   const state = getLaneState(lane);
   state.maxConcurrent = Math.max(1, maxConcurrent);
+  // Remove lazy resolver so ensureLaneConcurrency becomes a no-op on subsequent enqueues
+  getQueueState().lazyResolvers.delete(lane);
   drainLane(lane);
 }
 
