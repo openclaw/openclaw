@@ -1753,6 +1753,201 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+
+  // ── v34: Workspace Skills ───────────────────────────────────────────────────
+  // Adapted from Paperclip company_skills (paperclip sync P1, v2026.325.0).
+  // "company" → "workspace" to match operator1 scope terminology.
+  {
+    version: 34,
+    description: "Workspace skills: op1_workspace_skills (adapted from Paperclip company_skills)",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_workspace_skills (
+          id           TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          key          TEXT NOT NULL,
+          slug         TEXT NOT NULL,
+          name         TEXT NOT NULL,
+          description  TEXT,
+          markdown     TEXT NOT NULL DEFAULT '',
+          source_type  TEXT NOT NULL DEFAULT 'local_path',
+          source_locator TEXT,
+          source_ref   TEXT,
+          trust_level  TEXT NOT NULL DEFAULT 'markdown_only',
+          compatibility TEXT NOT NULL DEFAULT 'compatible',
+          file_inventory_json TEXT NOT NULL DEFAULT '[]',
+          metadata_json TEXT,
+          created_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+          UNIQUE (workspace_id, key)
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace ON op1_workspace_skills(workspace_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_workspace_skills_name ON op1_workspace_skills(workspace_id, name)",
+      );
+    },
+  },
+
+  // ── v35: Routines ──────────────────────────────────────────────────────────
+  // Adapted from Paperclip routines/routine_triggers/routine_runs schema
+  // (paperclip sync P1, v2026.325.0).
+  // UUIDs → TEXT, timestamps → INTEGER (unix epoch), jsonb → TEXT,
+  // companyId → workspace_id (unused internally but kept for future import/export).
+  {
+    version: 35,
+    description: "Routines: op1_routines, op1_routine_triggers, op1_routine_runs (adapted from Paperclip)",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_routines (
+          id                  TEXT PRIMARY KEY,
+          workspace_id        TEXT NOT NULL,
+          project_id          TEXT,
+          goal_id             TEXT,
+          parent_issue_id     TEXT,
+          title               TEXT NOT NULL,
+          description         TEXT,
+          assignee_agent_id   TEXT NOT NULL,
+          priority            TEXT NOT NULL DEFAULT 'medium',
+          status              TEXT NOT NULL DEFAULT 'active',
+          concurrency_policy  TEXT NOT NULL DEFAULT 'coalesce_if_active',
+          catch_up_policy     TEXT NOT NULL DEFAULT 'skip_missed',
+          created_by_agent_id TEXT,
+          created_by_user_id  TEXT,
+          updated_by_agent_id TEXT,
+          updated_by_user_id  TEXT,
+          last_triggered_at   INTEGER,
+          last_enqueued_at    INTEGER,
+          created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at          INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routines_workspace_status ON op1_routines(workspace_id, status)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routines_workspace_assignee ON op1_routines(workspace_id, assignee_agent_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routines_workspace_project ON op1_routines(workspace_id, project_id)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_routine_triggers (
+          id                  TEXT PRIMARY KEY,
+          workspace_id        TEXT NOT NULL,
+          routine_id          TEXT NOT NULL REFERENCES op1_routines(id) ON DELETE CASCADE,
+          kind                TEXT NOT NULL,
+          label               TEXT,
+          enabled             INTEGER NOT NULL DEFAULT 1,
+          cron_expression     TEXT,
+          timezone            TEXT,
+          next_run_at         INTEGER,
+          last_fired_at       INTEGER,
+          public_id           TEXT UNIQUE,
+          secret_signing_mode TEXT,
+          replay_window_sec   INTEGER,
+          last_rotated_at     INTEGER,
+          last_result         TEXT,
+          created_by_agent_id TEXT,
+          created_by_user_id  TEXT,
+          updated_by_agent_id TEXT,
+          updated_by_user_id  TEXT,
+          created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at          INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_triggers_routine ON op1_routine_triggers(workspace_id, routine_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_triggers_kind ON op1_routine_triggers(workspace_id, kind)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_triggers_next_run ON op1_routine_triggers(next_run_at)",
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_routine_runs (
+          id                    TEXT PRIMARY KEY,
+          workspace_id          TEXT NOT NULL,
+          routine_id            TEXT NOT NULL REFERENCES op1_routines(id) ON DELETE CASCADE,
+          trigger_id            TEXT REFERENCES op1_routine_triggers(id) ON DELETE SET NULL,
+          source                TEXT NOT NULL,
+          status                TEXT NOT NULL DEFAULT 'received',
+          triggered_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+          idempotency_key       TEXT,
+          trigger_payload_json  TEXT,
+          linked_issue_id       TEXT,
+          coalesced_into_run_id TEXT,
+          failure_reason        TEXT,
+          completed_at          INTEGER,
+          created_at            INTEGER NOT NULL DEFAULT (unixepoch()),
+          updated_at            INTEGER NOT NULL DEFAULT (unixepoch())
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_runs_routine ON op1_routine_runs(workspace_id, routine_id, created_at)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_runs_trigger ON op1_routine_runs(trigger_id, created_at)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_runs_linked_issue ON op1_routine_runs(linked_issue_id)",
+      );
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_routine_runs_idempotency ON op1_routine_runs(trigger_id, idempotency_key)",
+      );
+    },
+  },
+
+  // ── v36: Portability metadata ───────────────────────────────────────────────
+  // Tracks export/import provenance on agents.
+  // Adapted from Paperclip company-portability feature (paperclip sync P1, v2026.325.0).
+  {
+    version: 36,
+    description: "Portability metadata: op1_portability_exports + portability columns on agents",
+    up(db) {
+      // Export manifests table — records outbound exports for audit/reimport
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_portability_exports (
+          id            TEXT PRIMARY KEY,
+          workspace_id  TEXT NOT NULL,
+          exported_by   TEXT,
+          include_json  TEXT NOT NULL DEFAULT '{}',
+          status        TEXT NOT NULL DEFAULT 'pending',
+          asset_path    TEXT,
+          error         TEXT,
+          created_at    INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at  INTEGER
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_portability_exports_workspace ON op1_portability_exports(workspace_id, created_at)",
+      );
+
+      // Import manifests table — records inbound imports
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS op1_portability_imports (
+          id                  TEXT PRIMARY KEY,
+          workspace_id        TEXT NOT NULL,
+          imported_by         TEXT,
+          source_ref          TEXT,
+          collision_strategy  TEXT NOT NULL DEFAULT 'skip',
+          status              TEXT NOT NULL DEFAULT 'pending',
+          result_json         TEXT,
+          error               TEXT,
+          created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+          completed_at        INTEGER
+        )
+      `);
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS idx_portability_imports_workspace ON op1_portability_imports(workspace_id, created_at)",
+      );
+    },
+  },
 ];
 
 // ── Public API ──────────────────────────────────────────────────────────────

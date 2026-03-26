@@ -1,6 +1,6 @@
 /**
  * Type definitions for Paperclip Orchestration layer in Operator1.
- * Matches schema migrations v18-v23.
+ * Matches schema migrations v18-v23, v34-v36.
  */
 
 // ── Workspaces (v18) ────────────────────────────────────────────────────────
@@ -315,4 +315,173 @@ export interface FinanceEvent {
   model: string | null;
   amountMicrocents: number;
   createdAt: number;
+}
+
+// ── Workspace Skills (v34) ───────────────────────────────────────────────────
+// Adapted from Paperclip CompanySkill (paperclip sync P1, v2026.325.0).
+// "company" → "workspace" scope terminology.
+
+export type WorkspaceSkillSourceType = "local_path" | "github" | "url" | "catalog" | "skills_sh";
+
+export type WorkspaceSkillTrustLevel = "markdown_only" | "assets" | "scripts_executables";
+
+export type WorkspaceSkillCompatibility = "compatible" | "unknown" | "invalid";
+
+export type WorkspaceSkillSourceBadge = "paperclip" | "github" | "local" | "url" | "catalog" | "skills_sh";
+
+export interface WorkspaceSkillFileInventoryEntry {
+  path: string;
+  kind: "skill" | "markdown" | "reference" | "script" | "asset" | "other";
+}
+
+export interface WorkspaceSkill {
+  id: string;
+  workspaceId: string;
+  key: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  markdown: string;
+  sourceType: WorkspaceSkillSourceType;
+  sourceLocator: string | null;
+  sourceRef: string | null;
+  trustLevel: WorkspaceSkillTrustLevel;
+  compatibility: WorkspaceSkillCompatibility;
+  fileInventory: WorkspaceSkillFileInventoryEntry[];
+  metadata: Record<string, unknown> | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkspaceSkillListItem {
+  id: string;
+  workspaceId: string;
+  key: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  sourceType: WorkspaceSkillSourceType;
+  sourceLocator: string | null;
+  sourceRef: string | null;
+  trustLevel: WorkspaceSkillTrustLevel;
+  compatibility: WorkspaceSkillCompatibility;
+  fileInventory: WorkspaceSkillFileInventoryEntry[];
+  createdAt: number;
+  updatedAt: number;
+  attachedAgentCount: number;
+}
+
+// ── Routines (v35) ───────────────────────────────────────────────────────────
+// Adapted from Paperclip Routine/RoutineTrigger/RoutineRun types
+// (paperclip sync P1, v2026.325.0).
+// Timestamps are unix epoch integers (not Date objects) to match SQLite storage.
+
+export interface Routine {
+  id: string;
+  workspaceId: string;
+  projectId: string | null;
+  goalId: string | null;
+  parentIssueId: string | null;
+  title: string;
+  description: string | null;
+  assigneeAgentId: string;
+  priority: string;
+  status: string;
+  concurrencyPolicy: string;
+  catchUpPolicy: string;
+  createdByAgentId: string | null;
+  createdByUserId: string | null;
+  updatedByAgentId: string | null;
+  updatedByUserId: string | null;
+  lastTriggeredAt: number | null;
+  lastEnqueuedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineTrigger {
+  id: string;
+  workspaceId: string;
+  routineId: string;
+  kind: string;
+  label: string | null;
+  enabled: boolean;
+  cronExpression: string | null;
+  timezone: string | null;
+  nextRunAt: number | null;
+  lastFiredAt: number | null;
+  publicId: string | null;
+  secretSigningMode: string | null;
+  replayWindowSec: number | null;
+  lastRotatedAt: number | null;
+  lastResult: string | null;
+  createdByAgentId: string | null;
+  createdByUserId: string | null;
+  updatedByAgentId: string | null;
+  updatedByUserId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineRun {
+  id: string;
+  workspaceId: string;
+  routineId: string;
+  triggerId: string | null;
+  source: string;
+  status: string;
+  triggeredAt: number;
+  idempotencyKey: string | null;
+  triggerPayload: Record<string, unknown> | null;
+  linkedIssueId: string | null;
+  coalescedIntoRunId: string | null;
+  failureReason: string | null;
+  completedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineListItem extends Routine {
+  triggers: Pick<
+    RoutineTrigger,
+    "id" | "kind" | "label" | "enabled" | "nextRunAt" | "lastFiredAt" | "lastResult"
+  >[];
+  lastRun: RoutineRun | null;
+}
+
+// ── Portability (v36) ────────────────────────────────────────────────────────
+// Adapted from Paperclip company-portability feature
+// (paperclip sync P1, v2026.325.0).
+// Multi-tenant company concepts removed; workspace-scoped.
+
+export interface PortabilityInclude {
+  agents: boolean;
+  projects: boolean;
+  skills: boolean;
+  routines: boolean;
+}
+
+export interface PortabilityExport {
+  id: string;
+  workspaceId: string;
+  exportedBy: string | null;
+  include: PortabilityInclude;
+  status: "pending" | "complete" | "failed";
+  assetPath: string | null;
+  error: string | null;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+export interface PortabilityImport {
+  id: string;
+  workspaceId: string;
+  importedBy: string | null;
+  sourceRef: string | null;
+  collisionStrategy: "skip" | "overwrite" | "rename";
+  status: "pending" | "complete" | "failed";
+  result: Record<string, unknown> | null;
+  error: string | null;
+  createdAt: number;
+  completedAt: number | null;
 }
