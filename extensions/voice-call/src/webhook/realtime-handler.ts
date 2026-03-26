@@ -40,7 +40,10 @@ export class RealtimeCallHandler {
   private toolHandlers = new Map<string, ToolHandlerFn>();
   /** One-time tokens issued per TwiML response; consumed on WS upgrade.
    * Stores expiry + caller metadata so registerCallInManager can include From/To. */
-  private pendingStreamTokens = new Map<string, { expiry: number; from?: string; to?: string }>();
+  private pendingStreamTokens = new Map<
+    string,
+    { expiry: number; from?: string; to?: string; direction?: "inbound" | "outbound" }
+  >();
 
   constructor(
     private config: VoiceCallRealtimeConfig,
@@ -121,9 +124,11 @@ export class RealtimeCallHandler {
    */
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
     const host = req.headers.host || "localhost:8443";
+    const rawDirection = params?.get("Direction");
     const token = this.issueStreamToken({
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
+      direction: rawDirection === "outbound-api" ? "outbound" : "inbound",
     });
     const wsUrl = `wss://${host}/voice/stream/realtime/${token}`;
     console.log(
@@ -159,7 +164,9 @@ export class RealtimeCallHandler {
   // ---------------------------------------------------------------------------
 
   /** Generate a single-use stream token valid for STREAM_TOKEN_TTL_MS. */
-  private issueStreamToken(meta: { from?: string; to?: string } = {}): string {
+  private issueStreamToken(
+    meta: { from?: string; to?: string; direction?: "inbound" | "outbound" } = {},
+  ): string {
     const token = randomUUID();
     this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
     // Evict expired tokens to prevent unbounded growth if calls are abandoned
@@ -170,11 +177,15 @@ export class RealtimeCallHandler {
   }
 
   /** Consume a stream token. Returns caller metadata if valid, null if not. */
-  private consumeStreamToken(token: string): { from?: string; to?: string } | null {
+  private consumeStreamToken(
+    token: string,
+  ): { from?: string; to?: string; direction?: "inbound" | "outbound" } | null {
     const entry = this.pendingStreamTokens.get(token);
     if (!entry) return null;
     this.pendingStreamTokens.delete(token);
-    return Date.now() <= entry.expiry ? { from: entry.from, to: entry.to } : null;
+    return Date.now() <= entry.expiry
+      ? { from: entry.from, to: entry.to, direction: entry.direction }
+      : null;
   }
 
   /**
@@ -186,7 +197,7 @@ export class RealtimeCallHandler {
     streamSid: string,
     callSid: string,
     ws: WebSocket,
-    callerMeta: { from?: string; to?: string },
+    callerMeta: { from?: string; to?: string; direction?: "inbound" | "outbound" },
   ): OpenAIRealtimeVoiceBridge | null {
     const apiKey = this.openaiApiKey ?? process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -309,13 +320,13 @@ export class RealtimeCallHandler {
    */
   private registerCallInManager(
     callSid: string,
-    callerMeta: { from?: string; to?: string } = {},
+    callerMeta: { from?: string; to?: string; direction?: "inbound" | "outbound" } = {},
   ): string {
     const now = Date.now();
     const baseFields = {
       providerCallId: callSid,
       timestamp: now,
-      direction: "inbound" as const,
+      direction: (callerMeta.direction ?? "inbound") as "inbound" | "outbound",
       ...(callerMeta.from ? { from: callerMeta.from } : {}),
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
