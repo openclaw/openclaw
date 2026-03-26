@@ -54,6 +54,53 @@ async function seedSession(params?: { text?: string }) {
   return { storePath };
 }
 
+async function fetchSessionHistory(
+  port: number,
+  sessionKey: string,
+  params?: {
+    query?: string;
+    headers?: HeadersInit;
+  },
+) {
+  const headers = new Headers(AUTH_HEADER);
+  for (const [key, value] of new Headers(READ_SCOPE_HEADER).entries()) {
+    headers.set(key, value);
+  }
+  for (const [key, value] of new Headers(params?.headers).entries()) {
+    headers.set(key, value);
+  }
+  return fetch(
+    `http://127.0.0.1:${port}/sessions/${encodeURIComponent(sessionKey)}/history${params?.query ?? ""}`,
+    {
+      headers,
+    },
+  );
+}
+
+async function withGatewayHarness<T>(
+  run: (harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>) => Promise<T>,
+) {
+  const harness = await createGatewaySuiteHarness();
+  try {
+    return await run(harness);
+  } finally {
+    await harness.close();
+  }
+}
+
+async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
+  await withGatewayHarness(async (harness) => {
+    const res = await fetchSessionHistory(harness.port, params.sessionKey);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sessionKey?: string;
+      messages?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(body.sessionKey).toBe(params.sessionKey);
+    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
+  });
+}
+
 async function readSseEvent(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   state: { buffer: string },
@@ -90,16 +137,8 @@ async function readSseEvent(
 describe("session history HTTP endpoints", () => {
   test("returns session history over direct REST", async () => {
     await seedSession({ text: "hello from history" });
-
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
-        {
-          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
-        },
-      );
-
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main");
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         sessionKey?: string;
@@ -117,23 +156,13 @@ describe("session history HTTP endpoints", () => {
       ).toMatchObject({
         seq: 1,
       });
-    } finally {
-      await harness.close();
-    }
+    });
   });
 
   test("returns 404 for unknown sessions", async () => {
     await createSessionStoreFile();
-
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:missing")}/history`,
-        {
-          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
-        },
-      );
-
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:missing");
       expect(res.status).toBe(404);
       await expect(res.json()).resolves.toMatchObject({
         ok: false,
@@ -142,9 +171,7 @@ describe("session history HTTP endpoints", () => {
           message: "Session not found: agent:main:missing",
         },
       });
-    } finally {
-      await harness.close();
-    }
+    });
   });
 
   test("prefers the freshest duplicate row for direct history reads", async () => {
@@ -193,25 +220,10 @@ describe("session history HTTP endpoints", () => {
       "utf-8",
     );
 
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
-        {
-          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
-        },
-      );
-
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        sessionKey?: string;
-        messages?: Array<{ content?: Array<{ text?: string }> }>;
-      };
-      expect(body.sessionKey).toBe("agent:main:main");
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("fresh history");
-    } finally {
-      await harness.close();
-    }
+    await expectSessionHistoryText({
+      sessionKey: "agent:main:main",
+      expectedText: "fresh history",
+    });
   });
 
   test("supports cursor pagination over direct REST while preserving the messages field", async () => {
@@ -229,14 +241,10 @@ describe("session history HTTP endpoints", () => {
     });
     expect(third.ok).toBe(true);
 
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const firstPage = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=2`,
-        {
-          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
-        },
-      );
+    await withGatewayHarness(async (harness) => {
+      const firstPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=2",
+      });
       expect(firstPage.status).toBe(200);
       const firstBody = (await firstPage.json()) as {
         sessionKey?: string;
@@ -254,12 +262,9 @@ describe("session history HTTP endpoints", () => {
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
-      const secondPage = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
-        {
-          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
-        },
-      );
+      const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+      });
       expect(secondPage.status).toBe(200);
       const secondBody = (await secondPage.json()) as {
         items?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
@@ -273,9 +278,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
-    } finally {
-      await harness.close();
-    }
+    });
   });
 
   test("streams bounded history windows over SSE", async () => {
@@ -287,18 +290,11 @@ describe("session history HTTP endpoints", () => {
     });
     expect(second.ok).toBe(true);
 
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
-        {
-          headers: {
-            ...AUTH_HEADER,
-            ...READ_SCOPE_HEADER,
-            Accept: "text/event-stream",
-          },
-        },
-      );
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=1",
+        headers: { Accept: "text/event-stream" },
+      });
 
       expect(res.status).toBe(200);
       const reader = res.body?.getReader();
@@ -326,26 +322,16 @@ describe("session history HTTP endpoints", () => {
       ).toBe("third message");
 
       await reader?.cancel();
-    } finally {
-      await harness.close();
-    }
+    });
   });
 
   test("streams session history updates over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
-    const harness = await createGatewaySuiteHarness();
-    try {
-      const res = await fetch(
-        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
-        {
-          headers: {
-            ...AUTH_HEADER,
-            ...READ_SCOPE_HEADER,
-            Accept: "text/event-stream",
-          },
-        },
-      );
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Accept: "text/event-stream" },
+      });
 
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
@@ -396,9 +382,7 @@ describe("session history HTTP endpoints", () => {
       });
 
       await reader?.cancel();
-    } finally {
-      await harness.close();
-    }
+    });
   });
 
   test("rejects session history when operator.read is not requested", async () => {
