@@ -54,16 +54,6 @@ jobs:
           push: false
           provenance: false
 
-      - name: Build root Dockerfile smoke image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          tags: openclaw-dockerfile-smoke:local
-          load: true
-          push: false
-          provenance: false
-
       - name: Run root Dockerfile CLI smoke
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
