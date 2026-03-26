@@ -260,6 +260,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     const client = createMattermostClient({
       baseUrl: account.baseUrl ?? "",
       botToken: account.botToken ?? "",
+      allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
     });
 
     const auth = await authorizeSlashInvocation({

@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
+import { _setFetchGuardForTesting } from "./types.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
   enabled: true,
@@ -69,6 +70,31 @@ export function installBlueBubblesFetchTestHooks(params: {
 }) {
   beforeEach(() => {
     vi.stubGlobal("fetch", params.mockFetch);
+    // Replace the SSRF guard with a passthrough that delegates to the mocked global.fetch,
+    // wrapping the result in a real Response so callers can call .arrayBuffer() on it.
+    _setFetchGuardForTesting(async (p) => {
+      const raw = await globalThis.fetch(p.url, p.init);
+      let body: ArrayBuffer;
+      if (typeof raw.arrayBuffer === "function") {
+        body = await raw.arrayBuffer();
+      } else {
+        const text =
+          typeof (raw as { text?: () => Promise<string> }).text === "function"
+            ? await (raw as { text: () => Promise<string> }).text()
+            : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
+              ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
+              : "";
+        body = new TextEncoder().encode(text).buffer;
+      }
+      return {
+        response: new Response(body, {
+          status: (raw as { status?: number }).status ?? 200,
+          headers: (raw as { headers?: HeadersInit }).headers,
+        }),
+        release: async () => {},
+        finalUrl: p.url,
+      };
+    });
     params.mockFetch.mockReset();
     params.privateApiStatusMock.mockReset?.();
     params.privateApiStatusMock.mockClear?.();
@@ -76,6 +102,7 @@ export function installBlueBubblesFetchTestHooks(params: {
   });
 
   afterEach(() => {
+    _setFetchGuardForTesting(null);
     vi.unstubAllGlobals();
   });
 }

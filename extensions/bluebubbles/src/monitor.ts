@@ -275,6 +275,7 @@ export async function monitorBlueBubblesProvider(
     password: account.config.password,
     accountId: account.accountId,
     timeoutMs: 5000,
+    allowPrivateNetwork: account.config.allowPrivateNetwork === true,
   }).catch(() => null);
   if (serverInfo?.os_version) {
     runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);

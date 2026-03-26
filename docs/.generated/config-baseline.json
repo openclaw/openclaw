@@ -23297,6 +23297,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.accounts.*.baseUrl",
       "kind": "channel",
       "type": "string",
@@ -23817,6 +23827,16 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25407,6 +25427,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.apiPassword",
       "kind": "channel",
       "type": [
@@ -25988,6 +26018,16 @@
       "path": "channels.nextcloud-talk.allowFrom.*",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nextcloud-talk.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,

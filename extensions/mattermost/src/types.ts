@@ -86,6 +86,8 @@ export type MattermostAccountConfig = {
      */
     allowedSourceIps?: string[];
   };
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
   /** Retry configuration for DM channel creation */
   dmChannelRetry?: {
     /** Maximum number of retry attempts (default: 3) */

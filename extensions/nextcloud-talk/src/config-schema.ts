@@ -43,6 +43,8 @@ export const NextcloudTalkAccountSchemaBase = z
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
+    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
+    allowPrivateNetwork: z.boolean().optional(),
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
