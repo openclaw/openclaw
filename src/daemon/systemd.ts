@@ -10,7 +10,7 @@ import {
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveHomeDir } from "./paths.js";
+import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -416,6 +416,18 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
+async function readDotEnvKeys(pathname: string): Promise<Set<string>> {
+  const keys = new Set<string>();
+  const content = await fs.readFile(pathname, "utf8");
+  for (const rawLine of content.split(/\r?\n/)) {
+    const parsed = parseEnvironmentFileLine(rawLine);
+    if (parsed) {
+      keys.add(parsed.key);
+    }
+  }
+  return keys;
+}
+
 async function writeSystemdUnit({
   env,
   programArguments,
@@ -439,12 +451,32 @@ async function writeSystemdUnit({
     // File does not exist yet — nothing to back up.
   }
 
+  // Use EnvironmentFile= instead of inline Environment= for vars that already
+  // live in .env, so secrets are never written into the unit file on disk.
+  // See: https://github.com/openclaw/openclaw/issues/54521
+  const dotEnvPath = path.join(resolveGatewayStateDir(env), ".env");
+  let environmentFile: string | undefined;
+  let filteredEnvironment = environment;
+  try {
+    await fs.access(dotEnvPath);
+    const dotEnvKeys = await readDotEnvKeys(dotEnvPath);
+    environmentFile = dotEnvPath;
+    if (environment && dotEnvKeys.size > 0) {
+      filteredEnvironment = Object.fromEntries(
+        Object.entries(environment).filter(([key]) => !dotEnvKeys.has(key)),
+      );
+    }
+  } catch {
+    // .env file is absent; fall back to inline environment variables.
+  }
+
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const unit = buildSystemdUnit({
     description: serviceDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: filteredEnvironment,
+    environmentFile,
   });
   await fs.writeFile(unitPath, unit, "utf8");
   return { unitPath, backedUp };
