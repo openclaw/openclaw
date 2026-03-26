@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { modelsAreEqual } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -18,9 +18,9 @@ type CompactionBranchEntry = {
 
 type CompactionFallbackSession = {
   agent: {
-    setModel: (model: Model<unknown>) => void;
+    setModel: (model: Model<Api>) => void;
   };
-  model: Model<unknown> | undefined;
+  model: Model<Api> | undefined;
   sessionId: string;
   sessionManager: {
     getBranch: () => CompactionBranchEntry[];
@@ -32,7 +32,7 @@ type CompactionFallbackSession = {
 };
 
 type CompactionFallbackModelRegistry = {
-  find: (provider: string, modelId: string) => Model<unknown> | undefined;
+  find: (provider: string, modelId: string) => Model<Api> | undefined;
 };
 
 type CompactionFallbackCandidateRef = {
@@ -46,7 +46,7 @@ type InstallEmbeddedCompactionFallbackParams = {
   agentDir?: string;
   provider: string;
   model: string;
-  currentModel?: Model<unknown>;
+  currentModel?: Model<Api>;
   modelRegistry: CompactionFallbackModelRegistry;
   runId?: string;
 };
@@ -151,7 +151,7 @@ function didCompactionAdvance(
 
 async function withTemporarySessionModel<T>(
   session: CompactionFallbackSession,
-  candidate: Model<unknown>,
+  candidate: Model<Api>,
   fn: () => Promise<T>,
 ): Promise<T> {
   const originalModel = session.model;
@@ -171,9 +171,9 @@ async function withTemporarySessionModel<T>(
 function resolveCompactionCandidateModel(params: {
   provider: string;
   model: string;
-  currentModel?: Model<unknown>;
+  currentModel?: Model<Api>;
   modelRegistry: CompactionFallbackModelRegistry;
-}): Model<unknown> | undefined {
+}): Model<Api> | undefined {
   if (
     params.currentModel &&
     params.currentModel.provider === params.provider &&
