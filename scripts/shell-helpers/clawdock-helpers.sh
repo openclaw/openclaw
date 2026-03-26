@@ -314,8 +314,9 @@ clawdock-devices() {
   printf "%s\n" "$output" | _clawdock_filter_warnings
   if [ $exit_status -ne 0 ]; then
     echo ""
-    # Case-insensitive fixed-string match; works on macOS Bash 3.2 (no ${var,,}).
-    if printf '%s\n' "$output" | grep -Fqi "gateway token mismatch"; then
+    # Case-insensitive match via `tr`; works on macOS Bash 3.2 (no ${var,,})
+    # and Windows Git Bash (where `grep -Fqi` can be unreliable in pipes).
+    if [[ "$(printf '%s' "$output" | tr '[:upper:]' '[:lower:]')" == *"gateway token mismatch"* ]]; then
       echo -e "${_CLR_CYAN}💡 If you see token mismatch errors above:${_CLR_RESET}"
       echo -e "   1. Run: $(_cmd clawdock-fix-token)"
       echo -e "   2. Retry: $(_cmd clawdock-devices)"
