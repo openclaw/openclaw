@@ -1,5 +1,6 @@
 import {
   type Component,
+  getKeybindings,
   Input,
   isKeyRelease,
   matchesKey,
@@ -330,14 +331,24 @@ export class SearchableSelectList implements Component {
       return;
     }
 
+    const allowVimNav = !this.searchInput.getValue().trim();
+
     // Navigation keys
-    if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
+    if (
+      matchesKey(keyData, "up") ||
+      matchesKey(keyData, "ctrl+p") ||
+      (allowVimNav && keyData === "k")
+    ) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.notifySelectionChange();
       return;
     }
 
-    if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
+    if (
+      matchesKey(keyData, "down") ||
+      matchesKey(keyData, "ctrl+n") ||
+      (allowVimNav && keyData === "j")
+    ) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
       this.notifySelectionChange();
       return;
@@ -351,7 +362,8 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
+    const kb = getKeybindings();
+    if (kb.matches(keyData, "tui.select.cancel")) {
       if (this.onCancel) {
         this.onCancel();
       }

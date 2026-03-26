@@ -33,7 +33,6 @@ export type IMessageSendOpts = {
 
 export type IMessageSendResult = {
   messageId: string;
-  sentText: string;
 };
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
@@ -79,17 +78,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? String(raw).trim() : null;
 }
 
-function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
-  if (text.trim()) {
-    return text;
-  }
-  const kind = kindFromMime(mediaContentType ?? undefined);
-  if (!kind) {
-    return text;
-  }
-  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
-}
-
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -125,7 +113,12 @@ export async function sendMessageIMessage(
       localRoots: opts.mediaLocalRoots,
     });
     filePath = resolved.path;
-    message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);
+    if (!message.trim()) {
+      const kind = kindFromMime(resolved.contentType ?? undefined);
+      if (kind) {
+        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      }
+    }
   }
 
   if (!message.trim() && !filePath) {
@@ -179,7 +172,6 @@ export async function sendMessageIMessage(
     const resolvedId = resolveMessageId(result);
     return {
       messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
-      sentText: message,
     };
   } finally {
     if (shouldClose) {

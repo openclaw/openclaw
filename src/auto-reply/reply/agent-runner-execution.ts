@@ -6,8 +6,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -188,9 +187,6 @@ export async function runAgentTurnWithFallback(params: {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         const reply = resolveSendableOutboundReplyParts(payload);
-        if (params.followupRun.run.silentExpected) {
-          return { skip: true };
-        }
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
@@ -281,14 +277,7 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              provider,
-            );
-            const authProfileId =
-              provider === params.followupRun.run.provider
-                ? params.followupRun.run.authProfileId
-                : undefined;
+            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -307,16 +296,13 @@ export async function runAgentTurnWithFallback(params: {
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
-                  cliSessionId: cliSessionBinding?.sessionId,
-                  cliSessionBinding,
-                  authProfileId,
+                  cliSessionId,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[
                       bootstrapPromptWarningSignaturesSeen.length - 1
                     ],
                   images: params.opts?.images,
-                  imageOrder: params.opts?.imageOrder,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -417,7 +403,6 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
                 images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
                 abortSignal: params.opts?.abortSignal,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
@@ -438,9 +423,6 @@ export async function runAgentTurnWithFallback(params: {
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
-                        if (params.followupRun.run.silentExpected) {
-                          return;
-                        }
                         await params.typingSignals.signalReasoningDelta();
                         await params.opts?.onReasoningStream?.({
                           text: payload.text,
@@ -613,17 +595,6 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
-      if (err instanceof LiveSessionModelSwitchError) {
-        params.followupRun.run.provider = err.provider;
-        params.followupRun.run.model = err.model;
-        params.followupRun.run.authProfileId = err.authProfileId;
-        params.followupRun.run.authProfileIdSource = err.authProfileId
-          ? err.authProfileIdSource
-          : undefined;
-        fallbackProvider = err.provider;
-        fallbackModel = err.model;
-        continue;
-      }
       const message = err instanceof Error ? err.message : String(err);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);

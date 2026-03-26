@@ -5,12 +5,13 @@ import {
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
+  CLAUDE_CLI_PROFILE_ID,
+  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   repairOAuthProfileIdMismatch,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -22,42 +23,30 @@ import {
   resolveProviderAuthLoginCommand,
 } from "./provider-auth-guidance.js";
 
-export async function maybeRepairLegacyOAuthProfileIds(
+export async function maybeRepairAnthropicOAuthProfileId(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore();
-  let nextCfg = cfg;
-  const providers = resolvePluginProviders({
-    config: cfg,
-    env: process.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+  const repair = repairOAuthProfileIdMismatch({
+    cfg,
+    store,
+    provider: "anthropic",
+    legacyProfileId: "anthropic:default",
   });
-  for (const provider of providers) {
-    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
-      const repair = repairOAuthProfileIdMismatch({
-        cfg: nextCfg,
-        store,
-        provider: provider.id,
-        legacyProfileId: repairSpec.legacyProfileId,
-      });
-      if (!repair.migrated || repair.changes.length === 0) {
-        continue;
-      }
-
-      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-      const apply = await prompter.confirm({
-        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
-        initialValue: true,
-      });
-      if (!apply) {
-        continue;
-      }
-      nextCfg = repair.config;
-    }
+  if (!repair.migrated || repair.changes.length === 0) {
+    return cfg;
   }
-  return nextCfg;
+
+  note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
+  const apply = await prompter.confirm({
+    message: "Update Anthropic OAuth profile id in config now?",
+    initialValue: true,
+  });
+  if (!apply) {
+    return cfg;
+  }
+  return repair.config;
 }
 
 function pruneAuthOrder(
@@ -245,36 +234,29 @@ export function resolveUnusableProfileHint(params: {
   return "Wait for cooldown or switch provider.";
 }
 
-export async function resolveAuthIssueHint(
-  issue: AuthIssue,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string | null> {
+function formatAuthIssueHint(issue: AuthIssue): string | null {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
-  const providerHint = await formatAuthDoctorHint({
-    cfg,
-    store,
-    provider: issue.provider,
-    profileId: issue.profileId,
-  });
-  if (providerHint.trim()) {
-    return providerHint;
+  if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "anthropic",
+    })}`;
+  }
+  if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
+    return `Deprecated profile. ${buildProviderAuthRecoveryHint({
+      provider: "openai-codex",
+    })}`;
   }
   return buildProviderAuthRecoveryHint({
     provider: issue.provider,
   }).replace(/^Run /, "Re-auth via ");
 }
 
-async function formatAuthIssueLine(
-  issue: AuthIssue,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-): Promise<string> {
+function formatAuthIssueLine(issue: AuthIssue): string {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-  const hint = await resolveAuthIssueHint(issue, cfg, store);
+  const hint = formatAuthIssueHint(issue);
   const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
@@ -370,21 +352,19 @@ export async function noteAuthProfileHealth(params: {
   }
 
   if (issues.length > 0) {
-    const issueLines = await Promise.all(
-      issues.map((issue) =>
-        formatAuthIssueLine(
-          {
+    note(
+      issues
+        .map((issue) =>
+          formatAuthIssueLine({
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
             reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
-          },
-          params.cfg,
-          store,
-        ),
-      ),
+          }),
+        )
+        .join("\n"),
+      "Model auth",
     );
-    note(issueLines.join("\n"), "Model auth");
   }
 }

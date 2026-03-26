@@ -1,12 +1,7 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
-  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
-} from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
-import { defaultSlotIdForKey, hasKind } from "./slots.js";
-import type { PluginKind } from "./types.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
@@ -33,13 +28,52 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
+export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
+  "amazon-bedrock",
+  "anthropic",
+  "byteplus",
+  "cloudflare-ai-gateway",
+  "deepseek",
+  "device-pair",
+  "github-copilot",
+  "google",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "minimax",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "phone-control",
+  "qianfan",
+  "sglang",
+  "synthetic",
+  "talk-voice",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
+  "openai-codex": "openai",
+  "kimi-coding": "kimi",
+  "minimax-portal-auth": "minimax",
+};
+
 export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
-  return (
-    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
-    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
-    trimmed
-  );
+  return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
 }
 
 const normalizeList = (value: unknown): string[] => {
@@ -265,7 +299,7 @@ export function resolveEnableState(
   if (entry?.enabled === true) {
     return { enabled: true };
   }
-  if (origin === "bundled" && enabledByDefault === true) {
+  if (origin === "bundled" && (enabledByDefault ?? BUNDLED_ENABLED_BY_DEFAULT.has(id))) {
     return { enabled: true };
   }
   if (origin === "bundled") {
@@ -313,33 +347,30 @@ export function resolveEffectiveEnableState(params: {
 
 export function resolveMemorySlotDecision(params: {
   id: string;
-  kind?: string | string[];
+  kind?: string;
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind as PluginKind | PluginKind[] | undefined, "memory")) {
+  if (params.kind !== "memory") {
     return { enabled: true };
   }
-  // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the
-  // memory slot must stay enabled so its other slot role can still load.
-  const isMultiKind = Array.isArray(params.kind) && params.kind.length > 1;
   if (params.slot === null) {
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: "memory slot disabled" };
+    return { enabled: false, reason: "memory slot disabled" };
   }
   if (typeof params.slot === "string") {
     if (params.slot === params.id) {
       return { enabled: true, selected: true };
     }
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot set to "${params.slot}"` };
+    return {
+      enabled: false,
+      reason: `memory slot set to "${params.slot}"`,
+    };
   }
   if (params.selectedId && params.selectedId !== params.id) {
-    return isMultiKind
-      ? { enabled: true }
-      : { enabled: false, reason: `memory slot already filled by "${params.selectedId}"` };
+    return {
+      enabled: false,
+      reason: `memory slot already filled by "${params.selectedId}"`,
+    };
   }
   return { enabled: true, selected: true };
 }

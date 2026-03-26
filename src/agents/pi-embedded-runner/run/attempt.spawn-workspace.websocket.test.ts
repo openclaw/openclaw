@@ -11,6 +11,15 @@ describe("openai websocket transport selection", () => {
     ).toBe(true);
   });
 
+  it("accepts the Codex responses transport pair", () => {
+    expect(
+      shouldUseOpenAIWebSocketTransport({
+        provider: "openai-codex",
+        modelApi: "openai-codex-responses",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects mismatched OpenAI websocket transport pairs", () => {
     expect(
       shouldUseOpenAIWebSocketTransport({
@@ -22,12 +31,6 @@ describe("openai websocket transport selection", () => {
       shouldUseOpenAIWebSocketTransport({
         provider: "openai-codex",
         modelApi: "openai-responses",
-      }),
-    ).toBe(false);
-    expect(
-      shouldUseOpenAIWebSocketTransport({
-        provider: "openai-codex",
-        modelApi: "openai-codex-responses",
       }),
     ).toBe(false);
     expect(

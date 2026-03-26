@@ -1,20 +1,14 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveCompatibilityHostVersion } from "../version.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
@@ -23,7 +17,6 @@ export type PluginStatusReport = PluginRegistry & {
 };
 
 export type PluginCapabilityKind =
-  | "cli-backend"
   | "text-inference"
   | "speech"
   | "media-understanding"
@@ -123,16 +116,6 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
-function resolveStatusConfig(
-  config: ReturnType<typeof loadConfig>,
-  env: NodeJS.ProcessEnv | undefined,
-) {
-  return applyPluginAutoEnable({
-    config,
-    env: env ?? process.env,
-  }).config;
-}
-
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -141,7 +124,7 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
+    normalizeOpenClawVersionBase(resolveRuntimeServiceVersion(env)) ??
     normalizeOpenClawVersionBase(plugin.version) ??
     plugin.version
   );
@@ -153,35 +136,14 @@ export function buildPluginStatusReport(params?: {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
-  const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
+  const config = params?.config ?? loadConfig();
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
       resolveDefaultAgentWorkspaceDir());
 
-  // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
-  // report the same loaded/disabled status the gateway uses at runtime.  Without
-  // this, bundled provider plugins are incorrectly shown as "disabled" when
-  // `plugins.allow` is set because the allowlist check runs before the
-  // bundled-default-enable check.  Scoped to bundled providers only (not all
-  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
-  const bundledProviderIds = resolveBundledProviderCompatPluginIds({
-    config,
-    workspaceDir,
-    env: params?.env,
-  });
-  const effectiveConfig = withBundledPluginAllowlistCompat({
-    config,
-    pluginIds: bundledProviderIds,
-  });
-  const runtimeCompatConfig = withBundledPluginEnablementCompat({
-    config: effectiveConfig,
-    pluginIds: bundledProviderIds,
-  });
-
   const registry = loadOpenClawPlugins({
-    config: runtimeCompatConfig,
+    config,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
@@ -199,7 +161,6 @@ export function buildPluginStatusReport(params?: {
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
   return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
@@ -247,8 +208,7 @@ export function buildPluginInspectReport(params: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const rawConfig = params.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params.env);
+  const config = params.config ?? loadConfig();
   const report =
     params.report ??
     buildPluginStatusReport({
@@ -381,8 +341,7 @@ export function buildAllPluginInspectReports(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
+  const config = params?.config ?? loadConfig();
   const report =
     params?.report ??
     buildPluginStatusReport({

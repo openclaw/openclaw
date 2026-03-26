@@ -5,10 +5,6 @@ import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   resolveMSTeamsSendContext: vi.fn(),
-  resolveMarkdownTableMode: vi.fn(() => "off"),
-  convertMarkdownTables: vi.fn((text: string) => text),
-  runtimeResolveMarkdownTableMode: vi.fn(() => "off"),
-  runtimeConvertMarkdownTables: vi.fn((text: string) => text),
   requiresFileConsent: vi.fn(),
   prepareFileConsentActivity: vi.fn(),
   extractFilename: vi.fn(async () => "fallback.bin"),
@@ -20,14 +16,6 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
-}));
-
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
-  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
-}));
-
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  convertMarkdownTables: mockState.convertMarkdownTables,
 }));
 
 vi.mock("./send-context.js", () => ({
@@ -53,8 +41,8 @@ vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: () => ({
     channel: {
       text: {
-        resolveMarkdownTableMode: mockState.runtimeResolveMarkdownTableMode,
-        convertMarkdownTables: mockState.runtimeConvertMarkdownTables,
+        resolveMarkdownTableMode: () => "off",
+        convertMarkdownTables: (text: string) => text,
       },
     },
   }),
@@ -89,77 +77,10 @@ function mockContinueConversationFailure(error: string) {
   return mockContinueConversation;
 }
 
-function createSharePointSendContext(params: {
-  conversationId: string;
-  graphChatId: string | null;
-  siteId: string;
-}) {
-  return {
-    adapter: {
-      continueConversation: vi.fn(
-        async (
-          _id: string,
-          _ref: unknown,
-          fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
-        ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
-      ),
-    },
-    appId: "app-id",
-    conversationId: params.conversationId,
-    graphChatId: params.graphChatId,
-    ref: {},
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    conversationType: "groupChat" as const,
-    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-    mediaMaxBytes: 8 * 1024 * 1024,
-    sharePointSiteId: params.siteId,
-  };
-}
-
-function mockSharePointPdfUpload(params: {
-  bufferSize: number;
-  fileName: string;
-  itemId: string;
-  uniqueId: string;
-}) {
-  mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-    buffer: Buffer.alloc(params.bufferSize, "pdf"),
-    contentType: "application/pdf",
-    fileName: params.fileName,
-    kind: "file",
-  });
-  mockState.requiresFileConsent.mockReturnValue(false);
-  mockState.uploadAndShareSharePoint.mockResolvedValue({
-    itemId: params.itemId,
-    webUrl: `https://sp.example.com/${params.fileName}`,
-    shareUrl: `https://sp.example.com/share/${params.fileName}`,
-    name: params.fileName,
-  });
-  mockState.getDriveItemProperties.mockResolvedValue({
-    eTag: `"${params.uniqueId},1"`,
-    webDavUrl: `https://sp.example.com/dav/${params.fileName}`,
-    name: params.fileName,
-  });
-  mockState.buildTeamsFileInfoCard.mockReturnValue({
-    contentType: "application/vnd.microsoft.teams.card.file.info",
-    contentUrl: `https://sp.example.com/dav/${params.fileName}`,
-    name: params.fileName,
-    content: { uniqueId: params.uniqueId, fileType: "pdf" },
-  });
-}
-
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
     mockState.loadOutboundMediaFromUrl.mockReset();
     mockState.resolveMSTeamsSendContext.mockReset();
-    mockState.resolveMarkdownTableMode.mockReset();
-    mockState.resolveMarkdownTableMode.mockReturnValue("off");
-    mockState.convertMarkdownTables.mockReset();
-    mockState.convertMarkdownTables.mockImplementation((text: string) => text);
-    mockState.runtimeResolveMarkdownTableMode.mockReset();
-    mockState.runtimeResolveMarkdownTableMode.mockReturnValue("off");
-    mockState.runtimeConvertMarkdownTables.mockReset();
-    mockState.runtimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockState.requiresFileConsent.mockReset();
     mockState.prepareFileConsentActivity.mockReset();
     mockState.extractFilename.mockReset();
@@ -221,52 +142,57 @@ describe("sendMessageMSTeams", () => {
     );
   });
 
-  it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {
-    mockState.runtimeResolveMarkdownTableMode.mockImplementation(() => {
-      throw new Error("MSTeams runtime not initialized");
-    });
-    mockState.runtimeConvertMarkdownTables.mockImplementation(() => {
-      throw new Error("MSTeams runtime not initialized");
-    });
-    mockState.resolveMarkdownTableMode.mockReturnValue("off");
-    mockState.convertMarkdownTables.mockReturnValue("hello");
-
-    await expect(
-      sendMessageMSTeams({
-        cfg: {} as OpenClawConfig,
-        to: "conversation:19:conversation@thread.tacv2",
-        text: "hello",
-      }),
-    ).resolves.toEqual({
-      messageId: "message-1",
-      conversationId: "19:conversation@thread.tacv2",
-    });
-
-    expect(mockState.resolveMarkdownTableMode).toHaveBeenCalledWith({
-      cfg: {},
-      channel: "msteams",
-    });
-    expect(mockState.convertMarkdownTables).toHaveBeenCalledWith("hello", "off");
-  });
-
   it("uses graphChatId instead of conversationId when uploading to SharePoint", async () => {
     // Simulates a group chat where Bot Framework conversationId is valid but we have
     // a resolved Graph chat ID cached from a prior send.
     const graphChatId = "19:graph-native-chat-id@thread.tacv2";
     const botFrameworkConversationId = "19:bot-framework-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue(
-      createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId,
-        siteId: "site-123",
-      }),
-    );
-    mockSharePointPdfUpload({
-      bufferSize: 100,
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {
+        continueConversation: vi.fn(
+          async (
+            _id: string,
+            _ref: unknown,
+            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
+          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
+        ),
+      },
+      appId: "app-id",
+      conversationId: botFrameworkConversationId,
+      graphChatId,
+      ref: {},
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "groupChat",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024 * 1024,
+      sharePointSiteId: "site-123",
+    });
+
+    const pdfBuffer = Buffer.alloc(100, "pdf");
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: pdfBuffer,
+      contentType: "application/pdf",
       fileName: "doc.pdf",
+      kind: "file",
+    });
+    mockState.requiresFileConsent.mockReturnValue(false);
+    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-1",
-      uniqueId: "{GUID-123}",
+      webUrl: "https://sp.example.com/doc.pdf",
+      shareUrl: "https://sp.example.com/share/doc.pdf",
+      name: "doc.pdf",
+    });
+    mockState.getDriveItemProperties.mockResolvedValue({
+      eTag: '"{GUID-123},1"',
+      webDavUrl: "https://sp.example.com/dav/doc.pdf",
+      name: "doc.pdf",
+    });
+    mockState.buildTeamsFileInfoCard.mockReturnValue({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sp.example.com/dav/doc.pdf",
+      name: "doc.pdf",
+      content: { uniqueId: "GUID-123", fileType: "pdf" },
     });
 
     await sendMessageMSTeams({
@@ -288,18 +214,51 @@ describe("sendMessageMSTeams", () => {
   it("falls back to conversationId when graphChatId is not available", async () => {
     const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue(
-      createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId: null,
-        siteId: "site-456",
-      }),
-    );
-    mockSharePointPdfUpload({
-      bufferSize: 50,
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: {
+        continueConversation: vi.fn(
+          async (
+            _id: string,
+            _ref: unknown,
+            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
+          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
+        ),
+      },
+      appId: "app-id",
+      conversationId: botFrameworkConversationId,
+      graphChatId: null, // resolution failed — must fall back
+      ref: {},
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "groupChat",
+      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+      mediaMaxBytes: 8 * 1024 * 1024,
+      sharePointSiteId: "site-456",
+    });
+
+    const pdfBuffer = Buffer.alloc(50, "pdf");
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: pdfBuffer,
+      contentType: "application/pdf",
       fileName: "report.pdf",
+      kind: "file",
+    });
+    mockState.requiresFileConsent.mockReturnValue(false);
+    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-2",
-      uniqueId: "{GUID-456}",
+      webUrl: "https://sp.example.com/report.pdf",
+      shareUrl: "https://sp.example.com/share/report.pdf",
+      name: "report.pdf",
+    });
+    mockState.getDriveItemProperties.mockResolvedValue({
+      eTag: '"{GUID-456},1"',
+      webDavUrl: "https://sp.example.com/dav/report.pdf",
+      name: "report.pdf",
+    });
+    mockState.buildTeamsFileInfoCard.mockReturnValue({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sp.example.com/dav/report.pdf",
+      name: "report.pdf",
+      content: { uniqueId: "GUID-456", fileType: "pdf" },
     });
 
     await sendMessageMSTeams({

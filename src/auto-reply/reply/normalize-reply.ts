@@ -3,7 +3,6 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
-  isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   stripSilentToken,
@@ -53,7 +52,7 @@ export function normalizeReplyPayload(
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
-  if (text && isSilentReplyPayloadText(text, silentToken)) {
+  if (text && isSilentReplyText(text, silentToken)) {
     if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;

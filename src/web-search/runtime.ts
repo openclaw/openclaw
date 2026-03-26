@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
@@ -86,18 +86,12 @@ function hasEntryCredential(
   const rawValue =
     provider.getConfiguredCredentialValue?.(config) ??
     provider.getCredentialValue(search as Record<string, unknown> | undefined);
-  const configuredRef = resolveSecretInputRef({
-    value: rawValue,
-  }).ref;
-  if (configuredRef && configuredRef.source !== "env") {
-    return true;
-  }
-  const fromConfig = normalizeSecretInput(normalizeSecretInputString(rawValue));
-  if (configuredRef?.source === "env") {
-    return Boolean(
-      normalizeSecretInput(process.env[configuredRef.id]) || readProviderEnvValue(provider.envVars),
-    );
-  }
+  const fromConfig = normalizeSecretInput(
+    normalizeResolvedSecretInputString({
+      value: rawValue,
+      path: provider.credentialPath,
+    }),
+  );
   return Boolean(fromConfig || readProviderEnvValue(provider.envVars));
 }
 

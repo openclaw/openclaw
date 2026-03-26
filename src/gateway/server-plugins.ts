@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -368,10 +367,16 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod("sessions.delete", {
-        key: params.sessionKey,
-        deleteTranscript: params.deleteTranscript ?? true,
-      });
+      await dispatchGatewayMethod(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          deleteTranscript: params.deleteTranscript ?? true,
+        },
+        {
+          syntheticScopes: [ADMIN_SCOPE],
+        },
+      );
     },
   };
 }
@@ -391,15 +396,11 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
-  const resolvedConfig = applyPluginAutoEnable({
-    config: params.cfg,
-    env: process.env,
-  }).config;
   const pluginRegistry = loadOpenClawPlugins({
-    config: resolvedConfig,
+    config: params.cfg,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: resolveGatewayStartupPluginIds({
-      config: resolvedConfig,
+      config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: process.env,
     }),

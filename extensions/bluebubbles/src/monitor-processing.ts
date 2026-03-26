@@ -5,7 +5,6 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
-import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 import {
@@ -834,15 +833,14 @@ export async function processMessage(
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : message.senderId;
 
-  const route = resolveBlueBubblesConversationRoute({
+  const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
+    channel: "bluebubbles",
     accountId: account.accountId,
-    isGroup,
-    peerId,
-    sender: message.senderId,
-    chatId,
-    chatGuid,
-    chatIdentifier,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
   });
 
   // Mention gating for group chats (parity with iMessage/WhatsApp)
@@ -1660,29 +1658,15 @@ export async function processReaction(
   const peerId = reaction.isGroup
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : reaction.senderId;
-  const requireMention =
-    reaction.isGroup &&
-    core.channel.groups.resolveRequireMention({
-      cfg: config,
-      channel: "bluebubbles",
-      groupId: peerId,
-      accountId: account.accountId,
-    });
 
-  if (requireMention) {
-    logVerbose(core, runtime, "bluebubbles: skipping group reaction (requireMention=true)");
-    return;
-  }
-
-  const route = resolveBlueBubblesConversationRoute({
+  const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
+    channel: "bluebubbles",
     accountId: account.accountId,
-    isGroup: reaction.isGroup,
-    peerId,
-    sender: reaction.senderId,
-    chatId,
-    chatGuid,
-    chatIdentifier,
+    peer: {
+      kind: reaction.isGroup ? "group" : "direct",
+      id: peerId,
+    },
   });
 
   const senderLabel = reaction.senderName || reaction.senderId;

@@ -11,7 +11,7 @@ import {
   resolvePollMaxSelections,
   type OpenClawConfig,
   type TelegramActionConfig,
-} from "openclaw/plugin-sdk/telegram-core";
+} from "../runtime-api.js";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
@@ -47,9 +47,6 @@ export const telegramActionRuntime = {
 };
 
 const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
-const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
-  0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
-] as const;
 const TELEGRAM_ACTION_ALIASES = {
   createForumTopic: "createForumTopic",
   delete: "deleteMessage",
@@ -71,25 +68,7 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
-type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
-type RawTelegramButton = {
-  callback_data?: unknown;
-  style?: unknown;
-  text?: unknown;
-};
 
-function readTelegramForumTopicIconColor(
-  params: Record<string, unknown>,
-): TelegramForumTopicIconColor | undefined {
-  const iconColor = readNumberParam(params, "iconColor", { integer: true });
-  if (iconColor == null) {
-    return undefined;
-  }
-  if (!TELEGRAM_FORUM_TOPIC_ICON_COLORS.includes(iconColor as TelegramForumTopicIconColor)) {
-    throw new Error("iconColor must be one of Telegram's supported forum topic colors.");
-  }
-  return iconColor as TelegramForumTopicIconColor;
-}
 function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;
@@ -124,10 +103,14 @@ export function readTelegramButtons(
       if (!button || typeof button !== "object") {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
       }
-      const rawButton = button as RawTelegramButton;
-      const text = typeof rawButton.text === "string" ? rawButton.text.trim() : "";
+      const text =
+        typeof (button as { text?: unknown }).text === "string"
+          ? (button as { text: string }).text.trim()
+          : "";
       const callbackData =
-        typeof rawButton.callback_data === "string" ? rawButton.callback_data.trim() : "";
+        typeof (button as { callback_data?: unknown }).callback_data === "string"
+          ? (button as { callback_data: string }).callback_data.trim()
+          : "";
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
@@ -136,7 +119,7 @@ export function readTelegramButtons(
           `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
         );
       }
-      const styleRaw = rawButton.style;
+      const styleRaw = (button as { style?: unknown }).style;
       const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
       if (styleRaw !== undefined && !style) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
@@ -592,7 +575,7 @@ export async function handleTelegramAction(
     }
     const chatId = readTelegramChatId(params);
     const name = readStringParam(params, "name", { required: true });
-    const iconColor = readTelegramForumTopicIconColor(params);
+    const iconColor = readNumberParam(params, "iconColor", { integer: true });
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -604,7 +587,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
-      iconColor,
+      iconColor: iconColor ?? undefined,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
     });
     return jsonResult({

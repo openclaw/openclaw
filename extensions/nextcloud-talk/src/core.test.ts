@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { nextcloudTalkPlugin } from "./channel.js";
+import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import {
   escapeNextcloudTalkMarkdown,
   formatNextcloudTalkCodeBlock,
@@ -26,29 +28,11 @@ import {
 } from "./signature.js";
 import type { CoreConfig } from "./types.js";
 
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const readFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("../runtime-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
     ...actual,
     fetchWithSsrFGuard,
@@ -64,14 +48,6 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const tempDirs: string[] = [];
-let nextcloudTalkPlugin: typeof import("./channel.js").nextcloudTalkPlugin;
-let NextcloudTalkConfigSchema: typeof import("./config-schema.js").NextcloudTalkConfigSchema;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ nextcloudTalkPlugin } = await import("./channel.js"));
-  ({ NextcloudTalkConfigSchema } = await import("./config-schema.js"));
-});
 
 afterEach(async () => {
   fetchWithSsrFGuard.mockReset();
@@ -430,7 +406,6 @@ describe("nextcloud talk core", () => {
   });
 
   it("resolves direct rooms from the room info endpoint", async () => {
-    vi.resetModules();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuard.mockResolvedValue({
       response: {
@@ -470,7 +445,6 @@ describe("nextcloud talk core", () => {
   });
 
   it("reads the api password from a file and logs non-ok room info responses", async () => {
-    vi.resetModules();
     const release = vi.fn(async () => {});
     const log = vi.fn();
     const error = vi.fn();
@@ -506,7 +480,6 @@ describe("nextcloud talk core", () => {
   });
 
   it("returns undefined from room info without credentials or base url", async () => {
-    vi.resetModules();
     const { resolveNextcloudTalkRoomKind } = await import("./room-info.js");
 
     await expect(

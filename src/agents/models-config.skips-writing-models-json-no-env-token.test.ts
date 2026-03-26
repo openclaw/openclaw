@@ -10,7 +10,7 @@ import {
   withTempEnv,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.secrets.js";
+import type { ProviderConfig as ModelsProviderConfig } from "./models-config.providers.js";
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
   syncExternalCliCredentials: () => false,
@@ -21,17 +21,17 @@ vi.mock("./models-config.providers.js", async () => {
     "./models-config.providers.js",
   );
   const [
-    { buildDeepSeekProvider: buildDeepSeekProviderFromSdk },
-    { buildMinimaxProvider: buildMinimaxProviderFromSdk },
-    { buildMistralProvider: buildMistralProviderFromSdk },
-    { buildSyntheticProvider: buildSyntheticProviderFromSdk },
-    { buildXaiProvider: buildXaiProviderFromSdk },
+    { buildDeepSeekProvider },
+    { buildMinimaxProvider },
+    { buildMistralProvider },
+    { buildSyntheticProvider },
+    { buildXaiProvider },
   ] = await Promise.all([
-    import("../plugin-sdk/deepseek.js"),
-    import("../plugin-sdk/minimax.js"),
-    import("../plugin-sdk/mistral.js"),
-    import("../plugin-sdk/synthetic.js"),
-    import("../plugin-sdk/xai.js"),
+    import("../../extensions/deepseek/provider-catalog.js"),
+    import("../../extensions/minimax/provider-catalog.js"),
+    import("../../extensions/mistral/provider-catalog.js"),
+    import("../../extensions/synthetic/provider-catalog.js"),
+    import("../../extensions/xai/provider-catalog.js"),
   ]);
   return {
     ...actual,
@@ -43,27 +43,27 @@ vi.mock("./models-config.providers.js", async () => {
           models: [],
         },
         deepseek: {
-          ...buildDeepSeekProviderFromSdk(),
+          ...buildDeepSeekProvider(),
           apiKey: "DEEPSEEK_API_KEY",
         },
         mistral: {
-          ...buildMistralProviderFromSdk(),
+          ...buildMistralProvider(),
           apiKey: "MISTRAL_API_KEY",
         },
         xai: {
-          ...buildXaiProviderFromSdk(),
+          ...buildXaiProvider(),
           apiKey: "XAI_API_KEY",
         },
       };
       if (env?.MINIMAX_API_KEY) {
         providers["minimax"] = {
-          ...buildMinimaxProviderFromSdk(),
+          ...buildMinimaxProvider(),
           apiKey: "MINIMAX_API_KEY",
         };
       }
       if (env?.SYNTHETIC_API_KEY) {
         providers["synthetic"] = {
-          ...buildSyntheticProviderFromSdk(),
+          ...buildSyntheticProvider(),
           apiKey: "SYNTHETIC_API_KEY",
         };
       }

@@ -21,7 +21,7 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import { isSupportedLocale } from "../i18n/index.ts";
-import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { inferBasePathFromPathname, normalizeBasePath } from "./navigation.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
@@ -89,7 +89,13 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 }
 
 function getSessionStorage(): Storage | null {
-  return getSafeSessionStorage();
+  if (typeof window !== "undefined" && window.sessionStorage) {
+    return window.sessionStorage;
+  }
+  if (typeof sessionStorage !== "undefined") {
+    return sessionStorage;
+  }
+  return null;
 }
 
 function normalizeGatewayTokenScope(gatewayUrl: string): string {

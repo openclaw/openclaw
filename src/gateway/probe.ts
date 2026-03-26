@@ -36,17 +36,12 @@ export function clampProbeTimeoutMs(timeoutMs: number): number {
   return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
 }
 
-function formatProbeCloseError(close: GatewayProbeClose): string {
-  return `gateway closed (${close.code}): ${close.reason}`;
-}
-
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
-  tlsFingerprint?: string;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -54,29 +49,18 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
-
-  const deviceIdentity = await (async () => {
-    let hostname: string;
+  const disableDeviceIdentity = (() => {
     try {
-      hostname = new URL(opts.url).hostname;
+      const hostname = new URL(opts.url).hostname;
+      // Local authenticated probes should stay device-bound so read/detail RPCs
+      // are not scope-limited by the shared-auth scope stripping hardening.
+      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
     } catch {
-      return null;
-    }
-    // Local authenticated probes should stay device-bound so read/detail RPCs
-    // are not scope-limited by the shared-auth scope stripping hardening.
-    if (isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password)) {
-      return null;
-    }
-    try {
-      const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-      return loadOrCreateDeviceIdentity();
-    } catch {
-      // Read-only or restricted environments should still be able to run
-      // token/password-auth detail probes without crashing on identity persistence.
-      return null;
+      return false;
     }
   })();
+
+  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -105,30 +89,17 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
-      tlsFingerprint: opts.tlsFingerprint,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity,
+      deviceIdentity: disableDeviceIdentity ? null : undefined,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },
       onClose: (code, reason) => {
         close = { code, reason };
-        if (connectLatencyMs == null) {
-          settle({
-            ok: false,
-            connectLatencyMs,
-            error: formatProbeCloseError(close),
-            close,
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
-          });
-        }
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;

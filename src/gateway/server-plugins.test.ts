@@ -7,7 +7,6 @@ import type { GatewayRequestContext, GatewayRequestOptions } from "./server-meth
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
 const resolveGatewayStartupPluginIds = vi.hoisted(() => vi.fn(() => ["discord", "telegram"]));
-const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
 const primeConfiguredBindingRegistry = vi.hoisted(() =>
   vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
 );
@@ -24,10 +23,6 @@ vi.mock("../plugins/loader.js", () => ({
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveGatewayStartupPluginIds,
-}));
-
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable,
 }));
 
 vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
@@ -88,15 +83,6 @@ let runtimeModule: PluginRuntimeModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 
-function createTestLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
-
 function createTestContext(label: string): GatewayRequestContext {
   return { label } as unknown as GatewayRequestContext;
 }
@@ -129,7 +115,12 @@ async function createSubagentRuntime(
   _serverPlugins: ServerPluginsModule,
   cfg: Record<string, unknown> = {},
 ): Promise<PluginRuntime["subagent"]> {
-  const log = createTestLog();
+  const log = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
   loadOpenClawPlugins.mockReturnValue(createRegistry([]));
   serverPluginBootstrapModule.loadGatewayStartupPlugins({
     cfg,
@@ -153,36 +144,6 @@ async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
   return serverPluginsModule;
 }
 
-function loadGatewayPluginsForTest(
-  overrides: Partial<Parameters<ServerPluginsModule["loadGatewayPlugins"]>[0]> = {},
-) {
-  const log = createTestLog();
-  serverPluginsModule.loadGatewayPlugins({
-    cfg: {},
-    workspaceDir: "/tmp",
-    log,
-    coreGatewayHandlers: {},
-    baseMethods: [],
-    ...overrides,
-  });
-  return log;
-}
-
-function loadGatewayStartupPluginsForTest(
-  overrides: Partial<Parameters<ServerPluginBootstrapModule["loadGatewayStartupPlugins"]>[0]> = {},
-) {
-  const log = createTestLog();
-  serverPluginBootstrapModule.loadGatewayStartupPlugins({
-    cfg: {},
-    workspaceDir: "/tmp",
-    log,
-    coreGatewayHandlers: {},
-    baseMethods: [],
-    ...overrides,
-  });
-  return log;
-}
-
 beforeAll(async () => {
   await loadTestModules();
 });
@@ -190,7 +151,6 @@ beforeAll(async () => {
 beforeEach(() => {
   loadOpenClawPlugins.mockReset();
   resolveGatewayStartupPluginIds.mockReset().mockReturnValue(["discord", "telegram"]);
-  applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({ config, changes: [] }));
   primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
   handleGatewayRequest.mockReset();
   runtimeModule.clearGatewaySubagentRuntime();
@@ -220,6 +180,7 @@ afterEach(() => {
 
 describe("loadGatewayPlugins", () => {
   test("logs plugin errors with details", async () => {
+    const { loadGatewayStartupPlugins } = serverPluginBootstrapModule;
     const diagnostics: PluginDiagnostic[] = [
       {
         level: "error",
@@ -229,7 +190,21 @@ describe("loadGatewayPlugins", () => {
       },
     ];
     loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = loadGatewayStartupPluginsForTest();
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayStartupPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
 
     expect(log.error).toHaveBeenCalledWith(
       "[plugins] failed to load plugin: boom (plugin=telegram, source=/tmp/telegram/index.ts)",
@@ -238,13 +213,24 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("loads only gateway startup plugin ids", async () => {
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadGatewayPluginsForTest();
 
-    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
     });
+
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: {},
       workspaceDir: "/tmp",
@@ -257,28 +243,24 @@ describe("loadGatewayPlugins", () => {
     );
   });
 
-  test("loads gateway plugins from the auto-enabled config snapshot", async () => {
-    const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-
-    loadGatewayPluginsForTest();
-
-    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
-      config: autoEnabledConfig,
-      workspaceDir: "/tmp",
-      env: process.env,
-    });
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: autoEnabledConfig,
-      }),
-    );
-  });
-
   test("provides subagent runtime with sessions.get method aliases", async () => {
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadGatewayPluginsForTest();
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
 
     const call = loadOpenClawPlugins.mock.calls.at(-1)?.[0] as
       | { runtimeOptions?: { allowGatewaySubagentBinding?: boolean } }
@@ -499,65 +481,36 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
-  test("rejects fallback session deletion without minting admin scope", async () => {
+  test("keeps admin scope for fallback session deletion", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-delete-session"));
 
-    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-      // Re-run the gateway scope check here so the test proves fallback dispatch
-      // does not smuggle admin into the request client.
-      const scopes = Array.isArray(opts.client?.connect?.scopes) ? opts.client.connect.scopes : [];
-      const auth = methodScopesModule.authorizeOperatorScopesForMethod("sessions.delete", scopes);
-      if (!auth.allowed) {
-        opts.respond(false, undefined, {
-          code: "INVALID_REQUEST",
-          message: `missing scope: ${auth.missingScope}`,
-        });
-        return;
-      }
-      opts.respond(true, {});
+    await runtime.deleteSession({
+      sessionKey: "s-delete",
+      deleteTranscript: true,
     });
-
-    await expect(
-      runtime.deleteSession({
-        sessionKey: "s-delete",
-        deleteTranscript: true,
-      }),
-    ).rejects.toThrow("missing scope: operator.admin");
-
-    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
-    expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
-  });
-
-  test("allows session deletion when the request scope already has admin", async () => {
-    const serverPlugins = serverPluginsModule;
-    const runtime = await createSubagentRuntime(serverPlugins);
-    const scope = {
-      context: createTestContext("request-scope-delete-session"),
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-        },
-      } as GatewayRequestOptions["client"],
-      isWebchatConnect: () => false,
-    } satisfies PluginRuntimeGatewayRequestScope;
-
-    await expect(
-      gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
-        runtime.deleteSession({
-          sessionKey: "s-delete-admin",
-          deleteTranscript: true,
-        }),
-      ),
-    ).resolves.toBeUndefined();
 
     expect(getLastDispatchedClientScopes()).toEqual(["operator.admin"]);
   });
 
   test("can prefer setup-runtime channel plugins during startup loads", async () => {
+    const { loadGatewayPlugins } = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    loadGatewayPluginsForTest({
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
       preferSetupRuntimeForChannelPlugins: true,
     });
 
@@ -569,43 +522,26 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("primes configured bindings during gateway startup", async () => {
+    const { loadGatewayStartupPlugins } = serverPluginBootstrapModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
-    const cfg = {};
-    const autoEnabledConfig = { channels: { slack: { enabled: true } }, autoEnabled: true };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    loadGatewayStartupPluginsForTest({ cfg });
 
-    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg: autoEnabledConfig });
-  });
-
-  test("uses the auto-enabled config snapshot for gateway bootstrap policies", async () => {
-    const serverPlugins = serverPluginsModule;
-    const autoEnabledConfig = {
-      plugins: {
-        entries: {
-          demo: {
-            subagent: { allowModelOverride: true, allowedModels: ["openai/gpt-5.4"] },
-          },
-        },
-      },
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
     };
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    const runtime = await createSubagentRuntime(serverPlugins, {});
-    serverPlugins.setFallbackGatewayContext(createTestContext("auto-enabled-bootstrap-policy"));
 
-    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("demo", () =>
-      runtime.run({
-        sessionKey: "s-auto-enabled-bootstrap-policy",
-        message: "use trusted override",
-        model: "openai/gpt-5.4",
-        deliver: false,
-      }),
-    );
-
-    expect(getLastDispatchedParams()).toMatchObject({
-      sessionKey: "s-auto-enabled-bootstrap-policy",
-      model: "openai/gpt-5.4",
+    const cfg = {};
+    loadGatewayStartupPlugins({
+      cfg,
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
     });
+
+    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg });
   });
 
   test("can suppress duplicate diagnostics when reloading full runtime plugins", async () => {
@@ -619,7 +555,13 @@ describe("loadGatewayPlugins", () => {
       },
     ];
     loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
-    const log = createTestLog();
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
 
     reloadDeferredGatewayPlugins({
       cfg: {},
@@ -648,7 +590,10 @@ describe("loadGatewayPlugins", () => {
       cfg: {},
       workspaceDir: "/tmp",
       log: {
-        ...createTestLog(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
       },
       coreGatewayHandlers: {},
       baseMethods: [],

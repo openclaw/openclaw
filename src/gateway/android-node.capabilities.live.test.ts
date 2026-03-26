@@ -1,18 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { parseNodeList, parsePairingList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { unwrapRemoteConfigSnapshot } from "./android-node.capabilities.policy-config.js";
-import { shouldFetchRemotePolicyConfig } from "./android-node.capabilities.policy-source.js";
 import { buildGatewayConnectionDetails } from "./call.js";
 import { GatewayClient } from "./client.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
-import { resolveNodeCommandAllowlist } from "./node-command-policy.js";
 
 const LIVE = isLiveTestEnabled();
 const LIVE_ANDROID_NODE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_ANDROID_NODE);
@@ -67,14 +63,6 @@ function parseErrorCode(message: string): string {
     return head;
   }
   return "UNKNOWN";
-}
-
-function readGatewayErrorCode(err: unknown, fallbackMessage: string): string {
-  const byField = readString(asRecord(err).gatewayCode);
-  if (byField) {
-    return byField;
-  }
-  return parseErrorCode(fallbackMessage);
 }
 
 function assertObjectPayload(command: string, payload: unknown): Record<string, unknown> {
@@ -226,16 +214,6 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "error",
     allowedErrorCodes: ["INVALID_REQUEST"],
   },
-  "sms.search": {
-    buildParams: () => ({}),
-    timeoutMs: 20_000,
-    outcome: "success",
-    onSuccess: (payload) => {
-      const obj = assertObjectPayload("sms.search", payload);
-      expect(typeof obj.count === "number" || typeof obj.count === "string").toBe(true);
-      expect(Array.isArray(obj.messages)).toBe(true);
-    },
-  },
   "debug.logs": {
     buildParams: () => ({}),
     timeoutMs: 20_000,
@@ -273,67 +251,11 @@ function resolveGatewayConnection() {
     },
   });
   return {
-    details,
     url: details.url,
     token: creds.token,
     password: creds.password,
   };
 }
-
-async function resolvePolicyConfigForRun(params: {
-  client: GatewayClient;
-  connectionDetails: ReturnType<typeof buildGatewayConnectionDetails>;
-  loadLocalConfig?: () => OpenClawConfig;
-}): Promise<OpenClawConfig> {
-  if (shouldFetchRemotePolicyConfig(params.connectionDetails)) {
-    const raw = await params.client.request("config.get", {});
-    return unwrapRemoteConfigSnapshot(raw);
-  }
-
-  const loadLocalConfig = params.loadLocalConfig ?? loadConfig;
-  return loadLocalConfig();
-}
-
-describe("resolvePolicyConfigForRun", () => {
-  it("skips local config loading for remote runs", async () => {
-    const request = vi.fn().mockResolvedValue({ config: { gateway: { bind: "127.0.0.1" } } });
-    const loadLocalConfig = vi.fn(() => {
-      throw new Error("local config should not load in remote mode");
-    });
-
-    const result = await resolvePolicyConfigForRun({
-      client: { request } as unknown as GatewayClient,
-      connectionDetails: {
-        url: "wss://example.invalid/gateway",
-        urlSource: "env override",
-        message: "remote",
-      },
-      loadLocalConfig,
-    });
-
-    expect(loadLocalConfig).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith("config.get", {});
-    expect(asRecord(result.gateway)).toBeTruthy();
-  });
-
-  it("still uses local config loading for local loopback runs", async () => {
-    const localConfig = { gateway: { bind: "127.0.0.1" } } as unknown as OpenClawConfig;
-    const loadLocalConfig = vi.fn(() => localConfig);
-
-    const result = await resolvePolicyConfigForRun({
-      client: { request: vi.fn() } as unknown as GatewayClient,
-      connectionDetails: {
-        url: "ws://127.0.0.1:4000/gateway",
-        urlSource: "local loopback",
-        message: "local",
-      },
-      loadLocalConfig,
-    });
-
-    expect(loadLocalConfig).toHaveBeenCalledTimes(1);
-    expect(result).toBe(localConfig);
-  });
-});
 
 async function connectGatewayClient(params: {
   url: string;
@@ -450,7 +372,7 @@ async function invokeNodeCommand(params: {
     return {
       command: params.command,
       ok: false,
-      errorCode: readGatewayErrorCode(err, message),
+      errorCode: parseErrorCode(message),
       errorMessage: message,
       durationMs: Math.max(1, Date.now() - startedAt),
     };
@@ -495,7 +417,7 @@ describeLive("android node capability integration (preconditioned)", () => {
   const results = new Map<string, CommandResult>();
 
   beforeAll(async () => {
-    const { details, url, token, password } = resolveGatewayConnection();
+    const { url, token, password } = resolveGatewayConnection();
     client = await connectGatewayClient({ url, token, password });
 
     const listRaw = await client.request("node.list", {});
@@ -526,22 +448,10 @@ describeLive("android node capability integration (preconditioned)", () => {
     const describeObj = asRecord(describeRaw);
     const commands = readStringArray(describeObj.commands);
     expect(commands.length, "node.describe advertised no commands").toBeGreaterThan(0);
-
-    const cfg = await resolvePolicyConfigForRun({
-      client,
-      connectionDetails: details,
-    });
-    const allowlist = resolveNodeCommandAllowlist(cfg, {
-      platform: target.platform,
-      deviceFamily: target.deviceFamily,
-    });
-
-    commandsToRun = commands.filter(
-      (command) => allowlist.has(command) && !SKIPPED_INTERACTIVE_COMMANDS.has(command),
-    );
+    commandsToRun = commands.filter((command) => !SKIPPED_INTERACTIVE_COMMANDS.has(command));
     expect(
       commandsToRun.length,
-      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes allowCommands/denyCommands)",
+      "node.describe advertised only interactive commands (nothing runnable in CI/dev integration mode)",
     ).toBeGreaterThan(0);
 
     const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);

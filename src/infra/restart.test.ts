@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
@@ -16,13 +16,9 @@ vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
-  return {
-    ...actual,
-    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  };
-});
+vi.mock("../config/paths.js", () => ({
+  resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+}));
 
 let __testing: typeof import("./restart-stale-pids.js").__testing;
 let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
@@ -30,12 +26,23 @@ let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGate
 
 let currentTimeMs = 0;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doMock("node:child_process", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:child_process")>();
+    return {
+      ...actual,
+      spawnSync: (...args: Parameters<typeof actual.spawnSync>) => spawnSyncMock(...args),
+    };
+  });
+  vi.doMock("./ports-lsof.js", () => ({
+    resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
+  }));
+  vi.doMock("../config/paths.js", () => ({
+    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+  }));
   ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
     await import("./restart-stale-pids.js"));
-});
-
-beforeEach(() => {
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();
@@ -57,27 +64,24 @@ afterEach(() => {
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
-    const gatewayPidA = process.pid + 1000;
-    const gatewayPidB = process.pid + 2000;
-    const foreignPid = process.pid + 3000;
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
       stdout: [
         `p${process.pid}`,
         "copenclaw",
-        `p${gatewayPidA}`,
+        "p4100",
         "copenclaw-gateway",
-        `p${foreignPid}`,
+        "p4200",
         "cnode",
-        `p${gatewayPidB}`,
+        "p4300",
         "cOpenClaw",
       ].join("\n"),
     });
 
     const pids = findGatewayPidsOnPortSync(18789);
 
-    expect(pids).toEqual([gatewayPidA, gatewayPidB]);
+    expect(pids).toEqual([4100, 4300]);
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "/usr/sbin/lsof",
       ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"],
@@ -99,13 +103,11 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
 
 describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", () => {
   it("kills stale gateway pids discovered on the gateway port", () => {
-    const stalePidA = process.pid + 1000;
-    const stalePidB = process.pid + 2000;
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,
         status: 0,
-        stdout: [`p${stalePidA}`, "copenclaw", `p${stalePidB}`, "copenclaw-gateway"].join("\n"),
+        stdout: ["p6001", "copenclaw", "p6002", "copenclaw-gateway"].join("\n"),
       })
       .mockReturnValue({
         error: undefined,
@@ -116,21 +118,20 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     const killed = cleanStaleGatewayProcessesSync();
 
-    expect(killed).toEqual([stalePidA, stalePidB]);
+    expect(killed).toEqual([6001, 6002]);
     expect(resolveGatewayPortMock).toHaveBeenCalledWith(undefined, process.env);
-    expect(killSpy).toHaveBeenCalledWith(stalePidA, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(stalePidB, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(stalePidA, "SIGKILL");
-    expect(killSpy).toHaveBeenCalledWith(stalePidB, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(6001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(6002, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(6001, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(6002, "SIGKILL");
   });
 
   it("uses explicit port override when provided", () => {
-    const stalePid = process.pid + 1000;
     spawnSyncMock
       .mockReturnValueOnce({
         error: undefined,
         status: 0,
-        stdout: [`p${stalePid}`, "copenclaw"].join("\n"),
+        stdout: ["p7001", "copenclaw"].join("\n"),
       })
       .mockReturnValue({
         error: undefined,
@@ -141,15 +142,15 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     const killed = cleanStaleGatewayProcessesSync(19999);
 
-    expect(killed).toEqual([stalePid]);
+    expect(killed).toEqual([7001]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "/usr/sbin/lsof",
       ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
       expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
     );
-    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
-    expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(7001, "SIGKILL");
   });
 
   it("returns empty when no stale listeners are found", () => {

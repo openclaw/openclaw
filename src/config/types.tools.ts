@@ -1,7 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
-import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -227,8 +226,8 @@ export function parseToolsBySenderTypedKey(
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
-  /** Exec host routing (default: auto). */
-  host?: "auto" | "sandbox" | "gateway" | "node";
+  /** Exec host routing (default: sandbox). */
+  host?: "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
   /** Exec ask mode (default: on-miss). */
@@ -263,9 +262,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration. */
+  /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
+    /** Enable apply_patch for OpenAI models (default: false). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -327,11 +326,6 @@ export type MemorySearchConfig = {
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
   extraPaths?: string[];
-  /** Optional QMD-specific extra collections for cross-agent search. */
-  qmd?: {
-    /** Additional QMD collections appended for this agent's search scope. */
-    extraCollections?: MemoryQmdIndexPath[];
-  };
   /** Optional multimodal file indexing for selected extra paths. */
   multimodal?: {
     /** Enable image/audio embeddings from extraPaths. */
@@ -346,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Memory embedding provider adapter id. */
-  provider?: string;
+  /** Embedding provider mode. */
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -365,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback memory embedding provider adapter id when embeddings fail. */
-  fallback?: string;
+  /** Fallback behavior when embeddings fail. */
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -385,10 +379,6 @@ export type MemorySearchConfig = {
   store?: {
     driver?: "sqlite";
     path?: string;
-    fts?: {
-      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
-      tokenizer?: "unicode61" | "trigram";
-    };
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
@@ -469,23 +459,6 @@ type WebSearchLegacyProviderConfig = {
   inlineCitations?: boolean;
 };
 
-type XSearchToolConfig = {
-  /** Enable X search tool (default: true when an xAI API key is available). */
-  enabled?: boolean;
-  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
-  apiKey?: SecretInput;
-  /** Model id to use for X search. */
-  model?: string;
-  /** Keep inline citations in the xAI response payload when available. */
-  inlineCitations?: boolean;
-  /** Optional max search/tool turns for xAI to use internally. */
-  maxTurns?: number;
-  /** Timeout in seconds for X search requests. */
-  timeoutSeconds?: number;
-  /** Cache TTL in minutes for X search results. */
-  cacheTtlMinutes?: number;
-};
-
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -522,8 +495,6 @@ export type ToolsConfig = {
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
     } & Record<string, unknown>;
-    /** X (formerly Twitter) search tool configuration using xAI Grok. */
-    x_search?: XSearchToolConfig;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;

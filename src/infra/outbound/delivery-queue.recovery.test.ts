@@ -19,14 +19,8 @@ describe("delivery-queue recovery", () => {
   const baseCfg = {};
 
   const enqueueCrashRecoveryEntries = async () => {
-    await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
-    await enqueueDelivery(
-      { channel: "demo-channel-b", to: "2", payloads: [{ text: "b" }] },
-      tmpDir(),
-    );
+    await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+    await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir());
   };
 
   const runRecovery = async ({
@@ -66,7 +60,7 @@ describe("delivery-queue recovery", () => {
 
   it("moves entries that exceeded max retries to failed/", async () => {
     const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
       tmpDir(),
     );
     setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
@@ -81,10 +75,7 @@ describe("delivery-queue recovery", () => {
   });
 
   it("increments retryCount on failed recovery attempt", async () => {
-    await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
-      tmpDir(),
-    );
+    await enqueueDelivery({ channel: "slack", to: "#ch", payloads: [{ text: "x" }] }, tmpDir());
 
     const deliver = vi.fn().mockRejectedValue(new Error("network down"));
     const { result } = await runRecovery({ deliver });
@@ -100,7 +91,7 @@ describe("delivery-queue recovery", () => {
 
   it("moves entries to failed/ immediately on permanent delivery errors", async () => {
     const id = await enqueueDelivery(
-      { channel: "demo-channel", to: "user:abc", payloads: [{ text: "hi" }] },
+      { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },
       tmpDir(),
     );
     const deliver = vi
@@ -116,33 +107,8 @@ describe("delivery-queue recovery", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
-  it("treats Matrix 'User not in room' as a permanent error", async () => {
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!lowercased:matrix.example.com", payloads: [{ text: "hi" }] },
-      tmpDir(),
-    );
-    const deliver = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          "MatrixError: [403] User @bot:matrix.example.com not in room !lowercased:matrix.example.com",
-        ),
-      );
-    const log = createRecoveryLog();
-    const { result } = await runRecovery({ deliver, log });
-
-    expect(result.failed).toBe(1);
-    expect(result.recovered).toBe(0);
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
-  });
-
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
-    await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
-      tmpDir(),
-    );
+    await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
 
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
@@ -153,7 +119,7 @@ describe("delivery-queue recovery", () => {
   it("replays stored delivery options during recovery", async () => {
     await enqueueDelivery(
       {
-        channel: "demo-channel-a",
+        channel: "whatsapp",
         to: "+1",
         payloads: [{ text: "a" }],
         bestEffort: true,
@@ -189,10 +155,7 @@ describe("delivery-queue recovery", () => {
 
   it("respects maxRecoveryMs time budget and bumps deferred retries", async () => {
     await enqueueCrashRecoveryEntries();
-    await enqueueDelivery(
-      { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
-      tmpDir(),
-    );
+    await enqueueDelivery({ channel: "slack", to: "#c", payloads: [{ text: "c" }] }, tmpDir());
 
     const deliver = vi.fn().mockResolvedValue([]);
     const { result, log } = await runRecovery({
@@ -216,7 +179,7 @@ describe("delivery-queue recovery", () => {
 
   it("defers entries until backoff becomes eligible", async () => {
     const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
       tmpDir(),
     );
     setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: Date.now() });
@@ -241,11 +204,11 @@ describe("delivery-queue recovery", () => {
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();
     const blockedId = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "blocked" }] },
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "blocked" }] },
       tmpDir(),
     );
     const readyId = await enqueueDelivery(
-      { channel: "demo-channel-b", to: "2", payloads: [{ text: "ready" }] },
+      { channel: "telegram", to: "2", payloads: [{ text: "ready" }] },
       tmpDir(),
     );
 
@@ -267,7 +230,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "demo-channel-b", to: "2", skipQueue: true }),
+      expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
     );
 
     const remaining = await loadPendingDeliveries(tmpDir());
@@ -281,7 +244,7 @@ describe("delivery-queue recovery", () => {
     vi.setSystemTime(start);
 
     const id = await enqueueDelivery(
-      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "later" }] },
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "later" }] },
       tmpDir(),
     );
     setQueuedEntryState(tmpDir(), id, { retryCount: 3, lastAttemptAt: start.getTime() });

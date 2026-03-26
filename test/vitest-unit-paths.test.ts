@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
-import { bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 describe("isUnitConfigTestFile", () => {
   it("accepts unit-config src, test, and whitelisted ui tests", () => {
@@ -12,9 +11,7 @@ describe("isUnitConfigTestFile", () => {
 
   it("rejects files excluded from the unit config", () => {
     expect(
-      isUnitConfigTestFile(
-        bundledPluginFile("imessage", "src/monitor.shutdown.unhandled-rejection.test.ts"),
-      ),
+      isUnitConfigTestFile("extensions/imessage/src/monitor.shutdown.unhandled-rejection.test.ts"),
     ).toBe(false);
     expect(isUnitConfigTestFile("src/agents/pi-embedded-runner.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/commands/onboard.test.ts")).toBe(false);

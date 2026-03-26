@@ -1,10 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import {
-  BUNDLED_PLUGIN_ROOT_DIR,
-  BUNDLED_PLUGIN_TEST_GLOB,
-} from "./scripts/lib/bundled-plugin-paths.mjs";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
 import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
 import {
@@ -62,7 +58,6 @@ export default defineConfig({
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.config.ts",
-      "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
@@ -77,11 +72,9 @@ export default defineConfig({
     ],
     include: [
       "src/**/*.test.ts",
-      BUNDLED_PLUGIN_TEST_GLOB,
-      "packages/**/*.test.ts",
+      "extensions/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
-      "ui/src/ui/chat/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
       "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",
@@ -92,12 +85,10 @@ export default defineConfig({
       "ui/src/ui/controllers/sessions.test.ts",
       "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-gateway.sessions.node.test.ts",
-      "ui/src/ui/chat/slash-command-executor.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
-      "test/fixtures/**",
       "apps/macos/**",
       "apps/macos/.build/**",
       "**/node_modules/**",
@@ -123,7 +114,7 @@ export default defineConfig({
       include: ["./src/**/*.ts"],
       exclude: [
         // Never count workspace packages/apps toward core coverage thresholds.
-        `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
+        "extensions/**",
         "apps/**",
         "ui/**",
         "test/**",

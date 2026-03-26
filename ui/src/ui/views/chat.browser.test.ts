@@ -3,23 +3,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { renderChat, type ChatProps } from "./chat.ts";
 
-const contextNoticeSessions: ChatProps["sessions"] = {
-  ts: 0,
-  path: "",
-  count: 1,
-  defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-  sessions: [
-    {
-      key: "main",
-      kind: "direct",
-      updatedAt: null,
-      totalTokens: 3_800,
-      inputTokens: 3_800,
-      contextTokens: 4_000,
-    },
-  ],
-};
-
 function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   return {
     sessionKey: "main",
@@ -75,30 +58,40 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
   };
 }
 
-async function renderContextNoticeChat() {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderChat(
-      createProps({
-        sessions: contextNoticeSessions,
-      }),
-    ),
-    container,
-  );
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  return container;
-}
-
 describe("chat context notice", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
   it("falls back to default notice colors when theme vars are not hex", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
     document.documentElement.style.setProperty("--warn", "rgb(1, 2, 3)");
     document.documentElement.style.setProperty("--danger", "tomato");
-    const container = await renderContextNoticeChat();
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                totalTokens: 3_800,
+                inputTokens: 3_800,
+                contextTokens: 4_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).not.toBeNull();
@@ -111,7 +104,32 @@ describe("chat context notice", () => {
   });
 
   it("keeps the warning icon badge-sized", async () => {
-    const container = await renderContextNoticeChat();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                totalTokens: 3_800,
+                inputTokens: 3_800,
+                contextTokens: 4_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
     expect(icon).not.toBeNull();

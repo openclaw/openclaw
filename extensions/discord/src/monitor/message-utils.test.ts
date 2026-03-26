@@ -5,16 +5,19 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const fetchRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("../../../../src/media/fetch.js", () => ({
+  fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
+}));
+
+vi.mock("../../../../src/media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/media/store.js")>();
   return {
     ...actual,
-    fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
     saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("../../../../src/globals.js", () => ({
   logVerbose: () => {},
 }));
 
@@ -26,6 +29,7 @@ let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwar
 let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({
     __resetDiscordChannelInfoCacheForTest,
     resolveDiscordChannelInfo,

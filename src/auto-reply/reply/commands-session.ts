@@ -666,14 +666,12 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
           });
     }
     return action === SESSION_ACTION_IDLE
-      ? channelRuntime.threadBindings.setIdleTimeoutBySessionKey({
-          channelId: "telegram",
+      ? channelRuntime.telegram.threadBindings.setIdleTimeoutBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           idleTimeoutMs: durationMs,
         })
-      : channelRuntime.threadBindings.setMaxAgeBySessionKey({
-          channelId: "telegram",
+      : channelRuntime.telegram.threadBindings.setMaxAgeBySessionKey({
           targetSessionKey: telegramBinding!.targetSessionKey,
           accountId,
           maxAgeMs: durationMs,

@@ -21,7 +21,6 @@ const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
 type VitestExperimentalConfig = {
   experimental?: {
     fsModuleCache?: true;
-    fsModuleCachePath?: string;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   };
@@ -33,7 +32,6 @@ export function loadVitestExperimentalConfig(
 ): VitestExperimentalConfig {
   const experimental: {
     fsModuleCache?: true;
-    fsModuleCachePath?: string;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   } = {};
@@ -44,9 +42,6 @@ export function loadVitestExperimentalConfig(
   }
   if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
-  }
-  if (experimental.fsModuleCache && env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim()) {
-    experimental.fsModuleCachePath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH.trim();
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {
     experimental.importDurations = { print: true };

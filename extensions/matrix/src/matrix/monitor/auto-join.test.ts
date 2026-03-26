@@ -54,13 +54,10 @@ function registerAutoJoinHarness(params: {
   return harness;
 }
 
-async function triggerInvite(
-  getInviteHandler: () => InviteHandler | null,
-  inviteEvent: unknown = {},
-) {
+async function triggerInvite(getInviteHandler: () => InviteHandler | null) {
   const inviteHandler = getInviteHandler();
   expect(inviteHandler).toBeTruthy();
-  await inviteHandler!("!room:example.org", inviteEvent);
+  await inviteHandler!("!room:example.org", {});
 }
 
 describe("registerMatrixAutoJoin", () => {
@@ -177,27 +174,5 @@ describe("registerMatrixAutoJoin", () => {
 
     await triggerInvite(getInviteHandler);
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("joins sender-scoped invites without eager direct repair", async () => {
-    const { getInviteHandler, joinRoom } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await triggerInvite(getInviteHandler, { sender: "@alice:example.org" });
-
-    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("still joins invites when the sender is unavailable", async () => {
-    const { getInviteHandler } = registerAutoJoinHarness({
-      accountConfig: {
-        autoJoin: "always",
-      },
-    });
-
-    await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
   });
 });

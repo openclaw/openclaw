@@ -185,6 +185,9 @@ describe("findExtraGatewayServices (win32)", () => {
         "TaskName: Other Task",
         "Task To Run: C:\\tools\\helper.exe",
         "",
+        "TaskName: MoltBot Legacy",
+        "Task To Run: C:\\moltbot\\moltbot.exe run",
+        "",
       ].join("\n"),
       stderr: "",
     });
@@ -197,6 +200,14 @@ describe("findExtraGatewayServices (win32)", () => {
         detail: "task: Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
         scope: "system",
         marker: "clawdbot",
+        legacy: true,
+      },
+      {
+        platform: "win32",
+        label: "MoltBot Legacy",
+        detail: "task: MoltBot Legacy, run: C:\\moltbot\\moltbot.exe run",
+        scope: "system",
+        marker: "moltbot",
         legacy: true,
       },
     ]);

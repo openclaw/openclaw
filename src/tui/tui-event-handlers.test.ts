@@ -58,7 +58,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     currentSessionKey: "agent:main:main",
     currentSessionId: "session-1",
     activeChatRunId: "run-1",
-    pendingOptimisticUserMessage: false,
     historyLoaded: true,
     sessionInfo: { verboseLevel: "on" },
     initialSessionApplied: true,
@@ -127,7 +126,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       state,
       setActivityStatus: context.setActivityStatus,
       loadHistory: context.loadHistory,
-      noteLocalRunId: context.noteLocalRunId,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
       isLocalBtwRunId: context.isLocalBtwRunId,
@@ -466,24 +464,6 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
-  });
-
-  it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
-    const { state, loadHistory, isLocalRunId, handleChatEvent } = createHandlersHarness({
-      state: { activeChatRunId: null, pendingOptimisticUserMessage: true },
-    });
-
-    handleChatEvent({
-      runId: "run-gateway",
-      sessionKey: state.currentSessionKey,
-      state: "final",
-      message: { content: [{ type: "text", text: "done" }] },
-    });
-
-    expect(state.pendingOptimisticUserMessage).toBe(false);
-    expect(state.activeChatRunId).toBeNull();
-    expect(isLocalRunId("run-gateway")).toBe(false);
-    expect(loadHistory).not.toHaveBeenCalled();
   });
 
   function createConcurrentRunHarness(localContent = "partial") {

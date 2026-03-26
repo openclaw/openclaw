@@ -151,20 +151,21 @@ describe("POST /sessions/:sessionKey/kill", () => {
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
   });
 
-  it("rejects remote bearer-auth kills without requester ownership", async () => {
+  it("allows remote admin kills with an authorized bearer token", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
     });
+    killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
-    expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { type: "forbidden" },
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
+    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
+      cfg,
+      sessionKey: "agent:main:subagent:worker",
     });
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
   it("rejects remote kills without requester ownership or an authorized token", async () => {
@@ -239,17 +240,13 @@ describe("POST /sessions/:sessionKey/kill", () => {
     });
   });
 
-  it("keeps bearer-auth requester kills on the requester-owned path", async () => {
+  it("prefers admin kill when a valid bearer token is present alongside requester headers", async () => {
     isLocalDirectRequestMock.mockReturnValue(false);
     loadSessionEntryMock.mockReturnValue({
       entry: { sessionId: "sess-worker", updatedAt: Date.now() },
       canonicalKey: "agent:main:subagent:worker",
     });
-    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
-      runId: "run-1",
-      childSessionKey: "agent:main:subagent:worker",
-    });
-    killControlledSubagentRunMock.mockResolvedValue({ status: "ok" });
+    killSubagentRunAdminMock.mockResolvedValue({ found: true, killed: true });
 
     const response = await post(
       "/sessions/agent%3Amain%3Asubagent%3Aworker/kill",
@@ -258,18 +255,10 @@ describe("POST /sessions/:sessionKey/kill", () => {
     );
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: true });
-    expect(resolveSubagentControllerMock).toHaveBeenCalledWith({
+    expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
-      agentSessionKey: "agent:other:main",
+      sessionKey: "agent:main:subagent:worker",
     });
-    expect(killControlledSubagentRunMock).toHaveBeenCalledWith({
-      cfg,
-      controller: { controllerSessionKey: "agent:main:main" },
-      entry: expect.objectContaining({
-        runId: "run-1",
-        childSessionKey: "agent:main:subagent:worker",
-      }),
-    });
-    expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+    expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
   });
 });

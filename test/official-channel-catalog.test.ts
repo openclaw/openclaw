@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -6,21 +7,24 @@ import {
   OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH,
   writeOfficialChannelCatalog,
 } from "../scripts/write-official-channel-catalog.mjs";
-import { bundledPluginRoot } from "./helpers/bundled-plugin-paths.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
 function makeRepoRoot(prefix: string): string {
-  return makeTempRepoRoot(tempDirs, prefix);
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(repoRoot);
+  return repoRoot;
 }
 
 function writeJson(filePath: string, value: unknown): void {
-  writeJsonFile(filePath, value);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 afterEach(() => {
-  cleanupTempDirs(tempDirs);
+  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("buildOfficialChannelCatalog", () => {
@@ -41,7 +45,7 @@ describe("buildOfficialChannelCatalog", () => {
         },
         install: {
           npmSpec: "@openclaw/whatsapp",
-          localPath: bundledPluginRoot("whatsapp"),
+          localPath: "extensions/whatsapp",
           defaultChoice: "npm",
         },
         release: {
@@ -60,7 +64,7 @@ describe("buildOfficialChannelCatalog", () => {
           blurb: "dev only",
         },
         install: {
-          localPath: bundledPluginRoot("local-only"),
+          localPath: "extensions/local-only",
         },
         release: {
           publishToNpm: false,
@@ -85,6 +89,7 @@ describe("buildOfficialChannelCatalog", () => {
             },
             install: {
               npmSpec: "@openclaw/whatsapp",
+              localPath: "extensions/whatsapp",
               defaultChoice: "npm",
             },
           },

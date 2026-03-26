@@ -11,7 +11,6 @@ import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
-import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -33,7 +32,6 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
-  sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -110,22 +108,6 @@ function enqueueChatMessage(
   ];
 }
 
-function enqueuePendingRunMessage(host: ChatHost, text: string, pendingRunId: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return;
-  }
-  host.chatQueue = [
-    ...host.chatQueue,
-    {
-      id: generateUUID(),
-      text: trimmed,
-      createdAt: Date.now(),
-      pendingRunId,
-    },
-  ];
-}
-
 async function sendChatMessageNow(
   host: ChatHost,
   message: string,
@@ -176,12 +158,11 @@ async function flushChatQueue(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
-  const nextIndex = host.chatQueue.findIndex((item) => !item.pendingRunId);
-  if (nextIndex < 0) {
+  const [next, ...rest] = host.chatQueue;
+  if (!next) {
     return;
   }
-  const next = host.chatQueue[nextIndex];
-  host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
+  host.chatQueue = rest;
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -206,13 +187,6 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
-}
-
-export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
-  if (!runId) {
-    return;
-  }
-  host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
 }
 
 export async function handleSendChat(
@@ -286,7 +260,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session", "steer", "redirect"].includes(name);
+  return !["stop", "focus", "export-session"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -333,21 +307,10 @@ async function dispatchSlashCommand(
   const targetSessionKey = host.sessionKey;
   const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
     chatModelCatalog: host.chatModelCatalog,
-    sessionsResult: host.sessionsResult,
   });
 
   if (result.content) {
     injectCommandResult(host, result.content);
-  }
-
-  if (result.trackRunId) {
-    host.chatRunId = result.trackRunId;
-    host.chatStream = "";
-    host.chatSending = false;
-  }
-
-  if (result.pendingCurrentRun && host.chatRunId) {
-    enqueuePendingRunMessage(host, `/${name} ${args}`.trim(), host.chatRunId);
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {

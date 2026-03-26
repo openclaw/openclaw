@@ -15,7 +15,6 @@ type RegistryState = {
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
   key: string | null;
-  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
 };
 
 const state: RegistryState = (() => {
@@ -37,7 +36,6 @@ const state: RegistryState = (() => {
         version: 0,
       },
       key: null,
-      runtimeSubagentMode: "default",
     };
   }
   return globalState[REGISTRY_STATE];
@@ -73,17 +71,12 @@ function syncTrackedSurface(
   installSurfaceRegistry(surface, registry, false);
 }
 
-export function setActivePluginRegistry(
-  registry: PluginRegistry,
-  cacheKey?: string,
-  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
-) {
+export function setActivePluginRegistry(registry: PluginRegistry, cacheKey?: string) {
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
   state.key = cacheKey ?? null;
-  state.runtimeSubagentMode = runtimeSubagentMode;
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -182,10 +175,6 @@ export function getActivePluginRegistryKey(): string | null {
   return state.key;
 }
 
-export function getActivePluginRuntimeSubagentMode(): "default" | "explicit" | "gateway-bindable" {
-  return state.runtimeSubagentMode;
-}
-
 export function getActivePluginRegistryVersion(): number {
   return state.activeVersion;
 }
@@ -196,5 +185,4 @@ export function resetPluginRuntimeStateForTest(): void {
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
   state.key = null;
-  state.runtimeSubagentMode = "default";
 }

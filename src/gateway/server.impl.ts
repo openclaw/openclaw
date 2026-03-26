@@ -13,11 +13,9 @@ import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
   applyConfigOverrides,
-  getRuntimeConfig,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
-  registerConfigWriteListener,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -52,7 +50,6 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -75,10 +72,6 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import {
-  getInspectableTaskRegistrySummary,
-  startTaskRegistryMaintenance,
-} from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -91,6 +84,7 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
+import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import {
   createAgentEventHandler,
@@ -106,7 +100,6 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
-import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -122,7 +115,6 @@ import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
-import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -171,6 +163,7 @@ const logCanvas = log.child("canvas");
 const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
+const logBrowser = log.child("browser");
 
 let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
 
@@ -299,7 +292,6 @@ async function prepareGatewayStartupConfig(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
     persist: true,
-    baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
     auth: params.authOverride,
@@ -524,15 +516,11 @@ export async function startGatewayServer(
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
+    startDiagnosticHeartbeat();
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(
-    () =>
-      getTotalQueueSize() +
-      getTotalPendingReplies() +
-      getActiveEmbeddedRunCount() +
-      getInspectableTaskRegistrySummary().active,
+    () => getTotalQueueSize() + getTotalPendingReplies() + getActiveEmbeddedRunCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
@@ -546,11 +534,6 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
-  await runStartupSessionMigration({
-    cfg: cfgAtStart,
-    env: process.env,
-    log,
-  });
   const matrixInstallPathIssue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
     install: cfgAtStart.plugins?.installs?.matrix,
@@ -560,10 +543,7 @@ export async function startGatewayServer(
       issue: matrixInstallPathIssue,
       pluginLabel: "Matrix",
       defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: resolveBundledPluginInstallCommandHint({
-        pluginId: "matrix",
-        workspaceDir: process.cwd(),
-      }),
+      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
       formatCommand: formatCliCommand,
     });
     log.warn(
@@ -572,16 +552,12 @@ export async function startGatewayServer(
   }
 
   initSubagentRegistry();
-  const gatewayPluginConfigAtStart = applyPluginAutoEnable({
-    config: cfgAtStart,
-    env: process.env,
-  }).config;
-  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfigAtStart);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfigAtStart, defaultAgentId);
+  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const deferredConfiguredChannelPluginIds = minimalTestGateway
     ? []
     : resolveConfiguredDeferredChannelPluginIds({
-        config: gatewayPluginConfigAtStart,
+        config: cfgAtStart,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
@@ -591,7 +567,7 @@ export async function startGatewayServer(
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
-      cfg: gatewayPluginConfigAtStart,
+      cfg: cfgAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
       coreGatewayHandlers,
@@ -696,11 +672,7 @@ export async function startGatewayServer(
   }
   const serverStartedAt = Date.now();
   const channelManager = createChannelManager({
-    loadConfig: () =>
-      applyPluginAutoEnable({
-        config: loadConfig(),
-        env: process.env,
-      }).config,
+    loadConfig,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
@@ -716,7 +688,6 @@ export async function startGatewayServer(
     httpServers,
     httpBindHosts,
     wss,
-    preauthConnectionBudget,
     clients,
     broadcast,
     broadcastToConnIds,
@@ -771,6 +742,7 @@ export async function startGatewayServer(
   };
   let stopGatewayUpdateCheck = () => {};
   let tailscaleCleanup: (() => Promise<void>) | null = null;
+  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
   let skillsChangeUnsub = () => {};
@@ -815,6 +787,7 @@ export async function startGatewayServer(
       chatRunState,
       clients,
       configReloader,
+      browserControl,
       wss,
       httpServer,
       httpServers,
@@ -897,7 +870,6 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
-      startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({
           broadcast,
@@ -973,41 +945,21 @@ export async function startGatewayServer(
                 sessionId: sessionRow.sessionId,
                 kind: sessionRow.kind,
                 channel: sessionRow.channel,
-                subject: sessionRow.subject,
-                groupChannel: sessionRow.groupChannel,
-                space: sessionRow.space,
-                chatType: sessionRow.chatType,
-                origin: sessionRow.origin,
-                spawnedBy: sessionRow.spawnedBy,
-                spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
-                forkedFromParent: sessionRow.forkedFromParent,
-                spawnDepth: sessionRow.spawnDepth,
-                subagentRole: sessionRow.subagentRole,
-                subagentControlScope: sessionRow.subagentControlScope,
                 label: sessionRow.label,
                 displayName: sessionRow.displayName,
                 deliveryContext: sessionRow.deliveryContext,
                 parentSessionKey: sessionRow.parentSessionKey,
                 childSessions: sessionRow.childSessions,
                 thinkingLevel: sessionRow.thinkingLevel,
-                fastMode: sessionRow.fastMode,
-                verboseLevel: sessionRow.verboseLevel,
-                reasoningLevel: sessionRow.reasoningLevel,
-                elevatedLevel: sessionRow.elevatedLevel,
-                sendPolicy: sessionRow.sendPolicy,
                 systemSent: sessionRow.systemSent,
                 abortedLastRun: sessionRow.abortedLastRun,
-                inputTokens: sessionRow.inputTokens,
-                outputTokens: sessionRow.outputTokens,
                 lastChannel: sessionRow.lastChannel,
                 lastTo: sessionRow.lastTo,
                 lastAccountId: sessionRow.lastAccountId,
-                lastThreadId: sessionRow.lastThreadId,
                 totalTokens: sessionRow.totalTokens,
                 totalTokensFresh: sessionRow.totalTokensFresh,
                 contextTokens: sessionRow.contextTokens,
                 estimatedCostUsd: sessionRow.estimatedCostUsd,
-                responseUsage: sessionRow.responseUsage,
                 modelProvider: sessionRow.modelProvider,
                 model: sessionRow.model,
                 status: sessionRow.status,
@@ -1074,41 +1026,21 @@ export async function startGatewayServer(
                     sessionId: sessionRow.sessionId,
                     kind: sessionRow.kind,
                     channel: sessionRow.channel,
-                    subject: sessionRow.subject,
-                    groupChannel: sessionRow.groupChannel,
-                    space: sessionRow.space,
-                    chatType: sessionRow.chatType,
-                    origin: sessionRow.origin,
-                    spawnedBy: sessionRow.spawnedBy,
-                    spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
-                    forkedFromParent: sessionRow.forkedFromParent,
-                    spawnDepth: sessionRow.spawnDepth,
-                    subagentRole: sessionRow.subagentRole,
-                    subagentControlScope: sessionRow.subagentControlScope,
                     label: event.label ?? sessionRow.label,
                     displayName: event.displayName ?? sessionRow.displayName,
                     deliveryContext: sessionRow.deliveryContext,
                     parentSessionKey: event.parentSessionKey ?? sessionRow.parentSessionKey,
                     childSessions: sessionRow.childSessions,
                     thinkingLevel: sessionRow.thinkingLevel,
-                    fastMode: sessionRow.fastMode,
-                    verboseLevel: sessionRow.verboseLevel,
-                    reasoningLevel: sessionRow.reasoningLevel,
-                    elevatedLevel: sessionRow.elevatedLevel,
-                    sendPolicy: sessionRow.sendPolicy,
                     systemSent: sessionRow.systemSent,
                     abortedLastRun: sessionRow.abortedLastRun,
-                    inputTokens: sessionRow.inputTokens,
-                    outputTokens: sessionRow.outputTokens,
                     lastChannel: sessionRow.lastChannel,
                     lastTo: sessionRow.lastTo,
                     lastAccountId: sessionRow.lastAccountId,
-                    lastThreadId: sessionRow.lastThreadId,
                     totalTokens: sessionRow.totalTokens,
                     totalTokensFresh: sessionRow.totalTokensFresh,
                     contextTokens: sessionRow.contextTokens,
                     estimatedCostUsd: sessionRow.estimatedCostUsd,
-                    responseUsage: sessionRow.responseUsage,
                     modelProvider: sessionRow.modelProvider,
                     model: sessionRow.model,
                     status: sessionRow.status,
@@ -1170,12 +1102,6 @@ export async function startGatewayServer(
     const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
       forwarder: execApprovalForwarder,
     });
-    const pluginApprovalManager = new ExecApprovalManager<
-      import("../infra/plugin-approvals.js").PluginApprovalRequestPayload
-    >();
-    const pluginApprovalHandlers = createPluginApprovalHandlers(pluginApprovalManager, {
-      forwarder: execApprovalForwarder,
-    });
     const secretsHandlers = createSecretsHandlers({
       reloadSecrets: async () => {
         const active = getActiveSecretsRuntimeSnapshot();
@@ -1208,7 +1134,6 @@ export async function startGatewayServer(
       cron,
       cronStorePath,
       execApprovalManager,
-      pluginApprovalManager,
       loadGatewayModelCatalog,
       getHealthCache,
       refreshHealthSnapshot: refreshGatewayHealthSnapshot,
@@ -1224,11 +1149,8 @@ export async function startGatewayServer(
       nodeUnsubscribe,
       nodeUnsubscribeAll,
       hasConnectedMobileNode: hasMobileNodeConnected,
-      hasExecApprovalClients: (excludeConnId?: string) => {
+      hasExecApprovalClients: () => {
         for (const gatewayClient of clients) {
-          if (excludeConnId && gatewayClient.connId === excludeConnId) {
-            continue;
-          }
           const scopes = Array.isArray(gatewayClient.connect.scopes)
             ? gatewayClient.connect.scopes
             : [];
@@ -1237,21 +1159,6 @@ export async function startGatewayServer(
           }
         }
         return false;
-      },
-      disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
-        for (const gatewayClient of clients) {
-          if (gatewayClient.connect.device?.id !== deviceId) {
-            continue;
-          }
-          if (opts?.role && gatewayClient.connect.role !== opts.role) {
-            continue;
-          }
-          try {
-            gatewayClient.socket.close(4001, "device removed");
-          } catch {
-            /* ignore */
-          }
-        }
       },
       nodeRegistry,
       agentRunSeq,
@@ -1292,7 +1199,6 @@ export async function startGatewayServer(
     attachGatewayWsHandlers({
       wss,
       clients,
-      preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
       canvasHostEnabled: Boolean(canvasHost),
@@ -1308,7 +1214,6 @@ export async function startGatewayServer(
       extraHandlers: {
         ...pluginRegistry.gatewayHandlers,
         ...execApprovalHandlers,
-        ...pluginApprovalHandlers,
         ...secretsHandlers,
       },
       broadcast,
@@ -1347,7 +1252,7 @@ export async function startGatewayServer(
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
         ({ pluginRegistry } = reloadDeferredGatewayPlugins({
-          cfg: gatewayPluginConfigAtStart,
+          cfg: cfgAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayHandlers,
@@ -1355,8 +1260,8 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
       }
-      ({ pluginServices } = await startGatewaySidecars({
-        cfg: gatewayPluginConfigAtStart,
+      ({ browserControl, pluginServices } = await startGatewaySidecars({
+        cfg: cfgAtStart,
         pluginRegistry,
         defaultWorkspaceDir,
         deps,
@@ -1364,6 +1269,7 @@ export async function startGatewayServer(
         log,
         logHooks,
         logChannels,
+        logBrowser,
       }));
     }
 
@@ -1388,6 +1294,7 @@ export async function startGatewayServer(
               hookClientIpConfig,
               heartbeatRunner,
               cronState,
+              browserControl,
               channelHealthMonitor,
             }),
             setState: (nextState) => {
@@ -1397,11 +1304,13 @@ export async function startGatewayServer(
               cronState = nextState.cronState;
               cron = cronState.cron;
               cronStorePath = cronState.storePath;
+              browserControl = nextState.browserControl;
               channelHealthMonitor = nextState.channelHealthMonitor;
             },
             startChannel,
             stopChannel,
             logHooks,
+            logBrowser,
             logChannels,
             logCron,
             logReload,
@@ -1425,7 +1334,6 @@ export async function startGatewayServer(
           return startGatewayConfigReloader({
             initialConfig: cfgAtStart,
             readSnapshot: readConfigFileSnapshot,
-            subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {
@@ -1487,6 +1395,7 @@ export async function startGatewayServer(
     chatRunState,
     clients,
     configReloader,
+    browserControl,
     wss,
     httpServer,
     httpServers,

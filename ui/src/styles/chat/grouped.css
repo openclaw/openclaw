@@ -24,12 +24,11 @@
   gap: 2px;
   flex: 1 1 auto;
   max-width: min(900px, 68%);
-  align-items: flex-start;
 }
 
 /* User messages align content right */
 .chat-group.user .chat-group-messages {
-  align-items: flex-end;
+  align-items: stretch;
 }
 
 @media (max-width: 600px) {
@@ -196,7 +195,7 @@ img.chat-avatar {
   transition:
     background var(--duration-fast) ease-out,
     border-color var(--duration-fast) ease-out;
-  width: auto;
+  width: 100%;
   max-width: 100%;
   box-sizing: border-box;
   word-wrap: break-word;

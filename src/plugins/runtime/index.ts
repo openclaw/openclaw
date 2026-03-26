@@ -1,5 +1,8 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
+import {
+  listRuntimeImageGenerationProviders,
+  generateImage,
+} from "../../image-generation/runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -16,6 +19,7 @@ import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTools } from "./runtime-tools.js";
 import type { PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
@@ -47,29 +51,6 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
-  };
-}
-
-type RuntimeImageGenerationModule = Pick<
-  typeof import("../../plugin-sdk/image-generation-runtime.js"),
-  "generateImage" | "listRuntimeImageGenerationProviders"
->;
-let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
-
-function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
-  cachedRuntimeImageGenerationModule ??=
-    loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
-      dirName: "image-generation-core",
-      artifactBasename: "runtime-api.js",
-    });
-  return cachedRuntimeImageGenerationModule;
-}
-
-function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
-  return {
-    generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
-    listProviders: (params) =>
-      loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
   };
 }
 
@@ -195,21 +176,21 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
+    imageGeneration: {
+      generate: generateImage,
+      listProviders: listRuntimeImageGenerationProviders,
+    },
     webSearch: {
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
+    tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
-  } satisfies Omit<
-    PluginRuntime,
-    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"
-  > &
-    Partial<
-      Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration">
-    >;
+  } satisfies Omit<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth"> &
+    Partial<Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth">>;
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
   defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
@@ -217,7 +198,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     transcribeAudioFile: mediaUnderstanding.transcribeAudioFile,
   }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
-  defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
 
   return runtime as PluginRuntime;
 }

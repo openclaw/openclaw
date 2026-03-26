@@ -198,8 +198,9 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
       continue;
     }
 
-    process.stderr.write(
-      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}\n`,
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[session-write-lock] releasing lock held for ${heldForMs}ms (max=${held.maxHoldMs}ms): ${held.lockPath}`,
     );
 
     const didRelease = await releaseHeldLock(sessionFile, held, { force: true });

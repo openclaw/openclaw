@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  ensureConfiguredBindingRouteReady,
+  resolveConfiguredBindingRoute,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   resolveDiscordBoundConversationRoute,
@@ -7,9 +10,7 @@ import {
 } from "./route-resolution.js";
 import type { ThreadBindingRecord } from "./thread-bindings.js";
 
-type ResolvedConfiguredBindingRoute = ReturnType<
-  typeof conversationRuntime.resolveConfiguredBindingRoute
->;
+type ResolvedConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type ConfiguredBindingResolution = NonNullable<
   NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
 >;
@@ -20,9 +21,7 @@ export type DiscordNativeInteractionRouteState = {
   boundSessionKey?: string;
   configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
-  bindingReadiness: Awaited<
-    ReturnType<typeof conversationRuntime.ensureConfiguredBindingRouteReady>
-  > | null;
+  bindingReadiness: Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>> | null;
 };
 
 export async function resolveDiscordNativeInteractionRouteState(params: {
@@ -51,7 +50,7 @@ export async function resolveDiscordNativeInteractionRouteState(params: {
   });
   const configuredRoute =
     params.threadBinding == null
-      ? conversationRuntime.resolveConfiguredBindingRoute({
+      ? resolveConfiguredBindingRoute({
           cfg: params.cfg,
           route,
           conversation: {
@@ -74,7 +73,7 @@ export async function resolveDiscordNativeInteractionRouteState(params: {
   });
   const bindingReadiness =
     params.enforceConfiguredBindingReadiness && configuredBinding
-      ? await conversationRuntime.ensureConfiguredBindingRouteReady({
+      ? await ensureConfiguredBindingRouteReady({
           cfg: params.cfg,
           bindingResolution: configuredBinding,
         })

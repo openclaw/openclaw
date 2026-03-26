@@ -1,5 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -21,7 +20,6 @@ import {
   setInteractionSecret,
   type MattermostInteractiveButtonInput,
 } from "./interactions.js";
-import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
@@ -59,20 +57,6 @@ const channelByNameCache = new Map<string, string>();
 const dmChannelCache = new Map<string, string>();
 
 const getCore = () => getMattermostRuntime();
-
-function recordMattermostOutboundActivity(accountId: string): void {
-  try {
-    getCore().channel.activity.record({
-      channel: "mattermost",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Mattermost runtime not initialized") {
-      throw error;
-    }
-  }
-}
 
 function cacheKey(baseUrl: string, token: string): string {
   return `${baseUrl}::${token}`;
@@ -437,12 +421,12 @@ export async function sendMessageMattermost(
   }
 
   if (message) {
-    const tableMode = resolveMarkdownTableMode({
+    const tableMode = core.channel.text.resolveMarkdownTableMode({
       cfg,
       channel: "mattermost",
       accountId,
     });
-    message = convertMarkdownTables(message, tableMode);
+    message = core.channel.text.convertMarkdownTables(message, tableMode);
   }
 
   if (!message && (!fileIds || fileIds.length === 0)) {
@@ -460,7 +444,11 @@ export async function sendMessageMattermost(
     props,
   });
 
-  recordMattermostOutboundActivity(accountId);
+  core.channel.activity.record({
+    channel: "mattermost",
+    accountId,
+    direction: "outbound",
+  });
 
   return {
     messageId: post.id ?? "unknown",

@@ -83,7 +83,6 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   allowPrivateNetwork?: boolean;
-  proxy?: string;
   userId?: string;
   accessToken?: string;
   password?: string;
@@ -128,18 +127,17 @@ export type ChannelMeta = {
   docsLabel?: string;
   blurb: string;
   order?: number;
-  aliases?: readonly string[];
+  aliases?: string[];
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
+  selectionExtras?: string[];
   detailLabel?: string;
   systemImage?: string;
-  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: readonly string[];
+  preferOver?: string[];
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
@@ -335,7 +333,7 @@ export type ChannelThreadingAdapter = {
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
-   * Kept for compatibility with older plugin surfaces.
+   * Kept for compatibility with older extensions/docks.
    */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
@@ -464,14 +462,6 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  messageToolCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[] | undefined;
-  reactionGuidance?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

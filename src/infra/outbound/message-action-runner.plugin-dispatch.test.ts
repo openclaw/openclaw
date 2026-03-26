@@ -7,43 +7,11 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
-
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
     listAccountIds: () => ["default"],
     resolveAccount: () => account,
     isConfigured: () => true,
-  };
-}
-
-function createPollForwardingPlugin(params: {
-  pluginId: string;
-  label: string;
-  blurb: string;
-  handleAction: ChannelActionHandler;
-}): ChannelPlugin {
-  return {
-    id: params.pluginId,
-    meta: {
-      id: params.pluginId,
-      label: params.label,
-      selectionLabel: params.label,
-      docsPath: `/channels/${params.pluginId}`,
-      blurb: params.blurb,
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: createAlwaysConfiguredPluginConfig(),
-    messaging: {
-      targetResolver: {
-        looksLikeId: () => true,
-      },
-    },
-    actions: {
-      describeMessageTool: () => ({ actions: ["poll"] }),
-      supportsAction: ({ action }) => action === "poll",
-      handleAction: params.handleAction,
-    },
   };
 }
 
@@ -414,12 +382,28 @@ describe("runMessageAction plugin dispatch", () => {
       }),
     );
 
-    const telegramPollPlugin = createPollForwardingPlugin({
-      pluginId: "telegram",
-      label: "Telegram",
-      blurb: "Telegram poll forwarding test plugin.",
-      handleAction,
-    });
+    const telegramPollPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram poll forwarding test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["poll"] }),
+        supportsAction: ({ action }) => action === "poll",
+        handleAction,
+      },
+    };
 
     beforeEach(() => {
       setActivePluginRegistry(
@@ -505,12 +489,28 @@ describe("runMessageAction plugin dispatch", () => {
       }),
     );
 
-    const discordPollPlugin = createPollForwardingPlugin({
-      pluginId: "discord",
-      label: "Discord",
-      blurb: "Discord plugin-owned poll test plugin.",
-      handleAction,
-    });
+    const discordPollPlugin: ChannelPlugin = {
+      id: "discord",
+      meta: {
+        id: "discord",
+        label: "Discord",
+        selectionLabel: "Discord",
+        docsPath: "/channels/discord",
+        blurb: "Discord plugin-owned poll test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["poll"] }),
+        supportsAction: ({ action }) => action === "poll",
+        handleAction,
+      },
+    };
 
     beforeEach(() => {
       setActivePluginRegistry(

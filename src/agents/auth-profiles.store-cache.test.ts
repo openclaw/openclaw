@@ -22,52 +22,6 @@ async function loadFreshAuthProfilesModuleForTest() {
     await import("./auth-profiles.js"));
 }
 
-function withAgentDirEnv(prefix: string, run: (agentDir: string) => void | Promise<void>) {
-  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  try {
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    return run(agentDir);
-  } finally {
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    fs.rmSync(agentDir, { recursive: true, force: true });
-  }
-}
-
-function writeAuthStore(agentDir: string, key: string) {
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  fs.writeFileSync(
-    authPath,
-    `${JSON.stringify(
-      {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key,
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  return authPath;
-}
-
 describe("auth profile store cache", () => {
   beforeEach(async () => {
     await loadFreshAuthProfilesModuleForTest();
@@ -79,24 +33,98 @@ describe("auth profile store cache", () => {
     vi.clearAllMocks();
   });
 
-  it("reuses the synced auth store while auth-profiles.json is unchanged", async () => {
-    await withAgentDirEnv("openclaw-auth-store-cache-", (agentDir) => {
-      writeAuthStore(agentDir, "sk-test");
+  it("reuses the synced auth store while auth-profiles.json is unchanged", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-store-cache-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-test",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
 
       ensureAuthProfileStore(agentDir);
       ensureAuthProfileStore(agentDir);
 
       expect(mocks.syncExternalCliCredentials).toHaveBeenCalledTimes(1);
-    });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("refreshes the cached auth store after auth-profiles.json changes", async () => {
-    await withAgentDirEnv("openclaw-auth-store-refresh-", async (agentDir) => {
-      const authPath = writeAuthStore(agentDir, "sk-test-1");
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-store-refresh-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-test-1",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
 
       ensureAuthProfileStore(agentDir);
 
-      writeAuthStore(agentDir, "sk-test-2");
+      fs.writeFileSync(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "sk-test-2",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
       const bumpedMtime = new Date(Date.now() + 2_000);
       fs.utimesSync(authPath, bumpedMtime, bumpedMtime);
 
@@ -106,7 +134,19 @@ describe("auth profile store cache", () => {
       expect(reloaded.profiles["openai:default"]).toMatchObject({
         key: "sk-test-2",
       });
-    });
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("re-syncs external CLI credentials after the cache ttl when auth-profiles.json is absent", () => {

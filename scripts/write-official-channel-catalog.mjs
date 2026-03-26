@@ -19,9 +19,11 @@ function toCatalogInstall(value, packageName) {
   if (!npmSpec) {
     return null;
   }
+  const localPath = trimString(install.localPath);
   const defaultChoice = trimString(install.defaultChoice);
   return {
     npmSpec,
+    ...(localPath ? { localPath } : {}),
     ...(defaultChoice === "npm" || defaultChoice === "local" ? { defaultChoice } : {}),
   };
 }

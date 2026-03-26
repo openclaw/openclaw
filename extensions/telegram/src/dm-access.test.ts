@@ -2,29 +2,15 @@ import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/ch
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const createChannelPairingChallengeIssuerMock = vi.hoisted(() => vi.fn());
-const upsertChannelPairingRequestMock = vi.hoisted(() =>
-  vi.fn(async () => ({ code: "123456", created: true })),
-);
+const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn(async () => undefined));
 const withTelegramApiErrorLoggingMock = vi.hoisted(() => vi.fn(async ({ fn }) => await fn()));
-const createPairingPrefixStripperMock = vi.hoisted(
-  () => (prefix: RegExp, normalize: (value: string) => string) => (value: string) =>
-    normalize(value.replace(prefix, "")),
-);
 
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer: createChannelPairingChallengeIssuerMock,
-  createPairingPrefixStripper: createPairingPrefixStripperMock,
-  createLoggedPairingApprovalNotifier: () => undefined,
-  createTextPairingAdapter: () => undefined,
-  createChannelPairingController: () => ({}),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
-  createStaticReplyToModeResolver: (mode: string) => () => mode,
-  createTopLevelChannelReplyToModeResolver: () => () => "off",
-  createScopedAccountReplyToModeResolver: () => () => "off",
-  resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -70,7 +56,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: bot as never,
       logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
     expect(allowed).toBe(true);
@@ -87,7 +72,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
       logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
     expect(allowed).toBe(false);
@@ -103,7 +87,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage: vi.fn(async () => undefined) } } as never,
       logger: { info: vi.fn() },
-      upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
     expect(allowed).toBe(true);
@@ -133,7 +116,6 @@ describe("enforceTelegramDmAccess", () => {
       accountId: "main",
       bot: { api: { sendMessage } } as never,
       logger,
-      upsertPairingRequest: upsertChannelPairingRequestMock,
     });
 
     expect(allowed).toBe(false);

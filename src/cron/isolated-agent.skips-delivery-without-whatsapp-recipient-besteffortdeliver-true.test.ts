@@ -244,7 +244,7 @@ async function assertExplicitTelegramTargetDelivery(params: {
   storePath: string;
   deps: CliDeps;
   payloads: Array<Record<string, unknown>>;
-  expectedTexts: string[];
+  expectedText: string;
 }): Promise<void> {
   mockAgentPayloads(params.payloads);
   const res = await runExplicitTelegramAnnounceTurn({
@@ -255,22 +255,10 @@ async function assertExplicitTelegramTargetDelivery(params: {
 
   expectDeliveredOk(res);
   expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-  if (params.expectedTexts.length === 1) {
-    expectDirectTelegramDelivery(params.deps, {
-      chatId: "123",
-      text: params.expectedTexts[0] ?? "",
-    });
-    return;
-  }
-  expect(params.deps.sendMessageTelegram).toHaveBeenCalledTimes(params.expectedTexts.length);
-  for (const [index, text] of params.expectedTexts.entries()) {
-    expect(params.deps.sendMessageTelegram).toHaveBeenNthCalledWith(
-      index + 1,
-      "123",
-      text,
-      expect.objectContaining({ cfg: expect.any(Object) }),
-    );
-  }
+  expectDirectTelegramDelivery(params.deps, {
+    chatId: "123",
+    text: params.expectedText,
+  });
 }
 
 describe("runCronIsolatedAgentTurn", () => {
@@ -286,19 +274,19 @@ describe("runCronIsolatedAgentTurn", () => {
         storePath,
         deps,
         payloads: [{ text: "hello from cron" }],
-        expectedTexts: ["hello from cron"],
+        expectedText: "hello from cron",
       });
     });
   });
 
-  it("delivers explicit targets with all successful payload text", async () => {
+  it("delivers explicit targets with final-payload text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
         storePath,
         deps,
         payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-        expectedTexts: ["Working on it...", "Final weather summary"],
+        expectedText: "Final weather summary",
       });
     });
   });

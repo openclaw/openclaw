@@ -1,21 +1,118 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { getPairedDevice } from "../infra/device-pairing.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  type DeviceIdentity,
+} from "../infra/device-identity.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  rotateDeviceToken,
+} from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
-import {
-  issueOperatorToken,
-  openTrackedWs,
-  pairDeviceIdentity,
-} from "./device-authz.test-helpers.js";
 import {
   connectOk,
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
+  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+function resolveDeviceIdentityPath(name: string): string {
+  const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(root, "test-device-identities", `${name}.json`);
+}
+
+function loadDeviceIdentity(name: string): {
+  identityPath: string;
+  identity: DeviceIdentity;
+  publicKey: string;
+} {
+  const identityPath = resolveDeviceIdentityPath(name);
+  const identity = loadOrCreateDeviceIdentity(identityPath);
+  return {
+    identityPath,
+    identity,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+  };
+}
+
+async function pairDevice(params: {
+  name: string;
+  role: "node" | "operator";
+  scopes: string[];
+  clientId?: string;
+  clientMode?: string;
+}): Promise<{
+  identityPath: string;
+  identity: DeviceIdentity;
+}> {
+  const loaded = loadDeviceIdentity(params.name);
+  const request = await requestDevicePairing({
+    deviceId: loaded.identity.deviceId,
+    publicKey: loaded.publicKey,
+    role: params.role,
+    scopes: params.scopes,
+    clientId: params.clientId,
+    clientMode: params.clientMode,
+  });
+  await approveDevicePairing(request.request.requestId);
+  return {
+    identityPath: loaded.identityPath,
+    identity: loaded.identity,
+  };
+}
+
+async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Promise<{
+  deviceId: string;
+  identityPath: string;
+  pairingToken: string;
+}> {
+  const paired = await pairDevice({
+    name,
+    role: "operator",
+    scopes: ["operator.admin"],
+    clientId: GATEWAY_CLIENT_NAMES.TEST,
+    clientMode: GATEWAY_CLIENT_MODES.TEST,
+  });
+  const rotated = await rotateDeviceToken({
+    deviceId: paired.identity.deviceId,
+    role: "operator",
+    scopes: ["operator.pairing"],
+  });
+  expect(rotated.ok).toBe(true);
+  const pairingToken = rotated.ok ? rotated.entry.token : "";
+  expect(pairingToken).toBeTruthy();
+  return {
+    deviceId: paired.identity.deviceId,
+    identityPath: paired.identityPath,
+    pairingToken,
+  };
+}
+
+async function openTrackedWs(port: number): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 5_000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+  return ws;
+}
 
 async function connectPairingScopedOperator(params: {
   port: number;
@@ -37,7 +134,7 @@ async function connectApprovedNode(params: {
   name: string;
   onInvoke: (payload: unknown) => void;
 }): Promise<GatewayClient> {
-  const paired = await pairDeviceIdentity({
+  const paired = await pairDevice({
     name: params.name,
     role: "node",
     scopes: [],
@@ -110,20 +207,14 @@ async function waitForMacrotasks(): Promise<void> {
 describe("gateway device.token.rotate caller scope guard", () => {
   test("rejects rotating an admin-approved device token above the caller session scopes", async () => {
     const started = await startServerWithClient("secret");
-    const attacker = await issueOperatorToken({
-      name: "rotate-attacker",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
+    const attacker = await issuePairingScopedTokenForAdminApprovedDevice("rotate-attacker");
 
     let pairingWs: WebSocket | undefined;
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
         identityPath: attacker.identityPath,
-        deviceToken: attacker.token,
+        deviceToken: attacker.pairingToken,
       });
 
       const rotate = await rpcReq(pairingWs, "device.token.rotate", {
@@ -147,13 +238,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
 
   test("blocks the pairing-token to admin-node-invoke escalation chain", async () => {
     const started = await startServerWithClient("secret");
-    const attacker = await issueOperatorToken({
-      name: "rotate-rce-attacker",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
+    const attacker = await issuePairingScopedTokenForAdminApprovedDevice("rotate-rce-attacker");
 
     let sawInvoke = false;
     let pairingWs: WebSocket | undefined;
@@ -173,7 +258,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
         identityPath: attacker.identityPath,
-        deviceToken: attacker.token,
+        deviceToken: attacker.pairingToken,
       });
 
       const rotate = await rpcReq<{ token?: string }>(pairingWs, "device.token.rotate", {
@@ -189,7 +274,7 @@ describe("gateway device.token.rotate caller scope guard", () => {
 
       const paired = await getPairedDevice(attacker.deviceId);
       expect(paired?.tokens?.operator?.scopes).toEqual(["operator.pairing"]);
-      expect(paired?.tokens?.operator?.token).toBe(attacker.token);
+      expect(paired?.tokens?.operator?.token).toBe(attacker.pairingToken);
     } finally {
       pairingWs?.close();
       nodeClient?.stop();
@@ -201,20 +286,14 @@ describe("gateway device.token.rotate caller scope guard", () => {
 
   test("returns the same public deny for unknown devices and caller scope failures", async () => {
     const started = await startServerWithClient("secret");
-    const attacker = await issueOperatorToken({
-      name: "rotate-deny-shape",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
+    const attacker = await issuePairingScopedTokenForAdminApprovedDevice("rotate-deny-shape");
 
     let pairingWs: WebSocket | undefined;
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
         identityPath: attacker.identityPath,
-        deviceToken: attacker.token,
+        deviceToken: attacker.pairingToken,
       });
 
       const missingScope = await rpcReq(pairingWs, "device.token.rotate", {

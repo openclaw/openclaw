@@ -25,7 +25,6 @@ import {
 import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
@@ -34,8 +33,12 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import {
+  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushRelativePathForRun,
+  resolveMemoryFlushPromptForRun,
+  resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -331,12 +334,12 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   const reserveTokensFloor =
-    memoryFlushPlan?.reserveTokensFloor ??
+    resolveMemoryFlushSettings(params.cfg)?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
     20_000;
-  const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
+  const softThresholdTokens =
+    resolveMemoryFlushSettings(params.cfg)?.softThresholdTokens ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
   const hasPersistedTotalTokens =
@@ -463,8 +466,8 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  if (!memoryFlushPlan) {
+  const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
+  if (!memoryFlushSettings) {
     return params.sessionEntry;
   }
 
@@ -507,7 +510,9 @@ export async function runMemoryFlushIfNeeded(params: {
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
   const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+    contextWindowTokens -
+    memoryFlushSettings.reserveTokensFloor -
+    memoryFlushSettings.softThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -528,7 +533,7 @@ export async function runMemoryFlushIfNeeded(params: {
     canAttemptFlush && entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
   );
 
-  const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
+  const forceFlushTranscriptBytes = memoryFlushSettings.forceFlushTranscriptBytes;
   const shouldCheckTranscriptSizeForForcedFlush = Boolean(
     canAttemptFlush &&
     entry &&
@@ -627,15 +632,16 @@ export async function runMemoryFlushIfNeeded(params: {
   );
 
   const shouldFlushMemory =
-    (memoryFlushWritable &&
+    (memoryFlushSettings &&
+      memoryFlushWritable &&
       !params.isHeartbeat &&
       !isCli &&
       shouldRunMemoryFlush({
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
-        softThresholdTokens: memoryFlushPlan.softThresholdTokens,
+        reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
+        softThresholdTokens: memoryFlushSettings.softThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&
       entry != null &&
@@ -664,15 +670,13 @@ export async function runMemoryFlushIfNeeded(params: {
   }
   let memoryCompactionCompleted = false;
   const memoryFlushNowMs = Date.now();
-  const activeMemoryFlushPlan =
-    resolveMemoryFlushPlan({
-      cfg: params.cfg,
-      nowMs: memoryFlushNowMs,
-    }) ?? memoryFlushPlan;
-  const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
+  const memoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs: memoryFlushNowMs,
+  });
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
-    activeMemoryFlushPlan.systemPrompt,
+    memoryFlushSettings.systemPrompt,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -696,10 +700,13 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           allowGatewaySubagentBinding: true,
-          silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
-          prompt: activeMemoryFlushPlan.prompt,
+          prompt: resolveMemoryFlushPromptForRun({
+            prompt: memoryFlushSettings.prompt,
+            cfg: params.cfg,
+            nowMs: memoryFlushNowMs,
+          }),
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:

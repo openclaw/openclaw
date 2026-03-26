@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../extensions/public-artifacts.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   canResolveRegistryVersionForPackageTarget,
@@ -21,8 +20,6 @@ import {
   resolveGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
-
-const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -206,9 +203,9 @@ describe("update global helpers", () => {
 
     await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
 
-    await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+    await fs.rm(path.join(packageRoot, "dist/extensions/matrix/helper-api.js"));
     await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-      `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+      "missing bundled runtime sidecar dist/extensions/matrix/helper-api.js",
     );
   });
 });

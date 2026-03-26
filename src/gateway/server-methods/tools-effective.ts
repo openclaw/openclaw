@@ -86,9 +86,7 @@ function resolveTrustedToolsEffectiveContext(params: {
         ? String(delivery.threadId)
         : loaded.entry.lastThreadId != null
           ? String(loaded.entry.lastThreadId)
-          : loaded.entry.origin?.threadId != null
-            ? String(loaded.entry.origin.threadId)
-            : undefined,
+          : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,

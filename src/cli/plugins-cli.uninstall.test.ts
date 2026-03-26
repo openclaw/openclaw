@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildPluginStatusReport,
@@ -13,9 +12,6 @@ import {
   uninstallPlugin,
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
-
-const CLI_STATE_ROOT = "/tmp/openclaw-state";
-const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("plugins cli uninstall", () => {
   beforeEach(() => {
@@ -33,8 +29,8 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: ALPHA_INSTALL_PATH,
-            installPath: ALPHA_INSTALL_PATH,
+            sourcePath: "/tmp/openclaw-state/extensions/alpha",
+            installPath: "/tmp/openclaw-state/extensions/alpha",
           },
         },
       },
@@ -60,8 +56,8 @@ describe("plugins cli uninstall", () => {
         installs: {
           alpha: {
             source: "path",
-            sourcePath: ALPHA_INSTALL_PATH,
-            installPath: ALPHA_INSTALL_PATH,
+            sourcePath: "/tmp/openclaw-state/extensions/alpha",
+            installPath: "/tmp/openclaw-state/extensions/alpha",
           },
         },
       },

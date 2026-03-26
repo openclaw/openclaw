@@ -46,22 +46,6 @@ function createTestRunRecord(overrides: Partial<SubagentRunRecord> = {}): Subage
   };
 }
 
-function createActiveRuns(...runs: SubagentRunRecord[]) {
-  return new Map(runs.map((run) => [run.runId, run] satisfies [string, SubagentRunRecord]));
-}
-
-async function expectSkippedRecovery(store: ReturnType<typeof sessions.loadSessionStore>) {
-  vi.mocked(sessions.loadSessionStore).mockReturnValue(store);
-
-  const result = await recoverOrphanedSubagentSessions({
-    getActiveRuns: () => createActiveRuns(createTestRunRecord()),
-  });
-
-  expect(result.recovered).toBe(0);
-  expect(result.skipped).toBe(1);
-  expect(gateway.callGateway).not.toHaveBeenCalled();
-}
-
 describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,13 +97,24 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions that are not aborted", async () => {
-    await expectSkippedRecovery({
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
       "agent:main:subagent:test-session-1": {
         sessionId: "session-abc",
         updatedAt: Date.now(),
         abortedLastRun: false,
       },
     });
+
+    const activeRuns = new Map<string, SubagentRunRecord>();
+    activeRuns.set("run-1", createTestRunRecord());
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
   it("skips runs that have already ended", async () => {
@@ -230,7 +225,19 @@ describe("subagent-orphan-recovery", () => {
   });
 
   it("skips sessions with missing session entry in store", async () => {
-    await expectSkippedRecovery({});
+    // Store has no matching entry
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({});
+
+    const activeRuns = new Map<string, SubagentRunRecord>();
+    activeRuns.set("run-1", createTestRunRecord());
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
   });
 
   it("clears abortedLastRun flag after successful resume", async () => {

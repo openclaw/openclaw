@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   handleFeishuCardAction,
   resetProcessedFeishuCardActionTokensForTests,
@@ -35,8 +33,8 @@ vi.mock("./send.js", () => ({
 import { handleFeishuMessage } from "./bot.js";
 
 describe("Feishu Card Action Handler", () => {
-  const cfg: ClawdbotConfig = {};
-  const runtime: RuntimeEnv = createRuntimeEnv();
+  const cfg = {} as any; // Minimal mock
+  const runtime = { log: vi.fn(), error: vi.fn() } as any;
 
   function createCardActionEvent(params: {
     token: string;

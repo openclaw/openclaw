@@ -1,14 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createDiscordMessageHandler,
-  preflightDiscordMessageMock,
-  processDiscordMessageMock,
-  deliverDiscordReplyMock,
-} from "./message-handler.module-test-helpers.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+let createDiscordMessageHandler: typeof import("./message-handler.module-test-helpers.js").createDiscordMessageHandler;
+let preflightDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").preflightDiscordMessageMock;
+let processDiscordMessageMock: typeof import("./message-handler.module-test-helpers.js").processDiscordMessageMock;
+let deliverDiscordReplyMock: typeof import("./message-handler.module-test-helpers.js").deliverDiscordReplyMock;
 
 const eventualReplyDeliveredMock = vi.hoisted(() => vi.fn());
 type SetStatusFn = (patch: Record<string, unknown>) => void;
@@ -63,43 +61,6 @@ function installDefaultDiscordPreflight() {
   preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
     createPreflightContext(params.data.channel_id),
   );
-}
-
-function createAbortOnTimeoutProcessImplementation() {
-  return async (ctx: { abortSignal?: AbortSignal }) => {
-    await new Promise<void>((resolve) => {
-      if (ctx.abortSignal?.aborted) {
-        resolve();
-        return;
-      }
-      ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-    });
-  };
-}
-
-async function queueTimedMessages(params?: {
-  workerRunTimeoutMs?: number;
-  beforeCreateHandler?: () => void;
-}) {
-  preflightDiscordMessageMock.mockReset();
-  processDiscordMessageMock.mockReset();
-  deliverDiscordReplyMock.mockClear();
-
-  processDiscordMessageMock
-    .mockImplementationOnce(createAbortOnTimeoutProcessImplementation())
-    .mockImplementationOnce(async () => undefined);
-  installDefaultDiscordPreflight();
-  params?.beforeCreateHandler?.();
-
-  const handlerParams = createDiscordHandlerParams({
-    workerRunTimeoutMs: params?.workerRunTimeoutMs ?? 50,
-  });
-  const handler = createDiscordMessageHandler(handlerParams);
-
-  await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
-  await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
-
-  return { handlerParams };
 }
 
 async function runSingleMessageTimeout(params: {
@@ -166,6 +127,15 @@ async function createLifecycleStopScenario(params: {
 }
 
 describe("createDiscordMessageHandler queue behavior", () => {
+  beforeAll(async () => {
+    ({
+      createDiscordMessageHandler,
+      preflightDiscordMessageMock,
+      processDiscordMessageMock,
+      deliverDiscordReplyMock,
+    } = await import("./message-handler.module-test-helpers.js"));
+  });
+
   it("resets busy counters when the handler is created", () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
@@ -255,7 +225,34 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("applies explicit inbound worker timeout to queued runs so stalled runs do not block the queue", async () => {
     vi.useFakeTimers();
     try {
-      const { handlerParams } = await queueTimedMessages();
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      deliverDiscordReplyMock.mockClear();
+
+      processDiscordMessageMock
+        .mockImplementationOnce(async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })
+        .mockImplementationOnce(async () => undefined);
+      const params = createDiscordHandlerParams({ workerRunTimeoutMs: 50 });
+      preflightDiscordMessageMock.mockImplementation(
+        async (preflightParams: { data: { channel_id: string } }) =>
+          createPreflightContext(preflightParams.data.channel_id),
+      );
+      const handler = createDiscordMessageHandler(params);
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await expect(
+        handler(createMessageData("m-2") as never, {} as never),
+      ).resolves.toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(60);
       await vi.waitFor(() => {
@@ -266,7 +263,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         | { abortSignal?: AbortSignal }
         | undefined;
       expect(firstCtx?.abortSignal?.aborted).toBe(true);
-      expect(handlerParams.runtime.error).toHaveBeenCalledWith(
+      expect(params.runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("discord inbound worker timed out after"),
       );
       expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
@@ -290,15 +287,40 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("waits for the timeout fallback reply before starting the next queued run", async () => {
     vi.useFakeTimers();
     try {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+      deliverDiscordReplyMock.mockReset();
+
       const deliverTimeoutReply = createDeferred();
-      const { handlerParams } = await queueTimedMessages({
-        beforeCreateHandler: () => {
-          deliverDiscordReplyMock.mockReset();
-          deliverDiscordReplyMock.mockImplementationOnce(async () => {
-            await deliverTimeoutReply.promise;
-          });
-        },
+      deliverDiscordReplyMock.mockImplementationOnce(async () => {
+        await deliverTimeoutReply.promise;
       });
+      processDiscordMessageMock
+        .mockImplementationOnce(async (ctx: { abortSignal?: AbortSignal }) => {
+          await new Promise<void>((resolve) => {
+            if (ctx.abortSignal?.aborted) {
+              resolve();
+              return;
+            }
+            ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        })
+        .mockImplementationOnce(async () => undefined);
+      preflightDiscordMessageMock.mockImplementation(
+        async (preflightParams: { data: { channel_id: string } }) =>
+          createPreflightContext(preflightParams.data.channel_id),
+      );
+
+      const handler = createDiscordMessageHandler(
+        createDiscordHandlerParams({ workerRunTimeoutMs: 50 }),
+      );
+
+      await expect(
+        handler(createMessageData("m-1") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await expect(
+        handler(createMessageData("m-2") as never, {} as never),
+      ).resolves.toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(60);
       await vi.waitFor(() => {
@@ -306,9 +328,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
       });
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      expect(handlerParams.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("discord inbound worker timed out after"),
-      );
 
       deliverTimeoutReply.resolve();
       await deliverTimeoutReply.promise;

@@ -5,7 +5,7 @@ import {
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
-} from "../plugin-sdk/google.js";
+} from "./google-generative-ai.js";
 
 describe("google-generative-ai helpers", () => {
   it("detects the Google Generative AI transport id", () => {

@@ -497,13 +497,13 @@
   height: 30px;
   border-radius: var(--radius-md);
   border: none;
-  background: transparent;
-  color: var(--muted);
+  background: var(--muted-strong);
+  color: var(--text-strong);
   cursor: pointer;
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+    box-shadow var(--duration-fast) ease;
   padding: 0;
 }
 
@@ -518,8 +518,8 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--bg-hover);
+  background: var(--muted);
+  box-shadow: none;
 }
 
 .chat-send-btn:disabled {
@@ -529,7 +529,6 @@
 
 .chat-send-btn--stop {
   background: var(--danger);
-  color: var(--destructive-foreground);
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
 const mocks = vi.hoisted(() => ({
@@ -56,14 +55,23 @@ vi.mock("./reply/directive-handling.defaults.js", () => ({
 vi.mock("./reply/inbound-context.js", () => ({
   finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
 }));
-vi.mock("./reply/session-reset-model.runtime.js", () => ({
+vi.mock("./reply/session-reset-model.js", () => ({
   applyResetModelOverride: vi.fn(async () => undefined),
 }));
-vi.mock("./reply/stage-sandbox-media.runtime.js", () => ({
+vi.mock("./reply/stage-sandbox-media.js", () => ({
   stageSandboxMedia: vi.fn(async () => undefined),
 }));
 vi.mock("./reply/typing.js", () => ({
-  createTypingController: vi.fn(() => createMockTypingController()),
+  createTypingController: vi.fn(() => ({
+    onReplyStart: async () => undefined,
+    startTypingLoop: async () => undefined,
+    startTypingOnText: async () => undefined,
+    refreshTypingTtl: () => undefined,
+    isActive: () => false,
+    markRunComplete: () => undefined,
+    markDispatchIdle: () => undefined,
+    cleanup: () => undefined,
+  })),
 }));
 
 vi.mock("./reply/get-reply-directives.js", () => ({

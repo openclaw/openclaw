@@ -4,7 +4,6 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
   collectTypeScriptInventory,
   diffInventoryEntries,
@@ -84,7 +83,7 @@ function scanImportBoundaryViolations(sourceFile, filePath) {
 
   visitModuleSpecifiers(ts, sourceFile, ({ kind, specifier, specifierNode }) => {
     const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-    if (!resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    if (!resolvedPath?.startsWith("extensions/")) {
       return;
     }
     pushEntry(entries, {
@@ -212,11 +211,11 @@ export function diffInventory(expected, actual) {
 
 function formatInventoryHuman(inventory) {
   if (inventory.length === 0) {
-    return "Rule: src/plugins/** must not import bundled plugin files\nNo plugin import boundary violations found.";
+    return "Rule: src/plugins/** must not import extensions/**\nNo plugin import boundary violations found.";
   }
 
   const lines = [
-    "Rule: src/plugins/** must not import bundled plugin files",
+    "Rule: src/plugins/** must not import extensions/**",
     "Plugin extension import boundary inventory:",
   ];
   let activeFile = "";

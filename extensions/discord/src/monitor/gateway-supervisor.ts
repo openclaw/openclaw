@@ -1,4 +1,5 @@
 import type { EventEmitter } from "node:events";
+import type { Client } from "@buape/carbon";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
@@ -66,11 +67,12 @@ export function classifyDiscordGatewayEvent(params: {
 }
 
 export function createDiscordGatewaySupervisor(params: {
-  gateway?: unknown;
+  client: Client;
   isDisallowedIntentsError: (err: unknown) => boolean;
   runtime: RuntimeEnv;
 }): DiscordGatewaySupervisor {
-  const emitter = getDiscordGatewayEmitter(params.gateway);
+  const gateway = params.client.getPlugin("gateway");
+  const emitter = getDiscordGatewayEmitter(gateway);
   const pending: DiscordGatewayEvent[] = [];
   if (!emitter) {
     return {
@@ -84,36 +86,31 @@ export function createDiscordGatewaySupervisor(params: {
 
   let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
   let phase: GatewaySupervisorPhase = "buffering";
-  const logLateEvent =
-    (state: Extract<GatewaySupervisorPhase, "disposed" | "teardown">) =>
-    (event: DiscordGatewayEvent) => {
-      params.runtime.error?.(
-        danger(
-          `discord: suppressed late gateway ${event.type} error ${
-            state === "disposed" ? "after dispose" : "during teardown"
-          }: ${event.message}`,
-        ),
-      );
-    };
+  let disposed = false;
+  const logLateTeardownEvent = (event: DiscordGatewayEvent) => {
+    params.runtime.error?.(
+      danger(
+        `discord: suppressed late gateway ${event.type} error during teardown: ${event.message}`,
+      ),
+    );
+  };
   const onGatewayError = (err: unknown) => {
+    if (disposed) {
+      return;
+    }
     const event = classifyDiscordGatewayEvent({
       err,
       isDisallowedIntentsError: params.isDisallowedIntentsError,
     });
-    switch (phase) {
-      case "disposed":
-        logLateEvent("disposed")(event);
-        return;
-      case "active":
-        lifecycleHandler?.(event);
-        return;
-      case "teardown":
-        logLateEvent("teardown")(event);
-        return;
-      case "buffering":
-        pending.push(event);
-        return;
+    if (phase === "active" && lifecycleHandler) {
+      lifecycleHandler(event);
+      return;
     }
+    if (phase === "teardown") {
+      logLateTeardownEvent(event);
+      return;
+    }
+    pending.push(event);
   };
   emitter.on("error", onGatewayError);
 
@@ -141,12 +138,14 @@ export function createDiscordGatewaySupervisor(params: {
       return "continue";
     },
     dispose: () => {
-      if (phase === "disposed") {
+      if (disposed) {
         return;
       }
+      disposed = true;
       lifecycleHandler = undefined;
       phase = "disposed";
       pending.length = 0;
+      emitter.removeListener("error", onGatewayError);
     },
   };
 }

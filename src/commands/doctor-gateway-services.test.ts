@@ -2,10 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
-import {
-  readEmbeddedGatewayTokenForTest,
-  testServiceAuditCodes,
-} from "./doctor-service-audit.test-helpers.js";
 
 const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
@@ -44,13 +40,9 @@ vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    writeConfigFile: mocks.writeConfigFile,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  writeConfigFile: mocks.writeConfigFile,
+}));
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
@@ -65,9 +57,17 @@ vi.mock("../daemon/runtime-paths.js", () => ({
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
   needsNodeRuntimeMigration: vi.fn(() => false),
-  readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
+  readEmbeddedGatewayToken: (
+    command: {
+      environment?: Record<string, string>;
+      environmentValueSources?: Record<string, "inline" | "file">;
+    } | null,
+  ) =>
+    command?.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file"
+      ? undefined
+      : command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
   SERVICE_AUDIT_CODES: {
-    gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
+    gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   },
 }));
 
@@ -607,16 +607,16 @@ describe("maybeScanExtraGatewayServices", () => {
     mocks.findExtraGatewayServices.mockResolvedValue([
       {
         platform: "linux",
-        label: "clawdbot-gateway.service",
-        detail: "unit: /home/test/.config/systemd/user/clawdbot-gateway.service",
+        label: "moltbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/moltbot-gateway.service",
         scope: "user",
         legacy: true,
       },
     ]);
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([
       {
-        name: "clawdbot-gateway",
-        unitPath: "/home/test/.config/systemd/user/clawdbot-gateway.service",
+        name: "moltbot-gateway",
+        unitPath: "/home/test/.config/systemd/user/moltbot-gateway.service",
         enabled: true,
         exists: true,
       },
@@ -648,7 +648,7 @@ describe("maybeScanExtraGatewayServices", () => {
       stdout: process.stdout,
     });
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("clawdbot-gateway.service"),
+      expect.stringContaining("moltbot-gateway.service"),
       "Legacy gateway removed",
     );
     expect(runtime.log).toHaveBeenCalledWith(

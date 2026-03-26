@@ -1,43 +1,35 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
+const hoisted = vi.hoisted(() => {
+  const resolveByConversationMock = vi.fn();
+  const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
+  const touchMock = vi.fn();
+  return {
+    recordInboundSessionMock,
+    resolveByConversationMock,
+    touchMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
-vi.mock("./conversation-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./conversation-route.js")>();
-  return {
-    ...actual,
-    resolveTelegramConversationRoute: (...args: unknown[]) =>
-      resolveTelegramConversationRouteMock(...args),
+    recordInboundSession: (...args: unknown[]) => hoisted.recordInboundSessionMock(...args),
+    getSessionBindingService: () => ({
+      bind: vi.fn(),
+      getCapabilities: vi.fn(),
+      listBySession: vi.fn(),
+      resolveByConversation: (ref: unknown) => hoisted.resolveByConversationMock(ref),
+      touch: (bindingId: string, at?: number) => hoisted.touchMock(bindingId, at),
+      unbind: vi.fn(),
+    }),
   };
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
-function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
-  return {
-    configuredBinding: null,
-    configuredBindingSessionKey: "",
-    route: {
-      accountId: params.accountId,
-      agentId: params.agentId,
-      channel: "telegram",
-      sessionKey: params.sessionKey,
-      mainSessionKey: `agent:${params.agentId}:main`,
-      matchedBy: "binding.channel",
-      lastRoutePolicy: "bound",
-    },
-  } as const;
-}
-
-describe("buildTelegramMessageContext thread binding override", () => {
+describe("buildTelegramMessageContext bound conversation override", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ buildTelegramMessageContextForTest } =
@@ -45,18 +37,16 @@ describe("buildTelegramMessageContext thread binding override", () => {
   });
 
   beforeEach(() => {
-    recordInboundSessionMock.mockClear();
-    resolveTelegramConversationRouteMock.mockReset();
+    hoisted.recordInboundSessionMock.mockClear();
+    hoisted.resolveByConversationMock.mockReset().mockReturnValue(null);
+    hoisted.touchMock.mockReset();
   });
 
-  it("passes forum topic messages through the route seam and uses the bound session", async () => {
-    resolveTelegramConversationRouteMock.mockReturnValue(
-      createBoundRoute({
-        accountId: "default",
-        sessionKey: "agent:codex-acp:session-1",
-        agentId: "codex-acp",
-      }),
-    );
+  it("routes forum topic messages to the bound session", async () => {
+    hoisted.resolveByConversationMock.mockReturnValue({
+      bindingId: "default:-100200300:topic:77",
+      targetSessionKey: "agent:codex-acp:session-1",
+    });
 
     const ctx = await buildTelegramMessageContextForTest({
       message: {
@@ -71,30 +61,23 @@ describe("buildTelegramMessageContext thread binding override", () => {
       resolveGroupActivation: () => true,
     });
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        chatId: -100200300,
-        isGroup: true,
-        resolvedThreadId: 77,
-        replyThreadId: 77,
-        senderId: "42",
-      }),
-    );
+    expect(hoisted.resolveByConversationMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-100200300:topic:77",
+    });
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(hoisted.recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
       updateLastRoute: undefined,
     });
+    expect(hoisted.touchMock).toHaveBeenCalledWith("default:-100200300:topic:77", undefined);
   });
 
   it("treats named-account bound conversations as explicit route matches", async () => {
-    resolveTelegramConversationRouteMock.mockReturnValue(
-      createBoundRoute({
-        accountId: "work",
-        sessionKey: "agent:codex-acp:session-2",
-        agentId: "codex-acp",
-      }),
-    );
+    hoisted.resolveByConversationMock.mockReturnValue({
+      bindingId: "work:-100200300:topic:77",
+      targetSessionKey: "agent:codex-acp:session-2",
+    });
 
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
@@ -110,30 +93,18 @@ describe("buildTelegramMessageContext thread binding override", () => {
       resolveGroupActivation: () => true,
     });
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "work",
-        chatId: -100200300,
-        isGroup: true,
-        resolvedThreadId: 77,
-        replyThreadId: 77,
-        senderId: "42",
-      }),
-    );
     expect(ctx).not.toBeNull();
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-2");
+    expect(hoisted.touchMock).toHaveBeenCalledWith("work:-100200300:topic:77", undefined);
   });
 
-  it("passes dm messages through the route seam and uses the bound session", async () => {
-    resolveTelegramConversationRouteMock.mockReturnValue(
-      createBoundRoute({
-        accountId: "default",
-        sessionKey: "agent:codex-acp:session-dm",
-        agentId: "codex-acp",
-      }),
-    );
+  it("routes dm messages to the bound session", async () => {
+    hoisted.resolveByConversationMock.mockReturnValue({
+      bindingId: "default:1234",
+      targetSessionKey: "agent:codex-acp:session-dm",
+    });
 
     const ctx = await buildTelegramMessageContextForTest({
       message: {
@@ -145,16 +116,12 @@ describe("buildTelegramMessageContext thread binding override", () => {
       },
     });
 
-    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        chatId: 1234,
-        isGroup: false,
-        resolvedThreadId: undefined,
-        replyThreadId: undefined,
-        senderId: "42",
-      }),
-    );
+    expect(hoisted.resolveByConversationMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "1234",
+    });
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
+    expect(hoisted.touchMock).toHaveBeenCalledWith("default:1234", undefined);
   });
 });

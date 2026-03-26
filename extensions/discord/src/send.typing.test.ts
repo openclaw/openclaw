@@ -1,6 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveDiscordRestMock = vi.hoisted(() => vi.fn());
 
@@ -10,12 +10,9 @@ vi.mock("./client.js", () => ({
 
 let sendTypingDiscord: typeof import("./send.typing.js").sendTypingDiscord;
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
   ({ sendTypingDiscord } = await import("./send.typing.js"));
-});
-
-beforeEach(() => {
-  resolveDiscordRestMock.mockReset();
 });
 
 describe("sendTypingDiscord", () => {

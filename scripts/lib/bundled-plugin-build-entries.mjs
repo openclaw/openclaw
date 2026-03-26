@@ -1,10 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  BUNDLED_PLUGIN_ROOT_DIR,
-  bundledDistPluginFile,
-  bundledPluginFile,
-} from "./bundled-plugin-paths.mjs";
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -73,7 +68,7 @@ function collectTopLevelPublicSurfaceEntries(pluginDir) {
 export function collectBundledPluginBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ?? process.env;
-  const extensionsRoot = path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR);
+  const extensionsRoot = path.join(cwd, "extensions");
   const entries = [];
 
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
@@ -114,8 +109,8 @@ export function listBundledPluginBuildEntries(params = {}) {
     collectBundledPluginBuildEntries(params).flatMap(({ id, sourceEntries }) =>
       sourceEntries.map((entry) => {
         const normalizedEntry = entry.replace(/^\.\//, "");
-        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
-        return [entryKey, path.join(BUNDLED_PLUGIN_ROOT_DIR, id, normalizedEntry)];
+        const entryKey = `extensions/${id}/${normalizedEntry.replace(/\.[^.]+$/u, "")}`;
+        return [entryKey, path.join("extensions", id, normalizedEntry)];
       }),
     ),
   );
@@ -126,13 +121,13 @@ export function listBundledPluginPackArtifacts(params = {}) {
   const artifacts = new Set();
 
   for (const { id, hasPackageJson, sourceEntries } of entries) {
-    artifacts.add(bundledDistPluginFile(id, "openclaw.plugin.json"));
+    artifacts.add(`dist/extensions/${id}/openclaw.plugin.json`);
     if (hasPackageJson) {
-      artifacts.add(bundledDistPluginFile(id, "package.json"));
+      artifacts.add(`dist/extensions/${id}/package.json`);
     }
     for (const entry of sourceEntries) {
       const normalizedEntry = entry.replace(/^\.\//, "").replace(/\.[^.]+$/u, "");
-      artifacts.add(bundledDistPluginFile(id, `${normalizedEntry}.js`));
+      artifacts.add(`dist/extensions/${id}/${normalizedEntry}.js`);
     }
   }
 

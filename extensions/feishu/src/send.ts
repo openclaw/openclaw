@@ -1,5 +1,3 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -447,7 +445,7 @@ export async function sendMessageFeishu(
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = resolveMarkdownTableMode({
+  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
@@ -457,7 +455,7 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = convertMarkdownTables(rawText, tableMode);
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -535,11 +533,11 @@ export async function editMessageFeishu(params: {
     return { messageId, contentType: "interactive" };
   }
 
-  const tableMode = resolveMarkdownTableMode({
+  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
+  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text!, tableMode);
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },

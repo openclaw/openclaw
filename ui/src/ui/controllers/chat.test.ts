@@ -28,27 +28,6 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
-function createActiveStreamingState() {
-  return createState({
-    sessionKey: "main",
-    chatRunId: "run-user",
-    chatStream: "Working...",
-    chatStreamStartedAt: 123,
-  });
-}
-
-function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
-  return {
-    runId: "run-announce",
-    sessionKey: "main",
-    state: "final",
-    message: {
-      role: "assistant",
-      content: [{ type: "text", text: "NO_REPLY" }],
-    },
-  };
-}
-
 describe("handleChatEvent", () => {
   it("returns null when payload is missing", () => {
     const state = createState();
@@ -124,8 +103,21 @@ describe("handleChatEvent", () => {
   });
 
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
 
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe("run-user");
@@ -135,7 +127,12 @@ describe("handleChatEvent", () => {
   });
 
   it("returns final for another run when payload has no message", () => {
-    const state = createActiveStreamingState();
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
     const payload: ChatEventPayload = {
       runId: "run-announce",
       sessionKey: "main",
@@ -379,8 +376,21 @@ describe("handleChatEvent", () => {
   });
 
   it("drops NO_REPLY final payload from another run", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-user",
+      chatStream: "Working...",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+      },
+    };
 
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([]);

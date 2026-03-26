@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const { listBySessionMock } = vi.hoisted(() => ({
   listBySessionMock: vi.fn(),
@@ -10,15 +10,9 @@ vi.mock("../../../infra/outbound/session-binding-service.js", () => ({
   }),
 }));
 
-let handleSubagentsAgentsAction: typeof import("./action-agents.js").handleSubagentsAgentsAction;
+import { handleSubagentsAgentsAction } from "./action-agents.js";
 
 describe("handleSubagentsAgentsAction", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ handleSubagentsAgentsAction } = await import("./action-agents.js"));
-    listBySessionMock.mockReset();
-  });
-
   it("dedupes stale bound rows for the same child session", () => {
     const childSessionKey = "agent:main:subagent:worker";
     listBySessionMock.mockImplementation((sessionKey: string) =>

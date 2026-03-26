@@ -1,11 +1,6 @@
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
-import {
-  createMattermostClient,
-  fetchMattermostMe,
-  type MattermostClient,
-  type MattermostFetch,
-} from "./client.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import { createMattermostClient, fetchMattermostMe, type MattermostClient } from "./client.js";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
@@ -13,7 +8,7 @@ type ReactionParams = {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: MattermostFetch;
+  fetchImpl?: typeof fetch;
 };
 type ReactionMutation = (client: MattermostClient, params: MutationPayload) => Promise<void>;
 type MutationPayload = { userId: string; postId: string; emojiName: string };
@@ -43,7 +38,7 @@ export async function addMattermostReaction(params: {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: MattermostFetch;
+  fetchImpl?: typeof fetch;
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "add",
@@ -56,7 +51,7 @@ export async function removeMattermostReaction(params: {
   postId: string;
   emojiName: string;
   accountId?: string | null;
-  fetchImpl?: MattermostFetch;
+  fetchImpl?: typeof fetch;
 }): Promise<Result> {
   return runMattermostReaction(params, {
     action: "remove",

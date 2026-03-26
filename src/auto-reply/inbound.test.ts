@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDiscordGroupRequireMention } from "../../extensions/discord/src/group-policy.js";
+import { resolveSlackGroupRequireMention } from "../../extensions/slack/src/group-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -786,7 +788,7 @@ describe("mention helpers", () => {
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", async () => {
+  it("respects Discord guild/channel requireMention settings", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -814,10 +816,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
-  it("respects Slack channel requireMention settings", async () => {
+  it("respects Slack channel requireMention settings", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -840,10 +842,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
-  it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
+  it("uses Slack fallback resolver semantics for default-account wildcard channels", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -871,10 +873,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
-  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
+  it("matches the Slack plugin resolver for default-account wildcard fallbacks", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -902,10 +904,16 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
+      resolveSlackGroupRequireMention({
+        cfg,
+        groupId: groupResolution.id,
+        groupChannel: ctx.GroupSubject,
+      }),
+    );
   });
 
-  it("uses Discord fallback resolver semantics for guild slug matches", async () => {
+  it("uses Discord fallback resolver semantics for guild slug matches", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -932,10 +940,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
-  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
+  it("matches the Discord plugin resolver for slug + wildcard guild fallbacks", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -964,10 +972,17 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
+      resolveDiscordGroupRequireMention({
+        cfg,
+        groupId: groupResolution.id,
+        groupChannel: ctx.GroupChannel,
+        groupSpace: ctx.GroupSpace,
+      }),
+    );
   });
 
-  it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
+  it("respects LINE prefixed group keys in reply-stage requireMention resolution", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -989,10 +1004,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
-  it("preserves plugin-backed channel requireMention resolution", async () => {
+  it("preserves plugin-backed channel requireMention resolution", () => {
     resetPluginRuntimeStateForTest();
     const cfg: OpenClawConfig = {
       channels: {
@@ -1014,6 +1029,6 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 });

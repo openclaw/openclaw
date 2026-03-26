@@ -331,7 +331,10 @@ async function performClawHubSkillInstall(
         detail,
       };
     } finally {
-      await archive.cleanup().catch(() => undefined);
+      await fs.rm(archive.archivePath, { force: true }).catch(() => undefined);
+      await fs
+        .rm(path.dirname(archive.archivePath), { recursive: true, force: true })
+        .catch(() => undefined);
     }
   } catch (err) {
     return {

@@ -140,7 +140,7 @@ export function resolveSession(opts: {
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

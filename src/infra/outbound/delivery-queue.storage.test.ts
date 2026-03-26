@@ -12,14 +12,10 @@ import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-que
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
-  const queueDir = () => path.join(tmpDir(), "delivery-queue");
-  const queueJsonFiles = () => fs.readdirSync(queueDir()).filter((file) => file.endsWith(".json"));
-  const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
-    enqueueDelivery(params, rootDir);
 
   describe("enqueue + ack lifecycle", () => {
     it("creates and removes a queue entry", async () => {
-      const id = await enqueueTextDelivery(
+      const id = await enqueueDelivery(
         {
           channel: "whatsapp",
           to: "+1555",
@@ -37,7 +33,10 @@ describe("delivery-queue storage", () => {
         tmpDir(),
       );
 
-      expect(queueJsonFiles()).toEqual([`${id}.json`]);
+      const queueDir = path.join(tmpDir(), "delivery-queue");
+      const files = fs.readdirSync(queueDir).filter((file) => file.endsWith(".json"));
+      expect(files).toHaveLength(1);
+      expect(files[0]).toBe(`${id}.json`);
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry).toMatchObject({
@@ -58,53 +57,58 @@ describe("delivery-queue storage", () => {
       expect(entry.payloads).toEqual([{ text: "hello" }]);
 
       await ackDelivery(id, tmpDir());
-      expect(queueJsonFiles()).toHaveLength(0);
+      expect(fs.readdirSync(queueDir).filter((file) => file.endsWith(".json"))).toHaveLength(0);
     });
 
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
     });
 
-    it.each([
-      {
-        name: "ack cleans up leftover .delivered marker when .json is already gone",
-        payload: { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
-        prepareDeliveredMarker: true,
-        action: (id: string) => ackDelivery(id, tmpDir()),
-      },
-      {
-        name: "ack removes .delivered marker so recovery does not replay",
-        payload: { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
-        action: (id: string) => ackDelivery(id, tmpDir()),
-      },
-      {
-        name: "loadPendingDeliveries cleans up stale .delivered markers without replaying",
-        payload: { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
-        prepareDeliveredMarker: true,
-        action: () => loadPendingDeliveries(tmpDir()),
-        expectedEntriesLength: 0,
-      },
-    ])("$name", async ({ payload, prepareDeliveredMarker, action, expectedEntriesLength }) => {
-      const id = await enqueueTextDelivery(payload);
-      const deliveredPath = path.join(queueDir(), `${id}.delivered`);
+    it("ack cleans up leftover .delivered marker when .json is already gone", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale-marker" }] },
+        tmpDir(),
+      );
+      const queueDir = path.join(tmpDir(), "delivery-queue");
 
-      if (prepareDeliveredMarker) {
-        fs.renameSync(path.join(queueDir(), `${id}.json`), deliveredPath);
-      }
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+      await expect(ackDelivery(id, tmpDir())).resolves.toBeUndefined();
 
-      const entries = await action(id);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
 
-      if (expectedEntriesLength !== undefined) {
-        expect(entries).toHaveLength(expectedEntriesLength);
-      }
-      expect(fs.existsSync(deliveredPath)).toBe(false);
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
+    it("ack removes .delivered marker so recovery does not replay", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "ack-test" }] },
+        tmpDir(),
+      );
+      const queueDir = path.join(tmpDir(), "delivery-queue");
+
+      await ackDelivery(id, tmpDir());
+
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
+    });
+
+    it("loadPendingDeliveries cleans up stale .delivered markers without replaying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "telegram", to: "99", payloads: [{ text: "stale" }] },
+        tmpDir(),
+      );
+      const queueDir = path.join(tmpDir(), "delivery-queue");
+
+      fs.renameSync(path.join(queueDir, `${id}.json`), path.join(queueDir, `${id}.delivered`));
+
+      const entries = await loadPendingDeliveries(tmpDir());
+
+      expect(entries).toHaveLength(0);
+      expect(fs.existsSync(path.join(queueDir, `${id}.delivered`))).toBe(false);
     });
   });
 
   describe("failDelivery", () => {
     it("increments retryCount, records attempt time, and sets lastError", async () => {
-      const id = await enqueueTextDelivery(
+      const id = await enqueueDelivery(
         {
           channel: "telegram",
           to: "123",
@@ -125,7 +129,7 @@ describe("delivery-queue storage", () => {
 
   describe("moveToFailed", () => {
     it("moves entry to failed/ subdirectory", async () => {
-      const id = await enqueueTextDelivery(
+      const id = await enqueueDelivery(
         {
           channel: "slack",
           to: "#general",
@@ -136,8 +140,9 @@ describe("delivery-queue storage", () => {
 
       await moveToFailed(id, tmpDir());
 
-      const failedDir = path.join(queueDir(), "failed");
-      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
+      const queueDir = path.join(tmpDir(), "delivery-queue");
+      const failedDir = path.join(queueDir, "failed");
+      expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
     });
   });
@@ -148,14 +153,14 @@ describe("delivery-queue storage", () => {
     });
 
     it("loads multiple entries", async () => {
-      await enqueueTextDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] });
-      await enqueueTextDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] });
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir());
+      await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir());
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
     });
 
     it("persists gateway caller scopes for replay", async () => {
-      const id = await enqueueTextDelivery(
+      const id = await enqueueDelivery(
         {
           channel: "telegram",
           to: "2",
@@ -170,12 +175,11 @@ describe("delivery-queue storage", () => {
     });
 
     it("backfills lastAttemptAt for legacy retry entries during load", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "whatsapp",
-        to: "+1",
-        payloads: [{ text: "legacy" }],
-      });
-      const filePath = path.join(queueDir(), `${id}.json`);
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "legacy" }] },
+        tmpDir(),
+      );
+      const filePath = path.join(tmpDir(), "delivery-queue", `${id}.json`);
       const legacyEntry = readQueuedEntry(tmpDir(), id);
       legacyEntry.retryCount = 2;
       delete legacyEntry.lastAttemptAt;

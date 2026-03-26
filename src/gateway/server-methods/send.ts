@@ -3,7 +3,6 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -77,10 +76,7 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = applyPluginAutoEnable({
-    config: loadConfig(),
-    env: process.env,
-  }).config;
+  const cfg = loadConfig();
   let channel = normalizedChannel;
   if (!channel) {
     try {

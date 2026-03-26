@@ -35,10 +35,10 @@ export function shouldUseOpenAIWebSocketTransport(params: {
   provider: string;
   modelApi?: string | null;
 }): boolean {
-  // openai-codex normalizes to the ChatGPT backend HTTP path, not the public
-  // OpenAI Responses websocket endpoint. Keep it on HTTP until a provider-
-  // specific websocket target exists and is verified end-to-end.
-  return params.modelApi === "openai-responses" && params.provider === "openai";
+  return (
+    (params.modelApi === "openai-responses" && params.provider === "openai") ||
+    (params.modelApi === "openai-codex-responses" && params.provider === "openai-codex")
+  );
 }
 
 export function shouldAppendAttemptCacheTtl(params: {

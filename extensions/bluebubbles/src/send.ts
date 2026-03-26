@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { resolveBlueBubblesAccount } from "./accounts.js";
 import {
   getCachedBlueBubblesPrivateApiStatus,
   isBlueBubblesPrivateApiStatusEnabled,
@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "./runtime-api.js";
 import { stripMarkdown } from "./runtime-api.js";
 import { warnBlueBubbles } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import {
@@ -445,13 +446,24 @@ export async function sendMessageBlueBubbles(
     throw new Error("BlueBubbles send requires text (message was empty after markdown removal)");
   }
 
-  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveBlueBubblesServerAccount({
+  const account = resolveBlueBubblesAccount({
     cfg: opts.cfg ?? {},
     accountId: opts.accountId,
-    serverUrl: opts.serverUrl,
-    password: opts.password,
   });
-  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
+  const baseUrl =
+    normalizeSecretInputString(opts.serverUrl) ||
+    normalizeSecretInputString(account.config.serverUrl);
+  const password =
+    normalizeSecretInputString(opts.password) ||
+    normalizeSecretInputString(account.config.password);
+  if (!baseUrl) {
+    throw new Error("BlueBubbles serverUrl is required");
+  }
+  if (!password) {
+    throw new Error("BlueBubbles password is required");
+  }
+  const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
+  const allowPrivateNetwork = account.config.allowPrivateNetwork === true;
 
   const target = resolveBlueBubblesSendTarget(to);
   const chatGuid = await resolveChatGuidForTarget({

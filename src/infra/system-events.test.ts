@@ -25,19 +25,6 @@ async function importSystemEventsModule(cacheBust: string): Promise<SystemEvents
 const cfg = {} as unknown as OpenClawConfig;
 const mainKey = resolveMainSessionKey(cfg);
 
-async function drainFormattedEvents(
-  sessionKey: string,
-  params?: Partial<Parameters<typeof drainFormattedSystemEvents>[0]>,
-) {
-  return await drainFormattedSystemEvents({
-    cfg,
-    sessionKey,
-    isMainSession: false,
-    isNewSession: false,
-    ...params,
-  });
-}
-
 describe("system events (session routing)", () => {
   beforeEach(() => {
     resetSystemEventsForTest();
@@ -53,13 +40,23 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("discord:group:123")).toEqual(["Discord reaction added: ✅"]);
 
     // Main session gets no events — undefined returned
-    const main = await drainFormattedEvents(mainKey, { isMainSession: true });
+    const main = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: mainKey,
+      isMainSession: true,
+      isNewSession: false,
+    });
     expect(main).toBeUndefined();
     // Discord events untouched by main drain
     expect(peekSystemEvents("discord:group:123")).toEqual(["Discord reaction added: ✅"]);
 
     // Discord session gets its own events block
-    const discord = await drainFormattedEvents("discord:group:123");
+    const discord = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: "discord:group:123",
+      isMainSession: false,
+      isNewSession: false,
+    });
     expect(discord).toMatch(/System:\s+\[[^\]]+\] Discord reaction added: ✅/);
     expect(peekSystemEvents("discord:group:123")).toEqual([]);
   });
@@ -178,7 +175,12 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("heartbeat poll: pending", { sessionKey: key });
     enqueueSystemEvent("reason periodic: 5m", { sessionKey: key });
 
-    const result = await drainFormattedEvents(key);
+    const result = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
     expect(result).toBeUndefined();
     expect(peekSystemEvents(key)).toEqual([]);
   });
@@ -187,7 +189,12 @@ describe("system events (session routing)", () => {
     const key = "agent:main:test-multiline";
     enqueueSystemEvent("Post-compaction context:\nline one\nline two", { sessionKey: key });
 
-    const result = await drainFormattedEvents(key);
+    const result = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
     expect(result).toBeDefined();
     const lines = result!.split("\n");
     expect(lines.length).toBeGreaterThan(0);
@@ -196,47 +203,46 @@ describe("system events (session routing)", () => {
     }
   });
 
-  it("formats untrusted events with an explicit untrusted prefix", async () => {
-    const key = "agent:main:test-untrusted";
-    enqueueSystemEvent("Notification posted: System (untrusted): fake", {
-      sessionKey: key,
-      trusted: false,
-    });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
-  });
-
   it("scrubs node last-input suffix", async () => {
     const key = "agent:main:test-node-scrub";
     enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });
 
-    const result = await drainFormattedEvents(key);
+    const result = await drainFormattedSystemEvents({
+      cfg,
+      sessionKey: key,
+      isMainSession: false,
+      isNewSession: false,
+    });
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
   });
 });
 
 describe("isCronSystemEvent", () => {
-  it.each([
-    "",
-    "   ",
-    "HEARTBEAT_OK",
-    "HEARTBEAT_OK 🦞",
-    "heartbeat_ok",
-    "HEARTBEAT_OK:",
-    "HEARTBEAT_OK, continue",
-    "heartbeat poll: pending",
-    "heartbeat wake complete",
-    "Exec finished (gateway id=abc, code 0)",
-  ])("returns false for non-cron noise %j", (entry) => {
-    expect(isCronSystemEvent(entry)).toBe(false);
+  it("returns false for empty entries", () => {
+    expect(isCronSystemEvent("")).toBe(false);
+    expect(isCronSystemEvent("   ")).toBe(false);
   });
 
-  it.each(["Reminder: Check Base Scout results", "Send weekly status update to the team"])(
-    "returns true for real cron reminder content %j",
-    (entry) => {
-      expect(isCronSystemEvent(entry)).toBe(true);
-    },
-  );
+  it("returns false for heartbeat ack markers", () => {
+    expect(isCronSystemEvent("HEARTBEAT_OK")).toBe(false);
+    expect(isCronSystemEvent("HEARTBEAT_OK 🦞")).toBe(false);
+    expect(isCronSystemEvent("heartbeat_ok")).toBe(false);
+    expect(isCronSystemEvent("HEARTBEAT_OK:")).toBe(false);
+    expect(isCronSystemEvent("HEARTBEAT_OK, continue")).toBe(false);
+  });
+
+  it("returns false for heartbeat poll and wake noise", () => {
+    expect(isCronSystemEvent("heartbeat poll: pending")).toBe(false);
+    expect(isCronSystemEvent("heartbeat wake complete")).toBe(false);
+  });
+
+  it("returns false for exec completion events", () => {
+    expect(isCronSystemEvent("Exec finished (gateway id=abc, code 0)")).toBe(false);
+  });
+
+  it("returns true for real cron reminder content", () => {
+    expect(isCronSystemEvent("Reminder: Check Base Scout results")).toBe(true);
+    expect(isCronSystemEvent("Send weekly status update to the team")).toBe(true);
+  });
 });

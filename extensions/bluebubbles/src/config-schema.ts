@@ -1,14 +1,12 @@
 import {
   AllowFromListSchema,
-  buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "openclaw/plugin-sdk/zod";
-import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
+import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
 const bluebubblesActionSchema = z
@@ -72,8 +70,4 @@ export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
   bluebubblesAccountSchema,
 ).extend({
   actions: bluebubblesActionSchema,
-});
-
-export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
-  uiHints: bluebubblesChannelConfigUiHints,
 });

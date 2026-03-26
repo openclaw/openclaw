@@ -1,29 +1,9 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { registerCronCli } from "./cron-cli.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
-const mocks = vi.hoisted(() => {
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return {
-    defaultRuntime,
-    callGatewayFromCli: vi.fn(),
-  };
-});
-
-const { defaultRuntime, callGatewayFromCli } = mocks;
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const defaultGatewayMock = async (
   method: string,
@@ -36,20 +16,22 @@ const defaultGatewayMock = async (
   }
   return { ok: true, params };
 };
-callGatewayFromCli.mockImplementation(defaultGatewayMock);
+const callGatewayFromCli = vi.fn(defaultGatewayMock);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
     callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-      mocks.callGatewayFromCli(method, opts, params, extra as number | undefined),
+      callGatewayFromCli(method, opts, params, extra as number | undefined),
   };
 });
 
 vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.defaultRuntime,
+  defaultRuntime,
 }));
+
+const { registerCronCli } = await import("./cron-cli.js");
 
 type CronUpdatePatch = {
   patch?: {
@@ -90,11 +72,7 @@ function buildProgram() {
 function resetGatewayMock() {
   callGatewayFromCli.mockClear();
   callGatewayFromCli.mockImplementation(defaultGatewayMock);
-  defaultRuntime.log.mockClear();
-  defaultRuntime.error.mockClear();
-  defaultRuntime.writeStdout.mockClear();
-  defaultRuntime.writeJson.mockClear();
-  defaultRuntime.exit.mockClear();
+  resetRuntimeCapture();
 }
 
 async function runCronCommand(args: string[]): Promise<void> {
@@ -198,7 +176,8 @@ async function runCronRunAndCaptureExit(params: {
     },
   );
 
-  const runtime = defaultRuntime as { exit: (code: number) => void };
+  const runtimeModule = await import("../runtime.js");
+  const runtime = runtimeModule.defaultRuntime as { exit: (code: number) => void };
   const originalExit = runtime.exit;
   const exitSpy = vi.fn();
   runtime.exit = exitSpy;

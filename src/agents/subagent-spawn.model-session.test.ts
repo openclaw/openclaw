@@ -2,8 +2,6 @@ import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  expectPersistedRuntimeModel,
-  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -58,12 +56,18 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       return {};
     });
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
-    installSessionStoreCaptureMock(updateSessionStoreMock, {
-      operations,
-      onStore: (store) => {
+    updateSessionStoreMock.mockImplementation(
+      async (
+        _storePath: string,
+        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+      ) => {
+        operations.push("store:update");
+        const store: Record<string, Record<string, unknown>> = {};
+        await mutator(store);
         persistedStore = store;
+        return store;
       },
-    });
+    );
 
     const result = await spawnSubagentDirect(
       {
@@ -81,10 +85,10 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       modelApplied: true,
     });
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
-    expectPersistedRuntimeModel({
-      persistedStore,
-      sessionKey: /^agent:main:subagent:/,
-      provider: "openai-codex",
+    const [persistedKey, persistedEntry] = Object.entries(persistedStore ?? {})[0] ?? [];
+    expect(persistedKey).toMatch(/^agent:main:subagent:/);
+    expect(persistedEntry).toMatchObject({
+      modelProvider: "openai-codex",
       model: "gpt-5.4",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);

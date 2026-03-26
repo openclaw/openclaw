@@ -924,7 +924,6 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
-                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -984,13 +983,13 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
-                  "channels/qqbot",
                   "channels/signal",
                   "channels/slack",
                   "channels/synology-chat",
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1033,16 +1032,7 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  {
-                    "group": "Memory",
-                    "pages": [
-                      "concepts/memory",
-                      "concepts/memory-builtin",
-                      "concepts/memory-qmd",
-                      "concepts/memory-honcho",
-                      "concepts/memory-search"
-                    ]
-                  },
+                  "concepts/memory",
                   "concepts/compaction"
                 ]
               },
@@ -1078,7 +1068,6 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
-                  "plugins/voice-call",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1116,13 +1105,10 @@
               {
                 "group": "Automation",
                 "pages": [
-                  "automation/index",
                   "automation/hooks",
                   "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
-                  "automation/tasks",
-                  "automation/clawflow",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
@@ -1160,12 +1146,10 @@
                     ]
                   },
                   "tools/btw",
-                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
-                  "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
@@ -1352,24 +1336,18 @@
                 ]
               },
               {
-                "group": "Nodes and media",
+                "group": "Nodes and devices",
                 "pages": [
                   "nodes/index",
                   "nodes/troubleshooting",
-                  {
-                    "group": "Media capabilities",
-                    "pages": [
-                      "nodes/media-understanding",
-                      "nodes/images",
-                      "nodes/audio",
-                      "nodes/camera",
-                      "tools/tts"
-                    ]
-                  },
-                  {
-                    "group": "Node features",
-                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
-                  }
+                  "nodes/media-understanding",
+                  "nodes/images",
+                  "nodes/audio",
+                  "nodes/camera",
+                  "nodes/talk",
+                  "nodes/voicewake",
+                  "nodes/location-command",
+                  "tools/tts"
                 ]
               },
               {
@@ -1434,7 +1412,6 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
-                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"
@@ -1454,14 +1431,7 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": [
-                      "cli/acp",
-                      "cli/clawbot",
-                      "cli/completion",
-                      "cli/dns",
-                      "cli/docs",
-                      "cli/mcp"
-                    ]
+                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
                   }
                 ]
               },

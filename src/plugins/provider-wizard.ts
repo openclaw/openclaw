@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -135,8 +136,6 @@ function resolveProviderWizardProviders(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
     });
   }
   const cacheKey = buildProviderWizardCacheKey({
@@ -154,8 +153,6 @@ function resolveProviderWizardProviders(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
   });
   const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
   let nextConfigCache = configCache;
@@ -332,16 +329,8 @@ export async function runProviderModelSelectedHook(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const rawModel = params.model.trim();
-  if (!rawModel) {
-    return;
-  }
-  const slashIndex = rawModel.indexOf("/");
-  const selectedProviderId =
-    slashIndex === -1
-      ? DEFAULT_PROVIDER
-      : normalizeProviderId(rawModel.slice(0, slashIndex).trim());
-  if (!selectedProviderId || (slashIndex !== -1 && !rawModel.slice(slashIndex + 1).trim())) {
+  const parsed = parseModelRef(params.model, DEFAULT_PROVIDER);
+  if (!parsed) {
     return;
   }
 
@@ -350,7 +339,9 @@ export async function runProviderModelSelectedHook(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
+  const provider = providers.find(
+    (entry) => normalizeProviderId(entry.id) === normalizeProviderId(parsed.provider),
+  );
   if (!provider?.onModelSelected) {
     return;
   }

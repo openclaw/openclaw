@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type StreamingSessionStub = {
-  active: boolean;
-  start: ReturnType<typeof vi.fn>;
-  update: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-  isActive: ReturnType<typeof vi.fn>;
-};
-
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
@@ -19,7 +11,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
-const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const streamingInstances = vi.hoisted(() => [] as any[]);
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
@@ -511,17 +503,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.deliver({ text: "answer part final" }, { kind: "final" });
 
     expect(streamingInstances).toHaveLength(1);
-    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) =>
-      String(c[0] ?? ""),
-    );
-    const reasoningUpdate = updateCalls.find((c) => c.includes("Thinking"));
+    const updateCalls = streamingInstances[0].update.mock.calls.map((c: unknown[]) => c[0]);
+    const reasoningUpdate = updateCalls.find((c: string) => c.includes("Thinking"));
     expect(reasoningUpdate).toContain("> 💭 **Thinking**");
     // formatReasoningPrefix strips "Reasoning:" prefix and italic markers
     expect(reasoningUpdate).toContain("> thinking step");
     expect(reasoningUpdate).not.toContain("Reasoning:");
     expect(reasoningUpdate).not.toMatch(/> _.*_/);
 
-    const combinedUpdate = updateCalls.find((c) => c.includes("Thinking") && c.includes("---"));
+    const combinedUpdate = updateCalls.find(
+      (c: string) => c.includes("Thinking") && c.includes("---"),
+    );
     expect(combinedUpdate).toBeDefined();
 
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
@@ -675,16 +667,16 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     let shouldFailStart = true;
 
     // Intercept streaming instance creation to make first start() reject
-    const origPush = streamingInstances.push.bind(streamingInstances);
-    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+    const origPush = streamingInstances.push;
+    streamingInstances.push = function (this: any[], ...args: any[]) {
       if (shouldFailStart) {
         args[0].start = vi
           .fn()
           .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
         shouldFailStart = false;
       }
-      return origPush(...args);
-    };
+      return origPush.apply(this, args);
+    } as any;
 
     try {
       createFeishuReplyDispatcher({

@@ -1,8 +1,5 @@
 import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
@@ -15,7 +12,10 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "./test-support/lifecycle-test-support.js";
+} from "../../../test/helpers/extensions/feishu-lifecycle.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const {
@@ -166,7 +166,6 @@ describe("Feishu bot-menu lifecycle", () => {
       event,
       dispatchReplyFromConfigMock,
       createFeishuReplyDispatcherMock,
-      waitTimeoutMs: 5_000,
     });
 
     expect(lastRuntime?.error).not.toHaveBeenCalled();

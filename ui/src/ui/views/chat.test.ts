@@ -462,7 +462,11 @@ describe("chat view", () => {
       },
     });
 
-    getSafeLocalStorage()?.clear();
+    try {
+      localStorage.clear();
+    } catch {
+      /* noop */
+    }
     await i18n.setLocale("en");
 
     render(renderOverview(props), container);

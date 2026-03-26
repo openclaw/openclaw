@@ -1,11 +1,8 @@
 import type { OpenClawConfig } from "../config/types.js";
-import type { UpdateCheckResult } from "../infra/update-check.js";
 import { loggingState } from "../logging/state.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
-import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
+import { getAgentLocalStatuses } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
 import {
   buildTailscaleHttpsUrl,
@@ -13,15 +10,13 @@ import {
   resolveGatewayProbeSnapshot,
   resolveMemoryPluginStatus,
 } from "./status.scan.shared.js";
-import type { getStatusSummary as getStatusSummaryFn } from "./status.summary.js";
+import { getStatusSummary } from "./status.summary.js";
+import { getUpdateCheckResult } from "./status.update.js";
 
 let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
-let statusAgentLocalModulePromise: Promise<typeof import("./status.agent-local.js")> | undefined;
-let statusSummaryModulePromise: Promise<typeof import("./status.summary.js")> | undefined;
-let statusUpdateModulePromise: Promise<typeof import("./status.update.js")> | undefined;
 
 function loadPluginRegistryModule() {
   pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
@@ -33,56 +28,11 @@ function loadStatusScanDepsRuntimeModule() {
   return statusScanDepsRuntimeModulePromise;
 }
 
-function loadStatusAgentLocalModule() {
-  statusAgentLocalModulePromise ??= import("./status.agent-local.js");
-  return statusAgentLocalModulePromise;
-}
-
-function loadStatusSummaryModule() {
-  statusSummaryModulePromise ??= import("./status.summary.js");
-  return statusSummaryModulePromise;
-}
-
-function loadStatusUpdateModule() {
-  statusUpdateModulePromise ??= import("./status.update.js");
-  return statusUpdateModulePromise;
-}
-
-export function buildColdStartUpdateResult(): UpdateCheckResult {
+export function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
   return {
     root: null,
     installKind: "unknown",
     packageManager: "unknown",
-  };
-}
-
-function buildColdStartAgentLocalStatuses(): Awaited<ReturnType<typeof getAgentLocalStatusesFn>> {
-  return {
-    defaultId: "main",
-    agents: [],
-    totalSessions: 0,
-    bootstrapPendingCount: 0,
-  };
-}
-
-function buildColdStartStatusSummary(): Awaited<ReturnType<typeof getStatusSummaryFn>> {
-  return {
-    runtimeVersion: null,
-    heartbeat: {
-      defaultAgentId: "main",
-      agents: [],
-    },
-    channelSummary: [],
-    queuedSystemEvents: [],
-    tasks: createEmptyTaskRegistrySummary(),
-    taskAudit: createEmptyTaskAuditSummary(),
-    sessions: {
-      paths: [],
-      count: 0,
-      defaults: { model: null, contextTokens: null },
-      recent: [],
-      byAgent: [],
-    },
   };
 }
 
@@ -96,7 +46,7 @@ export async function scanStatusJsonCore(params: {
   resolveOsSummary: () => StatusScanResult["osSummary"];
   resolveMemory: (args: {
     cfg: OpenClawConfig;
-    agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
+    agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
     memoryPlugin: StatusScanResult["memoryPlugin"];
     runtime: RuntimeEnv;
   }) => Promise<StatusScanResult["memory"]>;
@@ -122,21 +72,13 @@ export async function scanStatusJsonCore(params: {
     params.coldStart && !hasConfiguredChannels && opts.all !== true;
   const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
-    : loadStatusUpdateModule().then(({ getUpdateCheckResult }) =>
-        getUpdateCheckResult({
-          timeoutMs: updateTimeoutMs,
-          fetchGit: true,
-          includeRegistry: true,
-        }),
-      );
-  const agentStatusPromise = skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartAgentLocalStatuses())
-    : loadStatusAgentLocalModule().then(({ getAgentLocalStatuses }) => getAgentLocalStatuses(cfg));
-  const summaryPromise = skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartStatusSummary())
-    : loadStatusSummaryModule().then(({ getStatusSummary }) =>
-        getStatusSummary({ config: cfg, sourceConfig }),
-      );
+    : getUpdateCheckResult({
+        timeoutMs: updateTimeoutMs,
+        fetchGit: true,
+        includeRegistry: true,
+      });
+  const agentStatusPromise = getAgentLocalStatuses(cfg);
+  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig });
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)

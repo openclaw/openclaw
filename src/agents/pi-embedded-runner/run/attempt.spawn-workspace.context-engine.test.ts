@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AttemptContextEngine,
   assembleAttemptContextEngine,
@@ -7,9 +7,7 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
-  cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
-  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
 } from "./attempt.spawn-workspace.test-support.js";
@@ -98,14 +96,9 @@ async function finalizeTurn(
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
-  const tempPaths: string[] = [];
 
   beforeEach(() => {
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
-  });
-
-  afterEach(async () => {
-    await cleanupTempPaths(tempPaths);
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -172,29 +165,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         return params.sessionKey === sessionKey;
       }),
     ).toBe(true);
-  });
-
-  it("forwards silentExpected to the embedded subscription", async () => {
-    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
-
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: {
-        bootstrap,
-        assemble,
-      },
-      attemptOverrides: {
-        silentExpected: true,
-      },
-      sessionKey,
-      tempPaths,
-    });
-
-    expect(result.promptError).toBeNull();
-    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        silentExpected: true,
-      }),
-    );
   });
 
   it("skips maintenance when afterTurn fails", async () => {

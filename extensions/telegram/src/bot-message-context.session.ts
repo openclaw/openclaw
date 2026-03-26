@@ -244,7 +244,6 @@ export async function buildTelegramInboundContextPayload(params: {
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
-    CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,
     IsForum: isForum,
     OriginatingChannel: "telegram" as const,

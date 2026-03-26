@@ -103,12 +103,12 @@ export function dockerExecResult(stdout: string) {
 export function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
     overrides: {
-      containerName: "openclaw-sbx-test",
+      containerName: "moltbot-sbx-test",
       ...overrides,
     },
     dockerOverrides: {
-      image: "openclaw-sandbox:bookworm-slim",
-      containerPrefix: "openclaw-sbx-",
+      image: "moltbot-sandbox:bookworm-slim",
+      containerPrefix: "moltbot-sbx-",
     },
   });
 }

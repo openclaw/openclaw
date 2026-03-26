@@ -6,10 +6,11 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
+import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
   resolveBundledWebSearchResolutionConfig,
@@ -40,24 +41,20 @@ function buildWebSearchSnapshotCacheKey(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
   env: NodeJS.ProcessEnv;
 }): string {
+  const effectiveVitest = params.env.VITEST ?? process.env.VITEST ?? "";
   return JSON.stringify({
     workspaceDir: params.workspaceDir ?? "",
     bundledAllowlistCompat: params.bundledAllowlistCompat === true,
-    onlyPluginIds: [...new Set(params.onlyPluginIds ?? [])].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
     config: params.config ?? null,
-    env: buildPluginSnapshotCacheEnvKey(params.env),
+    env: buildPluginSnapshotCacheEnvKey(params.env, {
+      includeProcessVitestFallback: effectiveVitest !== (params.env.VITEST ?? ""),
+    }),
   });
 }
 
 function pluginManifestDeclaresWebSearch(record: PluginManifestRecord): boolean {
-  if ((record.contracts?.webSearchProviders?.length ?? 0) > 0) {
-    return true;
-  }
   const configUiHintKeys = Object.keys(record.configUiHints ?? {});
   if (configUiHintKeys.some((key) => key === "webSearch" || key.startsWith("webSearch."))) {
     return true;
@@ -73,71 +70,17 @@ function resolveWebSearchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
 }): string[] | undefined {
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
   const ids = registry.plugins
-    .filter(
-      (plugin) =>
-        pluginManifestDeclaresWebSearch(plugin) &&
-        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
-    )
+    .filter(pluginManifestDeclaresWebSearch)
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
   return ids.length > 0 ? ids : undefined;
-}
-
-function resolveWebSearchLoadOptions(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
-  activate?: boolean;
-  cache?: boolean;
-}) {
-  const env = params.env ?? process.env;
-  const { config } = resolveBundledWebSearchResolutionConfig({
-    ...params,
-    env,
-  });
-  const onlyPluginIds = resolveWebSearchCandidatePluginIds({
-    config,
-    workspaceDir: params.workspaceDir,
-    env,
-    onlyPluginIds: params.onlyPluginIds,
-  });
-  return {
-    env,
-    config,
-    workspaceDir: params.workspaceDir,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    ...(onlyPluginIds ? { onlyPluginIds } : {}),
-    logger: createPluginLoaderLogger(log),
-  } satisfies PluginLoadOptions;
-}
-
-function mapRegistryWebSearchProviders(params: {
-  registry: ReturnType<typeof loadOpenClawPlugins>;
-  onlyPluginIds?: readonly string[];
-}): PluginWebSearchProviderEntry[] {
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
-  return sortWebSearchProviders(
-    params.registry.webSearchProviders
-      .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
-  );
 }
 
 export function resolvePluginWebSearchProviders(params: {
@@ -145,7 +88,6 @@ export function resolvePluginWebSearchProviders(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
 }): PluginWebSearchProviderEntry[] {
@@ -157,7 +99,6 @@ export function resolvePluginWebSearchProviders(params: {
     config: cacheOwnerConfig,
     workspaceDir: params.workspaceDir,
     bundledAllowlistCompat: params.bundledAllowlistCompat,
-    onlyPluginIds: params.onlyPluginIds,
     env,
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
@@ -168,10 +109,31 @@ export function resolvePluginWebSearchProviders(params: {
       return cached.providers;
     }
   }
-  const loadOptions = resolveWebSearchLoadOptions(params);
-  const resolved = mapRegistryWebSearchProviders({
-    registry: loadOpenClawPlugins(loadOptions),
+  const { config } = resolveBundledWebSearchResolutionConfig({
+    ...params,
+    env,
   });
+  const onlyPluginIds = resolveWebSearchCandidatePluginIds({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const registry = loadOpenClawPlugins({
+    config,
+    workspaceDir: params.workspaceDir,
+    env,
+    cache: params.cache ?? false,
+    activate: params.activate ?? false,
+    ...(onlyPluginIds ? { onlyPluginIds } : {}),
+    logger: createPluginLoaderLogger(log),
+  });
+
+  const resolved = sortWebSearchProviders(
+    registry.webSearchProviders.map((entry) => ({
+      ...entry.provider,
+      pluginId: entry.pluginId,
+    })),
+  );
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
     let configCache = webSearchProviderSnapshotCache.get(cacheOwnerConfig);
@@ -200,16 +162,15 @@ export function resolveRuntimeWebSearchProviders(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   bundledAllowlistCompat?: boolean;
-  onlyPluginIds?: readonly string[];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeRegistry = resolveRuntimePluginRegistry(
-    params.config === undefined ? undefined : resolveWebSearchLoadOptions(params),
-  );
-  if (runtimeRegistry) {
-    return mapRegistryWebSearchProviders({
-      registry: runtimeRegistry,
-      onlyPluginIds: params.onlyPluginIds,
-    });
+  const runtimeProviders = getActivePluginRegistry()?.webSearchProviders ?? [];
+  if (runtimeProviders.length > 0) {
+    return sortWebSearchProviders(
+      runtimeProviders.map((entry) => ({
+        ...entry.provider,
+        pluginId: entry.pluginId,
+      })),
+    );
   }
   return resolvePluginWebSearchProviders(params);
 }

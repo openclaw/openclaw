@@ -2,14 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { tryHandleRootHelpFastPath } from "./entry.js";
 
 describe("entry root help fast path", () => {
-  it("renders root help without importing the full program", async () => {
+  it("renders root help without importing the full program", () => {
     const outputRootHelpMock = vi.fn();
 
     const handled = tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
       outputRootHelp: outputRootHelpMock,
       env: {},
     });
-    await Promise.resolve();
 
     expect(handled).toBe(true);
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);

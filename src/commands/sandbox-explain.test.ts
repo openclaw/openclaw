@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
 
@@ -12,6 +11,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: vi.fn().mockImplementation(() => mockCfg),
   };
 });
+
+const { sandboxExplainCommand } = await import("./sandbox-explain.js");
 
 describe("sandbox explain command", () => {
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {

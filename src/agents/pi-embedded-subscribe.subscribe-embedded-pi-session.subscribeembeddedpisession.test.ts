@@ -12,11 +12,6 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  async function flushBlockReplyCallbacks(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
@@ -137,9 +132,10 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
-      await flushBlockReplyCallbacks();
 
-      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(onBlockReply).toHaveBeenCalledTimes(1);
+      });
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
@@ -180,9 +176,10 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
-      await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
+      await vi.waitFor(() => {
+        expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
+      });
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");

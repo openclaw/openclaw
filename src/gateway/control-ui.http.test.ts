@@ -27,6 +27,7 @@ describe("handleControlUiHttpRequest", () => {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
+      assistantAgentId: string;
     };
   }
 
@@ -195,8 +196,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("");
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
-        expect(parsed).not.toHaveProperty("assistantAgentId");
-        expect(parsed).not.toHaveProperty("serverVersion");
+        expect(parsed.assistantAgentId).toBe("main");
       },
     });
   });
@@ -222,8 +222,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.basePath).toBe("/openclaw");
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
-        expect(parsed).not.toHaveProperty("assistantAgentId");
-        expect(parsed).not.toHaveProperty("serverVersion");
+        expect(parsed.assistantAgentId).toBe("main");
       },
     });
   });

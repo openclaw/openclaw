@@ -1,5 +1,3 @@
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
@@ -36,13 +34,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
-    "plugin.approval.request",
-    "plugin.approval.waitDecision",
-    "plugin.approval.resolve",
   ],
   [PAIRING_SCOPE]: [
     "node.pair.request",
     "node.pair.list",
+    "node.pair.approve",
     "node.pair.reject",
     "node.pair.verify",
     "device.pair.list",
@@ -110,13 +106,13 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.setProvider",
     "voicewake.set",
     "node.invoke",
-    "node.pair.approve",
     "chat.send",
     "chat.abort",
     "sessions.create",
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
+    "browser.request",
     "push.test",
     "node.pending.enqueue",
   ],
@@ -159,10 +155,6 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
   if (explicitScope) {
     return explicitScope;
-  }
-  const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
-  if (pluginScope) {
-    return pluginScope;
   }
   if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
     return ADMIN_SCOPE;

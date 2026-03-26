@@ -159,7 +159,7 @@ if (
 export function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
-    outputRootHelp?: () => void | Promise<void>;
+    outputRootHelp?: () => void;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -180,14 +180,16 @@ export function tryHandleRootHelpFastPath(
       process.exitCode = 1;
     });
   if (deps.outputRootHelp) {
-    Promise.resolve()
-      .then(() => deps.outputRootHelp?.())
-      .catch(handleError);
+    try {
+      deps.outputRootHelp();
+    } catch (error) {
+      handleError(error);
+    }
     return true;
   }
   import("./cli/program/root-help.js")
     .then(({ outputRootHelp }) => {
-      return outputRootHelp();
+      outputRootHelp();
     })
     .catch(handleError);
   return true;

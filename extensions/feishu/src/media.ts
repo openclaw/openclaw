@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import type * as Lark from "@larksuiteoapi/node-sdk";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -42,56 +41,21 @@ function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accoun
   };
 }
 
-type FeishuUploadResponse =
-  | Awaited<ReturnType<Lark.Client["im"]["image"]["create"]>>
-  | Awaited<ReturnType<Lark.Client["im"]["file"]["create"]>>;
-
-type FeishuDownloadResponse =
-  | Awaited<ReturnType<Lark.Client["im"]["image"]["get"]>>
-  | Awaited<ReturnType<Lark.Client["im"]["file"]["get"]>>
-  | Awaited<ReturnType<Lark.Client["im"]["messageResource"]["get"]>>;
-
-type FeishuHeaderMap = Record<string, string | string[]>;
-
-function asHeaderMap(value: object | undefined): FeishuHeaderMap | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const entries = Object.entries(value);
-  if (entries.every(([, entry]) => typeof entry === "string" || Array.isArray(entry))) {
-    return Object.fromEntries(entries) as FeishuHeaderMap;
-  }
-  return undefined;
-}
-
 function extractFeishuUploadKey(
-  response: FeishuUploadResponse,
+  response: unknown,
   params: {
     key: "image_key" | "file_key";
     errorPrefix: string;
   },
 ): string {
-  if (!response) {
-    throw new Error(`${params.errorPrefix}: empty response`);
+  // SDK v1.30+ returns data directly without code wrapper on success.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  if (responseAny.code !== undefined && responseAny.code !== 0) {
+    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
   }
 
-  const wrappedResponse = response as {
-    image_key?: string;
-    file_key?: string;
-    code?: number;
-    msg?: string;
-    data?: Partial<Record<"image_key" | "file_key", string>>;
-  };
-  if (wrappedResponse.code !== undefined && wrappedResponse.code !== 0) {
-    throw new Error(
-      `${params.errorPrefix}: ${wrappedResponse.msg || `code ${wrappedResponse.code}`}`,
-    );
-  }
-
-  const key =
-    params.key === "image_key"
-      ? (wrappedResponse.image_key ?? wrappedResponse.data?.image_key)
-      : (wrappedResponse.file_key ?? wrappedResponse.data?.file_key);
+  const key = responseAny[params.key] ?? responseAny.data?.[params.key];
   if (!key) {
     throw new Error(`${params.errorPrefix}: no ${params.key} returned`);
   }
@@ -137,106 +101,92 @@ function decodeDispositionFileName(value: string): string | undefined {
   return plainMatch?.[1]?.trim();
 }
 
-function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
+function extractFeishuDownloadMetadata(response: unknown): {
   contentType?: string;
   fileName?: string;
 } {
-  const responseWithOptionalFields = response as FeishuDownloadResponse & {
-    header?: object;
-    contentType?: string;
-    mime_type?: string;
-    data?: {
-      contentType?: string;
-      mime_type?: string;
-      file_name?: string;
-      fileName?: string;
-    };
-    file_name?: string;
-    fileName?: string;
-  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
   const headers =
-    asHeaderMap(responseWithOptionalFields.headers) ??
-    asHeaderMap(responseWithOptionalFields.header);
+    (responseAny.headers as Record<string, unknown> | undefined) ??
+    (responseAny.header as Record<string, unknown> | undefined);
 
   const contentType =
     readHeaderValue(headers, "content-type") ??
-    responseWithOptionalFields.contentType ??
-    responseWithOptionalFields.mime_type ??
-    responseWithOptionalFields.data?.contentType ??
-    responseWithOptionalFields.data?.mime_type;
+    (typeof responseAny.contentType === "string" ? responseAny.contentType : undefined) ??
+    (typeof responseAny.mime_type === "string" ? responseAny.mime_type : undefined) ??
+    (typeof responseAny.data?.contentType === "string"
+      ? responseAny.data.contentType
+      : undefined) ??
+    (typeof responseAny.data?.mime_type === "string" ? responseAny.data.mime_type : undefined);
 
   const disposition = readHeaderValue(headers, "content-disposition");
   const fileName =
     (disposition ? decodeDispositionFileName(disposition) : undefined) ??
-    responseWithOptionalFields.file_name ??
-    responseWithOptionalFields.fileName ??
-    responseWithOptionalFields.data?.file_name ??
-    responseWithOptionalFields.data?.fileName;
+    (typeof responseAny.file_name === "string" ? responseAny.file_name : undefined) ??
+    (typeof responseAny.fileName === "string" ? responseAny.fileName : undefined) ??
+    (typeof responseAny.data?.file_name === "string" ? responseAny.data.file_name : undefined) ??
+    (typeof responseAny.data?.fileName === "string" ? responseAny.data.fileName : undefined);
 
   return { contentType, fileName };
 }
 
-async function readReadableBuffer(stream: Readable): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
-
 async function readFeishuResponseBuffer(params: {
-  response: FeishuDownloadResponse;
+  response: unknown;
   tmpDirPrefix: string;
   errorPrefix: string;
 }): Promise<Buffer> {
   const { response } = params;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
+  const responseAny = response as any;
+  if (responseAny.code !== undefined && responseAny.code !== 0) {
+    throw new Error(`${params.errorPrefix}: ${responseAny.msg || `code ${responseAny.code}`}`);
+  }
+
   if (Buffer.isBuffer(response)) {
     return response;
   }
   if (response instanceof ArrayBuffer) {
     return Buffer.from(response);
   }
-  const responseWithOptionalFields = response as FeishuDownloadResponse & {
-    code?: number;
-    msg?: string;
-    data?: Buffer | ArrayBuffer;
-    [Symbol.asyncIterator]?: () => AsyncIterator<Buffer | Uint8Array | string>;
-  };
-  if (responseWithOptionalFields.code !== undefined && responseWithOptionalFields.code !== 0) {
-    throw new Error(
-      `${params.errorPrefix}: ${responseWithOptionalFields.msg || `code ${responseWithOptionalFields.code}`}`,
-    );
+  if (responseAny.data && Buffer.isBuffer(responseAny.data)) {
+    return responseAny.data;
   }
-
-  if (responseWithOptionalFields.data && Buffer.isBuffer(responseWithOptionalFields.data)) {
-    return responseWithOptionalFields.data;
+  if (responseAny.data instanceof ArrayBuffer) {
+    return Buffer.from(responseAny.data);
   }
-  if (responseWithOptionalFields.data instanceof ArrayBuffer) {
-    return Buffer.from(responseWithOptionalFields.data);
-  }
-  if (typeof response.getReadableStream === "function") {
-    return readReadableBuffer(response.getReadableStream());
-  }
-  if (typeof response.writeFile === "function") {
-    return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
-      await response.writeFile(tmpPath);
-      return await fs.promises.readFile(tmpPath);
-    });
-  }
-  if (responseWithOptionalFields[Symbol.asyncIterator]) {
-    const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
+  if (typeof responseAny.getReadableStream === "function") {
+    const stream = responseAny.getReadableStream();
     const chunks: Buffer[] = [];
-    for await (const chunk of asyncIterable) {
+    for await (const chunk of stream) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     return Buffer.concat(chunks);
   }
-  if (response instanceof Readable) {
-    return readReadableBuffer(response);
+  if (typeof responseAny.writeFile === "function") {
+    return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
+      await responseAny.writeFile(tmpPath);
+      return await fs.promises.readFile(tmpPath);
+    });
+  }
+  if (typeof responseAny[Symbol.asyncIterator] === "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of responseAny) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (typeof responseAny.read === "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of responseAny as Readable) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
   }
 
-  const keys = Object.keys(response as object);
-  throw new Error(`${params.errorPrefix}: unexpected response format. Keys: [${keys.join(", ")}]`);
+  const keys = Object.keys(responseAny);
+  const types = keys.map((k) => `${k}: ${typeof responseAny[k]}`).join(", ");
+  throw new Error(`${params.errorPrefix}: unexpected response format. Keys: [${types}]`);
 }
 
 /**
@@ -333,7 +283,8 @@ export async function uploadImageFeishu(params: {
   const response = await client.im.image.create({
     data: {
       image_type: imageType,
-      image: imageData,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      image: imageData as any,
     },
   });
 
@@ -385,7 +336,8 @@ export async function uploadFileFeishu(params: {
     data: {
       file_type: fileType,
       file_name: safeFileName,
-      file: fileData,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK accepts Buffer or ReadStream
+      file: fileData as any,
       ...(duration !== undefined && { duration }),
     },
   });

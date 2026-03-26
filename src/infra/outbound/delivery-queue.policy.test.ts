@@ -15,8 +15,7 @@ describe("delivery-queue policy", () => {
       "Bot was blocked by the user",
       "Forbidden: bot was kicked from the group chat",
       "chat_id is empty",
-      "Outbound not configured for channel: demo-channel",
-      "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
+      "Outbound not configured for channel: msteams",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -33,19 +32,22 @@ describe("delivery-queue policy", () => {
   });
 
   describe("computeBackoffMs", () => {
-    it.each([
-      { retryCount: 0, expected: 0 },
-      { retryCount: 1, expected: 5_000 },
-      { retryCount: 2, expected: 25_000 },
-      { retryCount: 3, expected: 120_000 },
-      { retryCount: 4, expected: 600_000 },
-      { retryCount: 5, expected: 600_000 },
-    ] as const)(
-      "returns scheduled backoff for retryCount=$retryCount",
-      ({ retryCount, expected }) => {
-        expect(computeBackoffMs(retryCount)).toBe(expected);
-      },
-    );
+    it("returns scheduled backoff values and clamps at max retry", () => {
+      const cases = [
+        { retryCount: 0, expected: 0 },
+        { retryCount: 1, expected: 5_000 },
+        { retryCount: 2, expected: 25_000 },
+        { retryCount: 3, expected: 120_000 },
+        { retryCount: 4, expected: 600_000 },
+        { retryCount: 5, expected: 600_000 },
+      ] as const;
+
+      for (const testCase of cases) {
+        expect(computeBackoffMs(testCase.retryCount), String(testCase.retryCount)).toBe(
+          testCase.expected,
+        );
+      }
+    });
   });
 
   describe("isEntryEligibleForRecoveryRetry", () => {
@@ -54,7 +56,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-1",
-          channel: "demo-channel",
+          channel: "whatsapp",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now,
@@ -70,7 +72,7 @@ describe("delivery-queue policy", () => {
       const result = isEntryEligibleForRecoveryRetry(
         {
           id: "entry-2",
-          channel: "demo-channel",
+          channel: "whatsapp",
           to: "+1",
           payloads: [{ text: "a" }],
           enqueuedAt: now - 30_000,

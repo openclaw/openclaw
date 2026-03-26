@@ -41,8 +41,6 @@ import {
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
-  resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -257,16 +255,7 @@ function resolveResponsesLimits(
 }
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
-  // Normalize from Responses API flat format to the internal wrapped format.
-  return (body.tools ?? []).map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict,
-    },
-  }));
+  return (body.tools ?? []) as ClientToolDefinition[];
 }
 
 function applyToolChoice(params: {
@@ -426,7 +415,6 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   deps: ReturnType<typeof createDefaultDeps>;
 }) {
   return agentCommandFromIngress(
@@ -442,7 +430,8 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      senderIsOwner: params.senderIsOwner,
+      // HTTP API callers are authenticated operator clients for this gateway context.
+      senderIsOwner: true,
       allowModelOverride: true,
     },
     defaultRuntime,
@@ -463,10 +452,6 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
-    requiredOperatorMethod: "chat.send",
-    // Compat HTTP uses a different scope model from generic HTTP helpers:
-    // shared-secret bearer auth is treated as full operator access here.
-    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -479,9 +464,6 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
-  // On the compat surface, shared-secret bearer auth is also treated as an
-  // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
@@ -712,7 +694,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
       });
 
@@ -965,7 +946,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
       });
 

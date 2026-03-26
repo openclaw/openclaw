@@ -136,9 +136,3 @@ export PATH="$HOME/.npm-global/bin:$PATH"
 ```
 
 Add the `export PATH=...` line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
-
-## Related
-
-- [Install Overview](/install) — all installation methods
-- [Updating](/install/updating) — keeping OpenClaw up to date
-- [Getting Started](/start/getting-started) — first steps after install

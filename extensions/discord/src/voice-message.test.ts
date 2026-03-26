@@ -1,16 +1,20 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
 
-vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
+    ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",
   };
 });
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
+    ...actual,
     runFfprobe: runFfprobeMock,
     runFfmpeg: runFfmpegMock,
     parseFfprobeCodecAndSampleRate: (stdout: string) => {
@@ -28,13 +32,11 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
 
 describe("ensureOggOpus", () => {
-  beforeAll(async () => {
-    ({ ensureOggOpus } = await import("./voice-message.js"));
-  });
-
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
+    ({ ensureOggOpus } = await import("./voice-message.js"));
   });
 
   afterEach(() => {

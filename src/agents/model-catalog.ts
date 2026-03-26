@@ -3,7 +3,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -296,11 +295,11 @@ export function findModelInCatalog(
   provider: string,
   modelId: string,
 ): ModelCatalogEntry | undefined {
-  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedProvider = provider.toLowerCase().trim();
   const normalizedModelId = modelId.toLowerCase().trim();
   return catalog.find(
     (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider &&
+      entry.provider.toLowerCase() === normalizedProvider &&
       entry.id.toLowerCase() === normalizedModelId,
   );
 }

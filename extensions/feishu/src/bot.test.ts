@@ -1,8 +1,6 @@
-import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import {
@@ -13,169 +11,6 @@ import {
   toMessageResourceType,
 } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
-
-type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
-type BoundConversation = ReturnType<
-  ReturnType<typeof ConversationRuntime.getSessionBindingService>["resolveByConversation"]
->;
-type BindingReadiness = Awaited<
-  ReturnType<typeof ConversationRuntime.ensureConfiguredBindingRouteReady>
->;
-type ReplyDispatcher = Parameters<
-  PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
->[0]["dispatcher"];
-
-function createReplyDispatcher(): ReplyDispatcher {
-  return {
-    sendToolResult: vi.fn(),
-    sendBlockReply: vi.fn(),
-    sendFinalReply: vi.fn(),
-    waitForIdle: vi.fn(),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
-
-function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
-  return {
-    bindingResolution: {
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "ou_sender_1",
-      },
-      compiledBinding: {
-        channel: "feishu",
-        accountPattern: "default",
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "feishu",
-            accountId: "default",
-            peer: { kind: "direct", id: "ou_sender_1" },
-          },
-        },
-        bindingConversationId: "ou_sender_1",
-        target: {
-          conversationId: "ou_sender_1",
-        },
-        agentId: "codex",
-        provider: {
-          compileConfiguredBinding: () => ({ conversationId: "ou_sender_1" }),
-          matchInboundConversation: () => ({ conversationId: "ou_sender_1" }),
-        },
-        targetFactory: {
-          driverId: "acp",
-          materialize: () => ({
-            record: {
-              bindingId: "config:acp:feishu:default:ou_sender_1",
-              targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              targetKind: "session",
-              conversation: {
-                channel: "feishu",
-                accountId: "default",
-                conversationId: "ou_sender_1",
-              },
-              status: "active",
-              boundAt: 0,
-              metadata: { source: "config" },
-            },
-            statefulTarget: {
-              kind: "stateful",
-              driverId: "acp",
-              sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              agentId: "codex",
-            },
-          }),
-        },
-      },
-      match: {
-        conversationId: "ou_sender_1",
-      },
-      record: {
-        bindingId: "config:acp:feishu:default:ou_sender_1",
-        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        targetKind: "session",
-        conversation: {
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "ou_sender_1",
-        },
-        status: "active",
-        boundAt: 0,
-        metadata: { source: "config" },
-      },
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        agentId: "codex",
-      },
-    },
-    route: {
-      agentId: "codex",
-      channel: "feishu",
-      accountId: "default",
-      sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      mainSessionKey: "agent:codex:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.channel",
-    } as ResolvedAgentRoute,
-  };
-}
-
-function createConfiguredBindingReadiness(ok: boolean, error?: string): BindingReadiness {
-  return (ok ? { ok: true } : { ok: false, error: error ?? "unknown error" }) as BindingReadiness;
-}
-
-function createBoundConversation(): NonNullable<BoundConversation> {
-  return {
-    bindingId: "default:oc_group_chat:topic:om_topic_root",
-    targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
-    targetKind: "session",
-    conversation: {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_topic_root",
-      parentConversationId: "oc_group_chat",
-    },
-    status: "active",
-    boundAt: 0,
-  };
-}
-
-function buildDefaultResolveRoute(): ResolvedAgentRoute {
-  return {
-    agentId: "main",
-    channel: "feishu",
-    accountId: "default",
-    sessionKey: "agent:main:feishu:dm:ou-attacker",
-    mainSessionKey: "agent:main:main",
-    lastRoutePolicy: "session",
-    matchedBy: "default",
-  };
-}
-
-function createUnboundConfiguredRoute(
-  route: NonNullable<ConfiguredBindingRoute>["route"],
-): ConfiguredBindingRoute {
-  return { bindingResolution: null, route };
-}
-
-const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
-  mockResolveAgentRoute(params);
-const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"] = (
-  params,
-) => mockReadSessionUpdatedAt(params);
-const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
-  mockResolveStorePath(params);
-const resolveEnvelopeFormatOptionsMock = () => ({});
-const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
-const withReplyDispatcherMock = async ({
-  run,
-}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
 
 const {
   mockCreateFeishuReplyDispatcher,
@@ -193,7 +28,7 @@ const {
   mockTouchBinding,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcher: createReplyDispatcher(),
+    dispatcher: vi.fn(),
     replyOptions: {},
     markDispatchIdle: vi.fn(),
   })),
@@ -206,23 +41,23 @@ const {
     fileName: "clip.mp4",
   }),
   mockCreateFeishuClient: vi.fn(),
-  mockResolveAgentRoute: vi.fn((_params?: unknown) => buildDefaultResolveRoute()),
-  mockReadSessionUpdatedAt: vi.fn((_params?: unknown): number | undefined => undefined),
-  mockResolveStorePath: vi.fn((_params?: unknown) => "/tmp/feishu-sessions.json"),
-  mockResolveConfiguredBindingRoute: vi.fn(
-    ({
-      route,
-    }: {
-      route: NonNullable<ConfiguredBindingRoute>["route"];
-    }): ConfiguredBindingRoute => ({
-      bindingResolution: null,
-      route,
-    }),
-  ),
-  mockEnsureConfiguredBindingRouteReady: vi.fn(
-    async (_params?: unknown): Promise<BindingReadiness> => ({ ok: true }),
-  ),
-  mockResolveBoundConversation: vi.fn(() => null as BoundConversation),
+  mockResolveAgentRoute: vi.fn(() => ({
+    agentId: "main",
+    channel: "feishu",
+    accountId: "default",
+    sessionKey: "agent:main:feishu:dm:ou-attacker",
+    mainSessionKey: "agent:main:main",
+    matchedBy: "default",
+  })),
+  mockReadSessionUpdatedAt: vi.fn(),
+  mockResolveStorePath: vi.fn(() => "/tmp/feishu-sessions.json"),
+  mockResolveConfiguredBindingRoute: vi.fn(({ route }) => ({
+    bindingResolution: null,
+    configuredBinding: null,
+    route,
+  })),
+  mockEnsureConfiguredBindingRouteReady: vi.fn(async (_params?: unknown) => ({ ok: true })),
+  mockResolveBoundConversation: vi.fn(() => null),
   mockTouchBinding: vi.fn(),
 }));
 
@@ -248,8 +83,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    resolveConfiguredBindingRoute: (params: unknown) =>
-      mockResolveConfiguredBindingRoute(params as { route: ResolvedAgentRoute }),
+    resolveConfiguredBindingRoute: (params: unknown) => mockResolveConfiguredBindingRoute(params),
     ensureConfiguredBindingRouteReady: (params: unknown) =>
       mockEnsureConfiguredBindingRouteReady(params),
     getSessionBindingService: () => ({
@@ -258,6 +92,13 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
     }),
   };
 });
+
+vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    resolveByConversation: mockResolveBoundConversation,
+    touch: mockTouchBinding,
+  }),
+}));
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
@@ -273,27 +114,36 @@ describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
-      ({
-        route,
-      }: {
-        route: NonNullable<ConfiguredBindingRoute>["route"];
-      }): ConfiguredBindingRoute => ({
-        bindingResolution: null,
-        route,
-      }),
+      ({ route }) =>
+        ({
+          bindingResolution: null,
+          configuredBinding: null,
+          route,
+        }) as any,
     );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockResolveAgentRoute.mockReset().mockReturnValue({
-      ...buildDefaultResolveRoute(),
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
     });
     mockSendMessageFeishu
       .mockReset()
       .mockResolvedValue({ messageId: "reply-msg", chatId: "oc_dm" });
     mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
-      dispatcher: createReplyDispatcher(),
+      dispatcher: {
+        sendToolResult: vi.fn(),
+        sendBlockReply: vi.fn(),
+        sendFinalReply: vi.fn(),
+        waitForIdle: vi.fn(),
+        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+        markComplete: vi.fn(),
+      } as any,
       replyOptions: {},
       markDispatchIdle: vi.fn(),
     });
@@ -302,22 +152,32 @@ describe("handleFeishuMessage ACP routing", () => {
       createPluginRuntimeMock({
         channel: {
           routing: {
-            resolveAgentRoute: resolveAgentRouteMock,
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           session: {
-            readSessionUpdatedAt: readSessionUpdatedAtMock,
-            resolveStorePath: resolveStorePathMock,
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
           },
           reply: {
-            resolveEnvelopeFormatOptions:
-              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: finalizeInboundContextMock as never,
+            finalizeInboundContext: ((ctx: unknown) =>
+              ctx) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
             dispatchReplyFromConfig: vi.fn().mockResolvedValue({
               queuedFinal: false,
               counts: { final: 1 },
             }),
-            withReplyDispatcher: withReplyDispatcherMock as never,
+            withReplyDispatcher: vi.fn(
+              async ({
+                run,
+              }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) =>
+                await run(),
+            ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
           },
           commands: {
             shouldComputeCommandAuthorized: vi.fn(() => false),
@@ -334,7 +194,68 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
-    mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
+    mockResolveConfiguredBindingRoute.mockReturnValue({
+      bindingResolution: {
+        configuredBinding: {
+          spec: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+            agentId: "codex",
+            mode: "persistent",
+          },
+          record: {
+            bindingId: "config:acp:feishu:default:ou_sender_1",
+            targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "ou_sender_1",
+            },
+            status: "active",
+            boundAt: 0,
+            metadata: { source: "config" },
+          },
+        },
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          agentId: "codex",
+        },
+      },
+      configuredBinding: {
+        spec: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "ou_sender_1",
+          agentId: "codex",
+          mode: "persistent",
+        },
+        record: {
+          bindingId: "config:acp:feishu:default:ou_sender_1",
+          targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          targetKind: "session",
+          conversation: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+          },
+          status: "active",
+          boundAt: 0,
+          metadata: { source: "config" },
+        },
+      },
+      route: {
+        agentId: "codex",
+        channel: "feishu",
+        accountId: "default",
+        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+        mainSessionKey: "agent:codex:main",
+        matchedBy: "binding.channel",
+      },
+    } as any);
 
     await dispatchMessage({
       cfg: {
@@ -358,10 +279,72 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
-    mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
-    mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
-      createConfiguredBindingReadiness(false, "runtime unavailable"),
-    );
+    mockResolveConfiguredBindingRoute.mockReturnValue({
+      bindingResolution: {
+        configuredBinding: {
+          spec: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+            agentId: "codex",
+            mode: "persistent",
+          },
+          record: {
+            bindingId: "config:acp:feishu:default:ou_sender_1",
+            targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+            targetKind: "session",
+            conversation: {
+              channel: "feishu",
+              accountId: "default",
+              conversationId: "ou_sender_1",
+            },
+            status: "active",
+            boundAt: 0,
+            metadata: { source: "config" },
+          },
+        },
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          agentId: "codex",
+        },
+      },
+      configuredBinding: {
+        spec: {
+          channel: "feishu",
+          accountId: "default",
+          conversationId: "ou_sender_1",
+          agentId: "codex",
+          mode: "persistent",
+        },
+        record: {
+          bindingId: "config:acp:feishu:default:ou_sender_1",
+          targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+          targetKind: "session",
+          conversation: {
+            channel: "feishu",
+            accountId: "default",
+            conversationId: "ou_sender_1",
+          },
+          status: "active",
+          boundAt: 0,
+          metadata: { source: "config" },
+        },
+      },
+      route: {
+        agentId: "codex",
+        channel: "feishu",
+        accountId: "default",
+        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+        mainSessionKey: "agent:codex:main",
+        matchedBy: "binding.channel",
+      },
+    } as any);
+    mockEnsureConfiguredBindingRouteReady.mockResolvedValue({
+      ok: false,
+      error: "runtime unavailable",
+    } as any);
 
     await dispatchMessage({
       cfg: {
@@ -389,7 +372,19 @@ describe("handleFeishuMessage ACP routing", () => {
   });
 
   it("routes Feishu topic messages through active bound conversations", async () => {
-    mockResolveBoundConversation.mockReturnValue(createBoundConversation());
+    mockResolveBoundConversation.mockReturnValue({
+      bindingId: "default:oc_group_chat:topic:om_topic_root",
+      targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
+      targetKind: "session",
+      conversation: {
+        channel: "feishu",
+        accountId: "default",
+        conversationId: "oc_group_chat:topic:om_topic_root",
+        parentConversationId: "oc_group_chat",
+      },
+      status: "active",
+      boundAt: 0,
+    } as any);
 
     await dispatchMessage({
       cfg: {
@@ -432,10 +427,7 @@ describe("handleFeishuMessage ACP routing", () => {
 });
 
 describe("handleFeishuMessage command authorization", () => {
-  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ({
-    ...ctx,
-    CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
-  }));
+  const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
   const mockDispatchReplyFromConfig = vi
     .fn()
     .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
@@ -478,19 +470,24 @@ describe("handleFeishuMessage command authorization", () => {
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
     mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
-      ({
-        route,
-      }: {
-        route: NonNullable<ConfiguredBindingRoute>["route"];
-      }): ConfiguredBindingRoute => ({
-        bindingResolution: null,
-        route,
-      }),
+      ({ route }) =>
+        ({
+          bindingResolution: null,
+          configuredBinding: null,
+          route,
+        }) as any,
     );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
-    mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:dm:ou-attacker",
+      mainSessionKey: "agent:main:main",
+      matchedBy: "default",
+    });
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
@@ -506,26 +503,33 @@ describe("handleFeishuMessage command authorization", () => {
         },
         channel: {
           routing: {
-            resolveAgentRoute: resolveAgentRouteMock,
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
           },
           session: {
-            readSessionUpdatedAt: readSessionUpdatedAtMock,
-            resolveStorePath: resolveStorePathMock,
+            readSessionUpdatedAt:
+              mockReadSessionUpdatedAt as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+            resolveStorePath:
+              mockResolveStorePath as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
           },
           reply: {
-            resolveEnvelopeFormatOptions:
-              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            resolveEnvelopeFormatOptions: vi.fn(
+              () => ({}),
+            ) as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: mockFinalizeInboundContext as never,
+            finalizeInboundContext:
+              mockFinalizeInboundContext as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher: mockWithReplyDispatcher as never,
+            withReplyDispatcher:
+              mockWithReplyDispatcher as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
             resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
           },
           media: {
-            saveMediaBuffer: mockSaveMediaBuffer,
+            saveMediaBuffer:
+              mockSaveMediaBuffer as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
           },
           pairing: {
             readAllowFromStore: mockReadAllowFromStore,

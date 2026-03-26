@@ -15,7 +15,7 @@ export type ExtraGatewayService = {
   label: string;
   detail: string;
   scope: "user" | "system";
-  marker?: "openclaw" | "clawdbot";
+  marker?: "openclaw" | "clawdbot" | "moltbot";
   legacy?: boolean;
 };
 
@@ -23,7 +23,7 @@ export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
+const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -142,7 +142,7 @@ function isIgnoredSystemdName(name: string): boolean {
 
 function isLegacyLabel(label: string): boolean {
   const lower = label.toLowerCase();
-  return lower.includes("clawdbot");
+  return lower.includes("clawdbot") || lower.includes("moltbot");
 }
 
 async function readDirEntries(dir: string): Promise<string[]> {
@@ -217,7 +217,7 @@ async function scanLaunchdDir(params: {
         label,
         detail: `plist: ${fullPath}`,
         scope: params.scope,
-        marker: "clawdbot",
+        marker: isLegacyLabel(label) ? "clawdbot" : "moltbot",
         legacy: true,
       });
       continue;

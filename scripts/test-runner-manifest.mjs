@@ -1,10 +1,8 @@
 import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.mjs";
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
-export const cliStartupBenchManifestPath = "test/fixtures/cli-startup-bench.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
 export const channelTimingManifestPath = "test/fixtures/test-timings.channels.json";
-export const extensionTimingManifestPath = "test/fixtures/test-timings.extensions.json";
 export const unitMemoryHotspotManifestPath = "test/fixtures/test-memory-hotspots.unit.json";
 
 const defaultTimingManifest = {
@@ -15,11 +13,6 @@ const defaultTimingManifest = {
 const defaultChannelTimingManifest = {
   config: "vitest.channels.config.ts",
   defaultDurationMs: 3000,
-  files: {},
-};
-const defaultExtensionTimingManifest = {
-  config: "vitest.extensions.config.ts",
-  defaultDurationMs: 1000,
   files: {},
 };
 const defaultMemoryHotspotManifest = {
@@ -142,10 +135,6 @@ export function loadUnitTimingManifest() {
 
 export function loadChannelTimingManifest() {
   return loadTimingManifest(channelTimingManifestPath, defaultChannelTimingManifest);
-}
-
-export function loadExtensionTimingManifest() {
-  return loadTimingManifest(extensionTimingManifestPath, defaultExtensionTimingManifest);
 }
 
 export function loadUnitMemoryHotspotManifest() {

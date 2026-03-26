@@ -3,18 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 
-vi.mock("../agents/subagent-registry-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/subagent-registry-read.js")>();
+vi.mock("../agents/subagent-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/subagent-registry.js")>();
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getLatestSubagentRunByChildSessionKeyMock(...args),
+    replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
   };
 });
-
-vi.mock("./session-subagent-reactivation.runtime.js", () => ({
-  replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
-}));
 
 import { reactivateCompletedSubagentSession } from "./session-subagent-reactivation.js";
 
@@ -24,7 +21,7 @@ describe("reactivateCompletedSubagentSession", () => {
     replaceSubagentRunAfterSteerMock.mockReset();
   });
 
-  it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {
+  it("reactivates the newest ended row even when stale active rows still exist for the same child session", () => {
     const childSessionKey = "agent:main:subagent:followup-race";
     const latestEndedRun = {
       runId: "run-current-ended",
@@ -42,12 +39,12 @@ describe("reactivateCompletedSubagentSession", () => {
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
 
-    await expect(
+    expect(
       reactivateCompletedSubagentSession({
         sessionKey: childSessionKey,
         runId: "run-next",
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
 
     expect(getLatestSubagentRunByChildSessionKeyMock).toHaveBeenCalledWith(childSessionKey);
     expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({

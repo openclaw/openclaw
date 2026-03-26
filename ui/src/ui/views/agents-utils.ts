@@ -329,16 +329,10 @@ export function buildAgentContext(
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
-    workspaceFromFiles ||
-    config.entry?.workspace ||
-    config.defaults?.workspace ||
-    agent.workspace ||
-    "default";
+    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
   const modelLabel = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agent.model);
+    : resolveModelLabel(config.defaults?.model);
   const identityName =
     agentIdentity?.name?.trim() ||
     agent.identity?.name?.trim() ||

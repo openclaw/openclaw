@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
-import { requireValidConfigSnapshot } from "./config-validation.js";
 
-const { readConfigFileSnapshot, buildPluginCompatibilityNotices } = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(),
-  buildPluginCompatibilityNotices: vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
-    () => [],
-  ),
-}));
+const readConfigFileSnapshot = vi.fn();
+const buildPluginCompatibilityNotices = vi.fn<(_params?: unknown) => PluginCompatibilityNotice[]>(
+  () => [],
+);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot,
@@ -49,6 +46,7 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
+    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime);
 
     expect(config).toEqual({ plugins: {} });
@@ -62,6 +60,7 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
+    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });
@@ -84,6 +83,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
+    const { requireValidConfigSnapshot } = await import("./config-validation.js");
     const config = await requireValidConfigSnapshot(runtime, {
       includeCompatibilityAdvisory: true,
     });

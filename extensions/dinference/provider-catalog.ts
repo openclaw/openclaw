@@ -1,9 +1,9 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildDinferenceModelDefinition,
-  type ModelProviderConfig,
   DINFERENCE_BASE_URL,
   DINFERENCE_MODEL_CATALOG,
-} from "openclaw/plugin-sdk/provider-models";
+} from "./models.ts";
 
 export function buildDinferenceProvider(): ModelProviderConfig {
   return {

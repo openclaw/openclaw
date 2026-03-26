@@ -25,11 +25,6 @@ function createDeferred() {
   return { promise, resolve };
 }
 
-async function flushAsyncWork() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("DiscordMessageListener", () => {
   it("returns immediately without awaiting handler completion", async () => {
     let resolveHandler: (() => void) | undefined;
@@ -45,8 +40,9 @@ describe("DiscordMessageListener", () => {
     await expect(listener.handle(fakeEvent("ch-1"), {} as never)).resolves.toBeUndefined();
     // Handler was dispatched but may not have been called yet (fire-and-forget).
     // Wait for the microtask to flush so the handler starts.
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
     expect(logger.error).not.toHaveBeenCalled();
 
     resolveHandler?.();
@@ -75,21 +71,24 @@ describe("DiscordMessageListener", () => {
     await listener.handle(fakeEvent("ch-1"), {} as never);
     await listener.handle(fakeEvent("ch-1"), {} as never);
 
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
     // Both handlers started without waiting for the first to finish.
     expect(order).toContain("start:1");
     expect(order).toContain("start:2");
 
     deferredB.resolve?.();
-    await flushAsyncWork();
-    expect(order).toContain("end:2");
+    await vi.waitFor(() => {
+      expect(order).toContain("end:2");
+    });
     // First handler is still running — no serialization.
     expect(order).not.toContain("end:1");
 
     deferredA.resolve?.();
-    await flushAsyncWork();
-    expect(order).toContain("end:1");
+    await vi.waitFor(() => {
+      expect(order).toContain("end:1");
+    });
   });
 
   it("runs handlers for different channels in parallel", async () => {
@@ -110,19 +109,22 @@ describe("DiscordMessageListener", () => {
     await listener.handle(fakeEvent("ch-a"), {} as never);
     await listener.handle(fakeEvent("ch-b"), {} as never);
 
-    await flushAsyncWork();
-    expect(handler).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
     expect(order).toContain("start:ch-a");
     expect(order).toContain("start:ch-b");
 
     deferredB.resolve?.();
-    await flushAsyncWork();
-    expect(order).toContain("end:ch-b");
+    await vi.waitFor(() => {
+      expect(order).toContain("end:ch-b");
+    });
     expect(order).not.toContain("end:ch-a");
 
     deferredA.resolve?.();
-    await flushAsyncWork();
-    expect(order).toContain("end:ch-a");
+    await vi.waitFor(() => {
+      expect(order).toContain("end:ch-a");
+    });
   });
 
   it("logs async handler failures", async () => {
@@ -133,10 +135,11 @@ describe("DiscordMessageListener", () => {
     const listener = new DiscordMessageListener(handler as never, logger as never);
 
     await expect(listener.handle(fakeEvent("ch-1"), {} as never)).resolves.toBeUndefined();
-    await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("discord handler failed: Error: boom"),
-    );
+    await vi.waitFor(() => {
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("discord handler failed: Error: boom"),
+      );
+    });
   });
 
   it("calls onEvent callback for each message", async () => {

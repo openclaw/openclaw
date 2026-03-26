@@ -3,7 +3,6 @@ import {
   loadChannelTimingManifest,
   loadTestRunnerBehavior,
 } from "../scripts/test-runner-manifest.mjs";
-import { bundledPluginDirPrefix, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 describe("loadTestRunnerBehavior", () => {
   it("loads channel isolated entries from the behavior manifest", () => {
@@ -11,16 +10,14 @@ describe("loadTestRunnerBehavior", () => {
     const files = behavior.channels.isolated.map((entry) => entry.file);
 
     expect(files).toContain(
-      bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
+      "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
     );
   });
 
   it("loads channel isolated prefixes from the behavior manifest", () => {
     const behavior = loadTestRunnerBehavior();
 
-    expect(behavior.channels.isolatedPrefixes).toContain(
-      bundledPluginDirPrefix("discord", "src/monitor"),
-    );
+    expect(behavior.channels.isolatedPrefixes).toContain("extensions/discord/src/monitor/");
   });
 
   it("loads channel timing metadata from the timing manifest", () => {

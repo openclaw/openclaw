@@ -9,29 +9,6 @@ vi.mock("@clack/prompts", () => ({
   select: (options: unknown) => selectMock(options),
 }));
 
-function setNonInteractiveTerminal() {
-  Object.defineProperty(process.stdin, "isTTY", {
-    value: false,
-    configurable: true,
-  });
-}
-
-function createRepairPrompter(params?: { force?: boolean }) {
-  setNonInteractiveTerminal();
-  return createDoctorPrompter({
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
-    options: {
-      repair: true,
-      nonInteractive: true,
-      ...(params?.force ? { force: true } : {}),
-    },
-  });
-}
-
 describe("createDoctorPrompter", () => {
   const originalStdinIsTTY = process.stdin.isTTY;
   const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -50,7 +27,22 @@ describe("createDoctorPrompter", () => {
   });
 
   it("auto-accepts repairs in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter();
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
 
     await expect(
       prompter.confirm({
@@ -74,7 +66,22 @@ describe("createDoctorPrompter", () => {
   });
 
   it("requires --force for aggressive repairs in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter();
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
 
     await expect(
       prompter.confirmAggressiveAutoFix({
@@ -86,8 +93,23 @@ describe("createDoctorPrompter", () => {
   });
 
   it("keeps skip-in-non-interactive prompts disabled during update-mode repairs", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-    const prompter = createRepairPrompter();
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        nonInteractive: true,
+      },
+    });
 
     await expect(
       prompter.confirmAutoFix({
@@ -105,7 +127,23 @@ describe("createDoctorPrompter", () => {
   });
 
   it("auto-accepts aggressive repairs only with --force in non-interactive fix mode", async () => {
-    const prompter = createRepairPrompter({ force: true });
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {
+        repair: true,
+        force: true,
+        nonInteractive: true,
+      },
+    });
 
     await expect(
       prompter.confirmAggressiveAutoFix({

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { withStateDirEnv } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
@@ -21,25 +21,6 @@ describe("resolveTelegramToken", () => {
     const tokenFile = path.join(dir, fileName);
     fs.writeFileSync(tokenFile, contents, "utf-8");
     return tokenFile;
-  }
-
-  function createUnknownAccountConfig(): OpenClawConfig {
-    return {
-      channels: {
-        telegram: {
-          botToken: "wrong-bot-token",
-          accounts: {
-            knownBot: { botToken: "known-bot-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-  }
-
-  function expectNoTokenForUnknownAccount(cfg: OpenClawConfig) {
-    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
   }
 
   afterEach(() => {
@@ -226,7 +207,20 @@ describe("resolveTelegramToken", () => {
 
   it("does not fall through to channel-level token when non-default accountId is not in config", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   });
 
   it("throws when botToken is an unresolved SecretRef object", () => {
@@ -263,7 +257,20 @@ describe("resolveTelegramToken", () => {
 
   it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   });
 });
 

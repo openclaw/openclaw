@@ -1,18 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledPluginRootAt, repoInstallSpec } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
-import { loadConfigForInstall } from "./plugins-install-command.js";
 
-const hoisted = vi.hoisted(() => ({
-  loadConfigMock: vi.fn<() => OpenClawConfig>(),
-  readConfigFileSnapshotMock: vi.fn<() => Promise<ConfigFileSnapshot>>(),
-  cleanStaleMatrixPluginConfigMock: vi.fn(),
-}));
-
-const loadConfigMock = hoisted.loadConfigMock;
-const readConfigFileSnapshotMock = hoisted.readConfigFileSnapshotMock;
-const cleanStaleMatrixPluginConfigMock = hoisted.cleanStaleMatrixPluginConfigMock;
+const loadConfigMock = vi.fn<() => OpenClawConfig>();
+const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const cleanStaleMatrixPluginConfigMock = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
@@ -23,7 +15,7 @@ vi.mock("../commands/doctor/providers/matrix.js", () => ({
   cleanStaleMatrixPluginConfig: (cfg: OpenClawConfig) => cleanStaleMatrixPluginConfigMock(cfg),
 }));
 
-const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
+const { loadConfigForInstall } = await import("./plugins-install-command.js");
 
 function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSnapshot {
   return {
@@ -31,10 +23,8 @@ function makeSnapshot(overrides: Partial<ConfigFileSnapshot> = {}): ConfigFileSn
     exists: true,
     raw: '{ "plugins": {} }',
     parsed: { plugins: {} },
-    sourceConfig: { plugins: {} } as ConfigFileSnapshot["sourceConfig"],
     resolved: { plugins: {} } as OpenClawConfig,
     valid: false,
-    runtimeConfig: { plugins: {} } as ConfigFileSnapshot["runtimeConfig"],
     config: { plugins: {} } as OpenClawConfig,
     hash: "abc",
     issues: [{ path: "plugins.installs.matrix", message: "stale path" }],
@@ -122,9 +112,9 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall({
-      rawSpec: MATRIX_REPO_INSTALL_SPEC,
-      normalizedSpec: MATRIX_REPO_INSTALL_SPEC,
-      resolvedPath: bundledPluginRootAt("/tmp/repo", "matrix"),
+      rawSpec: "./extensions/matrix",
+      normalizedSpec: "./extensions/matrix",
+      resolvedPath: "/tmp/repo/extensions/matrix",
     });
     expect(result).toBe(snapshotCfg);
   });

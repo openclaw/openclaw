@@ -617,9 +617,7 @@ export async function sanitizeSessionHistory(params: {
     allowedToolNames: params.allowedToolNames,
   });
   const repairedTools = policy.repairToolUseResultPairing
-    ? sanitizeToolUseResultPairing(sanitizedToolCalls, {
-        erroredAssistantResultPolicy: "drop",
-      })
+    ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
   const sanitizedCompactionUsage = ensureAssistantUsageSnapshots(
@@ -627,9 +625,7 @@ export async function sanitizeSessionHistory(params: {
   );
 
   const isOpenAIResponsesApi =
-    params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-codex-responses" ||
-    params.modelApi === "azure-openai-responses";
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot

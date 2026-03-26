@@ -4,7 +4,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
-import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -48,9 +47,12 @@ function buildSystemNodeCandidates(
   }
   if (platform === "win32") {
     const pathModule = getPathModule(platform);
-    return getWindowsProgramFilesRoots(env).map((root) =>
-      pathModule.join(root, "nodejs", "node.exe"),
-    );
+    const programFiles = env.ProgramFiles ?? "C:\\Program Files";
+    const programFilesX86 = env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    return [
+      pathModule.join(programFiles, "nodejs", "node.exe"),
+      pathModule.join(programFilesX86, "nodejs", "node.exe"),
+    ];
   }
   return [];
 }

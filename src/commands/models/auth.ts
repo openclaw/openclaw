@@ -276,7 +276,6 @@ async function runProviderAuthMethod(params: {
 
   const result = await params.method.run({
     config: params.config,
-    env: process.env,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,

@@ -5,10 +5,6 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
-import type {
-  PluginApprovalRequest,
-  PluginApprovalResolved,
-} from "../../infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -28,14 +24,12 @@ import type {
   ChannelStatusIssue,
 } from "./types.core.js";
 
-export type ChannelActionAvailabilityState =
+export type ChannelExecApprovalInitiatingSurfaceState =
   | { kind: "enabled" }
   | { kind: "disabled" }
   | { kind: "unsupported" };
 
-export type ChannelApprovalInitiatingSurfaceState = ChannelActionAvailabilityState;
-
-export type ChannelApprovalForwardTarget = {
+export type ChannelExecApprovalForwardTarget = {
   channel: string;
   to: string;
   accountId?: string | null;
@@ -154,17 +148,6 @@ export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
 
-export type ChannelOutboundPayloadHint =
-  | { kind: "approval-pending"; approvalKind: "exec" | "plugin" }
-  | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
-
-export type ChannelOutboundTargetRef = {
-  channel: string;
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
-
 export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
@@ -182,18 +165,6 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     fallbackLimit?: number;
   }) => number | undefined;
-  shouldSuppressLocalPayloadPrompt?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => boolean;
-  beforeDeliverPayload?: (params: {
-    cfg: OpenClawConfig;
-    target: ChannelOutboundTargetRef;
-    payload: ReplyPayload;
-    hint?: ChannelOutboundPayloadHint;
-  }) => Promise<void> | void;
   resolveTarget?: (params: {
     cfg?: OpenClawConfig;
     to?: string;
@@ -397,21 +368,6 @@ export type ChannelAuthAdapter = {
     verbose?: boolean;
     channelInput?: string | null;
   }) => Promise<void>;
-  authorizeActorAction?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    senderId?: string | null;
-    action: "approve";
-    approvalKind: "exec" | "plugin";
-  }) => {
-    authorized: boolean;
-    reason?: string;
-  };
-  getActionAvailabilityState?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    action: "approve";
-  }) => ChannelActionAvailabilityState;
 };
 
 export type ChannelHeartbeatAdapter = {
@@ -505,90 +461,38 @@ export type ChannelLifecycleAdapter = {
   }) => Promise<void> | void;
 };
 
-export type ChannelApprovalDeliveryAdapter = {
+export type ChannelExecApprovalAdapter = {
+  getInitiatingSurfaceState?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ChannelExecApprovalInitiatingSurfaceState;
+  shouldSuppressLocalPrompt?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    payload: ReplyPayload;
+  }) => boolean;
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
-    target: ChannelApprovalForwardTarget;
+    target: ChannelExecApprovalForwardTarget;
     request: ExecApprovalRequest;
   }) => boolean;
-};
-
-export type ChannelApprovalKind = "exec" | "plugin";
-
-export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
-
-export type ChannelApprovalNativeTarget = {
-  to: string;
-  threadId?: string | number | null;
-};
-
-export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
-
-export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
-
-export type ChannelApprovalNativeDeliveryCapabilities = {
-  enabled: boolean;
-  preferredSurface: ChannelApprovalNativeDeliveryPreference;
-  supportsOriginSurface: boolean;
-  supportsApproverDmSurface: boolean;
-  notifyOriginWhenDmOnly?: boolean;
-};
-
-export type ChannelApprovalNativeAdapter = {
-  describeDeliveryCapabilities: (params: {
+  buildPendingPayload?: (params: {
     cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeDeliveryCapabilities;
-  resolveOriginTarget?: (params: {
+    request: ExecApprovalRequest;
+    target: ChannelExecApprovalForwardTarget;
+    nowMs: number;
+  }) => ReplyPayload | null;
+  buildResolvedPayload?: (params: {
     cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget | null | Promise<ChannelApprovalNativeTarget | null>;
-  resolveApproverDmTargets?: (params: {
+    resolved: ExecApprovalResolved;
+    target: ChannelExecApprovalForwardTarget;
+  }) => ReplyPayload | null;
+  beforeDeliverPending?: (params: {
     cfg: OpenClawConfig;
-    accountId?: string | null;
-    approvalKind: ChannelApprovalKind;
-    request: ChannelApprovalNativeRequest;
-  }) => ChannelApprovalNativeTarget[] | Promise<ChannelApprovalNativeTarget[]>;
-};
-
-export type ChannelApprovalRenderAdapter = {
-  exec?: {
-    buildPendingPayload?: (params: {
-      cfg: OpenClawConfig;
-      request: ExecApprovalRequest;
-      target: ChannelApprovalForwardTarget;
-      nowMs: number;
-    }) => ReplyPayload | null;
-    buildResolvedPayload?: (params: {
-      cfg: OpenClawConfig;
-      resolved: ExecApprovalResolved;
-      target: ChannelApprovalForwardTarget;
-    }) => ReplyPayload | null;
-  };
-  plugin?: {
-    buildPendingPayload?: (params: {
-      cfg: OpenClawConfig;
-      request: PluginApprovalRequest;
-      target: ChannelApprovalForwardTarget;
-      nowMs: number;
-    }) => ReplyPayload | null;
-    buildResolvedPayload?: (params: {
-      cfg: OpenClawConfig;
-      resolved: PluginApprovalResolved;
-      target: ChannelApprovalForwardTarget;
-    }) => ReplyPayload | null;
-  };
-};
-
-export type ChannelApprovalAdapter = {
-  delivery?: ChannelApprovalDeliveryAdapter;
-  render?: ChannelApprovalRenderAdapter;
-  native?: ChannelApprovalNativeAdapter;
+    target: ChannelExecApprovalForwardTarget;
+    payload: ReplyPayload;
+  }) => Promise<void> | void;
 };
 
 export type ChannelAllowlistAdapter = {
@@ -656,18 +560,6 @@ export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversation
   matchPriority?: number;
 };
 
-export type ChannelCommandConversationContext = {
-  accountId: string;
-  threadId?: string;
-  threadParentId?: string;
-  senderId?: string;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  originatingTo?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-};
-
 export type ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: (params: {
     binding: ConfiguredBindingRule;
@@ -679,40 +571,6 @@ export type ChannelConfiguredBindingProvider = {
     conversationId: string;
     parentConversationId?: string;
   }) => ChannelConfiguredBindingMatch | null;
-  resolveCommandConversation?: (
-    params: ChannelCommandConversationContext,
-  ) => ChannelConfiguredBindingConversationRef | null;
-};
-
-export type ChannelConversationBindingSupport = {
-  supportsCurrentConversationBinding?: boolean;
-  setIdleTimeoutBySessionKey?: (params: {
-    targetSessionKey: string;
-    accountId?: string | null;
-    idleTimeoutMs: number;
-  }) => Array<{
-    boundAt: number;
-    lastActivityAt: number;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-  }>;
-  setMaxAgeBySessionKey?: (params: {
-    targetSessionKey: string;
-    accountId?: string | null;
-    maxAgeMs: number;
-  }) => Array<{
-    boundAt: number;
-    lastActivityAt: number;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-  }>;
-  createManager?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    | {
-        stop: () => void | Promise<void>;
-      }
-    | Promise<{
-        stop: () => void | Promise<void>;
-      }>;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

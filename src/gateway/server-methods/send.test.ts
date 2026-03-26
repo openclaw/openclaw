@@ -10,13 +10,10 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
   recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
   resolveOutboundTarget: vi.fn<ResolveOutboundTarget>(() => ({ ok: true, to: "resolved" })),
-  resolveOutboundSessionRoute: vi.fn(),
-  ensureOutboundSessionEntry: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
-  applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -46,6 +43,10 @@ function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): 
   return "main";
 }
 
+function passthroughPluginAutoEnable(config: unknown) {
+  return { config, changes: [] as unknown[] };
+}
+
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: ({
     sessionKey,
@@ -59,8 +60,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
-    mocks.applyPluginAutoEnable({ config, env }),
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => passthroughPluginAutoEnable(config),
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
@@ -69,11 +69,6 @@ vi.mock("../../plugins/loader.js", () => ({
 
 vi.mock("../../infra/outbound/targets.js", () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
-}));
-
-vi.mock("../../infra/outbound/outbound-session.js", () => ({
-  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
-  ensureOutboundSessionEntry: mocks.ensureOutboundSessionEntry,
 }));
 
 vi.mock("../../infra/outbound/channel-selection.js", () => ({
@@ -171,16 +166,7 @@ describe("gateway send mirroring", () => {
     vi.clearAllMocks();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
-    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
-    mocks.resolveOutboundSessionRoute.mockImplementation(
-      async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
-        sessionKey:
-          channel === "slack"
-            ? `agent:${agentId ?? "main"}:slack:channel:resolved`
-            : `agent:${agentId ?? "main"}:${channel ?? "main"}:resolved`,
-      }),
-    );
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "slack",
       configured: ["slack"],
@@ -214,42 +200,42 @@ describe("gateway send mirroring", () => {
   });
 
   it("forwards gateway client scopes into outbound delivery", async () => {
-    mockDeliverySuccess("m-scope");
+    mockDeliverySuccess("m-telegram-scope");
 
     await runSendWithClient(
       {
-        to: "channel:C1",
+        to: "https://t.me/mychannel",
         message: "hi",
-        channel: "slack",
-        idempotencyKey: "idem-scope",
+        channel: "telegram",
+        idempotencyKey: "idem-telegram-scope",
       },
       { connect: { scopes: ["operator.write"] } },
     );
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
+        channel: "telegram",
         gatewayClientScopes: ["operator.write"],
       }),
     );
   });
 
   it("forwards an empty gateway scope array into outbound delivery", async () => {
-    mockDeliverySuccess("m-empty-scope");
+    mockDeliverySuccess("m-telegram-empty-scope");
 
     await runSendWithClient(
       {
-        to: "channel:C1",
+        to: "https://t.me/mychannel",
         message: "hi",
-        channel: "slack",
-        idempotencyKey: "idem-empty-scope",
+        channel: "telegram",
+        idempotencyKey: "idem-telegram-empty-scope",
       },
       { connect: { scopes: [] } },
     );
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
+        channel: "telegram",
         gatewayClientScopes: [],
       }),
     );
@@ -317,32 +303,6 @@ describe("gateway send mirroring", () => {
     );
   });
 
-  it("auto-picks the single configured channel from the auto-enabled config snapshot for send", async () => {
-    const autoEnabledConfig = { channels: { slack: {} }, plugins: { allow: ["slack"] } };
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mockDeliverySuccess("m-single-send-auto");
-
-    const { respond } = await runSend({
-      to: "x",
-      message: "hi",
-      idempotencyKey: "idem-missing-channel-auto-enabled",
-    });
-
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-    });
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
-      cfg: autoEnabledConfig,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ messageId: "m-single-send-auto" }),
-      undefined,
-      expect.objectContaining({ channel: "slack" }),
-    );
-  });
-
   it("returns invalid request when send channel selection is ambiguous", async () => {
     mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
       new Error("Channel is required when multiple channels are configured: telegram, slack"),
@@ -367,10 +327,10 @@ describe("gateway send mirroring", () => {
   it("forwards gateway client scopes into outbound poll delivery", async () => {
     await runPollWithClient(
       {
-        to: "channel:C1",
+        to: "https://t.me/mychannel",
         question: "Q?",
         options: ["A", "B"],
-        channel: "slack",
+        channel: "telegram",
         idempotencyKey: "idem-poll-scope",
       },
       { connect: { scopes: ["operator.admin"] } },
@@ -388,10 +348,10 @@ describe("gateway send mirroring", () => {
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {
     await runPollWithClient(
       {
-        to: "channel:C1",
+        to: "https://t.me/mychannel",
         question: "Q?",
         options: ["A", "B"],
-        channel: "slack",
+        channel: "telegram",
         idempotencyKey: "idem-poll-empty-scope",
       },
       { connect: { scopes: [] } },
@@ -537,6 +497,7 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-4",
     });
 
+    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
@@ -677,37 +638,38 @@ describe("gateway send mirroring", () => {
     );
   });
 
-  it("recovers cold plugin resolution for threaded sends", async () => {
+  it("recovers cold plugin resolution for telegram threaded sends", async () => {
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
     mocks.deliverOutboundPayloads.mockResolvedValue([
-      { messageId: "m-threaded", channel: "slack" },
+      { messageId: "m-telegram", channel: "telegram" },
     ]);
-    const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
+    const telegramPlugin = { outbound: { sendPoll: mocks.sendPoll } };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(outboundPlugin)
-      .mockReturnValue(outboundPlugin);
+      .mockReturnValueOnce(telegramPlugin)
+      .mockReturnValue(telegramPlugin);
 
     const { respond } = await runSend({
       to: "123",
-      message: "threaded completion",
-      channel: "slack",
-      threadId: "1710000000.9999",
-      idempotencyKey: "idem-cold-thread",
+      message: "forum completion",
+      channel: "telegram",
+      threadId: "42",
+      idempotencyKey: "idem-cold-telegram-thread",
     });
 
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "slack",
+        channel: "telegram",
         to: "123",
-        threadId: "1710000000.9999",
+        threadId: "42",
       }),
     );
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ messageId: "m-threaded" }),
+      expect.objectContaining({ messageId: "m-telegram" }),
       undefined,
-      expect.objectContaining({ channel: "slack" }),
+      expect.objectContaining({ channel: "telegram" }),
     );
   });
 });

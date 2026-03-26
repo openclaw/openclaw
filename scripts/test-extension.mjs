@@ -5,10 +5,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { channelTestRoots } from "../vitest.channel-paths.mjs";
-import {
-  BUNDLED_PLUGIN_PATH_PREFIX,
-  BUNDLED_PLUGIN_ROOT_DIR,
-} from "./lib/bundled-plugin-paths.mjs";
 import { loadTestRunnerBehavior } from "./test-runner-manifest.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -114,11 +110,11 @@ function listChangedPaths(base, head = "HEAD") {
 }
 
 function hasExtensionPackage(extensionId) {
-  return fs.existsSync(path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, extensionId, "package.json"));
+  return fs.existsSync(path.join(repoRoot, "extensions", extensionId, "package.json"));
 }
 
 export function listAvailableExtensionIds() {
-  const extensionsDir = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
+  const extensionsDir = path.join(repoRoot, "extensions");
   if (!fs.existsSync(extensionsDir)) {
     return [];
   }
@@ -140,9 +136,7 @@ export function detectChangedExtensionIds(changedPaths) {
       continue;
     }
 
-    const extensionMatch = relativePath.match(
-      new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX.replace("/", "\\/")}([^/]+)(?:/|$)`),
-    );
+    const extensionMatch = relativePath.match(/^extensions\/([^/]+)(?:\/|$)/);
     if (extensionMatch) {
       const extensionId = extensionMatch[1];
       if (hasExtensionPackage(extensionId)) {
@@ -185,20 +179,20 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
       return asGiven;
     }
 
-    const byName = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, targetArg);
+    const byName = path.join(repoRoot, "extensions", targetArg);
     if (fs.existsSync(path.join(byName, "package.json"))) {
       return byName;
     }
 
     throw new Error(
-      `Unknown extension target "${targetArg}". Use a plugin name like "slack" or a path inside the bundled plugin workspace tree.`,
+      `Unknown extension target "${targetArg}". Use an extension name like "slack" or a path under extensions/.`,
     );
   }
 
   let current = cwd;
   while (true) {
     if (
-      normalizeRelative(path.relative(repoRoot, current)).startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      normalizeRelative(path.relative(repoRoot, current)).startsWith("extensions/") &&
       fs.existsSync(path.join(current, "package.json"))
     ) {
       return current;
@@ -211,7 +205,7 @@ function resolveExtensionDirectory(targetArg, cwd = process.cwd()) {
   }
 
   throw new Error(
-    "No extension target provided, and current working directory is not inside the bundled plugin workspace tree.",
+    "No extension target provided, and current working directory is not inside extensions/.",
   );
 }
 

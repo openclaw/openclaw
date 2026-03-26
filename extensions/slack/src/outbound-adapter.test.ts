@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sendMessageSlackMock = vi.hoisted(() => vi.fn());
-const hasHooksMock = vi.hoisted(() => vi.fn());
-const runMessageSendingMock = vi.hoisted(() => vi.fn());
+const sendMessageSlackMock = vi.fn();
+const hasHooksMock = vi.fn();
+const runMessageSendingMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
+import { slackOutbound } from "./outbound-adapter.js";
 
 describe("slackOutbound", () => {
   const cfg = {
@@ -27,13 +27,11 @@ describe("slackOutbound", () => {
     },
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     sendMessageSlackMock.mockReset();
     hasHooksMock.mockReset();
     runMessageSendingMock.mockReset();
     hasHooksMock.mockReturnValue(false);
-    ({ slackOutbound } = await import("./outbound-adapter.js"));
   });
 
   it("sends payload media first, then finalizes with blocks", async () => {

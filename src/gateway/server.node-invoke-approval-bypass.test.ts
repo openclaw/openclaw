@@ -117,9 +117,7 @@ describe("node.invoke approval bypass", () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const list = await listDevicePairing();
     for (const pending of list.pending) {
-      await approveDevicePairing(pending.requestId, {
-        callerScopes: pending.scopes ?? ["operator.admin"],
-      });
+      await approveDevicePairing(pending.requestId);
     }
   };
 

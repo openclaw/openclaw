@@ -75,6 +75,7 @@ type QrCommandContext = {
 };
 
 type QrChannelSender = {
+  resolveSend: (api: OpenClawPluginApi) => QrSendFn | undefined;
   createOpts: (params: {
     ctx: QrCommandContext;
     qrFilePath: string;
@@ -83,16 +84,24 @@ type QrChannelSender = {
   }) => Record<string, unknown>;
 };
 
+type QrSendFn = (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
+
+function coerceQrSend(send: unknown): QrSendFn | undefined {
+  return typeof send === "function" ? (send as QrSendFn) : undefined;
+}
+
 const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   telegram: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.telegram?.sendMessageTelegram),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
+      ...(typeof ctx.messageThreadId === "number" ? { messageThreadId: ctx.messageThreadId } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   discord: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.discord?.sendMessageDiscord),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -100,14 +109,16 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   slack: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.slack?.sendMessageSlack),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(ctx.messageThreadId != null ? { threadId: String(ctx.messageThreadId) } : {}),
+      ...(ctx.messageThreadId != null ? { threadTs: String(ctx.messageThreadId) } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   signal: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.signal?.sendMessageSignal),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -115,6 +126,7 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   imessage: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.imessage?.sendMessageIMessage),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -122,6 +134,7 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   whatsapp: {
+    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.whatsapp?.sendMessageWhatsApp),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       verbose: false,
       mediaUrl: qrFilePath,
@@ -505,22 +518,20 @@ async function sendQrPngToSupportedChannel(params: {
   if (!sender) {
     return false;
   }
-  const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
-  const send = adapter?.sendMedia;
+  const send = sender.resolveSend(params.api);
   if (!send) {
     return false;
   }
-  await send({
-    cfg: params.api.config,
-    to: params.target,
-    text: params.caption,
-    ...sender.createOpts({
+  await send(
+    params.target,
+    params.caption,
+    sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
       accountId,
     }),
-  });
+  );
   return true;
 }
 
@@ -600,16 +611,9 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = gatewayClientScopes
-            ? await approveDevicePairing(pending.requestId, {
-                callerScopes: gatewayClientScopes,
-              })
-            : await approveDevicePairing(pending.requestId);
+          const approved = await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
-          }
-          if (approved.status === "forbidden") {
-            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();
@@ -758,8 +762,7 @@ export default definePluginEntry({
                 channelKeys.join(",") || "none"
               }`,
             );
-            const adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
-            const send = adapter?.sendText;
+            const send = api.runtime?.channel?.telegram?.sendMessageTelegram;
             if (!send) {
               throw new Error(
                 `telegram runtime unavailable (runtime keys: ${runtimeKeys.join(",")}; channel keys: ${channelKeys.join(
@@ -767,11 +770,10 @@ export default definePluginEntry({
                 )})`,
               );
             }
-            await send({
-              cfg: api.config,
-              to: target,
-              text: formatSetupInstructions(payload.expiresAtMs),
-              ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
+            await send(target, formatSetupInstructions(payload.expiresAtMs), {
+              ...(typeof ctx.messageThreadId === "number"
+                ? { messageThreadId: ctx.messageThreadId }
+                : {}),
               ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
             });
             api.logger.info?.(

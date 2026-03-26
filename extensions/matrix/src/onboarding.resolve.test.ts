@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { matrixOnboardingAdapter } from "./onboarding.js";
+import {
+  runMatrixAddAccountAllowlistConfigure,
+  runMatrixInteractiveConfigure,
+} from "./onboarding.test-harness.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -10,12 +15,8 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-let runMatrixAddAccountAllowlistConfigure: typeof import("./onboarding.test-harness.js").runMatrixAddAccountAllowlistConfigure;
-
 describe("matrix onboarding account-scoped resolution", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runMatrixAddAccountAllowlistConfigure } = await import("./onboarding.test-harness.js"));
+  beforeEach(() => {
     installMatrixTestRuntime();
     resolveMatrixTargetsMock.mockClear();
   });

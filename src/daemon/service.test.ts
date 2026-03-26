@@ -6,7 +6,6 @@ import {
   resolveGatewayService,
   startGatewayService,
 } from "./service.js";
-import { createMockGatewayService } from "./service.test-helpers.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -29,7 +28,20 @@ afterEach(() => {
 });
 
 function createService(overrides: Partial<GatewayService> = {}): GatewayService {
-  return createMockGatewayService(overrides);
+  return {
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    stage: vi.fn(async () => {}),
+    install: vi.fn(async () => {}),
+    uninstall: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    restart: vi.fn(async () => ({ outcome: "completed" as const })),
+    isLoaded: vi.fn(async () => false),
+    readCommand: vi.fn(async () => null),
+    readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
+    ...overrides,
+  };
 }
 
 describe("resolveGatewayService", () => {

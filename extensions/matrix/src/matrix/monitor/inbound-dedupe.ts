@@ -1,6 +1,7 @@
+import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
 import { createAsyncLock } from "../async-lock.js";
-import { resolveMatrixStateFilePath } from "../client/storage.js";
+import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
 import { LogService } from "../sdk/logger.js";
 
@@ -43,12 +44,16 @@ function resolveInboundDedupeStatePath(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 }): string {
-  return resolveMatrixStateFilePath({
-    auth: params.auth,
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.auth.accountId,
+    deviceId: params.auth.deviceId,
     env: params.env,
     stateDir: params.stateDir,
-    filename: INBOUND_DEDUPE_FILENAME,
   });
+  return path.join(storagePaths.rootDir, INBOUND_DEDUPE_FILENAME);
 }
 
 function normalizeTimestamp(raw: unknown): number | null {

@@ -1,5 +1,4 @@
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelRef = {
   provider?: string | null;
@@ -20,7 +19,7 @@ function isHighSignalClaudeModelId(id: string): boolean {
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
-  const provider = normalizeProviderId(ref.provider ?? "");
+  const provider = ref.provider?.trim().toLowerCase() ?? "";
   const id = ref.id?.trim().toLowerCase() ?? "";
   if (!provider || !id) {
     return false;

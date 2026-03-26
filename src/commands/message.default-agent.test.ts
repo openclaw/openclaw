@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { messageCommand } from "./message.js";
 
 let testConfig: Record<string, unknown> = {};
 
@@ -58,6 +57,9 @@ describe("messageCommand agent routing", () => {
       error: vi.fn(),
       exit: vi.fn(),
     };
+
+    const { messageCommand } = await import("./message.js");
+
     await messageCommand(
       {
         action: "send",

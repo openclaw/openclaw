@@ -1,5 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -8,10 +7,9 @@ let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExe
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
-let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 
 describe("detectCursorKeyMode", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     ({ detectCursorKeyMode } = await import("./bash-tools.exec-runtime.js"));
   });
 
@@ -42,42 +40,14 @@ describe("detectCursorKeyMode", () => {
   });
 });
 
-describe("resolveExecTarget", () => {
-  beforeAll(async () => {
-    ({ resolveExecTarget } = await import("./bash-tools.exec-runtime.js"));
-  });
-
-  it("treats auto as a default strategy rather than a host allowlist", () => {
-    expect(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
-  });
-});
-
 describe("emitExecSystemEvent", () => {
   beforeEach(async () => {
     vi.resetModules();
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
-    vi.doMock("../infra/heartbeat-wake.js", async () => {
-      return await mergeMockedModule(
-        await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-          "../infra/heartbeat-wake.js",
-        ),
-        () => ({
-          requestHeartbeatNow: requestHeartbeatNowMock,
-        }),
-      );
-    });
+    vi.doMock("../infra/heartbeat-wake.js", () => ({
+      requestHeartbeatNow: requestHeartbeatNowMock,
+    }));
     vi.doMock("../infra/system-events.js", () => ({
       enqueueSystemEvent: enqueueSystemEventMock,
     }));

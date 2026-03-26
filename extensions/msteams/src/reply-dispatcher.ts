@@ -45,7 +45,6 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
-  const msteamsCfg = params.cfg.channels?.msteams;
   const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
@@ -106,9 +105,6 @@ export function createMSTeamsReplyDispatcher(params: {
     feedbackLoopEnabled,
     log: params.log,
   });
-
-  const blockStreamingEnabled =
-    typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
 
   const pendingMessages: MSTeamsRenderedMessage[] = [];
 
@@ -193,12 +189,6 @@ export function createMSTeamsReplyDispatcher(params: {
         chunkMode,
       });
       pendingMessages.push(...messages);
-
-      // When block streaming is enabled, flush immediately so blocks are
-      // delivered progressively instead of batching until markDispatchIdle.
-      if (blockStreamingEnabled) {
-        await flushPendingMessages();
-      }
     },
     onError: (err, info) => {
       const errMsg = formatUnknownError(err);
@@ -249,8 +239,6 @@ export function createMSTeamsReplyDispatcher(params: {
               streamController.onPartialReply(payload),
           }
         : {}),
-      disableBlockStreaming:
-        typeof msteamsCfg?.blockStreaming === "boolean" ? !msteamsCfg.blockStreaming : undefined,
       onModelSelected,
     },
     markDispatchIdle,

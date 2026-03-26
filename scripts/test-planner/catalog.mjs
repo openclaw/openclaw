@@ -2,14 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
-import {
-  BUNDLED_PLUGIN_PATH_PREFIX,
-  BUNDLED_PLUGIN_ROOT_DIR,
-} from "../lib/bundled-plugin-paths.mjs";
 import { dedupeFilesPreserveOrder, loadTestRunnerBehavior } from "../test-runner-manifest.mjs";
 
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
-const contractTestPrefixes = ["src/channels/plugins/contracts/", "src/plugins/contracts/"];
 
 export const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
@@ -59,8 +54,7 @@ export function loadTestCatalog() {
   const allKnownTestFiles = [
     ...new Set([
       ...walkTestFiles("src"),
-      ...walkTestFiles(BUNDLED_PLUGIN_ROOT_DIR),
-      ...walkTestFiles("packages"),
+      ...walkTestFiles("extensions"),
       ...walkTestFiles("test"),
       ...walkTestFiles(path.join("ui", "src", "ui")),
     ]),
@@ -82,15 +76,11 @@ export function loadTestCatalog() {
     const reasons = [];
     const isolated =
       options.unitMemoryIsolatedFiles?.includes(normalizedFile) ||
-      options.extensionTimedIsolatedFiles?.includes(normalizedFile) ||
       unitForkIsolatedFileSet.has(normalizedFile) ||
       extensionForkIsolatedFileSet.has(normalizedFile) ||
       channelIsolatedFileSet.has(normalizedFile);
     if (options.unitMemoryIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("unit-memory-isolated");
-    }
-    if (options.extensionTimedIsolatedFiles?.includes(normalizedFile)) {
-      reasons.push("extensions-timed-heavy");
     }
     if (unitForkIsolatedFileSet.has(normalizedFile)) {
       reasons.push("unit-isolated-manifest");
@@ -105,15 +95,13 @@ export function loadTestCatalog() {
     let surface = "base";
     if (isUnitConfigTestFile(normalizedFile)) {
       surface = "unit";
-    } else if (contractTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
-      surface = "contracts";
     } else if (normalizedFile.endsWith(".live.test.ts")) {
       surface = "live";
     } else if (normalizedFile.endsWith(".e2e.test.ts")) {
       surface = "e2e";
     } else if (channelTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
       surface = "channels";
-    } else if (normalizedFile.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    } else if (normalizedFile.startsWith("extensions/")) {
       surface = "extensions";
     } else if (normalizedFile.startsWith("src/gateway/")) {
       surface = "gateway";
@@ -196,13 +184,4 @@ export function loadTestCatalog() {
   };
 }
 
-export const testSurfaces = [
-  "unit",
-  "extensions",
-  "channels",
-  "contracts",
-  "gateway",
-  "live",
-  "e2e",
-  "base",
-];
+export const testSurfaces = ["unit", "extensions", "channels", "gateway", "live", "e2e", "base"];

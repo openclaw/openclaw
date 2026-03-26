@@ -1,104 +1,94 @@
+import { resolveDiscordGroupRequireMention } from "../../../extensions/discord/api.js";
+import { resolveSlackGroupRequireMention } from "../../../extensions/slack/api.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizePluginChannelId,
+} from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { resolveWhatsAppGroupIntroHint } from "../../channels/plugins/whatsapp-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
-import { extractExplicitGroupId } from "./group-id.js";
 
-const WHATSAPP_GROUP_INTRO_HINT =
-  "WhatsApp IDs: SenderId is the participant JID (group participant id).";
-
-const CHANNEL_LABELS: Partial<Record<ChannelId, string>> = {
-  bluebubbles: "BlueBubbles",
-  discord: "Discord",
-  imessage: "iMessage",
-  line: "LINE",
-  signal: "Signal",
-  slack: "Slack",
-  telegram: "Telegram",
-  webchat: "WebChat",
-  whatsapp: "WhatsApp",
-};
-
-let groupsRuntimePromise: Promise<typeof import("./groups.runtime.js")> | null = null;
-
-function loadGroupsRuntime() {
-  groupsRuntimePromise ??= import("./groups.runtime.js");
-  return groupsRuntimePromise;
-}
-
-function resolveGroupId(raw: string | undefined | null): string | undefined {
+function extractGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = (raw ?? "").trim();
-  return extractExplicitGroupId(trimmed) ?? (trimmed || undefined);
+  if (!trimmed) {
+    return undefined;
+  }
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return parts.slice(2).join(":") || undefined;
+  }
+  if (
+    parts.length >= 2 &&
+    parts[0]?.toLowerCase() === "whatsapp" &&
+    trimmed.toLowerCase().includes("@g.us")
+  ) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
+    return parts.slice(1).join(":") || undefined;
+  }
+  return trimmed;
 }
 
-function resolveLooseChannelId(raw?: string | null): ChannelId | null {
+function resolveDockChannelId(raw?: string | null): ChannelId | null {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) {
     return null;
   }
-  return normalized as ChannelId;
-}
-
-async function resolveRuntimeChannelId(raw?: string | null): Promise<ChannelId | null> {
-  const normalized = resolveLooseChannelId(raw);
-  if (!normalized) {
-    return null;
-  }
-  const { getChannelPlugin, normalizeChannelId } = await loadGroupsRuntime();
   try {
-    if (getChannelPlugin(normalized)) {
-      return normalized;
+    if (getChannelPlugin(normalized as ChannelId)) {
+      return normalized as ChannelId;
     }
   } catch {
     // Plugin registry may not be initialized in shared/test contexts.
   }
   try {
-    return normalizeChannelId(raw) ?? normalized;
+    return normalizePluginChannelId(raw) ?? (normalized as ChannelId);
   } catch {
-    return normalized;
+    return normalized as ChannelId;
   }
 }
 
-async function resolveBuiltInRequireMentionFromConfig(params: {
+function resolveBuiltInRequireMentionFromConfig(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   groupChannel?: string;
   groupId?: string;
   groupSpace?: string;
   accountId?: string | null;
-}): Promise<boolean | undefined> {
-  const runtime = await loadGroupsRuntime();
+}): boolean | undefined {
   switch (params.channel) {
     case "discord":
-      return runtime.resolveDiscordGroupRequireMention(params);
+      return resolveDiscordGroupRequireMention(params);
     case "slack":
-      return runtime.resolveSlackGroupRequireMention(params);
+      return resolveSlackGroupRequireMention(params);
     default:
       return undefined;
   }
 }
 
-export async function resolveGroupRequireMention(params: {
+export function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
   groupResolution?: GroupKeyResolution;
-}): Promise<boolean> {
+}): boolean {
   const { cfg, ctx, groupResolution } = params;
   const rawChannel = groupResolution?.channel ?? ctx.Provider?.trim();
-  const channel = await resolveRuntimeChannelId(rawChannel);
+  const channel = resolveDockChannelId(rawChannel);
   if (!channel) {
     return true;
   }
-  const groupId = groupResolution?.id ?? resolveGroupId(ctx.From);
+  const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
   let requireMention: boolean | undefined;
-  const runtime = await loadGroupsRuntime();
   try {
-    requireMention = runtime.getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
+    requireMention = getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
       cfg,
       groupId,
       groupChannel,
@@ -111,7 +101,7 @@ export async function resolveGroupRequireMention(params: {
   if (typeof requireMention === "boolean") {
     return requireMention;
   }
-  const builtInRequireMention = await resolveBuiltInRequireMentionFromConfig({
+  const builtInRequireMention = resolveBuiltInRequireMentionFromConfig({
     cfg,
     channel,
     groupChannel,
@@ -134,6 +124,9 @@ export function defaultGroupActivation(requireMention: boolean): "always" | "men
   return !requireMention ? "always" : "mention";
 }
 
+/**
+ * Resolve a human-readable provider label from the raw provider string.
+ */
 function resolveProviderLabel(rawProvider: string | undefined): string {
   const providerKey = rawProvider?.trim().toLowerCase() ?? "";
   if (!providerKey) {
@@ -142,13 +135,20 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
   }
-  const providerId = resolveLooseChannelId(rawProvider?.trim());
+  const providerId = resolveDockChannelId(rawProvider?.trim());
   if (providerId) {
-    return CHANNEL_LABELS[providerId] ?? providerId;
+    return getChannelPlugin(providerId)?.meta.label ?? providerId;
   }
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
+/**
+ * Build a persistent group-chat context block that is always included in the
+ * system prompt for group-chat sessions (every turn, not just the first).
+ *
+ * Contains: group name, participants, and an explicit instruction to reply
+ * directly instead of using the message tool.
+ */
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
@@ -178,12 +178,25 @@ export function buildGroupIntro(params: {
 }): string {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const providerId = resolveLooseChannelId(params.sessionCtx.Provider?.trim());
+  const rawProvider = params.sessionCtx.Provider?.trim();
+  const providerId = resolveDockChannelId(rawProvider);
   const activationLine =
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const providerIdsLine = providerId === "whatsapp" ? WHATSAPP_GROUP_INTRO_HINT : undefined;
+  const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
+  const groupChannel =
+    params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
+  const groupSpace = params.sessionCtx.GroupSpace?.trim();
+  const providerIdsLine = providerId
+    ? (getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
+        cfg: params.cfg,
+        groupId,
+        groupChannel,
+        groupSpace,
+        accountId: params.sessionCtx.AccountId,
+      }) ?? (providerId === "whatsapp" ? resolveWhatsAppGroupIntroHint() : undefined))
+    : undefined;
   const silenceLine =
     activation === "always"
       ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`

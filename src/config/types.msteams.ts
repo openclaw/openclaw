@@ -87,8 +87,6 @@ export type MSTeamsConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
-  /** Enable progressive block-by-block message delivery instead of a single reply. */
-  blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -136,9 +134,3 @@ export type MSTeamsConfig = {
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
 };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    msteams?: MSTeamsConfig;
-  }
-}

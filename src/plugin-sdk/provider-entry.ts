@@ -1,4 +1,5 @@
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+import { buildSingleProviderApiKeyCatalog } from "../plugins/provider-catalog.js";
 import type { ProviderPlugin, ProviderPluginWizardSetup } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type {
@@ -6,7 +7,6 @@ import type {
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
-import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 

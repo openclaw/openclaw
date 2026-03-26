@@ -30,10 +30,3 @@ export function resolveWritableRenameTargetsForBridge<T extends { containerPath:
     ensureWritable,
   });
 }
-
-export function createWritableRenameTargetResolver<T extends { containerPath: string }>(
-  resolveTarget: (params: { filePath: string; cwd?: string }) => T,
-  ensureWritable: (target: T, action: string) => void,
-): (params: { from: string; to: string; cwd?: string }) => { from: T; to: T } {
-  return (params) => resolveWritableRenameTargetsForBridge(params, resolveTarget, ensureWritable);
-}

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveProviderCapabilitiesWithPlugin as resolveProviderCapabilitiesWithPluginRuntime } from "../plugins/provider-runtime.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { normalizeProviderId } from "./model-selection.js";
 
 export type ProviderCapabilities = {
   anthropicToolSchemaMode: "native" | "openai-functions";
@@ -34,6 +34,17 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   transcriptToolCallIdModelHints: [],
   geminiThoughtSignatureModelHints: [],
   dropThinkingBlockModelHints: [],
+};
+
+const CORE_PROVIDER_CAPABILITIES: Record<string, Partial<ProviderCapabilities>> = {
+  "anthropic-vertex": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
+  "amazon-bedrock": {
+    providerFamily: "anthropic",
+    dropThinkingBlockModelHints: ["claude"],
+  },
 };
 
 const PLUGIN_CAPABILITIES_FALLBACKS: Record<string, Partial<ProviderCapabilities>> = {
@@ -107,8 +118,8 @@ export function resolveProviderCapabilities(
     : undefined;
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
-    ...PLUGIN_CAPABILITIES_FALLBACKS[normalized],
-    ...pluginCapabilities,
+    ...CORE_PROVIDER_CAPABILITIES[normalized],
+    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
   };
 }
 

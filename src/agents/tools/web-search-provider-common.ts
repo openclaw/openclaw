@@ -30,7 +30,21 @@ type UnsupportedWebSearchFilterName =
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
-export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
+
+function getSharedSearchCache(): Map<string, CacheEntry<Record<string, unknown>>> {
+  const root = globalThis as Record<PropertyKey, unknown>;
+  const existing = root[SEARCH_CACHE_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, CacheEntry<Record<string, unknown>>>;
+  }
+  const next = new Map<string, CacheEntry<Record<string, unknown>>>();
+  root[SEARCH_CACHE_KEY] = next;
+  return next;
+}
+
+export const SEARCH_CACHE = getSharedSearchCache();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -86,7 +100,6 @@ export async function postTrustedWebToolsJson<T>(
     body: Record<string, unknown>;
     errorLabel: string;
     maxErrorBytes?: number;
-    extraHeaders?: Record<string, string>;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -97,7 +110,6 @@ export async function postTrustedWebToolsJson<T>(
       init: {
         method: "POST",
         headers: {
-          ...params.extraHeaders,
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",

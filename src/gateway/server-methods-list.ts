@@ -29,9 +29,6 @@ const BASE_METHODS = [
   "exec.approval.request",
   "exec.approval.waitDecision",
   "exec.approval.resolve",
-  "plugin.approval.request",
-  "plugin.approval.waitDecision",
-  "plugin.approval.resolve",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",
@@ -110,6 +107,7 @@ const BASE_METHODS = [
   "agent",
   "agent.identity.get",
   "agent.wait",
+  "browser.request",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
@@ -143,7 +141,5 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
-  "plugin.approval.requested",
-  "plugin.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

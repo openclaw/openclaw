@@ -122,13 +122,12 @@ export function registerControlUiAndPairingSuite(): void {
     ws: WebSocket;
     token?: string;
     password?: string;
-    client?: { id: string; version: string; platform: string; mode: string };
   }) => {
     const res = await connectReq(params.ws, {
       ...(params.token ? { token: params.token } : {}),
       ...(params.password ? { password: params.password } : {}),
       device: null,
-      client: { ...(params.client ?? CONTROL_UI_CLIENT) },
+      client: { ...CONTROL_UI_CLIENT },
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
@@ -201,9 +200,7 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: params.displayName,
       platform: params.platform,
     });
-    await approveDevicePairing(seeded.request.requestId, {
-      callerScopes: ["operator.admin"],
-    });
+    await approveDevicePairing(seeded.request.requestId);
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
@@ -294,24 +291,6 @@ export function registerControlUiAndPairingSuite(): void {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
     await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
-    ws.close();
-    await server.close();
-    restoreGatewayToken(prevToken);
-  });
-
-  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
-    testState.gatewayControlUi = { allowInsecureAuth: true };
-    const { server, ws, prevToken } = await startServerWithClient("secret");
-    await connectControlUiWithoutDeviceAndExpectOk({
-      ws,
-      token: "secret",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.TUI,
-        version: "1.0.0",
-        platform: "darwin",
-        mode: GATEWAY_CLIENT_MODES.UI,
-      },
-    });
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -763,9 +742,7 @@ export function registerControlUiAndPairingSuite(): void {
     if (!pendingForTestDevice[0]) {
       throw new Error("expected pending pairing request");
     }
-    await approveDevicePairing(pendingForTestDevice[0].requestId, {
-      callerScopes: pendingForTestDevice[0].scopes ?? ["operator.admin"],
-    });
+    await approveDevicePairing(pendingForTestDevice[0].requestId);
 
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
@@ -847,9 +824,7 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: "legacy-test",
       platform: "test",
     });
-    await approveDevicePairing(pending.request.requestId, {
-      callerScopes: pending.request.scopes ?? ["operator.admin"],
-    });
+    await approveDevicePairing(pending.request.requestId);
 
     await stripPairedMetadataRolesAndScopes(deviceId);
 

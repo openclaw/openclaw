@@ -1,12 +1,12 @@
 import {
-  buildDinferenceModelDefinition,
-  DINFERENCE_BASE_URL,
-  DINFERENCE_MODEL_CATALOG,
-} from "openclaw/plugin-sdk/provider-models";
-import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import {
+  buildDinferenceModelDefinition,
+  DINFERENCE_BASE_URL,
+  DINFERENCE_MODEL_CATALOG,
+} from "./models.ts";
 
 export const DINFERENCE_DEFAULT_MODEL_ID = "glm-5";
 export const DINFERENCE_DEFAULT_MODEL_REF = `dinference/${DINFERENCE_DEFAULT_MODEL_ID}`;

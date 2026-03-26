@@ -3,16 +3,23 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorRuntime, mockDoctorConfigSnapshot } from "./doctor.e2e-harness.js";
-import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
+
+const terminalNoteMock = vi.fn();
+
+vi.mock("../terminal/note.js", () => ({
+  note: (...args: unknown[]) => terminalNoteMock(...args),
+}));
+
+vi.doUnmock("./doctor-sandbox.js");
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
   beforeEach(async () => {
-    doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["./doctor-sandbox.js"],
-    });
+    vi.resetModules();
+    ({ doctorCommand } = await import("./doctor.js"));
+    terminalNoteMock.mockClear();
   });
 
   it("warns when per-agent sandbox docker/browser/prune overrides are ignored under shared scope", async () => {

@@ -7,6 +7,16 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+import {
+  buildModelsProviderData,
+  createChannelReplyPipeline,
+  isRequestBodyLimitError,
+  logTypingFailure,
+  readRequestBodyWithLimit,
+  type OpenClawConfig,
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -27,16 +37,6 @@ import {
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
-import {
-  buildModelsProviderData,
-  createChannelReplyPipeline,
-  isRequestBodyLimitError,
-  logTypingFailure,
-  readRequestBodyWithLimit,
-  type OpenClawConfig,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import {
   parseSlashCommandPayload,

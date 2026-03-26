@@ -1,3 +1,4 @@
+import { buildBrowseProvidersButton } from "../../../extensions/telegram/api.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
@@ -12,7 +13,6 @@ import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
-import { buildBrowseProvidersButton } from "./commands-models.telegram.js";
 import {
   formatAuthLabel,
   type ModelAuthDetailMode,

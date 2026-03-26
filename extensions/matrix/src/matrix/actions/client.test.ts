@@ -41,15 +41,11 @@ vi.mock("../send.js", () => ({
   resolveMatrixRoomId: (...args: unknown[]) => resolveMatrixRoomIdMock(...args),
 }));
 
-let withResolvedActionClient: typeof import("./client.js").withResolvedActionClient;
-let withResolvedRoomAction: typeof import("./client.js").withResolvedRoomAction;
-let withStartedActionClient: typeof import("./client.js").withStartedActionClient;
+const { withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
+  await import("./client.js");
 
 describe("action client helpers", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
-      await import("./client.js"));
+  beforeEach(() => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
       .mockReset()

@@ -6,14 +6,8 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 
-type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
-
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
-const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
-  vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
-);
+const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() => vi.fn());
 const deliverReplies = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -38,7 +32,6 @@ const buildModelsProviderData = vi.hoisted(() =>
     byProvider: new Map<string, Set<string>>(),
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
-    modelNames: new Map<string, string>(),
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
@@ -2119,7 +2112,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onSkip?.({ text: "" }, { reason: "empty", kind: "final" });
+      dispatcherOptions.onSkip?.({ text: "" }, { reason: "no_reply", kind: "final" });
       return { queuedFinal: false };
     });
     deliverReplies.mockResolvedValueOnce({ delivered: true });
@@ -2145,7 +2138,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2173,7 +2166,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
@@ -2237,7 +2230,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       try {
         await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       } catch (err) {
-        dispatcherOptions.onError?.(err, { kind: "final" });
+        dispatcherOptions.onError(err, { kind: "final" });
       }
       return { queuedFinal: false };
     });
