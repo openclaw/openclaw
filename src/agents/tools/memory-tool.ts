@@ -177,6 +177,31 @@ export function createMemoryGetTool(options: {
         const relPath = readStringParam(params, "path", { required: true });
         const from = readNumberParam(params, "from", { integer: true });
         const lines = readNumberParam(params, "lines", { integer: true });
+
+        // Check if agentmemo provider is configured — it handles readFile remotely
+        const memorySearch = resolveMemorySearchConfig(cfg, agentId);
+        if (memorySearch?.provider === "agentmemo") {
+          const memory = await getMemoryManagerContextWithPurpose({
+            cfg,
+            agentId,
+            purpose: "status",
+          });
+          if ("error" in memory) {
+            return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
+          }
+          try {
+            const result = await memory.manager.readFile({
+              relPath,
+              from: from ?? undefined,
+              lines: lines ?? undefined,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+          }
+        }
+
         const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {

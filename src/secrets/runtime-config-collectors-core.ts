@@ -97,6 +97,7 @@ function collectAgentMemorySearchAssignments(params: {
 
   const list = Array.isArray(agents.list) ? agents.list : [];
   let hasEnabledAgentWithoutOverride = false;
+  let hasEnabledAgentWithoutAgentmemoOverride = false;
   for (const rawAgent of list) {
     if (!isRecord(rawAgent)) {
       continue;
@@ -110,12 +111,14 @@ function collectAgentMemorySearchAssignments(params: {
     }
     if (!memorySearch || !Object.prototype.hasOwnProperty.call(memorySearch, "remote")) {
       hasEnabledAgentWithoutOverride = true;
-      continue;
     }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
+    const remote = isRecord(memorySearch?.remote) ? memorySearch.remote : undefined;
     if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
       hasEnabledAgentWithoutOverride = true;
-      continue;
+    }
+    const agentmemo = isRecord(memorySearch?.agentmemo) ? memorySearch.agentmemo : undefined;
+    if (!agentmemo || !Object.prototype.hasOwnProperty.call(agentmemo, "apiKey")) {
+      hasEnabledAgentWithoutAgentmemoOverride = true;
     }
   }
 
@@ -145,8 +148,14 @@ function collectAgentMemorySearchAssignments(params: {
       expected: "string",
       defaults: params.defaults,
       context: params.context,
-      active: defaultsEnabled && defaultsMemorySearch.provider === "agentmemo",
-      inactiveReason: 'memorySearch.provider is not "agentmemo".',
+      active:
+        defaultsEnabled &&
+        defaultsMemorySearch.provider === "agentmemo" &&
+        (hasEnabledAgentWithoutAgentmemoOverride || list.length === 0),
+      inactiveReason:
+        defaultsMemorySearch.provider !== "agentmemo"
+          ? 'memorySearch.provider is not "agentmemo".'
+          : "all enabled agents override memorySearch.agentmemo.apiKey.",
       apply: (value) => {
         agentmemo.apiKey = value;
       },
@@ -179,13 +188,14 @@ function collectAgentMemorySearchAssignments(params: {
     }
     const agentmemoOverride = isRecord(memorySearch.agentmemo) ? memorySearch.agentmemo : undefined;
     if (agentmemoOverride && Object.prototype.hasOwnProperty.call(agentmemoOverride, "apiKey")) {
+      const effectiveProvider = memorySearch.provider ?? defaultsMemorySearch?.provider;
       collectSecretInputAssignment({
         value: agentmemoOverride.apiKey,
         path: `agents.list.${index}.memorySearch.agentmemo.apiKey`,
         expected: "string",
         defaults: params.defaults,
         context: params.context,
-        active: enabled && memorySearch.provider === "agentmemo",
+        active: enabled && effectiveProvider === "agentmemo",
         inactiveReason: 'agent memorySearch.provider is not "agentmemo".',
         apply: (value) => {
           agentmemoOverride.apiKey = value;
