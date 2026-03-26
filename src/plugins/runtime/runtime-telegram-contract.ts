@@ -129,3 +129,8 @@ export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../../extensions/telegram/api.js";
+export { resolveTelegramAutoThreadId } from "../../../extensions/telegram/src/action-threading.js";
+export {
+  buildTelegramExecApprovalPendingPayload,
+  shouldSuppressTelegramExecApprovalForwardingFallback,
+} from "../../../extensions/telegram/src/exec-approval-forwarding.js";

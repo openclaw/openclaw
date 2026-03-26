@@ -27,6 +27,14 @@ let buildFileEntry: MemoryInternalModule["buildFileEntry"];
 let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
+async function ensureProviderInitialized(manager: MemoryIndexManager): Promise<void> {
+  await (
+    manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
+    }
+  ).ensureProviderInitialized();
+}
+
 describe("memory vector dedupe", () => {
   let workspaceDir: string;
   let indexPath: string;
@@ -79,7 +87,7 @@ describe("memory vector dedupe", () => {
     } as OpenClawConfig;
 
     manager = await createMemoryManagerOrThrow(cfg);
-    await manager.probeEmbeddingAvailability();
+    await ensureProviderInitialized(manager);
 
     const db = (
       manager as unknown as {
