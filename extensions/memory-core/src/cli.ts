@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { formatDocsLink, formatHelpExamples, theme } from "openclaw/plugin-sdk/memory-core";
+import { formatDocsLink, formatHelpExamples, theme } from "./api.js";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 
 type MemoryCliRuntime = typeof import("./cli.runtime.js");
