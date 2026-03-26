@@ -351,16 +351,20 @@ export async function getReplyFromConfig(
       // First, check if the channel model matches the configured imageModel or its fallbacks
       const imageModelConfig = cfg.agents?.defaults?.imageModel;
       const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
-      if (imageModelPrimary) {
+      const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+      // Process if either primary or fallbacks are configured (handles fallback-only configs)
+      if (imageModelPrimary || fallbacks.length > 0) {
         const imageModelKeys = new Set<string>();
 
-        // Resolve the image model's primary to get its provider for fallback resolution.
+        // Determine the provider for fallback resolution:
+        // Use the image model's primary if available, otherwise use the first fallback.
         // Providerless fallbacks should resolve against the image model's provider,
         // not the agent's default provider (to handle mixed-provider configs correctly).
         let imageModelDefaultProvider = defaultProvider;
-        if (imageModelPrimary && channelAliasIndex && defaultProvider) {
+        const firstModel = imageModelPrimary ?? fallbacks[0];
+        if (firstModel && channelAliasIndex && defaultProvider) {
           const resolved = resolveModelRefFromString({
-            raw: imageModelPrimary.trim(),
+            raw: firstModel.trim(),
             defaultProvider,
             aliasIndex: channelAliasIndex,
           });
@@ -380,8 +384,9 @@ export async function getReplyFromConfig(
             imageModelKeys.add(modelKey(resolved.ref.provider, resolved.ref.model));
           }
         };
-        addResolvedModelKey(imageModelPrimary);
-        const fallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+        if (imageModelPrimary) {
+          addResolvedModelKey(imageModelPrimary);
+        }
         for (const fb of fallbacks) {
           if (fb?.trim()) {
             addResolvedModelKey(fb);
