@@ -88,6 +88,14 @@ export async function runDiscordGatewayLifecycle(params: {
     },
   });
 
+  // Suppress the "Max reconnect attempts (0) reached" error that Carbon emits
+  // asynchronously after we call gateway.disconnect() with maxAttempts: 0.
+  // Using a persistent listener (removed in the finally block) is safer than
+  // `once` because `once` can be consumed by an unrelated error that fires
+  // first, leaving the reconnect error unhandled and crashing the process.
+  const suppressShutdownError = () => {};
+  let suppressingShutdownErrors = false;
+
   const onAbort = () => {
     lifecycleStopping = true;
     reconnectStallWatchdog.disarm();
@@ -96,7 +104,12 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
-    gatewayEmitter?.once("error", () => {});
+    // Arm the persistent suppression listener before setting maxAttempts: 0
+    // so we never miss the async error regardless of other concurrent errors.
+    if (!suppressingShutdownErrors) {
+      suppressingShutdownErrors = true;
+      gatewayEmitter?.on("error", suppressShutdownError);
+    }
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
@@ -334,6 +347,11 @@ export async function runDiscordGatewayLifecycle(params: {
     reconnectStallWatchdog.stop();
     clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    // Clean up the shutdown-error suppression listener if it was armed.
+    if (suppressingShutdownErrors) {
+      gatewayEmitter?.removeListener("error", suppressShutdownError);
+      suppressingShutdownErrors = false;
+    }
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
       await params.voiceManager.destroy();

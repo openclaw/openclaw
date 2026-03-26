@@ -411,6 +411,89 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("suppresses async gateway errors after onAbort without crashing (#55116)", async () => {
+    // Regression test for: https://github.com/openclaw/openclaw/issues/55116
+    // onAbort sets maxAttempts: 0 and calls disconnect(). Carbon then emits
+    // "Max reconnect attempts (0) reached" asynchronously via the close event.
+    // The old code used `once("error", noop)` which could be consumed by an
+    // unrelated concurrent error, leaving the reconnect error unhandled.
+    // The fix uses a persistent `on("error", noop)` removed in the finally block.
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: false,
+      options: {} as Record<string, unknown>,
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    // waitForDiscordGatewayStop resolves immediately (lifecycle exits cleanly).
+    waitForDiscordGatewayStopMock.mockResolvedValueOnce(undefined);
+
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    // Simulate onAbort being called manually after lifecycle finishes
+    // to verify the suppression listener is cleaned up.
+    // After the finally block runs, the emitter must have zero error listeners.
+    expect(emitter.listenerCount("error")).toBe(0);
+  });
+
+  it("suppression listener handles multiple concurrent errors after abort (#55116)", async () => {
+    // The old `once` listener would be consumed by the first error, leaving
+    // subsequent errors (like the actual reconnect error) unhandled.
+    // We use forceStop to drive the lifecycle end while emitting errors
+    // after onAbort arms the suppression listener.
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: false,
+      options: {} as Record<string, unknown>,
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+
+    // Mock: hold the lifecycle open until forceStop/abort is triggered
+    waitForDiscordGatewayStopMock.mockImplementationOnce(
+      (waitParams: WaitForDiscordGatewayStopParams) =>
+        new Promise<void>((resolve, reject) => {
+          waitParams.registerForceStop?.((err) => reject(err));
+          // Resolve on abort so the lifecycle can settle cleanly
+          abortController.signal.addEventListener("abort", () => resolve(), { once: true });
+          if (abortController.signal.aborted) {
+            resolve();
+          }
+        }),
+    );
+
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    // Yield to let the lifecycle reach waitForDiscordGatewayStop
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Abort triggers onAbort, which arms suppressingShutdownErrors listener
+    abortController.abort();
+
+    // After abort, onAbort has run synchronously (it's a sync abort listener).
+    // Now simulate Carbon emitting two errors — both must be suppressed.
+    emitter.emit("error", new Error("Some other gateway error"));
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005"));
+
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+
+    // After lifecycle finally block, suppression listener must be removed.
+    expect(emitter.listenerCount("error")).toBe(0);
+  });
+
   it("does not push connected: true when abortSignal is already aborted", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const emitter = new EventEmitter();
