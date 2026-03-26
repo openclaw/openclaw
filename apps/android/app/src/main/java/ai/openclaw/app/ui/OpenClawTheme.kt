@@ -29,8 +29,10 @@ fun OpenClawTheme(content: @Composable () -> Unit) {
   if (!view.isInEditMode) {
     SideEffect {
       val window = (view.context as Activity).window
-      WindowCompat.getInsetsController(window, window.decorView)
-        .isAppearanceLightStatusBars = !isDark
+      WindowCompat.getInsetsController(window, window.decorView).apply {
+        isAppearanceLightStatusBars = !isDark
+        isAppearanceLightNavigationBars = !isDark
+      }
     }
   }
 
