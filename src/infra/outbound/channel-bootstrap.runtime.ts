@@ -5,6 +5,7 @@ import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginChannelRegistryVersion,
+  getActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 
@@ -23,8 +24,18 @@ export function bootstrapOutboundChannelPlugin(params: {
     return;
   }
 
-  const activeChannelRegistry = getActivePluginChannelRegistry();
-  const activeHasRequestedChannel = activeChannelRegistry?.channels?.some(
+  // Prefer the pinned channel registry when available so subagent registry
+  // swaps do not trigger unnecessary bootstrap for already-pinned channels.
+  const channelRegistry = getActivePluginChannelRegistry();
+  const pinnedHasRequestedChannel = channelRegistry?.channels?.some(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  if (pinnedHasRequestedChannel) {
+    return;
+  }
+
+  const activeRegistry = getActivePluginRegistry();
+  const activeHasRequestedChannel = activeRegistry?.channels?.some(
     (entry) => entry?.plugin?.id === params.channel,
   );
   if (activeHasRequestedChannel) {
