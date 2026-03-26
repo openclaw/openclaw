@@ -87,6 +87,11 @@ ntfy_topic = sys.argv[3]
 phone_number = sys.argv[4]
 
 
+def systemd_quote_arg(value: str) -> str:
+    escaped = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def replace_required(content: str, old: str, new: str, label: str) -> str:
     updated = content.replace(old, new)
     if updated == content:
@@ -99,7 +104,7 @@ content = service_path.read_text()
 content = replace_required(
     content,
     "ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh",
-    f"ExecStart={auth_monitor_path}",
+    f"ExecStart={systemd_quote_arg(auth_monitor_path)}",
     "ExecStart",
 )
 if ntfy_topic:
