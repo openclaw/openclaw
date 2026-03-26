@@ -154,6 +154,7 @@ async function touchSessionStore(params: {
       store,
     });
     store[primaryKey] = {
+      ...store[primaryKey],
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
