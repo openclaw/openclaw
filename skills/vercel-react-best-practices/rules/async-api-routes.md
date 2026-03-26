@@ -13,10 +13,10 @@ In API routes and Server Actions, start independent operations immediately, even
 
 ```typescript
 export async function GET(request: Request) {
-  const session = await auth()
-  const config = await fetchConfig()
-  const data = await fetchData(session.user.id)
-  return Response.json({ data, config })
+  const session = await auth();
+  const config = await fetchConfig();
+  const data = await fetchData(session.user.id);
+  return Response.json({ data, config });
 }
 ```
 
@@ -24,14 +24,11 @@ export async function GET(request: Request) {
 
 ```typescript
 export async function GET(request: Request) {
-  const sessionPromise = auth()
-  const configPromise = fetchConfig()
-  const session = await sessionPromise
-  const [config, data] = await Promise.all([
-    configPromise,
-    fetchData(session.user.id)
-  ])
-  return Response.json({ data, config })
+  const sessionPromise = auth();
+  const configPromise = fetchConfig();
+  const session = await sessionPromise;
+  const [config, data] = await Promise.all([configPromise, fetchData(session.user.id)]);
+  return Response.json({ data, config });
 }
 ```
 

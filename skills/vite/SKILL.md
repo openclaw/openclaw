@@ -20,23 +20,23 @@ Vite is a next-generation frontend build tool with fast dev server (native ESM +
 
 ## Core
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
-| Configuration | `vite.config.ts`, `defineConfig`, conditional configs, `loadEnv` | [core-config](references/core-config.md) |
-| Features | `import.meta.glob`, asset queries (`?raw`, `?url`), `import.meta.env`, HMR API | [core-features](references/core-features.md) |
-| Plugin API | Vite-specific hooks, virtual modules, plugin ordering | [core-plugin-api](references/core-plugin-api.md) |
+| Topic         | Description                                                                    | Reference                                        |
+| ------------- | ------------------------------------------------------------------------------ | ------------------------------------------------ |
+| Configuration | `vite.config.ts`, `defineConfig`, conditional configs, `loadEnv`               | [core-config](references/core-config.md)         |
+| Features      | `import.meta.glob`, asset queries (`?raw`, `?url`), `import.meta.env`, HMR API | [core-features](references/core-features.md)     |
+| Plugin API    | Vite-specific hooks, virtual modules, plugin ordering                          | [core-plugin-api](references/core-plugin-api.md) |
 
 ## Build & SSR
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
+| Topic       | Description                                                        | Reference                                    |
+| ----------- | ------------------------------------------------------------------ | -------------------------------------------- |
 | Build & SSR | Library mode, SSR middleware mode, `ssrLoadModule`, JavaScript API | [build-and-ssr](references/build-and-ssr.md) |
 
 ## Advanced
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
-| Environment API | Vite 6+ multi-environment support, custom runtimes | [environment-api](references/environment-api.md) |
+| Topic              | Description                                                         | Reference                                              |
+| ------------------ | ------------------------------------------------------------------- | ------------------------------------------------------ |
+| Environment API    | Vite 6+ multi-environment support, custom runtimes                  | [environment-api](references/environment-api.md)       |
 | Rolldown Migration | Vite 8 changes: Rolldown bundler, Oxc transformer, config migration | [rolldown-migration](references/rolldown-migration.md) |
 
 ## Quick Reference
@@ -53,14 +53,14 @@ vite build --ssr  # SSR build
 ### Common Config
 
 ```ts
-import { defineConfig } from 'vite'
+import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [],
-  resolve: { alias: { '@': '/src' } },
-  server: { port: 3000, proxy: { '/api': 'http://localhost:8080' } },
-  build: { target: 'esnext', outDir: 'dist' },
-})
+  resolve: { alias: { "@": "/src" } },
+  server: { port: 3000, proxy: { "/api": "http://localhost:8080" } },
+  build: { target: "esnext", outDir: "dist" },
+});
 ```
 
 ### Official Plugins

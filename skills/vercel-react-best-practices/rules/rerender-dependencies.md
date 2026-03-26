@@ -13,16 +13,16 @@ Specify primitive dependencies instead of objects to minimize effect re-runs.
 
 ```tsx
 useEffect(() => {
-  console.log(user.id)
-}, [user])
+  console.log(user.id);
+}, [user]);
 ```
 
 **Correct (re-runs only when id changes):**
 
 ```tsx
 useEffect(() => {
-  console.log(user.id)
-}, [user.id])
+  console.log(user.id);
+}, [user.id]);
 ```
 
 **For derived state, compute outside effect:**
@@ -31,15 +31,15 @@ useEffect(() => {
 // Incorrect: runs on width=767, 766, 765...
 useEffect(() => {
   if (width < 768) {
-    enableMobileMode()
+    enableMobileMode();
   }
-}, [width])
+}, [width]);
 
 // Correct: runs only on boolean transition
-const isMobile = width < 768
+const isMobile = width < 768;
 useEffect(() => {
   if (isMobile) {
-    enableMobileMode()
+    enableMobileMode();
   }
-}, [isMobile])
+}, [isMobile]);
 ```

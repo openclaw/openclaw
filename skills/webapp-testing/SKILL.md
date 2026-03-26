@@ -9,6 +9,7 @@ license: Complete terms in LICENSE.txt
 To test local web applications, write native Python Playwright scripts.
 
 **Helper Scripts Available**:
+
 - `scripts/with_server.py` - Manages server lifecycle (supports multiple servers)
 
 **Always run scripts with `--help` first** to see usage. DO NOT read the source until you try running the script first and find that a customized solution is abslutely necessary. These scripts can be very large and thus pollute your context window. They exist to be called directly as black-box scripts rather than ingested into your context window.
@@ -37,11 +38,13 @@ User task → Is it static HTML?
 To start a server, run `--help` first, then use the helper:
 
 **Single server:**
+
 ```bash
 python scripts/with_server.py --server "npm run dev" --port 5173 -- python your_automation.py
 ```
 
 **Multiple servers (e.g., backend + frontend):**
+
 ```bash
 python scripts/with_server.py \
   --server "cd backend && python server.py" --port 3000 \
@@ -50,6 +53,7 @@ python scripts/with_server.py \
 ```
 
 To create an automation script, include only Playwright logic (servers are managed automatically):
+
 ```python
 from playwright.sync_api import sync_playwright
 
@@ -65,6 +69,7 @@ with sync_playwright() as p:
 ## Reconnaissance-Then-Action Pattern
 
 1. **Inspect rendered DOM**:
+
    ```python
    page.screenshot(path='/tmp/inspect.png', full_page=True)
    content = page.content()
@@ -82,7 +87,7 @@ with sync_playwright() as p:
 
 ## Best Practices
 
-- **Use bundled scripts as black boxes** - To accomplish a task, consider whether one of the scripts available in `scripts/` can help. These scripts handle common, complex workflows reliably without cluttering the context window. Use `--help` to see usage, then invoke directly. 
+- **Use bundled scripts as black boxes** - To accomplish a task, consider whether one of the scripts available in `scripts/` can help. These scripts handle common, complex workflows reliably without cluttering the context window. Use `--help` to see usage, then invoke directly.
 - Use `sync_playwright()` for synchronous scripts
 - Always close the browser when done
 - Use descriptive selectors: `text=`, `role=`, CSS selectors, or IDs

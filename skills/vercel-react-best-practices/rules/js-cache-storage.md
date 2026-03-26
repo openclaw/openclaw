@@ -13,7 +13,7 @@ tags: javascript, localStorage, storage, caching, performance
 
 ```typescript
 function getTheme() {
-  return localStorage.getItem('theme') ?? 'light'
+  return localStorage.getItem("theme") ?? "light";
 }
 // Called 10 times = 10 storage reads
 ```
@@ -21,18 +21,18 @@ function getTheme() {
 **Correct (Map cache):**
 
 ```typescript
-const storageCache = new Map<string, string | null>()
+const storageCache = new Map<string, string | null>();
 
 function getLocalStorage(key: string) {
   if (!storageCache.has(key)) {
-    storageCache.set(key, localStorage.getItem(key))
+    storageCache.set(key, localStorage.getItem(key));
   }
-  return storageCache.get(key)
+  return storageCache.get(key);
 }
 
 function setLocalStorage(key: string, value: string) {
-  localStorage.setItem(key, value)
-  storageCache.set(key, value)  // keep cache in sync
+  localStorage.setItem(key, value);
+  storageCache.set(key, value); // keep cache in sync
 }
 ```
 
@@ -41,15 +41,13 @@ Use a Map (not a hook) so it works everywhere: utilities, event handlers, not ju
 **Cookie caching:**
 
 ```typescript
-let cookieCache: Record<string, string> | null = null
+let cookieCache: Record<string, string> | null = null;
 
 function getCookie(name: string) {
   if (!cookieCache) {
-    cookieCache = Object.fromEntries(
-      document.cookie.split('; ').map(c => c.split('='))
-    )
+    cookieCache = Object.fromEntries(document.cookie.split("; ").map((c) => c.split("=")));
   }
-  return cookieCache[name]
+  return cookieCache[name];
 }
 ```
 
@@ -58,13 +56,13 @@ function getCookie(name: string) {
 If storage can change externally (another tab, server-set cookies), invalidate cache:
 
 ```typescript
-window.addEventListener('storage', (e) => {
-  if (e.key) storageCache.delete(e.key)
-})
+window.addEventListener("storage", (e) => {
+  if (e.key) storageCache.delete(e.key);
+});
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
-    storageCache.clear()
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    storageCache.clear();
   }
-})
+});
 ```

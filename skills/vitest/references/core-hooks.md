@@ -8,27 +8,27 @@ description: beforeEach, afterEach, beforeAll, afterAll, and around hooks
 ## Basic Hooks
 
 ```ts
-import { afterAll, afterEach, beforeAll, beforeEach, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, test } from "vitest";
 
 beforeAll(async () => {
   // Runs once before all tests in file/suite
-  await setupDatabase()
-})
+  await setupDatabase();
+});
 
 afterAll(async () => {
   // Runs once after all tests in file/suite
-  await teardownDatabase()
-})
+  await teardownDatabase();
+});
 
 beforeEach(async () => {
   // Runs before each test
-  await clearTestData()
-})
+  await clearTestData();
+});
 
 afterEach(async () => {
   // Runs after each test
-  await cleanupMocks()
-})
+  await cleanupMocks();
+});
 ```
 
 ## Cleanup Return Pattern
@@ -37,20 +37,20 @@ Return cleanup function from `before*` hooks:
 
 ```ts
 beforeAll(async () => {
-  const server = await startServer()
-  
+  const server = await startServer();
+
   // Returned function runs as afterAll
   return async () => {
-    await server.close()
-  }
-})
+    await server.close();
+  };
+});
 
 beforeEach(async () => {
-  const connection = await connect()
-  
+  const connection = await connect();
+
   // Runs as afterEach
-  return () => connection.close()
-})
+  return () => connection.close();
+});
 ```
 
 ## Scoped Hooks
@@ -58,25 +58,25 @@ beforeEach(async () => {
 Hooks apply to current suite and nested suites:
 
 ```ts
-describe('outer', () => {
-  beforeEach(() => console.log('outer before'))
-  
-  test('test 1', () => {}) // outer before → test
-  
-  describe('inner', () => {
-    beforeEach(() => console.log('inner before'))
-    
-    test('test 2', () => {}) // outer before → inner before → test
-  })
-})
+describe("outer", () => {
+  beforeEach(() => console.log("outer before"));
+
+  test("test 1", () => {}); // outer before → test
+
+  describe("inner", () => {
+    beforeEach(() => console.log("inner before"));
+
+    test("test 2", () => {}); // outer before → inner before → test
+  });
+});
 ```
 
 ## Hook Timeout
 
 ```ts
 beforeAll(async () => {
-  await slowSetup()
-}, 30_000) // 30 second timeout
+  await slowSetup();
+}, 30_000); // 30 second timeout
 ```
 
 ## Around Hooks
@@ -84,19 +84,19 @@ beforeAll(async () => {
 Wrap tests with setup/teardown context:
 
 ```ts
-import { aroundEach, test } from 'vitest'
+import { aroundEach, test } from "vitest";
 
 // Wrap each test in database transaction
 aroundEach(async (runTest) => {
-  await db.beginTransaction()
-  await runTest() // Must be called!
-  await db.rollback()
-})
+  await db.beginTransaction();
+  await runTest(); // Must be called!
+  await db.rollback();
+});
 
-test('insert user', async () => {
-  await db.insert({ name: 'Alice' })
+test("insert user", async () => {
+  await db.insert({ name: "Alice" });
   // Automatically rolled back after test
-})
+});
 ```
 
 ### aroundAll
@@ -104,13 +104,13 @@ test('insert user', async () => {
 Wrap entire suite:
 
 ```ts
-import { aroundAll, test } from 'vitest'
+import { aroundAll, test } from "vitest";
 
 aroundAll(async (runSuite) => {
-  console.log('before all tests')
-  await runSuite() // Must be called!
-  console.log('after all tests')
-})
+  console.log("before all tests");
+  await runSuite(); // Must be called!
+  console.log("after all tests");
+});
 ```
 
 ### Multiple Around Hooks
@@ -119,16 +119,16 @@ Nested like onion layers:
 
 ```ts
 aroundEach(async (runTest) => {
-  console.log('outer before')
-  await runTest()
-  console.log('outer after')
-})
+  console.log("outer before");
+  await runTest();
+  console.log("outer after");
+});
 
 aroundEach(async (runTest) => {
-  console.log('inner before')
-  await runTest()
-  console.log('inner after')
-})
+  console.log("inner before");
+  await runTest();
+  console.log("inner after");
+});
 
 // Order: outer before → inner before → test → inner after → outer after
 ```
@@ -138,41 +138,41 @@ aroundEach(async (runTest) => {
 Inside test body:
 
 ```ts
-import { onTestFailed, onTestFinished, test } from 'vitest'
+import { onTestFailed, onTestFinished, test } from "vitest";
 
-test('with cleanup', () => {
-  const db = connect()
-  
+test("with cleanup", () => {
+  const db = connect();
+
   // Runs after test finishes (pass or fail)
-  onTestFinished(() => db.close())
-  
+  onTestFinished(() => db.close());
+
   // Only runs if test fails
   onTestFailed(({ task }) => {
-    console.log('Failed:', task.result?.errors)
-  })
-  
-  db.query('SELECT * FROM users')
-})
+    console.log("Failed:", task.result?.errors);
+  });
+
+  db.query("SELECT * FROM users");
+});
 ```
 
 ### Reusable Cleanup Pattern
 
 ```ts
 function useTestDb() {
-  const db = connect()
-  onTestFinished(() => db.close())
-  return db
+  const db = connect();
+  onTestFinished(() => db.close());
+  return db;
 }
 
-test('query users', () => {
-  const db = useTestDb()
-  expect(db.query('SELECT * FROM users')).toBeDefined()
-})
+test("query users", () => {
+  const db = useTestDb();
+  expect(db.query("SELECT * FROM users")).toBeDefined();
+});
 
-test('query orders', () => {
-  const db = useTestDb() // Fresh connection, auto-closed
-  expect(db.query('SELECT * FROM orders')).toBeDefined()
-})
+test("query orders", () => {
+  const db = useTestDb(); // Fresh connection, auto-closed
+  expect(db.query("SELECT * FROM orders")).toBeDefined();
+});
 ```
 
 ## Concurrent Test Hooks
@@ -180,10 +180,10 @@ test('query orders', () => {
 For concurrent tests, use context's hooks:
 
 ```ts
-test.concurrent('concurrent', ({ onTestFinished }) => {
-  const resource = allocate()
-  onTestFinished(() => resource.release())
-})
+test.concurrent("concurrent", ({ onTestFinished }) => {
+  const resource = allocate();
+  onTestFinished(() => resource.release());
+});
 ```
 
 ## Extended Test Hooks
@@ -193,25 +193,26 @@ With `test.extend`, hooks are type-aware:
 ```ts
 const test = base.extend<{ db: Database }>({
   db: async ({}, use) => {
-    const db = await createDb()
-    await use(db)
-    await db.close()
+    const db = await createDb();
+    await use(db);
+    await db.close();
   },
-})
+});
 
 // These hooks know about `db` fixture
 test.beforeEach(({ db }) => {
-  db.seed()
-})
+  db.seed();
+});
 
 test.afterEach(({ db }) => {
-  db.clear()
-})
+  db.clear();
+});
 ```
 
 ## Hook Execution Order
 
 Default order (stack):
+
 1. `beforeAll` (in order)
 2. `beforeEach` (in order)
 3. Test
@@ -224,10 +225,10 @@ Configure with `sequence.hooks`:
 defineConfig({
   test: {
     sequence: {
-      hooks: 'list', // 'stack' (default), 'list', 'parallel'
+      hooks: "list", // 'stack' (default), 'list', 'parallel'
     },
   },
-})
+});
 ```
 
 ## Key Points
@@ -238,7 +239,7 @@ defineConfig({
 - `onTestFinished` always runs, even if test fails
 - Use context hooks for concurrent tests
 
-<!-- 
+<!--
 Source references:
 - https://vitest.dev/api/hooks.html
 -->

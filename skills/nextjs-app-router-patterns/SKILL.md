@@ -426,10 +426,7 @@ export async function POST(request: NextRequest) {
 }
 
 // app/api/products/[id]/route.ts
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const product = await db.product.findUnique({ where: { id } });
 

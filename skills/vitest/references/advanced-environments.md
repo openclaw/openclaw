@@ -18,16 +18,16 @@ description: Configure environments like jsdom, happy-dom for browser APIs
 // vitest.config.ts
 defineConfig({
   test: {
-    environment: 'jsdom',
-    
+    environment: "jsdom",
+
     // Environment-specific options
     environmentOptions: {
       jsdom: {
-        url: 'http://localhost',
+        url: "http://localhost",
       },
     },
   },
-})
+});
 ```
 
 ## Installing Environment Packages
@@ -47,12 +47,12 @@ Use magic comment at top of file:
 ```ts
 // @vitest-environment jsdom
 
-import { expect, test } from 'vitest'
+import { expect, test } from "vitest";
 
-test('DOM test', () => {
-  const div = document.createElement('div')
-  expect(div).toBeInstanceOf(HTMLDivElement)
-})
+test("DOM test", () => {
+  const div = document.createElement("div");
+  expect(div).toBeInstanceOf(HTMLDivElement);
+});
 ```
 
 ## jsdom Environment
@@ -62,19 +62,19 @@ Full browser environment simulation:
 ```ts
 // @vitest-environment jsdom
 
-test('DOM manipulation', () => {
-  document.body.innerHTML = '<div id="app"></div>'
-  
-  const app = document.getElementById('app')
-  app.textContent = 'Hello'
-  
-  expect(app.textContent).toBe('Hello')
-})
+test("DOM manipulation", () => {
+  document.body.innerHTML = '<div id="app"></div>';
 
-test('window APIs', () => {
-  expect(window.location.href).toBeDefined()
-  expect(localStorage).toBeDefined()
-})
+  const app = document.getElementById("app");
+  app.textContent = "Hello";
+
+  expect(app.textContent).toBe("Hello");
+});
+
+test("window APIs", () => {
+  expect(window.location.href).toBeDefined();
+  expect(localStorage).toBeDefined();
+});
 ```
 
 ### jsdom Options
@@ -84,14 +84,14 @@ defineConfig({
   test: {
     environmentOptions: {
       jsdom: {
-        url: 'http://localhost:3000',
-        html: '<!DOCTYPE html><html><body></body></html>',
-        userAgent: 'custom-agent',
-        resources: 'usable',
+        url: "http://localhost:3000",
+        html: "<!DOCTYPE html><html><body></body></html>",
+        userAgent: "custom-agent",
+        resources: "usable",
       },
     },
   },
-})
+});
 ```
 
 ## happy-dom Environment
@@ -101,11 +101,11 @@ Faster but fewer APIs:
 ```ts
 // @vitest-environment happy-dom
 
-test('basic DOM', () => {
-  const el = document.createElement('div')
-  el.className = 'test'
-  expect(el.className).toBe('test')
-})
+test("basic DOM", () => {
+  const el = document.createElement("div");
+  el.className = "test";
+  expect(el.className).toBe("test");
+});
 ```
 
 ## Multiple Environments per Project
@@ -118,21 +118,21 @@ defineConfig({
     projects: [
       {
         test: {
-          name: 'unit',
-          include: ['tests/unit/**/*.test.ts'],
-          environment: 'node',
+          name: "unit",
+          include: ["tests/unit/**/*.test.ts"],
+          environment: "node",
         },
       },
       {
         test: {
-          name: 'dom',
-          include: ['tests/dom/**/*.test.ts'],
-          environment: 'jsdom',
+          name: "dom",
+          include: ["tests/dom/**/*.test.ts"],
+          environment: "jsdom",
         },
       },
     ],
   },
-})
+});
 ```
 
 ## Custom Environment
@@ -141,23 +141,23 @@ Create custom environment package:
 
 ```ts
 // vitest-environment-custom/index.ts
-import type { Environment } from 'vitest/runtime'
+import type { Environment } from "vitest/runtime";
 
 export default <Environment>{
-  name: 'custom',
-  viteEnvironment: 'ssr', // or 'client'
-  
+  name: "custom",
+  viteEnvironment: "ssr", // or 'client'
+
   setup() {
     // Setup global state
-    globalThis.myGlobal = 'value'
-    
+    globalThis.myGlobal = "value";
+
     return {
       teardown() {
-        delete globalThis.myGlobal
+        delete globalThis.myGlobal;
       },
-    }
+    };
   },
-}
+};
 ```
 
 Use with:
@@ -165,9 +165,9 @@ Use with:
 ```ts
 defineConfig({
   test: {
-    environment: 'custom',
+    environment: "custom",
   },
-})
+});
 ```
 
 ## Environment with VM
@@ -176,25 +176,25 @@ For full isolation:
 
 ```ts
 export default <Environment>{
-  name: 'isolated',
-  viteEnvironment: 'ssr',
-  
+  name: "isolated",
+  viteEnvironment: "ssr",
+
   async setupVM() {
-    const vm = await import('node:vm')
-    const context = vm.createContext()
-    
+    const vm = await import("node:vm");
+    const context = vm.createContext();
+
     return {
       getVmContext() {
-        return context
+        return context;
       },
       teardown() {},
-    }
+    };
   },
-  
+
   setup() {
-    return { teardown() {} }
+    return { teardown() {} };
   },
-}
+};
 ```
 
 ## Browser Mode (Separate from Environments)
@@ -206,11 +206,11 @@ defineConfig({
   test: {
     browser: {
       enabled: true,
-      name: 'chromium', // or 'firefox', 'webkit'
-      provider: 'playwright',
+      name: "chromium", // or 'firefox', 'webkit'
+      provider: "playwright",
     },
   },
-})
+});
 ```
 
 ## CSS and Assets
@@ -221,16 +221,16 @@ In jsdom/happy-dom, configure CSS handling:
 defineConfig({
   test: {
     css: true, // Process CSS
-    
+
     // Or with options
     css: {
       include: /\.module\.css$/,
       modules: {
-        classNameStrategy: 'non-scoped',
+        classNameStrategy: "non-scoped",
       },
     },
   },
-})
+});
 ```
 
 ## Fixing External Dependencies
@@ -242,11 +242,11 @@ defineConfig({
   test: {
     server: {
       deps: {
-        inline: ['problematic-package'],
+        inline: ["problematic-package"],
       },
     },
   },
-})
+});
 ```
 
 ## Key Points
@@ -258,7 +258,7 @@ defineConfig({
 - Use projects for multiple environment configurations
 - Browser Mode is for real browser testing, not environment
 
-<!-- 
+<!--
 Source references:
 - https://vitest.dev/guide/environment.html
 -->

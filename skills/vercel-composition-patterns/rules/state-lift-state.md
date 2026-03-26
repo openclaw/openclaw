@@ -15,15 +15,15 @@ or awkward refs.
 
 ```tsx
 function ForwardMessageComposer() {
-  const [state, setState] = useState(initialState)
-  const forwardMessage = useForwardMessage()
+  const [state, setState] = useState(initialState);
+  const forwardMessage = useForwardMessage();
 
   return (
     <Composer.Frame>
       <Composer.Input />
       <Composer.Footer />
     </Composer.Frame>
-  )
+  );
 }
 
 // Problem: How does this button access composer state?
@@ -37,7 +37,7 @@ function ForwardMessageDialog() {
         <ForwardButton /> {/* Needs to call submit */}
       </DialogActions>
     </Dialog>
-  )
+  );
 }
 ```
 
@@ -45,20 +45,20 @@ function ForwardMessageDialog() {
 
 ```tsx
 function ForwardMessageDialog() {
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState("");
   return (
     <Dialog>
       <ForwardMessageComposer onInputChange={setInput} />
       <MessagePreview input={input} />
     </Dialog>
-  )
+  );
 }
 
 function ForwardMessageComposer({ onInputChange }) {
-  const [state, setState] = useState(initialState)
+  const [state, setState] = useState(initialState);
   useEffect(() => {
-    onInputChange(state.input) // Sync on every change 😬
-  }, [state.input])
+    onInputChange(state.input); // Sync on every change 😬
+  }, [state.input]);
 }
 ```
 
@@ -66,13 +66,13 @@ function ForwardMessageComposer({ onInputChange }) {
 
 ```tsx
 function ForwardMessageDialog() {
-  const stateRef = useRef(null)
+  const stateRef = useRef(null);
   return (
     <Dialog>
       <ForwardMessageComposer stateRef={stateRef} />
       <ForwardButton onPress={() => submit(stateRef.current)} />
     </Dialog>
-  )
+  );
 }
 ```
 
@@ -80,9 +80,9 @@ function ForwardMessageDialog() {
 
 ```tsx
 function ForwardMessageProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState(initialState)
-  const forwardMessage = useForwardMessage()
-  const inputRef = useRef(null)
+  const [state, setState] = useState(initialState);
+  const forwardMessage = useForwardMessage();
+  const inputRef = useRef(null);
 
   return (
     <Composer.Provider
@@ -92,7 +92,7 @@ function ForwardMessageProvider({ children }: { children: React.ReactNode }) {
     >
       {children}
     </Composer.Provider>
-  )
+  );
 }
 
 function ForwardMessageDialog() {
@@ -107,12 +107,12 @@ function ForwardMessageDialog() {
         </DialogActions>
       </Dialog>
     </ForwardMessageProvider>
-  )
+  );
 }
 
 function ForwardButton() {
-  const { actions } = use(Composer.Context)
-  return <Button onPress={actions.submit}>Forward</Button>
+  const { actions } = use(Composer.Context);
+  return <Button onPress={actions.submit}>Forward</Button>;
 }
 ```
 

@@ -10,6 +10,7 @@ metadata:
 Vitest is a next-generation testing framework powered by Vite. It provides a Jest-compatible API with native ESM, TypeScript, and JSX support out of the box. Vitest shares the same config, transformers, resolvers, and plugins with your Vite app.
 
 **Key Features:**
+
 - Vite-native: Uses Vite's transformation pipeline for fast HMR-like test updates
 - Jest-compatible: Drop-in replacement for most Jest test suites
 - Smart watch mode: Only reruns affected tests based on module graph
@@ -22,31 +23,31 @@ Vitest is a next-generation testing framework powered by Vite. It provides a Jes
 
 ## Core
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
-| Configuration | Vitest and Vite config integration, defineConfig usage | [core-config](references/core-config.md) |
-| CLI | Command line interface, commands and options | [core-cli](references/core-cli.md) |
-| Test API | test/it function, modifiers like skip, only, concurrent | [core-test-api](references/core-test-api.md) |
-| Describe API | describe/suite for grouping tests and nested suites | [core-describe](references/core-describe.md) |
-| Expect API | Assertions with toBe, toEqual, matchers and asymmetric matchers | [core-expect](references/core-expect.md) |
-| Hooks | beforeEach, afterEach, beforeAll, afterAll, aroundEach | [core-hooks](references/core-hooks.md) |
+| Topic         | Description                                                     | Reference                                    |
+| ------------- | --------------------------------------------------------------- | -------------------------------------------- |
+| Configuration | Vitest and Vite config integration, defineConfig usage          | [core-config](references/core-config.md)     |
+| CLI           | Command line interface, commands and options                    | [core-cli](references/core-cli.md)           |
+| Test API      | test/it function, modifiers like skip, only, concurrent         | [core-test-api](references/core-test-api.md) |
+| Describe API  | describe/suite for grouping tests and nested suites             | [core-describe](references/core-describe.md) |
+| Expect API    | Assertions with toBe, toEqual, matchers and asymmetric matchers | [core-expect](references/core-expect.md)     |
+| Hooks         | beforeEach, afterEach, beforeAll, afterAll, aroundEach          | [core-hooks](references/core-hooks.md)       |
 
 ## Features
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
-| Mocking | Mock functions, modules, timers, dates with vi utilities | [features-mocking](references/features-mocking.md) |
-| Snapshots | Snapshot testing with toMatchSnapshot and inline snapshots | [features-snapshots](references/features-snapshots.md) |
-| Coverage | Code coverage with V8 or Istanbul providers | [features-coverage](references/features-coverage.md) |
-| Test Context | Test fixtures, context.expect, test.extend for custom fixtures | [features-context](references/features-context.md) |
-| Concurrency | Concurrent tests, parallel execution, sharding | [features-concurrency](references/features-concurrency.md) |
-| Filtering | Filter tests by name, file patterns, tags | [features-filtering](references/features-filtering.md) |
+| Topic        | Description                                                    | Reference                                                  |
+| ------------ | -------------------------------------------------------------- | ---------------------------------------------------------- |
+| Mocking      | Mock functions, modules, timers, dates with vi utilities       | [features-mocking](references/features-mocking.md)         |
+| Snapshots    | Snapshot testing with toMatchSnapshot and inline snapshots     | [features-snapshots](references/features-snapshots.md)     |
+| Coverage     | Code coverage with V8 or Istanbul providers                    | [features-coverage](references/features-coverage.md)       |
+| Test Context | Test fixtures, context.expect, test.extend for custom fixtures | [features-context](references/features-context.md)         |
+| Concurrency  | Concurrent tests, parallel execution, sharding                 | [features-concurrency](references/features-concurrency.md) |
+| Filtering    | Filter tests by name, file patterns, tags                      | [features-filtering](references/features-filtering.md)     |
 
 ## Advanced
 
-| Topic | Description | Reference |
-|-------|-------------|-----------|
-| Vi Utilities | vi helper: mock, spyOn, fake timers, hoisted, waitFor | [advanced-vi](references/advanced-vi.md) |
-| Environments | Test environments: node, jsdom, happy-dom, custom | [advanced-environments](references/advanced-environments.md) |
-| Type Testing | Type-level testing with expectTypeOf and assertType | [advanced-type-testing](references/advanced-type-testing.md) |
-| Projects | Multi-project workspaces, different configs per project | [advanced-projects](references/advanced-projects.md) |
+| Topic        | Description                                             | Reference                                                    |
+| ------------ | ------------------------------------------------------- | ------------------------------------------------------------ |
+| Vi Utilities | vi helper: mock, spyOn, fake timers, hoisted, waitFor   | [advanced-vi](references/advanced-vi.md)                     |
+| Environments | Test environments: node, jsdom, happy-dom, custom       | [advanced-environments](references/advanced-environments.md) |
+| Type Testing | Type-level testing with expectTypeOf and assertType     | [advanced-type-testing](references/advanced-type-testing.md) |
+| Projects     | Multi-project workspaces, different configs per project | [advanced-projects](references/advanced-projects.md)         |

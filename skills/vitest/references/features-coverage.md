@@ -20,28 +20,23 @@ defineConfig({
   test: {
     coverage: {
       // Provider: 'v8' (default, faster) or 'istanbul' (more compatible)
-      provider: 'v8',
-      
+      provider: "v8",
+
       // Enable coverage
       enabled: true,
-      
+
       // Reporters
-      reporter: ['text', 'json', 'html'],
-      
+      reporter: ["text", "json", "html"],
+
       // Files to include
-      include: ['src/**/*.{ts,tsx}'],
-      
+      include: ["src/**/*.{ts,tsx}"],
+
       // Files to exclude
-      exclude: [
-        'node_modules/',
-        'tests/',
-        '**/*.d.ts',
-        '**/*.test.ts',
-      ],
-      
+      exclude: ["node_modules/", "tests/", "**/*.d.ts", "**/*.test.ts"],
+
       // Report uncovered files
       all: true,
-      
+
       // Thresholds
       thresholds: {
         lines: 80,
@@ -51,7 +46,7 @@ defineConfig({
       },
     },
   },
-})
+});
 ```
 
 ## Providers
@@ -104,10 +99,10 @@ coverage: {
     functions: 75,
     branches: 70,
     statements: 80,
-    
+
     // Per-file thresholds
     perFile: true,
-    
+
     // Auto-update thresholds (for gradual improvement)
     autoUpdate: true,
   },
@@ -121,7 +116,7 @@ coverage: {
 ```ts
 /* v8 ignore next -- @preserve */
 function ignored() {
-  return 'not covered'
+  return "not covered";
 }
 
 /* v8 ignore start -- @preserve */
@@ -201,7 +196,7 @@ vitest --merge-reports --coverage --reporter=json
 - Set thresholds to enforce minimum coverage
 - Use `@preserve` comment to keep ignore hints
 
-<!-- 
+<!--
 Source references:
 - https://vitest.dev/guide/coverage.html
 -->

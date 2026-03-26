@@ -1,5 +1,6 @@
-from playwright.sync_api import sync_playwright
 import os
+
+from playwright.sync_api import sync_playwright
 
 # Example: Automating interaction with static HTML files using file:// URLs
 

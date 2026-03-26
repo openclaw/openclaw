@@ -13,8 +13,8 @@ Instead of awaiting data in async components before returning JSX, use Suspense 
 
 ```tsx
 async function Page() {
-  const data = await fetchData() // Blocks entire page
-  
+  const data = await fetchData(); // Blocks entire page
+
   return (
     <div>
       <div>Sidebar</div>
@@ -24,7 +24,7 @@ async function Page() {
       </div>
       <div>Footer</div>
     </div>
-  )
+  );
 }
 ```
 
@@ -45,12 +45,12 @@ function Page() {
       </div>
       <div>Footer</div>
     </div>
-  )
+  );
 }
 
 async function DataDisplay() {
-  const data = await fetchData() // Only blocks this component
-  return <div>{data.content}</div>
+  const data = await fetchData(); // Only blocks this component
+  return <div>{data.content}</div>;
 }
 ```
 
@@ -61,8 +61,8 @@ Sidebar, Header, and Footer render immediately. Only DataDisplay waits for data.
 ```tsx
 function Page() {
   // Start fetch immediately, but don't await
-  const dataPromise = fetchData()
-  
+  const dataPromise = fetchData();
+
   return (
     <div>
       <div>Sidebar</div>
@@ -73,17 +73,17 @@ function Page() {
       </Suspense>
       <div>Footer</div>
     </div>
-  )
+  );
 }
 
 function DataDisplay({ dataPromise }: { dataPromise: Promise<Data> }) {
-  const data = use(dataPromise) // Unwraps the promise
-  return <div>{data.content}</div>
+  const data = use(dataPromise); // Unwraps the promise
+  return <div>{data.content}</div>;
 }
 
 function DataSummary({ dataPromise }: { dataPromise: Promise<Data> }) {
-  const data = use(dataPromise) // Reuses the same promise
-  return <div>{data.summary}</div>
+  const data = use(dataPromise); // Reuses the same promise
+  return <div>{data.summary}</div>;
 }
 ```
 

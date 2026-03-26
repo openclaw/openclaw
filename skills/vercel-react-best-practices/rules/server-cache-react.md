@@ -12,15 +12,15 @@ Use `React.cache()` for server-side request deduplication. Authentication and da
 **Usage:**
 
 ```typescript
-import { cache } from 'react'
+import { cache } from "react";
 
 export const getCurrentUser = cache(async () => {
-  const session = await auth()
-  if (!session?.user?.id) return null
+  const session = await auth();
+  if (!session?.user?.id) return null;
   return await db.user.findUnique({
-    where: { id: session.user.id }
-  })
-})
+    where: { id: session.user.id },
+  });
+});
 ```
 
 Within a single request, multiple calls to `getCurrentUser()` execute the query only once.
@@ -33,32 +33,32 @@ Within a single request, multiple calls to `getCurrentUser()` execute the query 
 
 ```typescript
 const getUser = cache(async (params: { uid: number }) => {
-  return await db.user.findUnique({ where: { id: params.uid } })
-})
+  return await db.user.findUnique({ where: { id: params.uid } });
+});
 
 // Each call creates new object, never hits cache
-getUser({ uid: 1 })
-getUser({ uid: 1 })  // Cache miss, runs query again
+getUser({ uid: 1 });
+getUser({ uid: 1 }); // Cache miss, runs query again
 ```
 
 **Correct (cache hit):**
 
 ```typescript
 const getUser = cache(async (uid: number) => {
-  return await db.user.findUnique({ where: { id: uid } })
-})
+  return await db.user.findUnique({ where: { id: uid } });
+});
 
 // Primitive args use value equality
-getUser(1)
-getUser(1)  // Cache hit, returns cached result
+getUser(1);
+getUser(1); // Cache hit, returns cached result
 ```
 
 If you must pass objects, pass the same reference:
 
 ```typescript
-const params = { uid: 1 }
-getUser(params)  // Query runs
-getUser(params)  // Cache hit (same reference)
+const params = { uid: 1 };
+getUser(params); // Query runs
+getUser(params); // Cache hit (same reference)
 ```
 
 **Next.js-Specific Note:**

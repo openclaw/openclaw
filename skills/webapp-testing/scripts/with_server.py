@@ -14,11 +14,12 @@ Usage:
       -- python test.py
 """
 
-import subprocess
-import socket
-import time
-import sys
 import argparse
+import socket
+import subprocess
+import sys
+import time
+
 
 def is_server_ready(port, timeout=30):
     """Wait for server to be ready by polling the port."""

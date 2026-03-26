@@ -13,18 +13,18 @@ React Server Components execute sequentially within a tree. Restructure with com
 
 ```tsx
 export default async function Page() {
-  const header = await fetchHeader()
+  const header = await fetchHeader();
   return (
     <div>
       <div>{header}</div>
       <Sidebar />
     </div>
-  )
+  );
 }
 
 async function Sidebar() {
-  const items = await fetchSidebarItems()
-  return <nav>{items.map(renderItem)}</nav>
+  const items = await fetchSidebarItems();
+  return <nav>{items.map(renderItem)}</nav>;
 }
 ```
 
@@ -32,13 +32,13 @@ async function Sidebar() {
 
 ```tsx
 async function Header() {
-  const data = await fetchHeader()
-  return <div>{data}</div>
+  const data = await fetchHeader();
+  return <div>{data}</div>;
 }
 
 async function Sidebar() {
-  const items = await fetchSidebarItems()
-  return <nav>{items.map(renderItem)}</nav>
+  const items = await fetchSidebarItems();
+  return <nav>{items.map(renderItem)}</nav>;
 }
 
 export default function Page() {
@@ -47,7 +47,7 @@ export default function Page() {
       <Header />
       <Sidebar />
     </div>
-  )
+  );
 }
 ```
 
@@ -55,13 +55,13 @@ export default function Page() {
 
 ```tsx
 async function Header() {
-  const data = await fetchHeader()
-  return <div>{data}</div>
+  const data = await fetchHeader();
+  return <div>{data}</div>;
 }
 
 async function Sidebar() {
-  const items = await fetchSidebarItems()
-  return <nav>{items.map(renderItem)}</nav>
+  const items = await fetchSidebarItems();
+  return <nav>{items.map(renderItem)}</nav>;
 }
 
 function Layout({ children }: { children: ReactNode }) {
@@ -70,7 +70,7 @@ function Layout({ children }: { children: ReactNode }) {
       <Header />
       {children}
     </div>
-  )
+  );
 }
 
 export default function Page() {
@@ -78,6 +78,6 @@ export default function Page() {
     <Layout>
       <Sidebar />
     </Layout>
-  )
+  );
 }
 ```

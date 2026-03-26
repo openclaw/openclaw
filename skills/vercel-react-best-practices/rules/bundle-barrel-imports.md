@@ -16,11 +16,11 @@ Popular icon and component libraries can have **up to 10,000 re-exports** in the
 **Incorrect (imports entire library):**
 
 ```tsx
-import { Check, X, Menu } from 'lucide-react'
+import { Check, X, Menu } from "lucide-react";
 // Loads 1,583 modules, takes ~2.8s extra in dev
 // Runtime cost: 200-800ms on every cold start
 
-import { Button, TextField } from '@mui/material'
+import { Button, TextField } from "@mui/material";
 // Loads 2,225 modules, takes ~4.2s extra in dev
 ```
 
@@ -30,14 +30,14 @@ import { Button, TextField } from '@mui/material'
 // next.config.js - automatically optimizes barrel imports at build time
 module.exports = {
   experimental: {
-    optimizePackageImports: ['lucide-react', '@mui/material']
-  }
-}
+    optimizePackageImports: ["lucide-react", "@mui/material"],
+  },
+};
 ```
 
 ```tsx
 // Keep the standard imports - Next.js transforms them to direct imports
-import { Check, X, Menu } from 'lucide-react'
+import { Check, X, Menu } from "lucide-react";
 // Full TypeScript support, no manual path wrangling
 ```
 
@@ -46,8 +46,8 @@ This is the recommended approach because it preserves TypeScript type safety and
 **Correct - Direct imports (non-Next.js projects):**
 
 ```tsx
-import Button from '@mui/material/Button'
-import TextField from '@mui/material/TextField'
+import Button from "@mui/material/Button";
+import TextField from "@mui/material/TextField";
 // Loads only what you use
 ```
 

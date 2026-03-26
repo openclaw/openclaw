@@ -61,18 +61,18 @@ Useful with lint-staged:
 ```js
 // .lintstagedrc.js
 export default {
-  '*.{ts,tsx}': 'vitest related --run',
-}
+  "*.{ts,tsx}": "vitest related --run",
+};
 ```
 
 ## Focus Tests (.only)
 
 ```ts
-test.only('only this runs', () => {})
+test.only("only this runs", () => {});
 
-describe.only('only this suite', () => {
-  test('runs', () => {})
-})
+describe.only("only this suite", () => {
+  test("runs", () => {});
+});
 ```
 
 In CI, `.only` throws error unless configured:
@@ -82,22 +82,22 @@ defineConfig({
   test: {
     allowOnly: true, // Allow .only in CI
   },
-})
+});
 ```
 
 ## Skip Tests
 
 ```ts
-test.skip('skipped', () => {})
+test.skip("skipped", () => {});
 
 // Conditional
-test.skipIf(process.env.CI)('not in CI', () => {})
-test.runIf(!process.env.CI)('local only', () => {})
+test.skipIf(process.env.CI)("not in CI", () => {});
+test.runIf(!process.env.CI)("local only", () => {});
 
 // Dynamic skip
-test('dynamic', ({ skip }) => {
-  skip(someCondition, 'reason')
-})
+test("dynamic", ({ skip }) => {
+  skip(someCondition, "reason");
+});
 ```
 
 ## Tags
@@ -105,8 +105,8 @@ test('dynamic', ({ skip }) => {
 Filter by custom tags:
 
 ```ts
-test('database test', { tags: ['db'] }, () => {})
-test('slow test', { tags: ['slow', 'integration'] }, () => {})
+test("database test", { tags: ["db"] }, () => {});
+test("slow test", { tags: ["slow", "integration"] }, () => {});
 ```
 
 Run tagged tests:
@@ -122,10 +122,10 @@ Configure allowed tags:
 ```ts
 defineConfig({
   test: {
-    tags: ['db', 'slow', 'integration'],
+    tags: ["db", "slow", "integration"],
     strictTags: true, // Fail on unknown tags
   },
-})
+});
 ```
 
 ## Include/Exclude Patterns
@@ -134,24 +134,21 @@ defineConfig({
 defineConfig({
   test: {
     // Test file patterns
-    include: ['**/*.{test,spec}.{ts,tsx}'],
-    
+    include: ["**/*.{test,spec}.{ts,tsx}"],
+
     // Exclude patterns
-    exclude: [
-      '**/node_modules/**',
-      '**/e2e/**',
-      '**/*.skip.test.ts',
-    ],
-    
+    exclude: ["**/node_modules/**", "**/e2e/**", "**/*.skip.test.ts"],
+
     // Include source for in-source testing
-    includeSource: ['src/**/*.ts'],
+    includeSource: ["src/**/*.ts"],
   },
-})
+});
 ```
 
 ## Watch Mode Filtering
 
 In watch mode, press:
+
 - `p` - Filter by filename pattern
 - `t` - Filter by test name pattern
 - `a` - Run all tests
@@ -169,11 +166,11 @@ vitest --project integration --project e2e
 ## Environment-based Filtering
 
 ```ts
-const isDev = process.env.NODE_ENV === 'development'
-const isCI = process.env.CI
+const isDev = process.env.NODE_ENV === "development";
+const isCI = process.env.CI;
 
-describe.skipIf(isCI)('local only tests', () => {})
-describe.runIf(isDev)('dev tests', () => {})
+describe.skipIf(isCI)("local only tests", () => {});
+describe.runIf(isDev)("dev tests", () => {});
 ```
 
 ## Combining Filters
@@ -204,7 +201,7 @@ vitest list --json          # JSON output
 - Use `.only` for debugging, but configure CI to reject it
 - Watch mode has interactive filtering
 
-<!-- 
+<!--
 Source references:
 - https://vitest.dev/guide/filtering.html
 - https://vitest.dev/guide/cli.html

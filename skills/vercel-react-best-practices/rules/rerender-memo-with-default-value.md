@@ -1,10 +1,8 @@
 ---
-
 title: Extract Default Non-primitive Parameter Value from Memoized Component to Constant
 impact: MEDIUM
 impactDescription: restores memoization by using a constant for default value
 tags: rerender, memo, optimization
-
 ---
 
 ## Extract Default Non-primitive Parameter Value from Memoized Component to Constant

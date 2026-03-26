@@ -13,12 +13,12 @@ When a hook contains multiple independent tasks with different dependencies, spl
 
 ```tsx
 const sortedProducts = useMemo(() => {
-  const filtered = products.filter((p) => p.category === category)
+  const filtered = products.filter((p) => p.category === category);
   const sorted = filtered.toSorted((a, b) =>
-    sortOrder === "asc" ? a.price - b.price : b.price - a.price
-  )
-  return sorted
-}, [products, category, sortOrder])
+    sortOrder === "asc" ? a.price - b.price : b.price - a.price,
+  );
+  return sorted;
+}, [products, category, sortOrder]);
 ```
 
 **Correct (filtering only recomputes when products or category change):**
@@ -26,16 +26,16 @@ const sortedProducts = useMemo(() => {
 ```tsx
 const filteredProducts = useMemo(
   () => products.filter((p) => p.category === category),
-  [products, category]
-)
+  [products, category],
+);
 
 const sortedProducts = useMemo(
   () =>
     filteredProducts.toSorted((a, b) =>
-      sortOrder === "asc" ? a.price - b.price : b.price - a.price
+      sortOrder === "asc" ? a.price - b.price : b.price - a.price,
     ),
-  [filteredProducts, sortOrder]
-)
+  [filteredProducts, sortOrder],
+);
 ```
 
 This pattern also applies to `useEffect` when combining unrelated side effects:
@@ -44,21 +44,21 @@ This pattern also applies to `useEffect` when combining unrelated side effects:
 
 ```tsx
 useEffect(() => {
-  analytics.trackPageView(pathname)
-  document.title = `${pageTitle} | My App`
-}, [pathname, pageTitle])
+  analytics.trackPageView(pathname);
+  document.title = `${pageTitle} | My App`;
+}, [pathname, pageTitle]);
 ```
 
 **Correct (effects run independently):**
 
 ```tsx
 useEffect(() => {
-  analytics.trackPageView(pathname)
-}, [pathname])
+  analytics.trackPageView(pathname);
+}, [pathname]);
 
 useEffect(() => {
-  document.title = `${pageTitle} | My App`
-}, [pageTitle])
+  document.title = `${pageTitle} | My App`;
+}, [pageTitle]);
 ```
 
 **Note:** If your project has [React Compiler](https://react.dev/learn/react-compiler) enabled, it automatically optimizes dependency tracking and may handle some of these cases for you.

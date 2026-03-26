@@ -9,11 +9,11 @@ description: Vite configuration patterns using vite.config.ts
 
 ```ts
 // vite.config.ts
-import { defineConfig } from 'vite'
+import { defineConfig } from "vite";
 
 export default defineConfig({
   // config options
-})
+});
 ```
 
 Vite auto-resolves `vite.config.ts` from project root. Supports ES modules syntax regardless of `package.json` type.
@@ -24,12 +24,16 @@ Export a function to access command and mode:
 
 ```ts
 export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
-  if (command === 'serve') {
-    return { /* dev config */ }
+  if (command === "serve") {
+    return {
+      /* dev config */
+    };
   } else {
-    return { /* build config */ }
+    return {
+      /* build config */
+    };
   }
-})
+});
 ```
 
 - `command`: `'serve'` during dev, `'build'` for production
@@ -39,9 +43,11 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
 
 ```ts
 export default defineConfig(async ({ command, mode }) => {
-  const data = await fetchSomething()
-  return { /* config */ }
-})
+  const data = await fetchSomething();
+  return {
+    /* config */
+  };
+});
 ```
 
 ## Using Environment Variables in Config
@@ -49,12 +55,12 @@ export default defineConfig(async ({ command, mode }) => {
 `.env` files are loaded **after** config resolution. Use `loadEnv` to access them in config:
 
 ```ts
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   // Load env files from cwd, include all vars (empty prefix)
-  const env = loadEnv(mode, process.cwd(), '')
-  
+  const env = loadEnv(mode, process.cwd(), "");
+
   return {
     define: {
       __APP_ENV__: JSON.stringify(env.APP_ENV),
@@ -62,8 +68,8 @@ export default defineConfig(({ mode }) => {
     server: {
       port: env.APP_PORT ? Number(env.APP_PORT) : 5173,
     },
-  }
-})
+  };
+});
 ```
 
 ## Key Config Options
@@ -74,11 +80,11 @@ export default defineConfig(({ mode }) => {
 export default defineConfig({
   resolve: {
     alias: {
-      '@': '/src',
-      '~': '/src',
+      "@": "/src",
+      "~": "/src",
     },
   },
-})
+});
 ```
 
 ### define (Global Constants)
@@ -86,10 +92,10 @@ export default defineConfig({
 ```ts
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify('1.0.0'),
-    __API_URL__: 'window.__backend_api_url',
+    __APP_VERSION__: JSON.stringify("1.0.0"),
+    __API_URL__: "window.__backend_api_url",
   },
-})
+});
 ```
 
 Values must be JSON-serializable or single identifiers. Non-strings auto-wrapped with `JSON.stringify`.
@@ -97,11 +103,11 @@ Values must be JSON-serializable or single identifiers. Non-strings auto-wrapped
 ### plugins
 
 ```ts
-import vue from '@vitejs/plugin-vue'
+import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
   plugins: [vue()],
-})
+});
 ```
 
 Plugins array is flattened; falsy values ignored.
@@ -112,14 +118,14 @@ Plugins array is flattened; falsy values ignored.
 export default defineConfig({
   server: {
     proxy: {
-      '/api': {
-        target: 'http://localhost:3000',
+      "/api": {
+        target: "http://localhost:3000",
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        rewrite: (path) => path.replace(/^\/api/, ""),
       },
     },
   },
-})
+});
 ```
 
 ### build.target
@@ -129,9 +135,9 @@ Default: Baseline Widely Available browsers. Customize:
 ```ts
 export default defineConfig({
   build: {
-    target: 'esnext', // or 'es2020', ['chrome90', 'firefox88']
+    target: "esnext", // or 'es2020', ['chrome90', 'firefox88']
   },
-})
+});
 ```
 
 ## TypeScript Intellisense
@@ -142,17 +148,17 @@ For plain JS config files:
 /** @type {import('vite').UserConfig} */
 export default {
   // ...
-}
+};
 ```
 
 Or use `satisfies`:
 
 ```ts
-import type { UserConfig } from 'vite'
+import type { UserConfig } from "vite";
 
 export default {
   // ...
-} satisfies UserConfig
+} satisfies UserConfig;
 ```
 
 <!--

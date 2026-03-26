@@ -13,27 +13,27 @@ Access latest values in callbacks without adding them to dependency arrays. Prev
 
 ```tsx
 function SearchInput({ onSearch }: { onSearch: (q: string) => void }) {
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
-    const timeout = setTimeout(() => onSearch(query), 300)
-    return () => clearTimeout(timeout)
-  }, [query, onSearch])
+    const timeout = setTimeout(() => onSearch(query), 300);
+    return () => clearTimeout(timeout);
+  }, [query, onSearch]);
 }
 ```
 
 **Correct (using React's useEffectEvent):**
 
 ```tsx
-import { useEffectEvent } from 'react';
+import { useEffectEvent } from "react";
 
 function SearchInput({ onSearch }: { onSearch: (q: string) => void }) {
-  const [query, setQuery] = useState('')
-  const onSearchEvent = useEffectEvent(onSearch)
+  const [query, setQuery] = useState("");
+  const onSearchEvent = useEffectEvent(onSearch);
 
   useEffect(() => {
-    const timeout = setTimeout(() => onSearchEvent(query), 300)
-    return () => clearTimeout(timeout)
-  }, [query])
+    const timeout = setTimeout(() => onSearchEvent(query), 300);
+    return () => clearTimeout(timeout);
+  }, [query]);
 }
 ```

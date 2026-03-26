@@ -46,7 +46,7 @@ function UserList({ users }: { users: User[] }) {
 
 ```typescript
 // Fallback for older browsers
-const sorted = [...items].sort((a, b) => a.value - b.value)
+const sorted = [...items].sort((a, b) => a.value - b.value);
 ```
 
 **Other immutable array methods:**
