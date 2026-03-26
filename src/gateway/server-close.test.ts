@@ -36,6 +36,7 @@ describe("createGatewayCloseHandler", () => {
       clients: new Set(),
       configReloader: { stop: vi.fn(async () => undefined) },
       browserControl: null,
+      persistentMcpManager: null,
       wss: { close: (cb: () => void) => cb() } as never,
       httpServer: {
         close: (cb: (err?: Error | null) => void) => cb(null),
