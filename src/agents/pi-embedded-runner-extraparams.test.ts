@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { injectAutoRouterPlugin } from "../../extensions/openrouter/index.js";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,
@@ -85,25 +86,7 @@ beforeEach(() => {
           const validModels = rawAllowedModels.filter((m): m is string => typeof m === "string");
           if (validModels.length > 0) {
             autoRouterAllowedModels = validModels;
-            const underlying = streamFn;
-            streamFn = (model, context, options) => {
-              const originalOnPayload = options?.onPayload;
-              return (underlying as StreamFn)(model, context, {
-                ...options,
-                onPayload: (payload) => {
-                  if (payload && typeof payload === "object") {
-                    const existing = Array.isArray((payload as Record<string, unknown>).plugins)
-                      ? ((payload as Record<string, unknown>).plugins as unknown[])
-                      : [];
-                    (payload as Record<string, unknown>).plugins = [
-                      ...existing,
-                      { id: "auto-router", allowed_models: validModels },
-                    ];
-                  }
-                  return originalOnPayload?.(payload, model);
-                },
-              });
-            };
+            streamFn = injectAutoRouterPlugin(streamFn, validModels);
           }
         }
       }
