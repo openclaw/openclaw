@@ -7,8 +7,8 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   getActivePluginRegistry: vi.fn(),
-  resolveConfiguredChannelPluginIds: vi.fn(() => []),
-  resolveChannelPluginIds: vi.fn(() => ["telegram", "slack"]),
+  resolveConfiguredChannelPluginIds: vi.fn<(...args: never[]) => string[]>(() => []),
+  resolveChannelPluginIds: vi.fn<(...args: never[]) => string[]>(() => ["telegram", "slack"]),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
