@@ -131,6 +131,9 @@ export function createWhatsAppPluginBase(params: {
       reactions: true,
       media: true,
     },
+    streaming: {
+      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+    },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
     configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
