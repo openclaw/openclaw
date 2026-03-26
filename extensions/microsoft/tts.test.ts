@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-let edgeTTS: typeof import("./tts-core.js").edgeTTS;
+let edgeTTS: typeof import("./tts.js").edgeTTS;
 
 let mockTtsPromise = vi.fn<(text: string, filePath: string) => Promise<void>>();
 
@@ -16,15 +16,13 @@ vi.mock("node-edge-tts", () => ({
 }));
 
 const baseEdgeConfig = {
-  enabled: true,
   voice: "en-US-MichelleNeural",
   lang: "en-US",
   outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-  outputFormatConfigured: false,
   saveSubtitles: false,
 };
 
-describe("edgeTTS – empty audio validation", () => {
+describe("edgeTTS empty audio validation", () => {
   let tempDir: string | undefined;
 
   beforeEach(async () => {
@@ -36,7 +34,7 @@ describe("edgeTTS – empty audio validation", () => {
         }
       },
     }));
-    ({ edgeTTS } = await import("./tts-core.js"));
+    ({ edgeTTS } = await import("./tts.js"));
   });
 
   afterEach(() => {
