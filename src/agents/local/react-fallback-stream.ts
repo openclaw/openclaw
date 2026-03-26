@@ -251,9 +251,9 @@ export function wrapStreamFnWithReActFallback(
         const wrappedStream = createAssistantMessageEventStream();
 
         const snoop = async () => {
+          let hasNativeToolCall = false;
+          let hasReActAction = false;
           try {
-            let hasNativeToolCall = false;
-            let hasReActAction = false;
             let firstChunkDoneReceived = false;
 
             for await (const chunk of native) {
@@ -278,13 +278,6 @@ export function wrapStreamFnWithReActFallback(
                 }
               }
             }
-
-            if (hasNativeToolCall) {
-              await updateModelCapability(configDir, config.providerId, config.modelId, "native");
-            } else if (hasReActAction) {
-              await updateModelCapability(configDir, config.providerId, config.modelId, "react");
-            }
-            wrappedStream.end();
           } catch {
             wrappedStream.push({
               type: "error",
@@ -307,7 +300,19 @@ export function wrapStreamFnWithReActFallback(
                 timestamp: Date.now(),
               },
             } as any); // eslint-disable-line @typescript-eslint/no-explicit-any
+          } finally {
             wrappedStream.end();
+          }
+
+          // Side-effect: update cache (best-effort)
+          try {
+            if (hasNativeToolCall) {
+              await updateModelCapability(configDir, config.providerId, config.modelId, "native");
+            } else if (hasReActAction) {
+              await updateModelCapability(configDir, config.providerId, config.modelId, "react");
+            }
+          } catch {
+            // Silence cache update errors to avoid polluting the log/stream
           }
         };
 
