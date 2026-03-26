@@ -142,6 +142,30 @@ describe("subagent registry seam flow", () => {
     vi.useRealTimers();
   });
 
+  it("passes undefined timeout override when runTimeoutSeconds is omitted", () => {
+    mod.registerSubagentRun({
+      runId: "run-timeout-default",
+      childSessionKey: "agent:main:subagent:timeout-default",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish the task",
+      cleanup: "delete",
+    });
+
+    expect(mocks.resolveAgentTimeoutMs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overrideSeconds: undefined,
+      }),
+    );
+
+    expect(
+      mod.getLatestSubagentRunByChildSessionKey("agent:main:subagent:timeout-default"),
+    ).toMatchObject({
+      runId: "run-timeout-default",
+      runTimeoutSeconds: undefined,
+    });
+  });
+
   it("completes a registered run across timing persistence, lifecycle status, and announce cleanup", async () => {
     mod.registerSubagentRun({
       runId: "run-1",
@@ -504,6 +528,38 @@ describe("subagent registry seam flow", () => {
         reason: "released",
         workspaceDir: undefined,
       });
+    });
+  });
+
+  it("preserves omitted timeout across steer restart replacement", () => {
+    mod.registerSubagentRun({
+      runId: "run-steer-old",
+      childSessionKey: "agent:main:subagent:steer-timeout",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "first run",
+      cleanup: "delete",
+    });
+    mocks.resolveAgentTimeoutMs.mockClear();
+
+    const previous = mod.getLatestSubagentRunByChildSessionKey("agent:main:subagent:steer-timeout");
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-steer-old",
+      nextRunId: "run-steer-new",
+      fallback: previous ?? undefined,
+    });
+
+    expect(replaced).toBe(true);
+    expect(mocks.resolveAgentTimeoutMs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        overrideSeconds: undefined,
+      }),
+    );
+    expect(
+      mod.getLatestSubagentRunByChildSessionKey("agent:main:subagent:steer-timeout"),
+    ).toMatchObject({
+      runId: "run-steer-new",
+      runTimeoutSeconds: undefined,
     });
   });
 });
