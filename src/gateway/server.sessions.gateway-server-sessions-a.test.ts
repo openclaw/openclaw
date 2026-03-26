@@ -1019,6 +1019,30 @@ describe("gateway server sessions", () => {
           subagentRole: "orchestrator",
           subagentControlScope: "children",
           elevatedLevel: "on",
+          ttsAuto: "always",
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          authProfileOverride: "work",
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 7,
+          sendPolicy: "deny",
+          queueMode: "interrupt",
+          queueDebounceMs: 250,
+          queueCap: 9,
+          queueDrop: "old",
+          groupActivation: "always",
+          groupActivationNeedsSystemIntro: true,
+          execHost: "gateway",
+          execSecurity: "allowlist",
+          execAsk: "on-miss",
+          execNode: "mac-mini",
+          displayName: "Ops Child",
+          deliveryContext: {
+            channel: "discord",
+            to: "discord:child",
+            accountId: "acct-1",
+            threadId: "thread-1",
+          },
           label: "owned child",
         },
       },
@@ -1037,6 +1061,30 @@ describe("gateway server sessions", () => {
         subagentRole?: string;
         subagentControlScope?: string;
         elevatedLevel?: string;
+        ttsAuto?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+        sendPolicy?: string;
+        queueMode?: string;
+        queueDebounceMs?: number;
+        queueCap?: number;
+        queueDrop?: string;
+        groupActivation?: string;
+        groupActivationNeedsSystemIntro?: boolean;
+        execHost?: string;
+        execSecurity?: string;
+        execAsk?: string;
+        execNode?: string;
+        displayName?: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string;
+        };
         label?: string;
       };
     }>(ws, "sessions.reset", { key: "subagent:child" });
@@ -1050,6 +1098,30 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.subagentRole).toBe("orchestrator");
     expect(reset.payload?.entry.subagentControlScope).toBe("children");
     expect(reset.payload?.entry.elevatedLevel).toBe("on");
+    expect(reset.payload?.entry.ttsAuto).toBe("always");
+    expect(reset.payload?.entry.providerOverride).toBe("anthropic");
+    expect(reset.payload?.entry.modelOverride).toBe("claude-opus-4-1");
+    expect(reset.payload?.entry.authProfileOverride).toBe("work");
+    expect(reset.payload?.entry.authProfileOverrideSource).toBe("user");
+    expect(reset.payload?.entry.authProfileOverrideCompactionCount).toBe(7);
+    expect(reset.payload?.entry.sendPolicy).toBe("deny");
+    expect(reset.payload?.entry.queueMode).toBe("interrupt");
+    expect(reset.payload?.entry.queueDebounceMs).toBe(250);
+    expect(reset.payload?.entry.queueCap).toBe(9);
+    expect(reset.payload?.entry.queueDrop).toBe("old");
+    expect(reset.payload?.entry.groupActivation).toBe("always");
+    expect(reset.payload?.entry.groupActivationNeedsSystemIntro).toBe(true);
+    expect(reset.payload?.entry.execHost).toBe("gateway");
+    expect(reset.payload?.entry.execSecurity).toBe("allowlist");
+    expect(reset.payload?.entry.execAsk).toBe("on-miss");
+    expect(reset.payload?.entry.execNode).toBe("mac-mini");
+    expect(reset.payload?.entry.displayName).toBe("Ops Child");
+    expect(reset.payload?.entry.deliveryContext).toEqual({
+      channel: "discord",
+      to: "discord:child",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
     expect(reset.payload?.entry.label).toBe("owned child");
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
@@ -1063,6 +1135,30 @@ describe("gateway server sessions", () => {
         subagentRole?: string;
         subagentControlScope?: string;
         elevatedLevel?: string;
+        ttsAuto?: string;
+        providerOverride?: string;
+        modelOverride?: string;
+        authProfileOverride?: string;
+        authProfileOverrideSource?: string;
+        authProfileOverrideCompactionCount?: number;
+        sendPolicy?: string;
+        queueMode?: string;
+        queueDebounceMs?: number;
+        queueCap?: number;
+        queueDrop?: string;
+        groupActivation?: string;
+        groupActivationNeedsSystemIntro?: boolean;
+        execHost?: string;
+        execSecurity?: string;
+        execAsk?: string;
+        execNode?: string;
+        displayName?: string;
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string;
+        };
         label?: string;
       }
     >;
@@ -1074,6 +1170,30 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:subagent:child"]?.subagentRole).toBe("orchestrator");
     expect(store["agent:main:subagent:child"]?.subagentControlScope).toBe("children");
     expect(store["agent:main:subagent:child"]?.elevatedLevel).toBe("on");
+    expect(store["agent:main:subagent:child"]?.ttsAuto).toBe("always");
+    expect(store["agent:main:subagent:child"]?.providerOverride).toBe("anthropic");
+    expect(store["agent:main:subagent:child"]?.modelOverride).toBe("claude-opus-4-1");
+    expect(store["agent:main:subagent:child"]?.authProfileOverride).toBe("work");
+    expect(store["agent:main:subagent:child"]?.authProfileOverrideSource).toBe("user");
+    expect(store["agent:main:subagent:child"]?.authProfileOverrideCompactionCount).toBe(7);
+    expect(store["agent:main:subagent:child"]?.sendPolicy).toBe("deny");
+    expect(store["agent:main:subagent:child"]?.queueMode).toBe("interrupt");
+    expect(store["agent:main:subagent:child"]?.queueDebounceMs).toBe(250);
+    expect(store["agent:main:subagent:child"]?.queueCap).toBe(9);
+    expect(store["agent:main:subagent:child"]?.queueDrop).toBe("old");
+    expect(store["agent:main:subagent:child"]?.groupActivation).toBe("always");
+    expect(store["agent:main:subagent:child"]?.groupActivationNeedsSystemIntro).toBe(true);
+    expect(store["agent:main:subagent:child"]?.execHost).toBe("gateway");
+    expect(store["agent:main:subagent:child"]?.execSecurity).toBe("allowlist");
+    expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
+    expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
+    expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
+    expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
+      channel: "discord",
+      to: "discord:child",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
     expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
 
     ws.close();
