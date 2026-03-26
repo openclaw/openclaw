@@ -85,8 +85,14 @@ export async function readAgentMemoryFile(params: {
   // Episodic search hits are emitted with path "episodes/<uuid>".
   // The standard readMemoryFile only handles .md workspace paths, so intercept
   // these here and read directly from EpisodicStore before falling through.
+  // Guard: only proceed if memorySearch (and episodic) is enabled for this agent
+  // so callers cannot access stored episodes when the feature is opted out.
   const episodicMatch = /^episodes\/([^/]+)$/.exec(params.relPath.trim());
   if (episodicMatch) {
+    const episodicSettings = resolveMemorySearchConfig(params.cfg, params.agentId);
+    if (!episodicSettings?.episodic?.enabled) {
+      return { text: "", path: params.relPath };
+    }
     const episodeId = episodicMatch[1];
     // Lazy import to avoid pulling in better-sqlite3 unless needed.
     const { EpisodicStore } = await import("./episodic/store.js");
