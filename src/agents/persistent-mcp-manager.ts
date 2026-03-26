@@ -183,11 +183,12 @@ export class PersistentMcpManager {
     this.initPromise = this._doInit().then(
       () => {
         this.initPromise = null;
-        this.state = "ready";
+        // Guard: dispose() may have run while init was in flight.
+        if (this.state !== "disposed") this.state = "ready";
       },
       (err) => {
         this.initPromise = null;
-        this.state = "failed";
+        if (this.state !== "disposed") this.state = "failed";
         this.log.warn(`persistent-mcp: initialization failed: ${String(err)}`);
       },
     );
@@ -271,7 +272,9 @@ export class PersistentMcpManager {
       return;
     }
     const launchConfig = launch.config;
-    const lockPath = path.join(this.stateDir, "mcp", `${serverName}.lock`);
+    // Sanitize serverName to prevent path traversal (e.g. "../foo" as a config key).
+    const safeName = path.basename(serverName).replace(/[^\w.-]/g, "_") || "_unknown";
+    const lockPath = path.join(this.stateDir, "mcp", `${safeName}.lock`);
 
     // Clean up any stale process from a previous run.
     const existingLock = await readLockFile(lockPath);
@@ -322,6 +325,10 @@ export class PersistentMcpManager {
           `persistent-mcp: server "${serverName}" error: ${String(err)}; will reconnect on next use`,
         );
         void deleteLockFile(lockPath);
+        // Close the client and transport so the old subprocess is cleaned up
+        // before a lazy reconnect spawns a new one.
+        void handle.client.close().catch(() => {});
+        void handle.transport.close().catch(() => {});
       }
     };
 
