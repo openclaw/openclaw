@@ -25,6 +25,7 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerCommand() {},
     registerContextEngine() {},
     registerMemoryPromptSection() {},
+    registerMemoryFlushPlan() {},
     resolvePath(input: string) {
       return input;
     },

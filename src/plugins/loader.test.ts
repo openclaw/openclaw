@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { registerMemoryFlushPlanResolver, resolveMemoryFlushPlan } from "../memory/flush-plan.js";
 import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
@@ -1048,9 +1049,17 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
-  it("does not replace the active memory prompt section during non-activating loads", () => {
+  it("does not replace active memory plugin registries during non-activating loads", () => {
     useNoBundledPlugins();
     registerMemoryPromptSection(() => ["active memory section"]);
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "active",
+      systemPrompt: "active",
+      relativePath: "memory/active.md",
+    }));
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -1059,6 +1068,14 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         kind: "memory",
         register(api) {
           api.registerMemoryPromptSection(() => ["snapshot memory section"]);
+          api.registerMemoryFlushPlan(() => ({
+            softThresholdTokens: 10,
+            forceFlushTranscriptBytes: 20,
+            reserveTokensFloor: 30,
+            prompt: "snapshot",
+            systemPrompt: "snapshot",
+            relativePath: "memory/snapshot.md",
+          }));
         },
       };`,
     });
@@ -1081,9 +1098,10 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "active memory section",
     ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
   });
 
-  it("clears a newly-registered memory prompt section when plugin register fails", () => {
+  it("clears newly-registered memory plugin registries when plugin register fails", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "failing-memory",
@@ -1093,6 +1111,14 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         kind: "memory",
         register(api) {
           api.registerMemoryPromptSection(() => ["stale failure section"]);
+          api.registerMemoryFlushPlan(() => ({
+            softThresholdTokens: 10,
+            forceFlushTranscriptBytes: 20,
+            reserveTokensFloor: 30,
+            prompt: "failed",
+            systemPrompt: "failed",
+            relativePath: "memory/failed.md",
+          }));
           throw new Error("memory register failed");
         },
       };`,
@@ -1113,6 +1139,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
   });
 
   it("throws when activate:false is used without cache:false", () => {
@@ -3374,14 +3401,24 @@ export const runtimeValue = helperValue;`,
 });
 
 describe("clearPluginLoaderCache", () => {
-  it("resets the registered memory prompt section builder", () => {
+  it("resets registered memory plugin registries", () => {
     registerMemoryPromptSection(() => ["stale memory section"]);
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "stale",
+      systemPrompt: "stale",
+      relativePath: "memory/stale.md",
+    }));
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "stale memory section",
     ]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
 
     clearPluginLoaderCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(resolveMemoryFlushPlan({})).toBeNull();
   });
 });
