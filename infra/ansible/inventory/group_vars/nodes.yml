@@ -1,0 +1,6 @@
+---
+# Node-specific configuration
+# Nodes connect to the gateway but do not run their own gateway process
+# in the base platform phase. Image is pulled and config is deployed,
+# but containers are not started until node-mode capabilities are needed.
+openclaw_start_container: false

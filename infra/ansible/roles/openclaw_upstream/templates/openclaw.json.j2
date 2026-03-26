@@ -1,0 +1,97 @@
+// Managed by Ansible — do not edit manually
+// Generated for {{ inventory_hostname }} ({{ openclaw_mode }} mode)
+{
+  // Identity
+  identity: {
+    name: "{{ openclaw_identity_name }}",
+    theme: "{{ openclaw_identity_theme }}",
+  },
+
+  // LLM providers
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
+    },
+    order: {
+      anthropic: ["anthropic:default"],
+    },
+  },
+
+  // Agent defaults
+  agent: {
+    workspace: "~/.openclaw/workspace",
+    model: { primary: "{{ openclaw_default_model }}" },
+  },
+
+{% if openclaw_mode == 'gateway' %}
+  // Gateway binding
+  gateway: {
+    bind: "{{ openclaw_gateway_bind | default('lan') }}",
+    auth: {
+      mode: "{{ openclaw_gateway_auth_mode | default('token') }}",
+    },
+  },
+{% endif %}
+
+{% if openclaw_telegram_enabled | default(false) %}
+  // Telegram channel
+  channels: {
+    telegram: {
+      enabled: true,
+      dmPolicy: "{{ openclaw_telegram_dm_policy | default('allowlist') }}",
+{% if openclaw_telegram_allow_from | default([]) | length > 0 %}
+      allowFrom: {{ openclaw_telegram_allow_from | to_json }},
+{% endif %}
+      groups: { "*": { requireMention: {{ openclaw_telegram_require_mention | default(true) | lower }} } },
+    },
+  },
+{% endif %}
+
+{% if openclaw_mode == 'gateway' and openclaw_mcp_servers_enabled | default(false) %}
+  // MCP servers (fleet tools from telegram-agentic plugin)
+  mcp: {
+    servers: {
+      "fleet-tools": {
+        command: "python3",
+        args: ["{{ openclaw_mcp_servers_root }}/fleet-tools/server.py"],
+        env: { PYTHONPATH: "{{ openclaw_mcp_servers_root }}" },
+      },
+      "knowledge-tools": {
+        command: "python3",
+        args: ["{{ openclaw_mcp_servers_root }}/knowledge-tools/server.py"],
+        env: {
+          PYTHONPATH: "{{ openclaw_mcp_servers_root }}",
+          KNOWLEDGE_API_URL: "{{ openclaw_knowledge_api_url | default('http://100.119.126.67:8890') }}",
+        },
+      },
+      "delegation-tools": {
+        command: "python3",
+        args: ["{{ openclaw_mcp_servers_root }}/delegation-tools/server.py"],
+        env: {
+          PYTHONPATH: "{{ openclaw_mcp_servers_root }}",
+          ARCHON_API_URL: "{{ openclaw_archon_api_url | default('http://100.69.32.10:8181') }}",
+        },
+      },
+      "pipeline-tools": {
+        command: "python3",
+        args: ["{{ openclaw_mcp_servers_root }}/pipeline-tools/server.py"],
+        env: { PYTHONPATH: "{{ openclaw_mcp_servers_root }}" },
+      },
+      "self-tools": {
+        command: "python3",
+        args: ["{{ openclaw_mcp_servers_root }}/self-tools/server.py"],
+        env: {
+          PYTHONPATH: "{{ openclaw_mcp_servers_root }}",
+          PLUGIN_SOURCE_ROOT: "{{ openclaw_mcp_servers_root | dirname }}",
+        },
+      },
+    },
+  },
+{% endif %}
+
+  // Logging
+  logging: {
+    level: "{{ openclaw_log_level }}",
+    file: "{{ openclaw_log_file }}",
+  },
+}

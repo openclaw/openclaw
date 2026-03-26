@@ -1,0 +1,29 @@
+---
+# Deploy upstream OpenClaw to the fleet
+#
+# Usage:
+#   ansible-playbook playbooks/upstream.yml                    # Full fleet
+#   ansible-playbook playbooks/upstream.yml --limit mac        # Mac only (dev)
+#   ansible-playbook playbooks/upstream.yml --limit gateway    # Gateway VPS only
+#   ansible-playbook playbooks/upstream.yml --check --diff     # Dry run
+#
+# Deployment order (recommended):
+#   1. Mac (local dev validation)
+#   2. Gateway VPS (production gateway + Telegram)
+#   3. Kubuntu (node — image pull + config only)
+#   4. Pop!_OS (node — image pull + config only)
+
+- name: Deploy upstream OpenClaw (dev workstation)
+  hosts: dev
+  roles:
+    - openclaw_upstream
+
+- name: Deploy upstream OpenClaw (gateway)
+  hosts: gateway
+  roles:
+    - openclaw_upstream
+
+- name: Deploy upstream OpenClaw (nodes — image pull + config only)
+  hosts: nodes
+  roles:
+    - openclaw_upstream

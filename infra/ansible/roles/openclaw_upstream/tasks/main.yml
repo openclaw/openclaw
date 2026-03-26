@@ -1,0 +1,28 @@
+---
+# openclaw_upstream role — main task dispatcher
+# Deploys upstream OpenClaw to a fleet node (gateway or node mode)
+
+- name: Display deployment info
+  ansible.builtin.debug:
+    msg: >
+      Deploying OpenClaw {{ openclaw_version }} to {{ inventory_hostname }}
+      (mode: {{ openclaw_mode }}, root: {{ openclaw_upstream_root }})
+
+- name: Deploy configuration
+  ansible.builtin.include_tasks: config.yml
+
+- name: Deploy secrets
+  ansible.builtin.include_tasks: secrets.yml
+
+- name: Deploy Docker image and compose file
+  ansible.builtin.include_tasks: docker.yml
+
+- name: Stop old fork
+  ansible.builtin.include_tasks: stop-fork.yml
+  when: openclaw_stop_fork | bool
+
+- name: Start upstream container
+  ansible.builtin.include_tasks: start.yml
+  when: >
+    (openclaw_mode == 'gateway') or
+    (openclaw_start_container | default(false) | bool)

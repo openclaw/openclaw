@@ -1,0 +1,40 @@
+---
+# Build/pull Docker image and deploy compose file
+
+- name: Deploy docker-compose.upstream.yml
+  ansible.builtin.template:
+    src: docker-compose.upstream.yml.j2
+    dest: "{{ openclaw_upstream_root }}/docker-compose.upstream.yml"
+    mode: "0644"
+  notify: restart openclaw-upstream
+
+- name: Check if Docker image exists locally
+  ansible.builtin.command:
+    cmd: "docker image inspect {{ openclaw_image_name }}:{{ openclaw_image_tag }}"
+  register: image_check
+  changed_when: false
+  failed_when: false
+
+- name: Build Docker image (if not present)
+  ansible.builtin.command:
+    cmd: >
+      docker build
+      --build-arg OPENCLAW_EXTENSIONS="{{ openclaw_extensions }}"
+      -t {{ openclaw_image_name }}:{{ openclaw_image_tag }}
+      {{ openclaw_upstream_root }}/repo
+    chdir: "{{ openclaw_upstream_root }}"
+  when:
+    - image_check.rc != 0
+    - openclaw_mode == 'gateway' or openclaw_start_container | default(false) | bool
+  register: build_result
+  changed_when: build_result.rc == 0
+
+- name: Pull Docker image (alternative to build)
+  ansible.builtin.command:
+    cmd: "docker pull {{ openclaw_image_name }}:{{ openclaw_image_tag }}"
+  when:
+    - image_check.rc != 0
+    - not (openclaw_mode == 'gateway' or openclaw_start_container | default(false) | bool)
+  register: pull_result
+  changed_when: pull_result.rc == 0
+  failed_when: false

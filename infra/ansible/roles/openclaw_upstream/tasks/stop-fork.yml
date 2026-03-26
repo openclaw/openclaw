@@ -1,0 +1,19 @@
+---
+# Stop the old OpenClaw fork container
+# Only runs when openclaw_stop_fork is true (manual safety gate)
+
+- name: Check if old fork container is running
+  ansible.builtin.command:
+    cmd: "docker compose -f {{ openclaw_fork_compose_file }} ps -q {{ openclaw_fork_service_name }}"
+    chdir: "{{ openclaw_upstream_root }}/../openclaw"
+  register: fork_container
+  changed_when: false
+  failed_when: false
+
+- name: Stop old fork container
+  ansible.builtin.command:
+    cmd: "docker compose -f {{ openclaw_fork_compose_file }} stop {{ openclaw_fork_service_name }}"
+    chdir: "{{ openclaw_upstream_root }}/../openclaw"
+  when: fork_container.stdout | length > 0
+  register: stop_result
+  changed_when: stop_result.rc == 0

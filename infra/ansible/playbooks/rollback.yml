@@ -1,0 +1,51 @@
+---
+# Rollback: stop upstream OpenClaw and restart the old fork
+#
+# Usage:
+#   ansible-playbook playbooks/rollback.yml                    # Full fleet
+#   ansible-playbook playbooks/rollback.yml --limit gateway    # Gateway only
+#   ansible-playbook playbooks/rollback.yml --limit mac        # Mac only
+#
+# This playbook:
+#   1. Stops the upstream OpenClaw container
+#   2. Restarts the old fork container
+#   3. Verifies the old fork is healthy
+
+- name: Rollback to old OpenClaw fork
+  hosts: all
+  tasks:
+    - name: Stop upstream container
+      ansible.builtin.command:
+        cmd: "docker compose -f docker-compose.upstream.yml down"
+        chdir: "{{ openclaw_upstream_root }}"
+      register: stop_upstream
+      changed_when: stop_upstream.rc == 0
+      failed_when: false
+
+    - name: Restart old fork container
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ openclaw_fork_compose_file }} up -d {{ openclaw_fork_service_name }}"
+        chdir: "{{ openclaw_upstream_root }}/../openclaw"
+      register: start_fork
+      changed_when: "'Started' in start_fork.stderr or 'Creating' in start_fork.stderr"
+      failed_when: false
+
+    - name: Wait for old fork to start
+      ansible.builtin.pause:
+        seconds: 10
+      when: start_fork.changed | default(false)
+
+    - name: Verify old fork is running
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ openclaw_fork_compose_file }} ps {{ openclaw_fork_service_name }}"
+        chdir: "{{ openclaw_upstream_root }}/../openclaw"
+      register: fork_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display rollback result
+      ansible.builtin.debug:
+        msg: >
+          Rollback on {{ inventory_hostname }}:
+          upstream stopped (rc={{ stop_upstream.rc }}),
+          fork status: {{ fork_status.stdout | default('unknown') }}

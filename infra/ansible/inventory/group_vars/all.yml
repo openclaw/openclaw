@@ -1,0 +1,33 @@
+---
+# Upstream OpenClaw shared configuration
+openclaw_version: "2026.3.24"
+openclaw_image_tag: "fleet-{{ openclaw_version }}"
+openclaw_image_name: "openclaw"
+openclaw_gateway_port: 18789
+openclaw_bridge_port: 18790
+openclaw_timezone: "America/Chicago"
+openclaw_docker_network: "upstream-net"
+
+# Extensions to bake into the Docker image
+openclaw_extensions: "telegram ollama anthropic"
+
+# Gateway WebSocket URL (nodes connect here)
+openclaw_gateway_url: "ws://100.69.32.10:{{ openclaw_gateway_port }}"
+
+# Identity
+openclaw_identity_name: "OpenClaw"
+openclaw_identity_theme: "AI operations assistant"
+
+# Agent defaults
+openclaw_default_model: "anthropic/claude-sonnet-4-6"
+
+# Logging
+openclaw_log_level: "info"
+openclaw_log_file: "/tmp/openclaw/openclaw.log"
+
+# Safety gate: set to true to stop the old fork before starting upstream
+openclaw_stop_fork: false
+
+# Old fork compose file name (for rollback)
+openclaw_fork_compose_file: "docker-compose.yml"
+openclaw_fork_service_name: "openclaw"

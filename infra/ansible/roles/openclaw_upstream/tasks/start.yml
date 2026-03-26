@@ -1,0 +1,28 @@
+---
+# Start the upstream OpenClaw container and verify health
+
+- name: Start upstream OpenClaw container
+  ansible.builtin.command:
+    cmd: "docker compose -f docker-compose.upstream.yml up -d"
+    chdir: "{{ openclaw_upstream_root }}"
+  register: start_result
+  changed_when: "'Started' in start_result.stderr or 'Creating' in start_result.stderr"
+
+- name: Wait for health check to pass
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ openclaw_gateway_port }}/healthz"
+    method: GET
+    status_code: 200
+  register: health_check
+  retries: 12
+  delay: 5
+  until: health_check.status == 200
+  when: openclaw_mode == 'gateway'
+
+- name: Display health check result
+  ansible.builtin.debug:
+    msg: "OpenClaw upstream is healthy on {{ inventory_hostname }} (port {{ openclaw_gateway_port }})"
+  when:
+    - openclaw_mode == 'gateway'
+    - health_check is not skipped
+    - health_check.status | default(0) == 200

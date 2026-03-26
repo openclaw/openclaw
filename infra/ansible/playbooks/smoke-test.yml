@@ -1,0 +1,111 @@
+---
+# Smoke tests for upstream OpenClaw deployment
+#
+# Usage:
+#   ansible-playbook playbooks/smoke-test.yml
+#   ansible-playbook playbooks/smoke-test.yml --limit gateway
+#
+# Checks:
+#   1. Container is running and healthy
+#   2. Gateway HTTP health endpoint responds
+#   3. Telegram channel is connected (gateway only)
+#   4. Cross-node reachability (from nodes to gateway)
+#   5. Existing services unaffected (Supabase, Archon)
+
+- name: Smoke test — gateway
+  hosts: gateway
+  tasks:
+    - name: Check container is running
+      ansible.builtin.command:
+        cmd: "docker compose -f docker-compose.upstream.yml ps --format json"
+        chdir: "{{ openclaw_upstream_root }}"
+      register: container_status
+      changed_when: false
+
+    - name: Display container status
+      ansible.builtin.debug:
+        msg: "{{ container_status.stdout }}"
+
+    - name: Check gateway HTTP health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ openclaw_gateway_port }}/healthz"
+        method: GET
+        status_code: 200
+      register: health_result
+
+    - name: Display health result
+      ansible.builtin.debug:
+        msg: "Gateway health: {{ health_result.status }} — {{ health_result.json | default({}) }}"
+
+    - name: Check gateway status (channels)
+      ansible.builtin.command:
+        cmd: >
+          docker compose -f docker-compose.upstream.yml exec
+          openclaw-upstream node dist/index.js channels status --probe
+        chdir: "{{ openclaw_upstream_root }}"
+      register: channels_status
+      changed_when: false
+      failed_when: false
+
+    - name: Display channels status
+      ansible.builtin.debug:
+        msg: "{{ channels_status.stdout | default('No output') }}"
+
+    - name: Check Supabase is still reachable
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:54321/rest/v1/"
+        method: GET
+        status_code: [200, 401]
+      register: supabase_check
+      failed_when: false
+
+    - name: Check Archon is still reachable
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8181/health"
+        method: GET
+        status_code: 200
+      register: archon_check
+      failed_when: false
+
+    - name: Report existing services
+      ansible.builtin.debug:
+        msg: >
+          Existing services:
+          Supabase={{ supabase_check.status | default('unreachable') }},
+          Archon={{ archon_check.status | default('unreachable') }}
+
+- name: Smoke test — cross-node reachability
+  hosts: nodes
+  tasks:
+    - name: Check gateway reachable from this node
+      ansible.builtin.uri:
+        url: "http://100.69.32.10:{{ openclaw_gateway_port }}/healthz"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: cross_node_health
+      failed_when: false
+
+    - name: Display cross-node result
+      ansible.builtin.debug:
+        msg: >
+          Gateway reachable from {{ inventory_hostname }}:
+          {{ 'YES' if cross_node_health.status | default(0) == 200 else 'NO (status=' ~ cross_node_health.status | default('timeout') ~ ')' }}
+
+- name: Smoke test — dev workstation
+  hosts: dev
+  tasks:
+    - name: Check local gateway health (if running)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ openclaw_gateway_port }}/healthz"
+        method: GET
+        status_code: 200
+        timeout: 5
+      register: dev_health
+      failed_when: false
+
+    - name: Display dev health
+      ansible.builtin.debug:
+        msg: >
+          Dev gateway:
+          {{ 'healthy' if dev_health.status | default(0) == 200 else 'not running or unhealthy' }}

@@ -1,0 +1,42 @@
+---
+# Defaults for openclaw_upstream role
+# Override these in inventory group_vars or host_vars
+
+openclaw_version: "2026.3.24"
+openclaw_image_tag: "fleet-{{ openclaw_version }}"
+openclaw_image_name: "openclaw"
+openclaw_gateway_port: 18789
+openclaw_bridge_port: 18790
+openclaw_timezone: "America/Chicago"
+openclaw_docker_network: "upstream-net"
+openclaw_extensions: "telegram ollama anthropic"
+
+openclaw_mode: "node"
+openclaw_upstream_root: "/opt/openclaw-upstream"
+openclaw_gateway_bind: "lan"
+openclaw_telegram_enabled: false
+openclaw_ollama_host: ""
+
+openclaw_identity_name: "OpenClaw"
+openclaw_identity_theme: "AI operations assistant"
+openclaw_default_model: "anthropic/claude-sonnet-4-6"
+openclaw_log_level: "info"
+openclaw_log_file: "/tmp/openclaw/openclaw.log"
+
+openclaw_gateway_auth_mode: "token"
+openclaw_telegram_dm_policy: "allowlist"
+openclaw_telegram_allow_from: []
+openclaw_telegram_require_mention: true
+
+# Safety gates
+openclaw_stop_fork: false
+openclaw_start_container: true
+
+# Old fork references (for rollback)
+openclaw_fork_compose_file: "docker-compose.yml"
+openclaw_fork_service_name: "openclaw"
+
+# Secrets (set via vault or SOPS — never commit real values)
+openclaw_gateway_token: "{{ lookup('env', 'OPENCLAW_GATEWAY_TOKEN') }}"
+openclaw_anthropic_api_key: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
+openclaw_telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN') }}"

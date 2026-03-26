@@ -1,0 +1,21 @@
+---
+# Deploy openclaw.json configuration
+
+- name: Create upstream root directory
+  ansible.builtin.file:
+    path: "{{ openclaw_upstream_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Create openclaw data directory
+  ansible.builtin.file:
+    path: "{{ openclaw_upstream_root }}/openclaw-data"
+    state: directory
+    mode: "0755"
+
+- name: Deploy openclaw.json configuration
+  ansible.builtin.template:
+    src: openclaw.json.j2
+    dest: "{{ openclaw_upstream_root }}/openclaw-data/openclaw.json"
+    mode: "0644"
+  notify: restart openclaw-upstream

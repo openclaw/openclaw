@@ -1,0 +1,10 @@
+---
+# Handlers for openclaw_upstream role
+
+- name: restart openclaw-upstream
+  ansible.builtin.command:
+    cmd: "docker compose -f docker-compose.upstream.yml restart openclaw-upstream"
+    chdir: "{{ openclaw_upstream_root }}"
+  when: >
+    (openclaw_mode == 'gateway') or
+    (openclaw_start_container | default(false) | bool)
