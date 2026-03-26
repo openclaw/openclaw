@@ -40,6 +40,20 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("preserves intermediate assistant stream updates when enabled", () => {
+    const chatLog = new ChatLog(40, { preserveIntermediate: true });
+
+    chatLog.updateAssistant("first", "run-preserve");
+    chatLog.updateAssistant("second", "run-preserve");
+    chatLog.finalizeAssistant("final", "run-preserve");
+
+    const entries = chatLog.render(120).join("\n");
+    expect(entries).toContain("first");
+    expect(entries).toContain("second");
+    expect(entries).toContain("final");
+    expect(chatLog.children.length).toBe(3);
+  });
+
   it("drops stale tool references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
