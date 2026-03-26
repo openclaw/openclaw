@@ -81,7 +81,6 @@ const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
   output: "jsonl",
   resumeOutput: "text",
   input: "arg",
-  maxPromptArgChars: 100_000,
   modelArg: "--model",
   sessionIdFields: ["thread_id"],
   sessionMode: "existing",
