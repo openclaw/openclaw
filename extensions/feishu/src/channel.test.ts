@@ -280,6 +280,39 @@ describe("feishuPlugin actions", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("rejects raw legacy card text payloads", async () => {
+    const legacyCard = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "Run /new" },
+                value: { text: "/new" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: { to: "chat:oc_group_1", card: legacyCard },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow(
+      "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+    );
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("sends media through the outbound adapter", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({
       channel: "feishu",
