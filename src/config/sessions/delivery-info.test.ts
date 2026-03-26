@@ -17,7 +17,8 @@ vi.mock("./store.js", () => ({
   loadSessionStore: () => storeState.store,
 }));
 
-import { extractDeliveryInfo, parseSessionThreadInfo } from "./delivery-info.js";
+let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
+let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
@@ -25,8 +26,10 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
   deliveryContext,
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   storeState.store = {};
+  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
 });
 
 describe("extractDeliveryInfo", () => {

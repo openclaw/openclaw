@@ -1,4 +1,4 @@
-import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
+import { listControlledSubagentRuns } from "../../agents/subagent-control.js";
 import { logVerbose } from "../../globals.js";
 import { handleSubagentsAgentsAction } from "./commands-subagents/action-agents.js";
 import { handleSubagentsFocusAction } from "./commands-subagents/action-focus.js";
@@ -61,7 +61,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     params,
     handledPrefix,
     requesterKey,
-    runs: listSubagentRunsForRequester(requesterKey),
+    runs: listControlledSubagentRuns(requesterKey),
     restTokens,
   };
 

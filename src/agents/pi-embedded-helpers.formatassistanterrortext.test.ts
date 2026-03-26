@@ -4,7 +4,9 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
+  isRawApiErrorPayload,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -32,6 +34,12 @@ describe("formatAssistantErrorText", () => {
   it("returns context overflow for Kimi 'model token limit' errors", () => {
     const msg = makeAssistantError(
       "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("returns context overflow for Ollama 'prompt too long' errors (#34005)", () => {
+    const msg = makeAssistantError(
+      'Ollama API error 400: {"StatusCode":400,"Status":"400 Bad Request","error":"prompt too long; exceeded max context length by 4 tokens"}',
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
@@ -113,9 +121,82 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
+    const msg = makeAssistantError(
+      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("4381 min");
+    expect(result).toContain("go plan");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("surfaces provider-specific rate limit message from JSON payload (#54433)", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached. Try again in 30 seconds."}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("30 seconds");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("returns generic rate limit message when no specific details are present", () => {
+    const msg = makeAssistantError("429 Too Many Requests");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
+  it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("try again in 24 hours");
+    expect(result).not.toMatch(/^⚠️ 429\b/);
+    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
+  });
+
+  it("falls back to generic copy for HTML quota pages", () => {
+    const msg = makeAssistantError(
+      "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
+  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+    const msg = makeAssistantError(
+      "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
+
+  it("returns a connection-refused message for ECONNREFUSED failures", () => {
+    const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: connection refused by the provider endpoint.",
+    );
+  });
+
+  it("returns a DNS-specific message for provider lookup failures", () => {
+    const msg = makeAssistantError("dial tcp: lookup api.example.com: no such host (ENOTFOUND)");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: DNS lookup for the provider endpoint failed.",
+    );
+  });
+
+  it("returns an interrupted-connection message for socket hang ups", () => {
+    const msg = makeAssistantError("socket hang up");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: network connection was interrupted.",
+    );
   });
 });
 
@@ -151,5 +232,16 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
+  });
+});
+
+describe("raw API error payload helpers", () => {
+  it("recognizes provider-prefixed JSON payloads for observation fingerprints", () => {
+    const raw =
+      'Ollama API error: {"type":"error","error":{"type":"server_error","message":"Boom"},"request_id":"req_123"}';
+
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
+    expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
   });
 });
