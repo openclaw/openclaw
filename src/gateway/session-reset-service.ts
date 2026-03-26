@@ -322,6 +322,7 @@ export async function performGatewaySessionReset(params: {
       sendPolicy: currentEntry?.sendPolicy,
       spawnedBy: currentEntry?.spawnedBy,
       parentSessionKey: currentEntry?.parentSessionKey,
+      spawnDepth: currentEntry?.spawnDepth,
       label: currentEntry?.label,
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,
