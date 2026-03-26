@@ -55,10 +55,17 @@ export async function rotateConfigBackups(
   let dest = `${backupBase}.${stamp}`;
 
   // Handle sub-second collision: append zero-padded -02, -03, … suffix.
+  // We check for *any* existing file that shares the same timestamp prefix
+  // (not just the unsuffixed base name) so that if cleanOrphanBackups has
+  // already pruned the base entry we continue the sequence rather than
+  // reusing the bare timestamp.
   const dir = path.dirname(configPath);
   const entries = await ioFs.readdir(dir).catch(() => [] as string[]);
   const destBasename = path.basename(dest);
-  if (entries.includes(destBasename)) {
+  const hasCollision = entries.some(
+    (e) => e === destBasename || e.startsWith(`${destBasename}-`),
+  );
+  if (hasCollision) {
     let seq = 2;
     while (entries.includes(`${destBasename}-${String(seq).padStart(2, "0")}`)) {
       seq += 1;

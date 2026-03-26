@@ -215,6 +215,48 @@ describe("config backup rotation", () => {
     });
   });
 
+  it("continues collision suffix when base timestamp was already pruned", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const dir = path.dirname(configPath);
+      const base = path.basename(configPath);
+
+      await fs.writeFile(configPath, "current");
+      await fs.writeFile(`${configPath}.bak`, "to-rotate");
+
+      // Simulate: base timestamp was pruned but -02 and -03 siblings remain
+      // (e.g. cleanOrphanBackups removed the oldest unsuffixed entry).
+      const entries = await fs.readdir(dir);
+      // We need to rotate once to learn the current timestamp, then set up
+      // the scenario manually.
+      await rotateConfigBackups(configPath, fs);
+      const afterFirst = await fs.readdir(dir);
+      const stamped = afterFirst.find(
+        (e) => e.startsWith(`${base}.bak.`) && isDatetimeSuffix(e.slice(`${base}.bak.`.length)),
+      )!;
+      const stampSuffix = stamped.slice(`${base}.bak.`.length);
+
+      // Now create the edge-case scenario: remove the unsuffixed base, add -02
+      await fs.unlink(path.join(dir, stamped));
+      await fs.writeFile(path.join(dir, `${stamped}-02`), "sibling-02");
+      await fs.writeFile(`${configPath}.bak`, "second-rotate");
+
+      await rotateConfigBackups(configPath, fs);
+
+      const finalEntries = await fs.readdir(dir);
+      const suffixed = finalEntries.filter(
+        (e) =>
+          e.startsWith(`${base}.bak.${stampSuffix}`) &&
+          e !== `${base}.bak.${stampSuffix}`,
+      );
+
+      // Should have -02 (pre-existing) and -03 (newly created), NOT reuse the bare timestamp
+      expect(suffixed).toContain(`${base}.bak.${stampSuffix}-02`);
+      expect(suffixed).toContain(`${base}.bak.${stampSuffix}-03`);
+      expect(finalEntries).not.toContain(stamped); // bare timestamp NOT recreated
+    });
+  });
+
   describe("isDatetimeSuffix", () => {
     it("matches valid datetime suffixes", () => {
       expect(isDatetimeSuffix("20260308-143022")).toBe(true);
