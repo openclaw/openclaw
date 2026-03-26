@@ -48,11 +48,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       return;
     }
     lastDmUpdateMs = now;
-    try {
-      await client.dms.update();
-    } catch (err) {
-      log(`matrix: dm cache refresh failed (${String(err)})`);
-    }
+    await client.dms.update();
   };
 
   const resolveJoinedMembers = async (roomId: string): Promise<string[] | null> => {
@@ -82,34 +78,34 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     },
     isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
       const { roomId, senderId } = params;
-      await refreshDmCache();
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = await resolveJoinedMembers(roomId);
+      const strictDirectMembership = isStrictDirectMembership({
+        selfUserId,
+        remoteUserId: senderId,
+        joinedMembers,
+      });
+      let refreshFailed = false;
 
-      if (client.dms.isDm(roomId)) {
-        const directViaAccountData = Boolean(
-          isStrictDirectMembership({
-            selfUserId,
-            remoteUserId: senderId,
-            joinedMembers,
-          }),
-        );
-        if (directViaAccountData) {
+      try {
+        await refreshDmCache();
+      } catch (err) {
+        log(`matrix: dm cache refresh failed (${String(err)})`);
+        refreshFailed = true;
+      }
+
+      if (refreshFailed) {
+        if (strictDirectMembership) {
+          log(`matrix: dm detected via exact 2-member room room=${roomId}`);
+          return true;
+        }
+      } else if (client.dms.isDm(roomId)) {
+        if (strictDirectMembership) {
           log(`matrix: dm detected via m.direct room=${roomId}`);
           return true;
         }
         log(`matrix: ignoring stale m.direct classification room=${roomId}`);
-      }
-
-      if (
-        isStrictDirectMembership({
-          selfUserId,
-          remoteUserId: senderId,
-          joinedMembers,
-        })
-      ) {
-        log(`matrix: dm detected via exact 2-member room room=${roomId}`);
-        return true;
+        return false;
       }
 
       log(

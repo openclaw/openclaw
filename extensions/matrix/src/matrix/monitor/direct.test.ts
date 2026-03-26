@@ -30,73 +30,6 @@ describe("createDirectRoomTracker", () => {
   });
 
   it("treats m.direct rooms as DMs", async () => {
-    const tracker = createDirectRoomTracker(createMockClient({ isDm: true }));
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("does not trust stale m.direct classifications for shared rooms", async () => {
-    const tracker = createDirectRoomTracker(
-      createMockClient({
-        isDm: true,
-        members: ["@alice:example.org", "@bot:example.org", "@extra:example.org"],
-      }),
-    );
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("classifies 2-member rooms as DMs when direct metadata is missing", async () => {
-    const client = createMockClient({ isDm: false });
-    const tracker = createDirectRoomTracker(client);
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
-    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("does not classify rooms with extra members as DMs", async () => {
-    const tracker = createDirectRoomTracker(
-      createMockClient({
-        isDm: false,
-        members: ["@alice:example.org", "@bot:example.org", "@observer:example.org"],
-      }),
-    );
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("does not classify 2-member rooms whose sender is not a joined member as DMs", async () => {
-    const tracker = createDirectRoomTracker(
-      createMockClient({
-        isDm: false,
-        members: ["@mallory:example.org", "@bot:example.org"],
-      }),
-    );
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("re-checks room membership after invalidation when a DM gains extra members", async () => {
     const client = createMockClient({ isDm: true });
     const tracker = createDirectRoomTracker(client);
 
@@ -107,8 +40,100 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    client.__setMembers(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
 
+  it("does not trust stale m.direct classifications for shared rooms", async () => {
+    const client = createMockClient({
+      isDm: true,
+      members: ["@alice:example.org", "@bot:example.org", "@extra:example.org"],
+    });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("does not classify 2-member rooms as DMs when the dm cache refresh succeeds", async () => {
+    const client = createMockClient({ isDm: false });
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("falls back to strict 2-member membership when dm cache refresh fails", async () => {
+    const client = createMockClient({ isDm: false });
+    client.dms.update.mockRejectedValue(new Error("dm cache unavailable"));
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("does not classify rooms with extra members as DMs when falling back", async () => {
+    const client = createMockClient({
+      isDm: false,
+      members: ["@alice:example.org", "@bot:example.org", "@observer:example.org"],
+    });
+    client.dms.update.mockRejectedValue(new Error("dm cache unavailable"));
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
+    const client = createMockClient({
+      isDm: false,
+      members: ["@mallory:example.org", "@bot:example.org"],
+    });
+    client.dms.update.mockRejectedValue(new Error("dm cache unavailable"));
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("re-checks room membership after invalidation when fallback membership changes", async () => {
+    const client = createMockClient({ isDm: false });
+    client.dms.update.mockRejectedValue(new Error("dm cache unavailable"));
+    const tracker = createDirectRoomTracker(client);
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    client.__setMembers(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
     tracker.invalidateRoom("!room:example.org");
 
     await expect(
@@ -119,32 +144,9 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(false);
   });
 
-  it("still recognizes exact 2-member rooms when member state also claims is_direct", async () => {
-    const tracker = createDirectRoomTracker(createMockClient({}));
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(true);
-  });
-
-  it("ignores member-state is_direct when the room is not a strict DM", async () => {
-    const tracker = createDirectRoomTracker(
-      createMockClient({
-        members: ["@alice:example.org", "@bot:example.org", "@observer:example.org"],
-      }),
-    );
-    await expect(
-      tracker.isDirectMessage({
-        roomId: "!room:example.org",
-        senderId: "@alice:example.org",
-      }),
-    ).resolves.toBe(false);
-  });
-
   it("bounds joined-room membership cache size", async () => {
     const client = createMockClient({ isDm: false });
+    client.dms.update.mockRejectedValue(new Error("dm cache unavailable"));
     const tracker = createDirectRoomTracker(client);
 
     for (let i = 0; i <= 1024; i += 1) {
