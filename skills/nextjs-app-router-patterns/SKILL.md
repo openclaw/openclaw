@@ -503,9 +503,13 @@ fetch(url, { next: { revalidate: 60 } });
 
 // Tag-based invalidation
 fetch(url, { next: { tags: ["products"] } });
+```
 
-// Invalidate via Server Action
-("use server");
+Invalidate via Server Action (separate module, e.g. `app/actions.ts`):
+
+```ts
+"use server";
+
 import { revalidateTag, revalidatePath } from "next/cache";
 
 export async function updateProduct(id: string, data: ProductData) {

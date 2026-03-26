@@ -125,7 +125,9 @@
         },
         "skills": [
           "foundry-evm-debug",
+          "frontend-design",
           "morpho-sre",
+          "nextjs-app-router-patterns",
           "sre-api-wrappers",
           "sre-auto-remediation",
           "sre-consumer-frontend",
@@ -133,7 +135,8 @@
           "sre-incident-triage",
           "sre-sentinel",
           "sre-verify",
-          "vercel"
+          "vercel",
+          "vercel-react-best-practices"
         ]
       },
       {
@@ -253,7 +256,26 @@
           "web-design-guidelines"
         ],
         "tools": {
-          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"]
+          "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"],
+          "exec": {
+            "host": "gateway",
+            "security": "allowlist",
+            "ask": "off",
+            "safeBins": [
+              "node",
+              "npm",
+              "npx",
+              "pnpm",
+              "python3",
+              "playwright",
+              "tsc",
+              "next",
+              "vitest",
+              "eslint",
+              "prettier",
+              "jq"
+            ]
+          }
         }
       }
     ]
