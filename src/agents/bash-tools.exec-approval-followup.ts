@@ -1,3 +1,4 @@
+import { INTERNAL_MESSAGE_CHANNEL, isInternalMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -40,15 +41,27 @@ export async function sendExecApprovalFollowup(
       ? String(params.turnSourceThreadId)
       : undefined;
 
+  // Outbound `deliver` targets external messaging plugins. Webchat (Control UI) has no
+  // deliverable route and no `to`; `deliver: true` would make the gateway try to remap
+  // webchat to a configured channel and fail when none exist (e.g. Docker-only gateway).
+  const hasExternalDeliveryPair = Boolean(channel && to) && !isInternalMessageChannel(channel);
+  const deliver = hasExternalDeliveryPair;
+  const explicitChannel =
+    channel && to
+      ? channel
+      : isInternalMessageChannel(channel)
+        ? INTERNAL_MESSAGE_CHANNEL
+        : undefined;
+
   await callGatewayTool(
     "agent",
     { timeoutMs: 60_000 },
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
+      deliver,
       bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
+      channel: explicitChannel,
       to: channel && to ? to : undefined,
       accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
       threadId: channel && to ? threadId : undefined,
