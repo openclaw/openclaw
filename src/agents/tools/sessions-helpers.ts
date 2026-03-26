@@ -52,6 +52,7 @@ export type SessionListRow = {
   key: string;
   kind: SessionKind;
   channel: string;
+  spawnedBy?: string;
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
