@@ -1,31 +1,30 @@
 import fs from "node:fs/promises";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
-  OPENAI_BATCH_ENDPOINT,
-  type OpenAiBatchRequest,
-  runOpenAiEmbeddingBatches,
-} from "./batch-openai.js";
-import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
-import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
-import {
-  estimateStructuredEmbeddingInputBytes,
-  estimateUtf8Bytes,
-} from "./embedding-input-limits.js";
-import { type EmbeddingInput, hasNonTextEmbeddingParts } from "./embedding-inputs.js";
-import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
-import {
+  buildGeminiEmbeddingRequest,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  createSubsystemLogger,
+  enforceEmbeddingMaxInputTokens,
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+  hasNonTextEmbeddingParts,
   hashText,
   parseEmbedding,
   remapChunkLines,
+  runGeminiEmbeddingBatches,
+  runOpenAiEmbeddingBatches,
+  runVoyageEmbeddingBatches,
+  type EmbeddingInput,
+  type GeminiBatchRequest,
   type MemoryChunk,
   type MemoryFileEntry,
-} from "./internal.js";
+  type MemorySource,
+  type OpenAiBatchRequest,
+  type SessionFileEntry,
+  type VoyageBatchRequest,
+  OPENAI_BATCH_ENDPOINT,
+} from "../api.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";

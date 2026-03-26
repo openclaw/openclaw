@@ -1,1 +1,2 @@
-export { getMemorySearchManager, readAgentMemoryFile, resolveMemoryBackendConfig } from "./api.js";
+export { readAgentMemoryFile, resolveMemoryBackendConfig } from "./api.js";
+export { getMemorySearchManager } from "./runtime-api.js";
