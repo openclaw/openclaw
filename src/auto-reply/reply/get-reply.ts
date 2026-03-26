@@ -418,7 +418,18 @@ export async function getReplyFromConfig(
           }
         }
         const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
-        if (imageModelKeys.has(channelKey) || imageModelKeys.has(channelModelOverride.model)) {
+        // Resolve channel override using imageModel's provider for accurate key comparison.
+        // This prevents false matches when raw model strings are providerless but resolve
+        // to different providers in mixed-provider configs.
+        const channelOverrideResolved = resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider: imageModelDefaultProvider,
+          aliasIndex: channelAliasIndex,
+        });
+        const channelOverrideKey = channelOverrideResolved
+          ? modelKey(channelOverrideResolved.ref.provider, channelOverrideResolved.ref.model)
+          : channelModelOverride.model;
+        if (imageModelKeys.has(channelKey) || imageModelKeys.has(channelOverrideKey)) {
           channelModelIsVisionModel = true;
         }
       }
