@@ -33,7 +33,26 @@ let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
-  createBundleMcpToolRuntime: async () => ({
+  getOrCreateSessionMcpRuntime: async () => ({
+    sessionId: "bundle-mcp-runtime",
+    sessionKey: "agent:test:bundle-mcp-e2e",
+    workspaceDir: "/tmp",
+    configFingerprint: "test",
+    createdAt: Date.now(),
+    lastUsedAt: Date.now(),
+    markUsed: () => {},
+    getCatalog: async () => ({
+      version: 1,
+      generatedAt: Date.now(),
+      servers: {},
+      tools: [],
+    }),
+    callTool: async () => ({
+      content: [{ type: "text", text: "FROM-BUNDLE" }],
+    }),
+    dispose: async () => {},
+  }),
+  materializeBundleMcpToolsForRun: async () => ({
     tools: [
       {
         name: "bundle_probe",
