@@ -161,4 +161,58 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
+
+  it("filters outbound bot replies in self-chat mode to prevent echo loop (#55174)", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          allowFrom: ["+15550009999"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Owner",
+      isFromMe: true,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.isSelfChat).toBe(true);
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("allows inbound user messages in self-chat mode when isFromMe is false", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          allowFrom: ["+15550009999"],
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+15550009999",
+      selfE164: "+15550009999",
+      senderE164: "+15550009999",
+      group: false,
+      pushName: "Owner",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "15550009999@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.isSelfChat).toBe(true);
+  });
 });
