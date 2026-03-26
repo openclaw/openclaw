@@ -5089,6 +5089,15 @@
           }
         },
         {
+          "declaration": "export function resolveRequestClientIp(req?: IncomingMessage | undefined, trustedProxies?: string[] | undefined, allowRealIpFallback?: boolean): string | undefined;",
+          "exportName": "resolveRequestClientIp",
+          "kind": "function",
+          "source": {
+            "line": 186,
+            "path": "src/gateway/net.ts"
+          }
+        },
+        {
           "declaration": "export function resolveSingleWebhookTarget<T>(targets: readonly T[], isMatch: (target: T) => boolean): WebhookTargetMatchResult<T>;",
           "exportName": "resolveSingleWebhookTarget",
           "kind": "function",
