@@ -28,6 +28,7 @@ import {
 import { isFileMissingError } from "./fs-utils.js";
 import {
   buildFileEntry,
+  CODE_EXTENSIONS,
   ensureDir,
   hashText,
   listMemoryFiles,
@@ -385,10 +386,15 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
       return;
     }
+    // Build glob patterns for all code extensions recognised by detectCodeLanguage().
+    const codeExtGlobs = Object.keys(CODE_EXTENSIONS).map((ext) =>
+      path.join(this.workspaceDir, "memory", "**", `*${ext}`),
+    );
     const watchPaths = new Set<string>([
       path.join(this.workspaceDir, "MEMORY.md"),
       path.join(this.workspaceDir, "memory.md"),
       path.join(this.workspaceDir, "memory", "**", "*.md"),
+      ...codeExtGlobs,
     ]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
@@ -399,6 +405,9 @@ export abstract class MemoryManagerSyncOps {
         }
         if (stat.isDirectory()) {
           watchPaths.add(path.join(entry, "**", "*.md"));
+          for (const ext of Object.keys(CODE_EXTENSIONS)) {
+            watchPaths.add(path.join(entry, "**", `*${ext}`));
+          }
           if (this.settings.multimodal.enabled) {
             for (const modality of this.settings.multimodal.modalities) {
               for (const extension of getMemoryMultimodalExtensions(modality)) {
@@ -413,6 +422,7 @@ export abstract class MemoryManagerSyncOps {
         if (
           stat.isFile() &&
           (entry.toLowerCase().endsWith(".md") ||
+            Object.keys(CODE_EXTENSIONS).some((ext) => entry.toLowerCase().endsWith(ext)) ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
           watchPaths.add(entry);

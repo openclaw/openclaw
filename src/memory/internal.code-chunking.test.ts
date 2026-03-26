@@ -256,8 +256,7 @@ describe("chunkCode", () => {
     });
 
     it("handles content with only whitespace", () => {
-      const chunks = chunkCode("   \n\n  \n", "typescript", CHUNKING);
-      expect(chunks.filter((c) => c.text.trim().length > 0)).toHaveLength(0);
+      expect(chunkCode("   \n\n  \n", "typescript", CHUNKING)).toHaveLength(0);
     });
   });
 

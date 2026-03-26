@@ -475,8 +475,11 @@ export function chunkMarkdown(
  * indentation level 0 (no leading whitespace).
  */
 const DECL_START_RE: Record<CodeLanguage, RegExp> = {
+  // Only match structural declarations. Bare re-exports (`export * from`,
+  // `export { a, b }`) are intentionally excluded to avoid fragmenting barrel
+  // files into dozens of single-line chunks.
   typescript:
-    /^(?:export\s|default\s|async\s+(?:function|class)\b|function\s+\w|class\s+\w|const\s+\w[\w$]*\s*[=:]\s*(?:async\s+)?(?:function|\(|<)|interface\s+\w|type\s+\w[\w$]*\s*=|enum\s+\w|declare\s+|abstract\s+class\b)/,
+    /^(?:export\s+(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum|abstract|declare)\b|export\s+default\s|async\s+(?:function|class)\b|function\s+\w|class\s+\w|const\s+\w[\w$]*\s*[=:]\s*(?:async\s+)?(?:function|\(|<)|interface\s+\w|type\s+\w[\w$]*\s*=|enum\s+\w|declare\s+|abstract\s+class\b)/,
   python: /^(?:async\s+)?(?:def|class)\s+\w|^@\w/,
   go: /^func\s|^type\s+\w+\s+(?:struct|interface)\b/,
   rust: /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|impl|trait|type|const|static|mod)\s+\w/,
@@ -509,7 +512,7 @@ export function chunkCode(
   chunking: { tokens: number; overlap: number },
 ): MemoryChunk[] {
   const lines = content.split("\n");
-  if (lines.length === 0) {
+  if (content.trim().length === 0) {
     return [];
   }
 
