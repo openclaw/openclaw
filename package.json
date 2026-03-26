@@ -541,6 +541,10 @@
       "types": "./dist/plugin-sdk/twitch.d.ts",
       "default": "./dist/plugin-sdk/twitch.js"
     },
+    "./plugin-sdk/video-generation": {
+      "types": "./dist/plugin-sdk/video-generation.d.ts",
+      "default": "./dist/plugin-sdk/video-generation.js"
+    },
     "./plugin-sdk/webhook-ingress": {
       "types": "./dist/plugin-sdk/webhook-ingress.d.ts",
       "default": "./dist/plugin-sdk/webhook-ingress.js"

@@ -142,6 +142,26 @@ export function readNumberParam(
   return integer ? Math.trunc(value) : value;
 }
 
+export function readBooleanParam(
+  params: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const raw = readParamRaw(params, key);
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "true" || trimmed === "1") {
+      return true;
+    }
+    if (trimmed === "false" || trimmed === "0") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
 export function readStringArrayParam(
   params: Record<string, unknown>,
   key: string,
