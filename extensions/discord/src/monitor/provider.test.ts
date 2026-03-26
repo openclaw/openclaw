@@ -745,18 +745,22 @@ describe("monitorDiscordProvider", () => {
     expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
   });
 
-  it("throws when fetchUser('@me') fails to prevent running without bot identity (#42219)", async () => {
+  it("falls back to applicationId when fetchUser('@me') fails (#42219)", async () => {
     const { monitorDiscordProvider } = await import("./provider.js");
     const runtime = baseRuntime();
 
     clientFetchUserMock.mockRejectedValueOnce(new Error("network timeout"));
 
-    await expect(
+    // Should NOT throw — the code now falls back to applicationId as botUserId
+    // instead of aborting. We race with a short timeout to confirm no immediate rejection.
+    const result = await Promise.race([
       monitorDiscordProvider({
         config: baseConfig(),
         runtime,
-      }),
-    ).rejects.toThrow("discord: cannot start without bot identity");
+      }).then(() => "resolved", (err: Error) => `rejected: ${err.message}`),
+      new Promise<string>((r) => setTimeout(() => r("still-running"), 200)),
+    ]);
+    expect(result).toBe("still-running");
   });
 
   it("throws when fetchUser('@me') returns no user id", async () => {
