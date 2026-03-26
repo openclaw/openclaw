@@ -1,5 +1,6 @@
 import { markdownToText, truncateText } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isBlockedHostnameOrIp, SsrFBlockedError } from "openclaw/plugin-sdk/infra-runtime";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -28,6 +29,46 @@ const SCRAPE_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+
+/**
+ * Validate that a caller-supplied URL targets a public HTTP/HTTPS endpoint
+ * before forwarding it to the Firecrawl API.
+ *
+ * Without this check a prompt-injection attack can direct the agent to call
+ * firecrawl_scrape("http://169.254.169.254/...") and the Firecrawl service
+ * will happily fetch the cloud-instance metadata endpoint on behalf of the
+ * host environment, returning credentials into the LLM context (CWE-918).
+ *
+ * The guard reuses the same isBlockedHostnameOrIp() logic that is already
+ * enforced in the core web-fetch pipeline, ensuring consistent SSRF policy
+ * across all web-fetching tools.
+ *
+ * NOTE: This performs a static hostname check only — it does NOT resolve DNS
+ * to detect TOCTOU / DNS-rebinding attacks.  This is intentional: Firecrawl
+ * performs the actual HTTP fetch on its own remote infrastructure, so local
+ * DNS resolution would not reflect the address Firecrawl connects to.  The
+ * hostname-level guard catches obvious private/metadata targets; Firecrawl's
+ * own network-layer SSRF protections handle the rest.
+ */
+export function assertFirecrawlUrlAllowed(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // Redact full URL to avoid leaking embedded credentials or tokens in logs.
+    throw new SsrFBlockedError("Invalid URL supplied to Firecrawl");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SsrFBlockedError(
+      `Blocked non-HTTP(S) protocol in Firecrawl URL: ${parsed.protocol}`,
+    );
+  }
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    throw new SsrFBlockedError(
+      `Blocked hostname or private/internal IP in Firecrawl URL: ${parsed.hostname}`,
+    );
+  }
+}
 
 type FirecrawlSearchItem = {
   title: string;
@@ -342,6 +383,11 @@ export function parseFirecrawlScrapePayload(params: {
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
+  // Validate the caller-supplied URL before forwarding it to Firecrawl.
+  // Prompt-injection attacks can direct the agent to pass private/metadata
+  // addresses here; block them early using the shared SSRF guard (CWE-918).
+  assertFirecrawlUrlAllowed(params.url);
+
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -410,6 +456,7 @@ export async function runFirecrawlScrape(
 }
 
 export const __testing = {
+  assertFirecrawlUrlAllowed,
   parseFirecrawlScrapePayload,
   resolveSearchItems,
 };
