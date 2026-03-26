@@ -193,6 +193,31 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
+    configState.cfg = {
+      gateway: {
+        mode: "local",
+      },
+    };
+    configState.snapshot = {
+      exists: true,
+      valid: true,
+      config: {
+        update: { channel: "beta" },
+      },
+      parsed: {
+        update: { channel: "beta" },
+      },
+    };
+
+    await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      "Gateway start blocked: set gateway.mode=local (current: unset) or pass --allow-unconfigured.",
+    );
+    expect(startGatewayServer).not.toHaveBeenCalled();
+  });
+
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
     await runGatewayCli(["gateway", "run", "--auth", mode, "--allow-unconfigured"]);
 

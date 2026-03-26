@@ -1,25 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadIncludePatternsFromEnv } from "../vitest.extensions.config.ts";
+import { createPatternFileHelper } from "./helpers/pattern-file.js";
 
-const tempDirs = new Set<string>();
+const patternFiles = createPatternFileHelper("openclaw-vitest-extensions-config-");
 
 afterEach(() => {
-  for (const dir of tempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  tempDirs.clear();
+  patternFiles.cleanup();
 });
-
-const writePatternFile = (basename: string, value: unknown) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-extensions-config-"));
-  tempDirs.add(dir);
-  const filePath = path.join(dir, basename);
-  fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
-  return filePath;
-};
 
 describe("extensions vitest include patterns", () => {
   it("returns null when no include file is configured", () => {
@@ -27,7 +14,7 @@ describe("extensions vitest include patterns", () => {
   });
 
   it("loads include patterns from a JSON file", () => {
-    const filePath = writePatternFile("include.json", [
+    const filePath = patternFiles.writePatternFile("include.json", [
       "extensions/feishu/index.test.ts",
       42,
       "",
@@ -42,7 +29,7 @@ describe("extensions vitest include patterns", () => {
   });
 
   it("throws when the configured file is not a JSON array", () => {
-    const filePath = writePatternFile("include.json", {
+    const filePath = patternFiles.writePatternFile("include.json", {
       include: ["extensions/feishu/index.test.ts"],
     });
 

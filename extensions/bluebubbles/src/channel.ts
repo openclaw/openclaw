@@ -1,10 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-  createScopedDmSecurityResolver,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -25,15 +19,21 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { bluebubblesMessageActions } from "./actions.js";
+import {
+  bluebubblesCapabilities,
+  bluebubblesConfigAdapter,
+  bluebubblesConfigSchema,
+  bluebubblesMeta as meta,
+  bluebubblesReload,
+  describeBlueBubblesAccount,
+} from "./channel-shared.js";
 import type { BlueBubblesProbe } from "./channel.runtime.js";
-import { BlueBubblesConfigSchema } from "./config-schema.js";
 import {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./group-policy.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./runtime-api.js";
 import {
-  buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
@@ -57,20 +57,6 @@ const loadBlueBubblesChannelRuntime = createLazyRuntimeNamedExport(
   "blueBubblesChannelRuntime",
 );
 
-const bluebubblesConfigAdapter = createScopedChannelConfigAdapter<ResolvedBlueBubblesAccount>({
-  sectionKey: "bluebubbles",
-  listAccountIds: listBlueBubblesAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveBlueBubblesAccount),
-  defaultAccountId: resolveDefaultBlueBubblesAccountId,
-  clearBaseFields: ["serverUrl", "password", "name", "webhookPath"],
-  resolveAllowFrom: (account: ResolvedBlueBubblesAccount) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: (entry) => normalizeBlueBubblesHandle(entry.replace(/^bluebubbles:/i, "")),
-    }),
-});
-
 const resolveBlueBubblesDmPolicy = createScopedDmSecurityResolver<ResolvedBlueBubblesAccount>({
   channelKey: "bluebubbles",
   resolvePolicy: (account) => account.config.dmPolicy,
@@ -90,53 +76,23 @@ const collectBlueBubblesSecurityWarnings =
     mentionGated: false,
   });
 
-const meta = {
-  id: "bluebubbles",
-  label: "BlueBubbles",
-  selectionLabel: "BlueBubbles (macOS app)",
-  detailLabel: "BlueBubbles",
-  docsPath: "/channels/bluebubbles",
-  docsLabel: "bluebubbles",
-  blurb: "iMessage via the BlueBubbles mac app + REST API.",
-  systemImage: "bubble.left.and.text.bubble.right",
-  aliases: ["bb"],
-  order: 75,
-  preferOver: ["imessage"],
-};
-
 export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe> =
   createChatChannelPlugin<ResolvedBlueBubblesAccount, BlueBubblesProbe>({
     base: {
       id: "bluebubbles",
       meta,
-      capabilities: {
-        chatTypes: ["direct", "group"],
-        media: true,
-        reactions: true,
-        edit: true,
-        unsend: true,
-        reply: true,
-        effects: true,
-        groupManagement: true,
-      },
+      capabilities: bluebubblesCapabilities,
       groups: {
         resolveRequireMention: resolveBlueBubblesGroupRequireMention,
         resolveToolPolicy: resolveBlueBubblesGroupToolPolicy,
       },
-      reload: { configPrefixes: ["channels.bluebubbles"] },
-      configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
+      reload: bluebubblesReload,
+      configSchema: bluebubblesConfigSchema,
       setupWizard: blueBubblesSetupWizard,
       config: {
         ...bluebubblesConfigAdapter,
         isConfigured: (account) => account.configured,
-        describeAccount: (account): ChannelAccountSnapshot =>
-          describeAccountSnapshot({
-            account,
-            configured: account.configured,
-            extra: {
-              baseUrl: account.baseUrl,
-            },
-          }),
+        describeAccount: (account): ChannelAccountSnapshot => describeBlueBubblesAccount(account),
       },
       actions: bluebubblesMessageActions,
       messaging: {
@@ -240,6 +196,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
             baseUrl: account.baseUrl,
             password: account.config.password ?? null,
             timeoutMs,
+            allowPrivateNetwork: account.config.allowPrivateNetwork === true,
           }),
         resolveAccountSnapshot: ({ account, runtime, probe }) => {
           const running = runtime?.running ?? false;

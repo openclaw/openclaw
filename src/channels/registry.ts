@@ -1,3 +1,4 @@
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { CHANNEL_IDS, CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 import type { ChannelMeta } from "./plugins/types.js";
 import type { ChannelId } from "./plugins/types.js";
@@ -7,7 +8,6 @@ export type { ChatChannelId } from "./ids.js";
 export type ChatChannelMeta = ChannelMeta;
 
 const WEBSITE_URL = "https://openclaw.ai";
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type RegisteredChannelPluginEntry = {
   plugin: {
@@ -17,10 +17,7 @@ type RegisteredChannelPluginEntry = {
 };
 
 function listRegisteredChannelPluginEntries(): RegisteredChannelPluginEntry[] {
-  const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: { registry?: { channels?: RegisteredChannelPluginEntry[] | null } | null };
-  };
-  return globalState[REGISTRY_STATE]?.registry?.channels ?? [];
+  return getActivePluginRegistry()?.channels ?? [];
 }
 
 function findRegisteredChannelPluginEntry(

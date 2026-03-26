@@ -1,25 +1,34 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock getProcessStartTime so PID-recycling detection works on non-Linux
-// (macOS, CI runners). isPidAlive is left unmocked.
 const FAKE_STARTTIME = 12345;
-vi.mock("../shared/pid-alive.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
-  return {
-    ...original,
-    getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
-  };
-});
+let __testing: typeof import("./session-write-lock.js").__testing;
+let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSessionWriteLock;
+let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
+let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
+let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 
-import {
-  __testing,
-  acquireSessionWriteLock,
-  cleanStaleLockFiles,
-  resolveSessionLockMaxHoldFromTimeout,
-} from "./session-write-lock.js";
+async function loadFreshSessionWriteLockModuleForTest() {
+  vi.resetModules();
+  // Mock getProcessStartTime so PID-recycling detection works on non-Linux
+  // (macOS, CI runners). isPidAlive is left unmocked.
+  vi.doMock("../shared/pid-alive.js", async (importOriginal) => {
+    const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
+    return {
+      ...original,
+      getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
+    };
+  });
+  ({
+    __testing,
+    acquireSessionWriteLock,
+    cleanStaleLockFiles,
+    resetSessionWriteLockStateForTest,
+    resolveSessionLockMaxHoldFromTimeout,
+  } = await import("./session-write-lock.js"));
+}
 
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
@@ -95,6 +104,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 }
 
 describe("acquireSessionWriteLock", () => {
+  beforeEach(async () => {
+    await loadFreshSessionWriteLockModuleForTest();
+  });
+
+  afterEach(() => {
+    resetSessionWriteLockStateForTest();
+    vi.restoreAllMocks();
+  });
   it("reuses locks across symlinked session paths", async () => {
     if (process.platform === "win32") {
       return;
@@ -221,6 +238,17 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("removes lock files during process-exit cleanup", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      __testing.releaseAllLocksSync();
+
+      await expect(fs.access(lockPath)).rejects.toThrow();
+      await lock.release();
+    });
+  });
+
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
@@ -324,6 +352,9 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("reclaims lock files with recycled PIDs", async () => {
+    if (process.platform !== "linux") {
+      return;
+    }
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       // Write a lock with a live PID (current process) but a wrong starttime,
       // simulating PID recycling: the PID is alive but belongs to a different

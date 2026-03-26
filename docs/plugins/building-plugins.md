@@ -144,6 +144,15 @@ A single plugin can register any number of capabilities via the `api` object:
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
+Hook guard semantics to keep in mind:
+
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: false }` is treated as no decision.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
+- `message_sending`: `{ cancel: false }` is treated as no decision.
+
+See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+
 ## Registering agent tools
 
 Tools are typed functions the LLM can call. They can be required (always
@@ -214,6 +223,14 @@ internal imports — never import your own plugin through its SDK path.
 <Check>Internal imports use local modules, not SDK self-imports</Check>
 <Check>Tests pass (`pnpm test -- extensions/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
+
+## Beta Release Testing
+
+1. Watch for GitHub release tags on [openclaw/openclaw](https://github.com/openclaw/openclaw/releases) and subscribe via `Watch` > `Releases`. Beta tags look like `v2026.3.N-beta.1`. You can also turn on notifications for the official OpenClaw X account [@openclaw](https://x.com/openclaw) for release announcements.
+2. Test your plugin against the beta tag as soon as it appears. The window before stable is typically only a few hours.
+3. Post in your plugin's thread in the `plugin-forum` Discord channel after testing with either `all good` or what broke. If you do not have a thread yet, create one.
+4. If something breaks, ship a fix PR to `main` and drop the link in your thread. Blockers with a PR get merged; blockers without one might ship anyway. Maintainers watch these threads during beta testing.
+5. Silence means green. If you miss the window, your fix likely lands in the next cycle.
 
 ## Next steps
 

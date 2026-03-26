@@ -221,10 +221,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
-"extensions: qwen-portal-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/qwen-portal-auth/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
@@ -241,6 +237,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: deepseek":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepseek/**"
 "extensions: anthropic":
   - changed-files:
       - any-glob-to-any-file:

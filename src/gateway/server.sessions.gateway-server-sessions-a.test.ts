@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -32,7 +34,8 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 }));
 
 const sessionHookMocks = vi.hoisted(() => ({
-  triggerInternalHook: vi.fn(async () => {}),
+  hasInternalHookListeners: vi.fn(() => true),
+  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -51,6 +54,10 @@ const acpRuntimeMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   getAcpRuntimeBackend: vi.fn(),
   requireAcpRuntimeBackend: vi.fn(),
+}));
+const acpManagerMocks = vi.hoisted(() => ({
+  cancelSession: vi.fn(async () => {}),
+  closeSession: vi.fn(async () => {}),
 }));
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
@@ -90,6 +97,7 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   );
   return {
     ...actual,
+    hasInternalHookListeners: sessionHookMocks.hasInternalHookListeners,
     triggerInternalHook: sessionHookMocks.triggerInternalHook,
   };
 });
@@ -138,6 +146,13 @@ vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: acpManagerMocks.cancelSession,
+    closeSession: acpManagerMocks.closeSession,
+  }),
+}));
 
 vi.mock("../browser/session-tab-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../browser/session-tab-registry.js")>();
@@ -225,11 +240,30 @@ async function getMainPreviewEntry(ws: import("ws").WebSocket) {
   return entry;
 }
 
+function isInternalHookEvent(value: unknown): value is InternalHookEvent {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.action === "string" &&
+    typeof candidate.sessionKey === "string" &&
+    Array.isArray(candidate.messages) &&
+    typeof candidate.context === "object" &&
+    candidate.context !== null
+  );
+}
+
 describe("gateway server sessions", () => {
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReset();
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
     sessionHookMocks.triggerInternalHook.mockClear();
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
@@ -242,6 +276,8 @@ describe("gateway server sessions", () => {
     acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
       acpRuntimeMocks.getAcpRuntimeBackend(backendId),
     );
+    acpManagerMocks.cancelSession.mockClear();
+    acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
   });
@@ -1001,6 +1037,55 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.preview prefers the freshest duplicate row for a legacy mixed-case main alias", async () => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+
+    const staleTranscriptPath = path.join(dir, "sess-stale-main.jsonl");
+    const freshTranscriptPath = path.join(dir, "sess-fresh-main.jsonl");
+    await fs.writeFile(
+      staleTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-stale-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "stale preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      freshTranscriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-fresh-main" }),
+        JSON.stringify({ message: { role: "assistant", content: "fresh preview" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:work": {
+            sessionId: "sess-stale-main",
+            updatedAt: 1,
+          },
+          "agent:ops:WORK": {
+            sessionId: "sess-fresh-main",
+            updatedAt: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await openClient();
+    const entry = await getMainPreviewEntry(ws);
+    expect(entry?.items[0]?.text).toContain("fresh preview");
+
+    ws.close();
+  });
+
   test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -1074,6 +1159,68 @@ describe("gateway server sessions", () => {
     expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
 
     ws.close();
+  });
+
+  test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    const entries: Record<string, { sessionId: string; updatedAt: number; label?: string }> = {
+      "agent:main:subagent:target": {
+        sessionId: "sess-target-exact",
+        updatedAt: now - 20_000,
+      },
+    };
+    for (let i = 0; i < 9; i += 1) {
+      entries[`agent:main:subagent:noisy-${i}`] = {
+        sessionId: `sess-noisy-${i}`,
+        updatedAt: now - i * 1_000,
+        label: `sess-target-exact noisy ${i}`,
+      };
+    }
+    await writeSessionStore({ entries });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      sessionId: "sess-target-exact",
+    });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+  });
+
+  test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
+    await createSessionStoreDir();
+    const now = Date.now();
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:visible-parent": {
+          sessionId: "sess-visible-parent",
+          updatedAt: now - 3_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:hidden-parent": {
+          sessionId: "sess-hidden-parent",
+          updatedAt: now - 2_000,
+          spawnedBy: "agent:main:main",
+        },
+        "agent:main:subagent:shared-child-key-filter": {
+          sessionId: "sess-shared-child-key-filter",
+          updatedAt: now - 1_000,
+          spawnedBy: "agent:main:subagent:hidden-parent",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const resolved = await rpcReq(ws, "sessions.resolve", {
+      key: "agent:main:subagent:shared-child-key-filter",
+      spawnedBy: "agent:main:subagent:visible-parent",
+    });
+
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error?.message).toContain(
+      "No session found: agent:main:subagent:shared-child-key-filter",
+    );
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
@@ -1164,41 +1311,23 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:discord:group:dev",
-          backend: "acpx",
-          runtimeSessionName: "runtime:delete",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: acpRuntimeMocks.cancel,
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
-    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:discord:group:dev",
-        backend: "acpx",
-        runtimeSessionName: "runtime:delete",
-      },
+    expect(acpManagerMocks.cancelSession).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       reason: "session-delete",
+      sessionKey: "agent:main:discord:group:dev",
     });
 
     ws.close();
@@ -1403,32 +1532,17 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(async () => ({
-          sessionKey: "agent:main:main",
-          backend: "acpx",
-          runtimeSessionName: "runtime:reset",
-        })),
-        runTurn: vi.fn(async function* () {}),
-        cancel: vi.fn(async () => {}),
-        close: acpRuntimeMocks.close,
-      },
-    });
-
     const { ws } = await openClient();
     const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
-    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
-      handle: {
-        sessionKey: "agent:main:main",
-        backend: "acpx",
-        runtimeSessionName: "runtime:reset",
-      },
+    expect(acpManagerMocks.closeSession).toHaveBeenCalledWith({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      requireAcpSession: false,
       reason: "session-reset",
+      sessionKey: "agent:main:main",
     });
 
     ws.close();
@@ -1692,6 +1806,206 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    ws.close();
+  });
+
+  test("session:patch hook fires with correct context", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-hook-test",
+          updatedAt: Date.now(),
+          label: "original-label",
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const { ws } = await openClient();
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "updated-label",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+        sessionKey: expect.stringMatching(/agent:main:main/),
+        context: expect.objectContaining({
+          sessionEntry: expect.objectContaining({
+            sessionId: "sess-hook-test",
+            label: "updated-label",
+          }),
+          patch: expect.objectContaining({
+            label: "updated-label",
+          }),
+          cfg: expect.any(Object),
+        }),
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch hook does not fire for webchat clients", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-webchat-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    const ws = new WebSocket(`ws://127.0.0.1:${harness.port}`, {
+      headers: { origin: `http://127.0.0.1:${harness.port}` },
+    });
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    await connectOk(ws, {
+      client: {
+        id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+      scopes: ["operator.admin"],
+    });
+
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-not-trigger-hook",
+    });
+
+    expect(patched.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    ws.close();
+  });
+
+  test("session:patch hook only fires after successful patch", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-success-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+
+    sessionHookMocks.triggerInternalHook.mockClear();
+
+    // Test 1: Invalid patch (missing key) - hook should not fire
+    const invalidPatch = await rpcReq(ws, "sessions.patch", {
+      // Missing required 'key' parameter
+      label: "should-fail",
+    });
+
+    expect(invalidPatch.ok).toBe(false);
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    // Test 2: Valid patch - hook should fire
+    const validPatch = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "should-succeed",
+    });
+
+    expect(validPatch.ok).toBe(true);
+    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session",
+        action: "patch",
+      }),
+    );
+
+    ws.close();
+  });
+
+  test("session:patch skips clone and dispatch when no hooks listen", async () => {
+    const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
+    sessionHookMocks.hasInternalHookListeners.mockReturnValue(false);
+
+    const { ws } = await openClient();
+    const patched = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "no-hook-listener",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(structuredCloneSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        patch: expect.any(Object),
+        sessionEntry: expect.any(Object),
+      }),
+    );
+    expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
+
+    structuredCloneSpy.mockRestore();
+    ws.close();
+  });
+
+  test("session:patch hook mutations cannot change the response path", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cfg-isolation-test",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
+      if (!isInternalHookEvent(event) || !isSessionPatchEvent(event)) {
+        return;
+      }
+      event.context.cfg.agents = {
+        ...event.context.cfg.agents,
+        defaults: {
+          ...event.context.cfg.agents?.defaults,
+          model: "zai/glm-4.6",
+        },
+      };
+    });
+
+    const { ws } = await openClient();
+    const patched = await rpcReq<{
+      entry: { label?: string };
+      key: string;
+      resolved: { modelProvider: string; model: string };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:main",
+      label: "cfg-isolation",
+    });
+
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.resolved).toEqual({
+      modelProvider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+    expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
     ws.close();
   });

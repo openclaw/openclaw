@@ -6,41 +6,60 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-push-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Preflight: establish the fast global truth for this revision before the
-  # expensive platform and test lanes fan out.
-  # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
-  # Run scope detection, changed-extension detection, and fast security checks in
-  # one visible job so operators have a single preflight box to inspect and rerun.
-  # Fail-safe: if detection steps are skipped, downstream outputs fall back to
-  # conservative defaults that keep heavy lanes enabled.
+  # Preflight: establish routing truth and planner-owned matrices once, then let
+  # real work fan out from a single source of truth.
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     outputs:
-      docs_only: ${{ steps.docs_scope.outputs.docs_only }}
-      docs_changed: ${{ steps.docs_scope.outputs.docs_changed }}
-      run_node: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-      run_macos: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-      run_android: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-      run_skills_python: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-      run_windows: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-      has_changed_extensions: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-      changed_extensions_matrix: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+      docs_only: ${{ steps.manifest.outputs.docs_only }}
+      docs_changed: ${{ steps.manifest.outputs.docs_changed }}
+      run_node: ${{ steps.manifest.outputs.run_node }}
+      run_macos: ${{ steps.manifest.outputs.run_macos }}
+      run_android: ${{ steps.manifest.outputs.run_android }}
+      run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
+      run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
+      run_windows: ${{ steps.manifest.outputs.run_windows }}
+      has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
+      run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_release_check: ${{ steps.manifest.outputs.run_release_check }}
+      run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      checks_fast_matrix: ${{ steps.manifest.outputs.checks_fast_matrix }}
+      run_checks: ${{ steps.manifest.outputs.run_checks }}
+      checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
+      run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
+      extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
+      run_check: ${{ steps.manifest.outputs.run_check }}
+      run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
+      run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
+      checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
+      run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
+      macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
+      run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
+      run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
           submodules: false
 
       - name: Ensure preflight base commit
@@ -53,8 +72,6 @@ jobs:
         id: docs_scope
         uses: ./.github/actions/detect-docs-changes
 
-      # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
-      # Fail-safe: if skipped, downstream lanes run.
       - name: Detect changed scopes
         id: changed_scope
         if: steps.docs_scope.outputs.docs_only != 'true'
@@ -101,6 +118,60 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
           EOF
 
+      - name: Build CI manifest
+        id: manifest
+        env:
+          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+
+  # Run the fast security/SCM checks in parallel with scope detection so the
+  # main Node jobs do not have to wait for Python/pre-commit setup.
+  security-fast:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    env:
+      PRE_COMMIT_CACHE_KEY_SUFFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Ensure security base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Prepare trusted pre-commit config
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
+          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
       - name: Setup Python
         id: setup-python
         uses: actions/setup-python@v6
@@ -116,15 +187,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.PRE_COMMIT_CACHE_KEY_SUFFIX }}
+          restore-keys: |
+            pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-
 
       - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pre-commit
+          python -m pip install pre-commit==4.2.0
 
       - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -151,24 +224,24 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run zizmor --files "${workflow_files[@]}"
+          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        run: pre-commit run --all-files pnpm-audit-prod
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
-  # Fanout: downstream lanes branch from preflight outputs instead of waiting
-  # on unrelated Linux checks.
   # Build dist once for Node-relevant changes and share it with downstream jobs.
+  # Keep this overlapping with the fast correctness lanes so green PRs get heavy
+  # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
     needs: [preflight]
-    if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Ensure secrets base commit (PR fast path)
@@ -187,6 +260,9 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
@@ -194,16 +270,25 @@ jobs:
           path: dist/
           retention-days: 1
 
+      - name: Upload A2UI bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+          include-hidden-files: true
+          retention-days: 1
+
   # Validate npm pack contents after build (only on push to main, not PRs).
   release-check:
     needs: [preflight, build-artifacts]
-    if: github.event_name == 'push' && needs.preflight.outputs.docs_only != 'true'
+    if: needs.preflight.outputs.run_release_check == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -221,74 +306,82 @@ jobs:
       - name: Check release contents
         run: pnpm release:check
 
-  checks:
-    needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+  checks-fast:
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
-            task: channels
-            command: pnpm test:channels
-          - runtime: node
-            task: contracts
-            command: pnpm test:contracts
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
-          - runtime: bun
-            task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
-          - runtime: node
-            task: compat-node22
-            node_version: "22.x"
-            cache_key_suffix: "node22"
-            command: |
-              pnpm build
-              node openclaw.mjs --help
-              node openclaw.mjs status --json --timeout 1
-              pnpm test:build:singleton
-              node scripts/stage-bundled-plugin-runtime-deps.mjs
-              node --import tsx scripts/release-check.ts
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
     steps:
-      - name: Skip compatibility lanes on pull requests
-        if: github.event_name == 'pull_request' && (matrix.runtime == 'bun' || matrix.task == 'compat-node22')
-        run: echo "Skipping push-only lane on pull requests."
-
       - name: Checkout
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            extensions)
+              pnpm test:extensions
+              ;;
+            contracts|contracts-protocol)
+              pnpm test:contracts
+              pnpm protocol:check
+              ;;
+            *)
+              echo "Unsupported checks-fast task: $TASK" >&2
+              exit 1
+              ;;
+          esac
+
+  checks:
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
+    steps:
+      - name: Skip compatibility lanes on pull requests
+        if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
+        run: echo "Skipping push-only lane on pull requests."
+
+      - name: Checkout
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
-          install-bun: "${{ matrix.runtime == 'bun' }}"
+          install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')) && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'compat-node22')
+        if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
+          TASK: ${{ matrix.task }}
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
@@ -296,39 +389,72 @@ jobs:
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          if [ "$TASK" = "channels" ]; then
+            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
+          fi
           if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
-        if: github.event_name == 'push' && matrix.task == 'test'
+        if: matrix.task == 'test'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
 
-      - name: Build dist
-        if: github.event_name != 'push' && matrix.task == 'test' && matrix.runtime == 'node'
-        run: pnpm build
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test' || matrix.task == 'channels'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: github.event_name != 'pull_request' || (matrix.runtime != 'bun' && matrix.task != 'compat-node22')
-        run: ${{ matrix.command }}
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            channels)
+              pnpm test:channels
+              ;;
+            compat-node22)
+              pnpm build
+              pnpm ui:build
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
+              node scripts/stage-bundled-plugin-runtime-deps.mjs
+              node --import tsx scripts/release-check.ts
+              ;;
+            *)
+              echo "Unsupported checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   extension-fast:
     name: "extension-fast"
     needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && needs.preflight.outputs.has_changed_extensions == 'true'
+    if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.changed_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -346,13 +472,14 @@ jobs:
   check:
     name: "check"
     needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: always() && needs.preflight.outputs.run_check == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -370,13 +497,14 @@ jobs:
   check-additional:
     name: "check-additional"
     needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true'
+    if: always() && needs.preflight.outputs.run_check_additional == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -468,13 +596,14 @@ jobs:
   build-smoke:
     name: "build-smoke"
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -509,13 +638,14 @@ jobs:
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [preflight]
-    if: needs.preflight.outputs.docs_changed == 'true'
+    if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -529,13 +659,14 @@ jobs:
 
   skills-python:
     needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.preflight.outputs.run_skills_python == 'true')
+    if: needs.preflight.outputs.run_skills_python_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Python
@@ -555,8 +686,9 @@ jobs:
         run: python -m pytest -q skills
 
   checks-windows:
+    name: ${{ matrix.check_name }}
     needs: [preflight, build-artifacts]
-    if: always() && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_windows == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 20
     env:
@@ -569,42 +701,12 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 5
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 6
-            shard_count: 6
-            command: pnpm test
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -668,41 +770,57 @@ jobs:
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
         run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
-
-      - name: Build A2UI bundle (Windows)
-        if: matrix.task == 'test'
-        run: pnpm canvas:a2ui:bundle
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
       - name: Download dist artifact
-        if: github.event_name == 'push' && matrix.task == 'test'
+        if: matrix.task == 'test'
         uses: actions/download-artifact@v8
         with:
           name: dist-build
           path: dist/
 
-      - name: Build dist (Windows)
-        if: github.event_name != 'push' && matrix.task == 'test'
-        run: pnpm build
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported Windows checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
-  # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
-  # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
-  # running 4 separate jobs per PR (as before) starved the queue. One job
-  # per PR allows 5 PRs to run macOS checks simultaneously.
-  macos:
-    needs: [preflight]
-    if: github.event_name == 'pull_request' && needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_macos == 'true'
+  macos-node:
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -710,16 +828,56 @@ jobs:
         with:
           install-bun: "false"
 
-      - name: Build dist (macOS)
-        run: pnpm build
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
 
-      # --- Run all checks sequentially (fast gates first) ---
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS)
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported macOS node task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
-      # --- Xcode/Swift setup ---
+  macos-swift:
+    name: "macos-swift"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_macos_swift == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
@@ -727,6 +885,14 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
 
       - name: Show toolchain
         run: |
@@ -738,14 +904,6 @@ jobs:
         run: |
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
-
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
 
       - name: Swift build (release)
         run: |
@@ -772,26 +930,19 @@ jobs:
           exit 1
 
   android:
+    name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: needs.preflight.outputs.docs_only != 'true' && needs.preflight.outputs.run_android == 'true'
+    if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - task: test-play
-            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
-          - task: test-third-party
-            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
-          - task: build-play
-            command: ./gradlew --no-daemon :app:assemblePlayDebug
-          - task: build-third-party
-            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
+      matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Java
@@ -821,7 +972,7 @@ jobs:
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           gradle-version: 8.11.1
 
@@ -835,4 +986,26 @@ jobs:
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test-play)
+              ./gradlew --no-daemon :app:testPlayDebugUnitTest
+              ;;
+            test-third-party)
+              ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+              ;;
+            build-play)
+              ./gradlew --no-daemon :app:assemblePlayDebug
+              ;;
+            build-third-party)
+              ./gradlew --no-daemon :app:assembleThirdPartyDebug
+              ;;
+            *)
+              echo "Unsupported Android task: $TASK" >&2
+              exit 1
+              ;;
+          esac

@@ -5,6 +5,7 @@ import chutesPlugin from "../../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
 import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
 import deepgramPlugin from "../../../extensions/deepgram/index.js";
+import deepseekPlugin from "../../../extensions/deepseek/index.js";
 import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
 import falPlugin from "../../../extensions/fal/index.js";
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
@@ -13,6 +14,7 @@ import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
@@ -25,7 +27,6 @@ import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
@@ -357,12 +358,14 @@ const bundledProviderPlugins = dedupePlugins([
   chutesPlugin,
   cloudflareAiGatewayPlugin,
   copilotProxyPlugin,
+  deepseekPlugin,
   githubCopilotPlugin,
   falPlugin,
   googlePlugin,
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
+  microsoftFoundryPlugin,
   minimaxPlugin,
   mistralPlugin,
   modelStudioPlugin,
@@ -374,7 +377,6 @@ const bundledProviderPlugins = dedupePlugins([
   opencodeGoPlugin,
   openrouterPlugin,
   qianfanPlugin,
-  qwenPortalAuthPlugin,
   sglangPlugin,
   syntheticPlugin,
   togetherPlugin,
