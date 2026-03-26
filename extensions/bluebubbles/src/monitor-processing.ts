@@ -33,6 +33,7 @@ import type {
   BlueBubblesRuntimeEnv,
   WebhookTarget,
 } from "./monitor-shared.js";
+import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -460,6 +461,12 @@ export async function processMessage(
 
   const groupFlag = resolveGroupFlagFromChatGuid(message.chatGuid);
   const isGroup = typeof groupFlag === "boolean" ? groupFlag : message.isGroup;
+  if (isGroup && message.participants?.length) {
+    // BlueBubbles only gives us participant handles, so enrich phone numbers from local Contacts.
+    message.participants = await enrichBlueBubblesParticipantsWithContactNames(
+      message.participants,
+    );
+  }
 
   const text = message.text.trim();
   const attachments = message.attachments ?? [];

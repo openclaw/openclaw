@@ -23,6 +23,10 @@ import {
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
 } from "./monitor.webhook.test-helpers.js";
+import {
+  resetBlueBubblesParticipantContactNameCacheForTest,
+  setBlueBubblesParticipantContactDepsForTest,
+} from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 
 // Mock dependencies
@@ -185,12 +189,17 @@ describe("BlueBubbles webhook monitor", () => {
       hasControlCommandMock: mockHasControlCommand,
       resolveCommandAuthorizedFromAuthorizersMock: mockResolveCommandAuthorizedFromAuthorizers,
       buildMentionRegexesMock: mockBuildMentionRegexes,
-      extraReset: resetBlueBubblesSelfChatCache,
+      extraReset: () => {
+        resetBlueBubblesSelfChatCache();
+        resetBlueBubblesParticipantContactNameCacheForTest();
+        setBlueBubblesParticipantContactDepsForTest();
+      },
     });
   });
 
   afterEach(() => {
     unregister?.();
+    setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
   });
 
@@ -488,6 +497,37 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = getFirstDispatchCall();
       expect(callArgs.ctx.GroupSubject).toBe("Family");
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
+    });
+
+    it("enriches unnamed phone participants from local contacts before building ctx", async () => {
+      setupWebhookTarget();
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames: vi.fn(
+          async (phoneKeys: string[]) =>
+            new Map(
+              phoneKeys.map((phoneKey) => [
+                phoneKey,
+                phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+              ]),
+            ),
+        ),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
     });
   });
 
