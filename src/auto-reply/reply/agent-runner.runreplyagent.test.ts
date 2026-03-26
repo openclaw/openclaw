@@ -1516,6 +1516,47 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("does not reset session on timeout during heartbeat turns", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-heartbeat-timeout";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "All models failed (3): openai-codex/gpt-5.3-codex: LLM request timed out.",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      // Heartbeat timeout should NOT reset the session
+      expect(sessionStore.main.sessionId).toBe(sessionId);
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("timed out"),
+      });
+      // Should get the fallback text, not the reset text
+      expect(payload).toMatchObject({
+        text: expect.not.stringContaining("reset"),
+      });
+    });
+  });
+
   it("rewrites Bun socket errors into friendly text", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
       payloads: [

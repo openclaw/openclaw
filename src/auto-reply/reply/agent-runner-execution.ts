@@ -478,6 +478,7 @@ export async function runAgentTurnWithFallback(params: {
       if (
         embeddedError &&
         isTimeoutError(embeddedError.message) &&
+        !params.isHeartbeat &&
         !didResetAfterTimeout &&
         (await params.resetSessionAfterTimeout(embeddedError.message))
       ) {
@@ -524,20 +525,6 @@ export async function runAgentTurnWithFallback(params: {
           };
         }
       }
-      if (
-        isTimeoutFailure &&
-        !didResetAfterTimeout &&
-        (await params.resetSessionAfterTimeout(message))
-      ) {
-        didResetAfterTimeout = true;
-        return {
-          kind: "final",
-          payload: {
-            text: TIMEOUT_RESET_REPLY_TEXT,
-          },
-        };
-      }
-
       // Auto-recover from Gemini session corruption by resetting the session
       if (
         isSessionCorruption &&
@@ -583,12 +570,11 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
+      // Let transient HTTP errors (502/504/521) retry before considering a
+      // session reset — these are often temporary and do not indicate a
+      // session-bloat death spiral.
       if (isTransientHttp && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
-        // Retry the full runWithModelFallback() cycle — transient errors
-        // (502/521/etc.) typically affect the whole provider, so falling
-        // back to an alternate model first would not help. Instead we wait
-        // and retry the complete primary→fallback chain.
         defaultRuntime.error(
           `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
@@ -596,6 +582,25 @@ export async function runAgentTurnWithFallback(params: {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
         });
         continue;
+      }
+
+      // Only reset session for definitive timeouts: skip heartbeat turns
+      // (background pings should not discard conversation history) and skip
+      // transient HTTP errors (already retried above).
+      if (
+        isTimeoutFailure &&
+        !isTransientHttp &&
+        !params.isHeartbeat &&
+        !didResetAfterTimeout &&
+        (await params.resetSessionAfterTimeout(message))
+      ) {
+        didResetAfterTimeout = true;
+        return {
+          kind: "final",
+          payload: {
+            text: TIMEOUT_RESET_REPLY_TEXT,
+          },
+        };
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
