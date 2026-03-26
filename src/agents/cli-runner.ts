@@ -446,39 +446,46 @@ export async function runCliAgent(params: {
     }
   };
 
+  const buildCliRunResult = (resultParams: {
+    output: Awaited<ReturnType<typeof executeCliWithSession>>;
+    effectiveCliSessionId?: string;
+  }): EmbeddedPiRunResult => {
+    const text = resultParams.output.text?.trim();
+    const payloads = text ? [{ text }] : undefined;
+
+    return {
+      payloads,
+      meta: {
+        durationMs: Date.now() - started,
+        systemPromptReport,
+        agentMeta: {
+          sessionId: resultParams.effectiveCliSessionId ?? params.sessionId ?? "",
+          provider: params.provider,
+          model: modelId,
+          usage: resultParams.output.usage,
+          ...(resultParams.effectiveCliSessionId
+            ? {
+                cliSessionBinding: {
+                  sessionId: resultParams.effectiveCliSessionId,
+                  ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                  ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
+                  ...(preparedBackend.mcpConfigHash
+                    ? { mcpConfigHash: preparedBackend.mcpConfigHash }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+      },
+    };
+  };
+
   // Try with the provided CLI session ID first
   try {
     try {
       const output = await executeCliWithSession(reusableCliSession.sessionId);
-      const text = output.text?.trim();
-      const payloads = text ? [{ text }] : undefined;
       const effectiveCliSessionId = output.sessionId ?? reusableCliSession.sessionId;
-
-      return {
-        payloads,
-        meta: {
-          durationMs: Date.now() - started,
-          systemPromptReport,
-          agentMeta: {
-            sessionId: effectiveCliSessionId ?? params.sessionId ?? "",
-            provider: params.provider,
-            model: modelId,
-            usage: output.usage,
-            ...(effectiveCliSessionId
-              ? {
-                  cliSessionBinding: {
-                    sessionId: effectiveCliSessionId,
-                    ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
-                    ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
-                    ...(preparedBackend.mcpConfigHash
-                      ? { mcpConfigHash: preparedBackend.mcpConfigHash }
-                      : {}),
-                  },
-                }
-              : {}),
-          },
-        },
-      };
+      return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
       if (err instanceof FailoverError) {
         // Check if this is a session expired error and we have a session to clear
@@ -493,35 +500,8 @@ export async function runCliAgent(params: {
 
           // For now, retry without the session ID to create a new session
           const output = await executeCliWithSession(undefined);
-          const text = output.text?.trim();
-          const payloads = text ? [{ text }] : undefined;
           const effectiveCliSessionId = output.sessionId;
-
-          return {
-            payloads,
-            meta: {
-              durationMs: Date.now() - started,
-              systemPromptReport,
-              agentMeta: {
-                sessionId: output.sessionId ?? params.sessionId ?? "",
-                provider: params.provider,
-                model: modelId,
-                usage: output.usage,
-                ...(effectiveCliSessionId
-                  ? {
-                      cliSessionBinding: {
-                        sessionId: effectiveCliSessionId,
-                        ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
-                        ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
-                        ...(preparedBackend.mcpConfigHash
-                          ? { mcpConfigHash: preparedBackend.mcpConfigHash }
-                          : {}),
-                      },
-                    }
-                  : {}),
-              },
-            },
-          };
+          return buildCliRunResult({ output, effectiveCliSessionId });
         }
         throw err;
       }
