@@ -195,6 +195,14 @@ export function createSessionsListTool(opts?: {
           channel: derivedChannel,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.parentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           deliveryContext:
             deliveryChannel || deliveryTo || deliveryAccountId
               ? {
