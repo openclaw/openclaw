@@ -1,0 +1,19 @@
+{
+  "id": "fleet-coordinator",
+  "name": "Fleet Coordinator",
+  "description": "Multi-node fleet registry, health monitoring, task routing, scheduling, and guard hooks",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "fleetConfigPath": {
+        "type": "string",
+        "description": "Path to fleet.json (default: config/fleet.json)"
+      },
+      "healthCheckIntervalMs": {
+        "type": "number",
+        "description": "Health check interval in milliseconds (default: 60000)"
+      }
+    }
+  }
+}

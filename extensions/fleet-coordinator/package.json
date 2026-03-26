@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/fleet-coordinator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fleet registry, health monitoring, task routing, and guard hooks for OpenClaw fleet",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "ioredis": "5.6.1"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

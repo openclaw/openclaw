@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/distributed-workers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Distributed task execution with claim arbitration and worktree isolation",
+  "type": "module",
+  "dependencies": {
+    "ioredis": "5.6.1"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
