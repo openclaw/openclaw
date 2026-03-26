@@ -7,7 +7,11 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import {
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+  resolveContextInjectionMode,
+} from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
@@ -125,5 +129,31 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files).toEqual([]);
+  });
+});
+
+describe("resolveContextInjectionMode", () => {
+  it("returns 'always' when config is undefined", () => {
+    expect(resolveContextInjectionMode(undefined)).toBe("always");
+  });
+
+  it("returns 'always' when contextInjection is not set", () => {
+    expect(resolveContextInjectionMode({ agents: { defaults: {} } } as never)).toBe("always");
+  });
+
+  it("returns 'continuation-skip' when configured", () => {
+    expect(
+      resolveContextInjectionMode({
+        agents: { defaults: { contextInjection: "continuation-skip" } },
+      } as never),
+    ).toBe("continuation-skip");
+  });
+
+  it("returns 'always' when explicitly set", () => {
+    expect(
+      resolveContextInjectionMode({
+        agents: { defaults: { contextInjection: "always" } },
+      } as never),
+    ).toBe("always");
   });
 });

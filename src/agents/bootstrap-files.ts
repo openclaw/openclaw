@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -14,6 +15,11 @@ import {
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
+
+/** Resolve the effective context-injection mode from config (default: "always"). */
+export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
+  return config?.agents?.defaults?.contextInjection ?? "always";
+}
 export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 export function makeBootstrapWarn(params: {
