@@ -24,6 +24,10 @@ function createHarness(params?: {
   cryptoAvailable?: boolean;
   selfUserId?: string;
   selfUserIdError?: Error;
+  allowFrom?: string[];
+  dmEnabled?: boolean;
+  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
+  storeAllowFrom?: string[];
   joinedMembersByRoom?: Record<string, string[]>;
   verifications?: Array<{
     id: string;
@@ -67,6 +71,7 @@ function createHarness(params?: {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
   const logVerboseMessage = vi.fn();
+  const readStoreAllowFrom = vi.fn(async () => params?.storeAllowFrom ?? []);
   const client = {
     on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
       listeners.set(eventName, listener);
@@ -101,6 +106,10 @@ function createHarness(params?: {
       accountId: params?.accountId ?? "default",
       encryption: params?.authEncryption ?? true,
     } as MatrixAuth,
+    allowFrom: params?.allowFrom ?? [],
+    dmEnabled: params?.dmEnabled ?? true,
+    dmPolicy: params?.dmPolicy ?? "open",
+    readStoreAllowFrom,
     directTracker: {
       invalidateRoom,
     },
@@ -123,6 +132,7 @@ function createHarness(params?: {
     invalidateRoom,
     roomEventListener,
     listVerifications,
+    readStoreAllowFrom,
     logger,
     formatNativeDependencyHint,
     logVerboseMessage,
@@ -253,6 +263,112 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification request received from @alice:example.org.");
     expect(body).toContain('Open "Verify by emoji"');
+  });
+
+  it("blocks verification request notices when dmPolicy pairing would block the sender", async () => {
+    const { onRoomMessage, sendMessage, roomMessageListener, logVerboseMessage } = createHarness({
+      dmPolicy: "pairing",
+    });
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", {
+      event_id: "$req-pairing-blocked",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.key.verification.request",
+        body: "verification request",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(logVerboseMessage).toHaveBeenCalledWith(
+        expect.stringContaining("blocked verification sender @alice:example.org"),
+      );
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onRoomMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows verification notices for pairing-authorized DM senders from the allow store", async () => {
+    const { sendMessage, roomMessageListener, readStoreAllowFrom } = createHarness({
+      dmPolicy: "pairing",
+      storeAllowFrom: ["@alice:example.org"],
+    });
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", {
+      event_id: "$req-pairing-allowed",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.key.verification.request",
+        body: "verification request",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(readStoreAllowFrom).toHaveBeenCalled();
+  });
+
+  it("does not consult the allow store when dmPolicy is open", async () => {
+    const { sendMessage, roomMessageListener, readStoreAllowFrom } = createHarness({
+      dmPolicy: "open",
+    });
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", {
+      event_id: "$req-open-policy",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.key.verification.request",
+        body: "verification request",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+    expect(readStoreAllowFrom).not.toHaveBeenCalled();
+  });
+
+  it("blocks verification notices when Matrix DMs are disabled", async () => {
+    const { sendMessage, roomMessageListener, logVerboseMessage } = createHarness({
+      dmEnabled: false,
+    });
+    if (!roomMessageListener) {
+      throw new Error("room.message listener was not registered");
+    }
+
+    roomMessageListener("!room:example.org", {
+      event_id: "$req-dm-disabled",
+      sender: "@alice:example.org",
+      type: EventType.RoomMessage,
+      origin_server_ts: Date.now(),
+      content: {
+        msgtype: "m.key.verification.request",
+        body: "verification request",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(logVerboseMessage).toHaveBeenCalledWith(
+        expect.stringContaining("blocked verification sender @alice:example.org"),
+      );
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("posts ready-stage guidance for emoji verification", async () => {
@@ -421,6 +537,51 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     const body = getSentNoticeBody(sendMessage, 0);
     expect(body).toContain("Matrix verification SAS with @alice:example.org:");
     expect(body).toContain("SAS decimal: 6158 1986 3513");
+  });
+
+  it("blocks summary SAS notices when dmPolicy allowlist would block the sender", async () => {
+    const { sendMessage, verificationSummaryListener, logVerboseMessage } = createHarness({
+      dmPolicy: "allowlist",
+      joinedMembersByRoom: {
+        "!dm:example.org": ["@alice:example.org", "@bot:example.org"],
+      },
+    });
+    if (!verificationSummaryListener) {
+      throw new Error("verification.summary listener was not registered");
+    }
+
+    verificationSummaryListener({
+      id: "verification-blocked-summary",
+      roomId: "!dm:example.org",
+      otherUserId: "@alice:example.org",
+      isSelfVerification: false,
+      initiatedByMe: false,
+      phase: 3,
+      phaseName: "started",
+      pending: true,
+      methods: ["m.sas.v1"],
+      canAccept: false,
+      hasSas: true,
+      sas: {
+        decimal: [6158, 1986, 3513],
+        emoji: [
+          ["🎁", "Gift"],
+          ["🌍", "Globe"],
+          ["🐴", "Horse"],
+        ],
+      },
+      hasReciprocateQr: false,
+      completed: false,
+      createdAt: new Date("2026-02-25T21:42:54.000Z").toISOString(),
+      updatedAt: new Date("2026-02-25T21:42:55.000Z").toISOString(),
+    });
+
+    await vi.waitFor(() => {
+      expect(logVerboseMessage).toHaveBeenCalledWith(
+        expect.stringContaining("blocked verification sender @alice:example.org"),
+      );
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("posts SAS notices from summary updates using the room mapped by earlier flow events", async () => {
