@@ -1,0 +1,47 @@
+{
+  "id": "telegram-agentic",
+  "name": "Agentic Fleet Tools",
+  "description": "Fleet management, knowledge, delegation, and art pipeline tools for the OpenClaw fleet",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "notificationBatching": {
+        "type": "object",
+        "properties": {
+          "critical": { "type": "number", "description": "Minutes between critical notification batches (default: 5)" },
+          "high": { "type": "number", "description": "Minutes between high-priority batches (default: 60)" },
+          "medium": { "type": "number", "description": "Minutes between medium-priority batches (default: 180)" }
+        }
+      },
+      "aopLogFile": {
+        "type": "string",
+        "description": "Path to AOP-compatible event log file (default: ~/.openclaw/all.jsonl)"
+      },
+      "githubToken": {
+        "type": "string",
+        "description": "GitHub personal access token for API calls (fallback: GITHUB_TOKEN env var)"
+      },
+      "reportOutputDir": {
+        "type": "string",
+        "description": "Directory for saved reports (default: ~/.openclaw/workspace/reports)"
+      }
+    }
+  },
+  "uiHints": {
+    "githubToken": {
+      "label": "GitHub Token",
+      "help": "Personal access token for GitHub API (fallback: GITHUB_TOKEN env var)",
+      "sensitive": true,
+      "placeholder": "ghp_..."
+    },
+    "reportOutputDir": {
+      "label": "Report Output Directory",
+      "help": "Where reports are saved"
+    },
+    "aopLogFile": {
+      "label": "AOP Log File",
+      "help": "Path to the observability event log"
+    }
+  }
+}
