@@ -100,4 +100,71 @@ describe("browser.request profile selection", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      method: "POST",
+      path: "/profiles/create",
+      body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
+    },
+    {
+      method: "DELETE",
+      path: "/profiles/poc",
+      body: undefined,
+    },
+    {
+      method: "POST",
+      path: "profiles/create",
+      body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
+    },
+    {
+      method: "DELETE",
+      path: "profiles/poc",
+      body: undefined,
+    },
+    {
+      method: "POST",
+      path: "/reset-profile",
+      body: { profile: "poc", name: "poc" },
+    },
+    {
+      method: "POST",
+      path: "reset-profile",
+      body: { profile: "poc", name: "poc" },
+    },
+  ])("blocks persistent profile mutations for $method $path", async ({ method, path, body }) => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method,
+      path,
+      body,
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "browser.request cannot mutate persistent browser profiles",
+      }),
+    );
+  });
+
+  it("allows non-mutating profile reads", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "GET",
+      path: "/profiles",
+    });
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/profiles",
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+  });
 });

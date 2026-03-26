@@ -112,9 +112,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe(
-      "install dependencies (in ~/my-project)\n\n`cd ~/my-project && npm install`",
-    );
+    expect(detail).toBe("install dependencies (in ~/my-project), `cd ~/my-project && npm install`");
   });
 
   it("moves cd path to context suffix with multiple stages and raw command", () => {
@@ -126,7 +124,7 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe(
-      "install dependencies → run tests (in ~/my-project)\n\n`cd ~/my-project && npm install && npm test`",
+      "install dependencies → run tests (in ~/my-project), `cd ~/my-project && npm install && npm test`",
     );
   });
 
@@ -138,7 +136,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("check git status (in /tmp)\n\n`pushd /tmp && git status`");
+    expect(detail).toBe("check git status (in /tmp), `pushd /tmp && git status`");
   });
 
   it("clears inferred cwd when popd is stripped from preamble", () => {
@@ -149,7 +147,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies\n\n`pushd /tmp && popd && npm install`");
+    expect(detail).toBe("install dependencies, `pushd /tmp && popd && npm install`");
   });
 
   it("moves cd path to context suffix with || separator", () => {
@@ -173,7 +171,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("install dependencies (in /app)\n\n`cd /tmp && npm install`");
+    expect(detail).toBe("install dependencies (in /app), `cd /tmp && npm install`");
   });
 
   it("summarizes all stages and appends raw command", () => {
@@ -185,7 +183,7 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe(
-      "fetch git changes → rebase git branch\n\n`git fetch && git rebase origin/main`",
+      "fetch git changes → rebase git branch, `git fetch && git rebase origin/main`",
     );
   });
 

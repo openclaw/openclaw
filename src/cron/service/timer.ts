@@ -1,3 +1,4 @@
+import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -322,6 +323,10 @@ export function applyJobResult(
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
+  job.state.lastErrorReason =
+    result.status === "error" && typeof result.error === "string"
+      ? (resolveFailoverReasonFromError(result.error) ?? undefined)
+      : undefined;
   job.state.lastDelivered = result.delivered;
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
@@ -670,7 +675,6 @@ export async function onTimer(state: CronServiceState) {
     if (completedResults.length > 0) {
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-
         for (const result of completedResults) {
           applyOutcomeToStoredJob(state, result);
         }
@@ -957,7 +961,9 @@ async function applyStartupCatchupOutcomes(
 ): Promise<void> {
   const staggerMs = Math.max(0, state.deps.missedJobStaggerMs ?? DEFAULT_MISSED_JOB_STAGGER_MS);
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    // Startup catch-up runs during service bootstrap, before the timer loop is
+    // armed. Reuse the in-memory store instead of forcing a second reload.
+    await ensureLoaded(state, { skipRecompute: true });
     if (!state.store) {
       return;
     }

@@ -1,12 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProfileResetOps } from "./server-context.reset.js";
-
-const relayMocks = vi.hoisted(() => ({
-  stopChromeExtensionRelayServer: vi.fn(async () => true),
-}));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const trashMocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (from: string) => `${from}.trashed`),
@@ -16,12 +11,18 @@ const pwAiMocks = vi.hoisted(() => ({
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
 }));
 
-vi.mock("./extension-relay.js", () => relayMocks);
 vi.mock("./trash.js", () => trashMocks);
 vi.mock("./pw-ai.js", () => pwAiMocks);
 
+let createProfileResetOps: typeof import("./server-context.reset.js").createProfileResetOps;
+
 afterEach(() => {
   vi.clearAllMocks();
+});
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createProfileResetOps } = await import("./server-context.reset.js"));
 });
 
 function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["profile"] {
@@ -54,23 +55,6 @@ function createStatelessResetOps(profile: Parameters<typeof createProfileResetOp
 }
 
 describe("createProfileResetOps", () => {
-  it("stops extension relay for extension profiles", async () => {
-    const ops = createStatelessResetOps({
-      ...localOpenClawProfile(),
-      name: "chrome",
-      driver: "extension",
-    });
-
-    await expect(ops.resetProfile()).resolves.toEqual({
-      moved: false,
-      from: "http://127.0.0.1:18800",
-    });
-    expect(relayMocks.stopChromeExtensionRelayServer).toHaveBeenCalledWith({
-      cdpUrl: "http://127.0.0.1:18800",
-    });
-    expect(trashMocks.movePathToTrash).not.toHaveBeenCalled();
-  });
-
   it("rejects remote non-extension profiles", async () => {
     const ops = createStatelessResetOps({
       ...localOpenClawProfile(),

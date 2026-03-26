@@ -20,10 +20,24 @@ vi.mock("../acp-spawn.js", () => ({
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
 }));
 
-const { createSessionsSpawnTool } = await import("./sessions-spawn-tool.js");
+let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
+
+async function loadFreshSessionsSpawnToolModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../subagent-spawn.js", () => ({
+    SUBAGENT_SPAWN_MODES: ["run", "session"],
+    spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
+  }));
+  vi.doMock("../acp-spawn.js", () => ({
+    ACP_SPAWN_MODES: ["run", "session"],
+    ACP_SPAWN_STREAM_TARGETS: ["parent"],
+    spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+  }));
+  ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+}
 
 describe("sessions_spawn tool", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -34,6 +48,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
+    await loadFreshSessionsSpawnToolModuleForTest();
   });
 
   it("uses subagent runtime by default", async () => {
@@ -161,6 +176,43 @@ describe("sessions_spawn tool", () => {
         sandboxed: true,
       }),
     );
+  });
+
+  it("passes resumeSessionId through to ACP spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2c", {
+      runtime: "acp",
+      task: "resume prior work",
+      agentId: "codex",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "resume prior work",
+        agentId: "codex",
+        resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects resumeSessionId without runtime=acp", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-guard", {
+      task: "resume prior work",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+    });
+
+    expect(JSON.stringify(result)).toContain("resumeSessionId is only supported for runtime=acp");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects attachments for ACP runtime", async () => {

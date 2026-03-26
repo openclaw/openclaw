@@ -1,11 +1,12 @@
 ---
 title: IRC
-description: Connect OpenClaw to IRC channels and direct messages.
 summary: "IRC plugin setup, access controls, and troubleshooting"
 read_when:
   - You want to connect OpenClaw to IRC channels or DMs
   - You are configuring IRC allowlists, group policy, or mention gating
 ---
+
+# IRC
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
 IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
@@ -15,18 +16,18 @@ IRC ships as an extension plugin, but it is configured in the main config under 
 1. Enable IRC config in `~/.openclaw/openclaw.json`.
 2. Set at least:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "enabled": true,
-      "host": "irc.libera.chat",
-      "port": 6697,
-      "tls": true,
-      "nick": "openclaw-bot",
-      "channels": ["#openclaw"]
-    }
-  }
+  channels: {
+    irc: {
+      enabled: true,
+      host: "irc.libera.chat",
+      port: 6697,
+      tls: true,
+      nick: "openclaw-bot",
+      channels: ["#openclaw"],
+    },
+  },
 }
 ```
 
@@ -188,32 +189,32 @@ For more on group access vs mention-gating (and how they interact), see: [/chann
 
 To identify with NickServ after connect:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "nickserv": {
-        "enabled": true,
-        "service": "NickServ",
-        "password": "your-nickserv-password"
-      }
-    }
-  }
+  channels: {
+    irc: {
+      nickserv: {
+        enabled: true,
+        service: "NickServ",
+        password: "your-nickserv-password",
+      },
+    },
+  },
 }
 ```
 
 Optional one-time registration on connect:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "nickserv": {
-        "register": true,
-        "registerEmail": "bot@example.com"
-      }
-    }
-  }
+  channels: {
+    irc: {
+      nickserv: {
+        register: true,
+        registerEmail: "bot@example.com",
+      },
+    },
+  },
 }
 ```
 

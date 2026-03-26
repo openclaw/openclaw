@@ -1,15 +1,12 @@
 # OpenClaw iOS (Super Alpha)
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
 This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
 
 ## Distribution Status
 
-NO TEST FLIGHT AVAILABLE AT THIS POINT
-
-- Current distribution: local/manual deploy from source via Xcode.
-- App Store flow is not part of the current internal development path.
+- Public distribution: not available.
+- Internal beta distribution: local archive + TestFlight upload via Fastlane.
+- Local/manual deploy from source via Xcode remains the default development path.
 
 ## Super-Alpha Disclaimer
 
@@ -50,14 +47,93 @@ Shortcut command (same flow + open project):
 pnpm ios:open
 ```
 
+## Local Beta Release Flow
+
+Prereqs:
+
+- Xcode 16+
+- `pnpm`
+- `xcodegen`
+- `fastlane`
+- Apple account signed into Xcode for automatic signing/provisioning
+- App Store Connect API key set up in Keychain via `scripts/ios-asc-keychain-setup.sh` when auto-resolving a beta build number or uploading to TestFlight
+
+Release behavior:
+
+- Local development keeps using unique per-developer bundle IDs from `scripts/ios-configure-signing.sh`.
+- Beta release uses canonical `ai.openclaw.client*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/BetaRelease.xcconfig`.
+- Beta release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, and `OpenClawPushAPNsEnvironment=production`.
+- The beta flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
+- Root `package.json.version` is the only version source for iOS.
+- A root version like `2026.3.22-beta.1` becomes:
+  - `CFBundleShortVersionString = 2026.3.22`
+  - `CFBundleVersion = next TestFlight build number for 2026.3.22`
+
+Required env for beta builds:
+
+- `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
+  This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
+
+Archive without upload:
+
+```bash
+pnpm ios:beta:archive
+```
+
+Archive and upload to TestFlight:
+
+```bash
+pnpm ios:beta
+```
+
+If you need to force a specific build number:
+
+```bash
+pnpm ios:beta -- --build-number 7
+```
+
 ## APNs Expectations For Local/Manual Builds
 
 - The app calls `registerForRemoteNotifications()` at launch.
 - `apps/ios/Sources/OpenClaw.entitlements` sets `aps-environment` to `development`.
 - APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
+- Local/manual builds default to `OpenClawPushTransport=direct` and `OpenClawPushDistribution=local`.
 - Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
 - If push capability or provisioning is wrong, APNs registration fails at runtime (check Xcode logs for `APNs registration failed`).
-- Debug builds register as APNs sandbox; Release builds use production.
+- Debug builds default to `OpenClawPushAPNsEnvironment=sandbox`; Release builds default to `production`.
+
+## APNs Expectations For Official Builds
+
+- Official/TestFlight builds register with the external push relay before they publish `push.apns.register` to the gateway.
+- The gateway registration for relay mode contains an opaque relay handle, a registration-scoped send grant, relay origin metadata, and installation metadata instead of the raw APNs token.
+- The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
+- The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
+- If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
+- Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
+- Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
+
+## Official Build Relay Trust Model
+
+- `iOS -> gateway`
+  - The app must pair with the gateway and establish both node and operator sessions.
+  - The operator session is used to fetch `gateway.identity.get`.
+- `iOS -> relay`
+  - The app registers with the relay over HTTPS using App Attest plus the app receipt.
+  - The relay requires the official production/TestFlight distribution path, which is why local
+    Xcode/dev installs cannot use the hosted relay.
+- `gateway delegation`
+  - The app includes the gateway identity in relay registration.
+  - The relay returns a relay handle and registration-scoped send grant delegated to that gateway.
+- `gateway -> relay`
+  - The gateway signs relay send requests with its own device identity.
+  - The relay verifies both the delegated send grant and the gateway signature before it sends to
+    APNs.
+- `relay -> APNs`
+  - Production APNs credentials and raw official-build APNs tokens stay in the relay deployment,
+    not on the gateway.
+
+This exists to keep the hosted relay limited to genuine OpenClaw official builds and to ensure a
+gateway can only send pushes for iOS devices that paired with that gateway.
 
 ## What Works Now (Concrete)
 

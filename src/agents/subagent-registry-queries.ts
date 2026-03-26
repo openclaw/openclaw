@@ -1,6 +1,10 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+function resolveControllerSessionKey(entry: SubagentRunRecord): string {
+  return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
+}
+
 export function findRunIdsByChildSessionKeyFromRuns(
   runs: Map<string, SubagentRunRecord>,
   childSessionKey: string,
@@ -49,6 +53,17 @@ export function listRunsForRequesterFromRuns(
     }
     return true;
   });
+}
+
+export function listRunsForControllerFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  controllerSessionKey: string,
+): SubagentRunRecord[] {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  return [...runs.values()].filter((entry) => resolveControllerSessionKey(entry) === key);
 }
 
 function findLatestRunForChildSession(
@@ -104,9 +119,9 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
 
 export function countActiveRunsForSessionFromRuns(
   runs: Map<string, SubagentRunRecord>,
-  requesterSessionKey: string,
+  controllerSessionKey: string,
 ): number {
-  const key = requesterSessionKey.trim();
+  const key = controllerSessionKey.trim();
   if (!key) {
     return 0;
   }
@@ -121,11 +136,19 @@ export function countActiveRunsForSessionFromRuns(
     return pending;
   };
 
-  let count = 0;
+  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const entry of runs.values()) {
-    if (entry.requesterSessionKey !== key) {
+    if (resolveControllerSessionKey(entry) !== key) {
       continue;
     }
+    const existing = latestByChildSessionKey.get(entry.childSessionKey);
+    if (!existing || entry.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(entry.childSessionKey, entry);
+    }
+  }
+
+  let count = 0;
+  for (const entry of latestByChildSessionKey.values()) {
     if (typeof entry.endedAt !== "number") {
       count += 1;
       continue;
@@ -153,8 +176,24 @@ function forEachDescendantRun(
     if (!requester) {
       continue;
     }
+    const latestByChildSessionKey = new Map<string, [string, SubagentRunRecord]>();
     for (const [runId, entry] of runs.entries()) {
       if (entry.requesterSessionKey !== requester) {
+        continue;
+      }
+      const childKey = entry.childSessionKey.trim();
+      const existing = latestByChildSessionKey.get(childKey);
+      if (!existing || entry.createdAt > existing[1].createdAt) {
+        latestByChildSessionKey.set(childKey, [runId, entry]);
+      }
+    }
+    for (const [runId, entry] of latestByChildSessionKey.values()) {
+      const latestForChildSession = findLatestRunForChildSession(runs, entry.childSessionKey);
+      if (
+        !latestForChildSession ||
+        latestForChildSession.runId !== runId ||
+        latestForChildSession.requesterSessionKey !== requester
+      ) {
         continue;
       }
       visitor(runId, entry);

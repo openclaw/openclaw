@@ -14,8 +14,7 @@ vi.mock("../media/image-ops.js", () => ({
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
 const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
@@ -102,6 +101,13 @@ function expectNoImages(result: NodesToolResult) {
   expect(images).toHaveLength(0);
 }
 
+function expectFirstMediaUrl(result: NodesToolResult): string {
+  const details = result.details as { media?: { mediaUrls?: string[] } } | undefined;
+  const mediaUrl = details?.media?.mediaUrls?.[0];
+  expect(typeof mediaUrl).toBe("string");
+  return mediaUrl ?? "";
+}
+
 function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
   expect(result.content?.[0]).toMatchObject({
     type: "text",
@@ -135,11 +141,10 @@ function setupNodeInvokeMock(params: {
 function createSystemRunPreparePayload(cwd: string | null) {
   return {
     payload: {
-      cmdText: "echo hi",
       plan: {
         argv: ["echo", "hi"],
         cwd,
-        rawCommand: "echo hi",
+        commandText: "echo hi",
         agentId: null,
         sessionKey: null,
       },
@@ -189,9 +194,10 @@ async function executePhotosLatest(params: { modelHasVision: boolean }) {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
+  await loadOpenClawToolsForTest();
 });
 
 describe("nodes camera_snap", () => {
@@ -253,10 +259,8 @@ describe("nodes camera_snap", () => {
     );
 
     expectNoImages(result);
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
+    expect(result.content ?? []).toEqual([]);
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
   });
 
   it("passes deviceId when provided", async () => {
@@ -307,11 +311,8 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content?.[0]).toMatchObject({ type: "text" });
-    const mediaPath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
-      .replace(/^MEDIA:/, "")
-      .trim();
-    await expect(readFileUtf8AndCleanup(mediaPath)).resolves.toBe("url-image");
+    expect(result.content ?? []).toEqual([]);
+    await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
   });
 
   it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
@@ -418,16 +419,15 @@ describe("nodes photos_latest", () => {
     const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
-    const details = Array.isArray(result.details) ? result.details : [];
+    expect(result.content ?? []).toEqual([]);
+    const details =
+      (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
     expect(details[0]).toMatchObject({
       width: 1,
       height: 1,
       createdAt: "2026-03-04T00:00:00Z",
     });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 
   it("includes inline image blocks when model has vision", async () => {
@@ -435,11 +435,8 @@ describe("nodes photos_latest", () => {
 
     const result = await executePhotosLatest({ modelHasVision: true });
 
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
     expectSingleImage(result, { mimeType: "image/jpeg" });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 });
 
@@ -662,10 +659,9 @@ describe("nodes run", () => {
       onApprovalRequest: (approvalParams) => {
         expect(approvalParams).toMatchObject({
           id: expect.any(String),
-          command: "echo hi",
-          commandArgv: ["echo", "hi"],
           systemRunPlan: expect.objectContaining({
             argv: ["echo", "hi"],
+            commandText: "echo hi",
           }),
           nodeId: NODE_ID,
           host: "node",
@@ -793,3 +789,8 @@ describe("nodes invoke", () => {
     });
   });
 });
+async function loadOpenClawToolsForTest(): Promise<void> {
+  vi.resetModules();
+  await import("./test-helpers/fast-core-tools.js");
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}

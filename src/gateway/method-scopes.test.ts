@@ -8,14 +8,20 @@ import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("method scope resolution", () => {
-  it("classifies sessions.resolve + config.schema.lookup as read and poll as write", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.resolve")).toEqual([
-      "operator.read",
-    ]);
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("config.schema.lookup")).toEqual([
-      "operator.read",
-    ]);
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("poll")).toEqual(["operator.write"]);
+  it.each([
+    ["sessions.resolve", ["operator.read"]],
+    ["config.schema.lookup", ["operator.read"]],
+    ["sessions.create", ["operator.write"]],
+    ["sessions.send", ["operator.write"]],
+    ["sessions.abort", ["operator.write"]],
+    ["sessions.messages.subscribe", ["operator.read"]],
+    ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["poll", ["operator.write"]],
+    ["config.patch", ["operator.admin"]],
+    ["wizard.start", ["operator.admin"]],
+    ["update.run", ["operator.admin"]],
+  ])("resolves least-privilege scopes for %s", (method, expected) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
@@ -28,16 +34,13 @@ describe("method scope resolution", () => {
 });
 
 describe("operator scope authorization", () => {
-  it("allows read methods with operator.read or operator.write", () => {
-    expect(authorizeOperatorScopesForMethod("health", ["operator.read"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("health", ["operator.write"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("config.schema.lookup", ["operator.read"])).toEqual({
-      allowed: true,
-    });
+  it.each([
+    ["health", ["operator.read"], { allowed: true }],
+    ["health", ["operator.write"], { allowed: true }],
+    ["config.schema.lookup", ["operator.read"], { allowed: true }],
+    ["config.patch", ["operator.admin"], { allowed: true }],
+  ])("authorizes %s for scopes %j", (method, scopes, expected) => {
+    expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
 
   it("requires operator.write for write methods", () => {
@@ -63,6 +66,11 @@ describe("operator scope authorization", () => {
 });
 
 describe("core gateway method classification", () => {
+  it("treats node-role methods as classified even without operator scopes", () => {
+    expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
+    expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
+  });
+
   it("classifies every exposed core gateway handler method", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
       (method) => !isGatewayMethodClassified(method),
