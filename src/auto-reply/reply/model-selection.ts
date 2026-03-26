@@ -92,33 +92,35 @@ function collectImageModelKeys(
   // Providerless fallbacks should resolve against the image model's provider,
   // not the agent's default provider (to handle mixed-provider configs correctly).
   let imageModelDefaultProvider = "";
+  // Compute whether primary has a provider — needed by both the primary-deriving block
+  // and the fallback-deriving block below.
+  const primaryTrimmed = imageModelPrimary?.trim() ?? "";
+  const primaryHasProvider = primaryTrimmed.includes("/");
   // Only derive imageModelDefaultProvider from imageModelPrimary if it has an explicit
   // provider. If imageModelPrimary is providerless (no slash), leave imageModelDefaultProvider
   // empty so the fallback block below can derive the correct provider from fallbacks.
   // This fixes the case where imageModel: { fallbacks: ["openai/gpt-4o"] } with
   // defaultProvider "anthropic" would incorrectly resolve "gpt-4o" as Anthropic.
-  if (imageModelPrimary && aliasIndex && defaultProvider) {
-    const primaryTrimmed = imageModelPrimary.trim();
-    const hasProvider = primaryTrimmed.includes("/");
-    if (hasProvider) {
-      const resolved = resolveModelRefFromString({
-        raw: primaryTrimmed,
-        defaultProvider,
-        aliasIndex,
-      });
-      if (resolved) {
-        imageModelDefaultProvider = resolved.ref.provider;
-      }
+  if (imageModelPrimary && aliasIndex && defaultProvider && primaryHasProvider) {
+    const resolved = resolveModelRefFromString({
+      raw: primaryTrimmed,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      imageModelDefaultProvider = resolved.ref.provider;
     }
     // If providerless, leave imageModelDefaultProvider empty so fallback block derives from fallbacks.
   }
 
-  // If no primary was configured but fallbacks exist with provider-qualified entries,
-  // derive imageModelDefaultProvider from the first such fallback so that
-  // providerless fallback keys resolve correctly (e.g., an agent configured with
-  // defaultProvider "anthropic" and imageModel: { fallbacks: ["openai/gpt-4o", "gpt-4.1"] }
+  // If no primary was configured or the primary is providerless, derive
+  // imageModelDefaultProvider from the first fallback that has an explicit provider
+  // so that providerless fallback keys resolve correctly (e.g., an agent configured
+  // with defaultProvider "anthropic" and imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4o"] }
   // should resolve providerless "gpt-4o" as OpenAI, not Anthropic).
-  if (!imageModelPrimary && aliasIndex && !imageModelDefaultProvider) {
+  // Also handles the case where imageModelPrimary is providerless like "gpt-4o"
+  // with fallbacks ["openai/gpt-4.1"] — the provider "openai" should be derived from fallbacks.
+  if ((!imageModelPrimary || !primaryHasProvider) && aliasIndex && !imageModelDefaultProvider) {
     const fb =
       typeof imageModelConfig === "string"
         ? imageModelConfig
