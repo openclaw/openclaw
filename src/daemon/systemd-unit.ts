@@ -50,9 +50,10 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
   let envFileLine: string | null = null;
-  if (environmentFile) {
-    assertNoSystemdLineBreaks(environmentFile, "Systemd EnvironmentFile path");
-    envFileLine = `EnvironmentFile=${environmentFile}`;
+  if (environmentFile?.trim()) {
+    const envFilePath = environmentFile.trim();
+    assertNoSystemdLineBreaks(envFilePath, "Systemd EnvironmentFile path");
+    envFileLine = `EnvironmentFile=${systemdEscapeArg(envFilePath)}`;
   }
   const envLines = renderEnvLines(environment);
   return [
