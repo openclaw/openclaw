@@ -68,6 +68,8 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  /** True when this run is using a fallback model after the primary failed. */
+  isFallback?: boolean;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -732,7 +734,7 @@ export async function runWithModelFallback<T>(params: {
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: { ...runOptions, isFallback: i > 0 },
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -866,7 +868,12 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      options: { isFallback: i > 0 },
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }

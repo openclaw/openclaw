@@ -1623,6 +1623,8 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+  /** True when this output came from a fallback model after the primary failed. */
+  isFallback?: boolean;
 };
 
 // agent_end hook

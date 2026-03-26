@@ -2180,12 +2180,27 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      // Gateway context headers — propagated to AI gateway for tracing and analytics.
+      // These headers provide session/run context without requiring JWT parsing.
+      const gatewayContextHeaders: Record<string, string> = {
+        ...(params.sessionId ? { "X-OpenClaw-Session-Id": params.sessionId } : {}),
+        ...(params.runId ? { "X-OpenClaw-Attempt-Id": params.runId } : {}),
+        "X-OpenClaw-Fallback": String(params.isFallback ?? false),
+      };
+      const modelWithContextHeaders = {
+        ...params.model,
+        headers: {
+          ...params.model.headers,
+          ...gatewayContextHeaders,
+        },
+      };
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
         authStorage: params.authStorage,
         modelRegistry: params.modelRegistry,
-        model: params.model,
+        model: modelWithContextHeaders,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools: allCustomTools,
@@ -2443,6 +2458,31 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // Inject per-LLM-turn headers for gateway context. Must be in streamFn wrapper
+      // because one prompt() may trigger multiple LLM HTTP calls (one per tool-result round).
+      // Each call gets a unique, monotonically increasing turn index.
+      const priorAssistantCount = activeSession.messages.filter(
+        (m) => (m as { role?: string }).role === "assistant",
+      ).length;
+      let llmTurnCount = 0;
+      {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          llmTurnCount += 1;
+          const turnIndex = priorAssistantCount + llmTurnCount;
+          const turnId = `${params.runId ?? "run"}-turn-${turnIndex}`;
+          const modelWithTurnHeaders = {
+            ...model,
+            headers: {
+              ...model.headers,
+              "X-OpenClaw-Turn-Index": String(turnIndex),
+              "X-OpenClaw-Turn-Id": turnId,
+            },
+          };
+          return inner(modelWithTurnHeaders, context, options);
+        };
       }
 
       try {
@@ -3169,6 +3209,7 @@ export async function runEmbeddedAttempt(
               assistantTexts,
               lastAssistant,
               usage: getUsageTotals(),
+              isFallback: params.isFallback ?? false,
             },
             {
               agentId: hookAgentId,

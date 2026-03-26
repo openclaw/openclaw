@@ -101,6 +101,8 @@ export type RunEmbeddedPiAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;
+  /** True when this attempt is using a fallback model/provider after the primary failed. */
+  isFallback?: boolean;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

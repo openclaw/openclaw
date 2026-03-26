@@ -514,6 +514,7 @@ function runAgentAttempt(params: {
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
+    isFallback: params.isFallbackRetry,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
