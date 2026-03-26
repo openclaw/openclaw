@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOpenClawUserDataDir } from "../../extensions/browser/src/browser/chrome.js";
 import type {
   BrowserRouteContext,
   BrowserServerState,
 } from "../../extensions/browser/src/browser/server-context.js";
-import { resolveOpenClawUserDataDir } from "../../extensions/browser/src/browser/chrome.js";
 import { movePathToTrash } from "../../extensions/browser/src/browser/trash.js";
 import { loadConfig, writeConfigFile } from "../../extensions/browser/src/config/config.js";
 
