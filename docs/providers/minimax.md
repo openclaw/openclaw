@@ -54,7 +54,7 @@ Configure via CLI:
     mode: "merge",
     providers: {
       minimax: {
-        baseUrl: "https://api.minimax.io/anthropic",
+        baseUrl: "https://api.minimaxi.com/anthropic",
         apiKey: "${MINIMAX_API_KEY}",
         api: "anthropic-messages",
         models: [
