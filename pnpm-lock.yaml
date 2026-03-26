@@ -319,6 +319,8 @@ importers:
         specifier: 1.58.2
         version: 1.58.2
 
+  extensions/dinference: {}
+
   extensions/discord:
     dependencies:
       '@buape/carbon':

@@ -24,6 +24,7 @@ export type BuiltInAuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
+  | "dinference-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
@@ -76,6 +77,7 @@ export type BuiltInAuthChoiceGroupId =
   | "qwen"
   | "together"
   | "huggingface"
+  | "dinference"
   | "qianfan"
   | "modelstudio"
   | "xai"
@@ -134,6 +136,7 @@ export type OnboardOptions = {
   veniceApiKey?: string;
   togetherApiKey?: string;
   huggingfaceApiKey?: string;
+  dinferenceApiKey?: string;
   opencodeZenApiKey?: string;
   opencodeGoApiKey?: string;
   xaiApiKey?: string;

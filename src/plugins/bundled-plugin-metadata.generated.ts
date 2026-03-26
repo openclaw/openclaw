@@ -709,6 +709,47 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "dinference",
+    idHint: "dinference",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/dinference-provider",
+    packageVersion: "2026.3.22",
+    packageDescription: "OpenClaw DInference provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "dinference",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["dinference"],
+      providerAuthEnvVars: {
+        dinference: ["DINFERENCE_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "dinference",
+          method: "api-key",
+          choiceId: "dinference-api-key",
+          choiceLabel: "DInference API key",
+          groupId: "dinference",
+          groupLabel: "DInference",
+          groupHint: "Open source models (GLM-5, GLM-4.7, GPT-OSS-120b)",
+          optionKey: "dinferenceApiKey",
+          cliFlag: "--dinference-api-key",
+          cliOption: "--dinference-api-key <key>",
+          cliDescription: "DInference API key for model inference",
+        },
+      ],
+    },
+  },
+  {
     dirName: "discord",
     idHint: "discord",
     source: {

@@ -91,6 +91,11 @@ export {
   TOGETHER_MODEL_CATALOG,
 } from "../agents/together-models.js";
 export {
+  buildDinferenceModelDefinition,
+  DINFERENCE_BASE_URL,
+  DINFERENCE_MODEL_CATALOG,
+} from "../agents/dinference-models.js";
+export {
   discoverVeniceModels,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,

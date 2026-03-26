@@ -329,3 +329,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: dinference":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dinference/**"
