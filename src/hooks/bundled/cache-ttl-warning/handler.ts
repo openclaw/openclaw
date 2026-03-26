@@ -12,7 +12,11 @@
 import { routeReply } from "../../../auto-reply/reply/route-reply.js";
 import { loadConfig } from "../../../config/config.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { deleteMessageTelegram, resolveTelegramToken } from "../../../plugin-sdk/telegram.js";
+import {
+  deleteMessageTelegram,
+  resolveTelegramToken,
+  sendMessageTelegram,
+} from "../../../plugin-sdk/telegram.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 
@@ -102,6 +106,23 @@ async function sendCacheNotice(params: {
   try {
     const cfg = loadConfig();
     const normalizedChannel = normalizeChannelForSend(params.channelId);
+
+    // Use sendMessageTelegram directly to bypass routeReply which can fail with
+    // "Unknown channel: telegram" when the plugin registry is corrupted (#48790).
+    if (normalizedChannel === "telegram") {
+      const { token } = resolveTelegramToken(cfg, {});
+      if (!token) {
+        log.warn("cache-ttl-warning: no Telegram bot token — cannot send cache notice");
+        return {};
+      }
+      const result = await sendMessageTelegram(params.to, text, { cfg, token });
+      log.info(
+        `cache-ttl-warning: sent ${params.kind} notice to ${params.to} (messageId=${result.messageId})`,
+      );
+      return { messageId: result.messageId };
+    }
+
+    // Non-Telegram: fall back to routeReply
     const result = await routeReply({
       payload: { text },
       channel: normalizedChannel as Parameters<typeof routeReply>[0]["channel"],

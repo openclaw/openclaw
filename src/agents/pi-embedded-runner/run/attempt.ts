@@ -1111,7 +1111,7 @@ export async function runEmbeddedAttempt(
           void triggerInternalHook(
             createInternalHookEvent("agent", "llm-request", params.sessionKey ?? params.sessionId, {
               sessionKey: params.sessionKey,
-              conversationId: params.sessionId,
+              conversationId: params.messageTo ?? params.sessionId,
               channelId: params.messageChannel ?? params.messageProvider,
             }),
           );
