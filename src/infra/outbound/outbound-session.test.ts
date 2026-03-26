@@ -337,6 +337,30 @@ describe("resolveOutboundSessionRoute", () => {
     });
   });
 
+  it("uses resolved Discord channel targets to route bare numeric ids as channels without thread suffixes", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "456",
+      threadId: "789",
+      resolvedTarget: {
+        to: "channel:456",
+        kind: "channel",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:channel:456",
+      baseSessionKey: "agent:main:discord:channel:456",
+      from: "discord:channel:456",
+      to: "channel:456",
+      chatType: "channel",
+      threadId: "789",
+    });
+  });
+
   it("uses resolved Mattermost user targets to route bare ids as DMs", async () => {
     const userId = "dthcxgoxhifn3pwh65cut3ud3w";
     const route = await resolveOutboundSessionRoute({
