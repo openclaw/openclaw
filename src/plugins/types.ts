@@ -1423,7 +1423,6 @@ export type PluginHookName =
   | "gateway_stop"
   | "before_response_emit"
   | "before_dispatch";
-  | "before_dispatch";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1452,7 +1451,6 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_response_emit",
-  "before_dispatch",
   "before_dispatch",
 ] as const satisfies readonly PluginHookName[];
 
