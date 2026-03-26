@@ -132,6 +132,18 @@ describe("createSlackDraftStream", () => {
     expect(stream.channelId()).toBeUndefined();
   });
 
+  it("messageId is undefined before flush and available after flush", async () => {
+    // Regression: fast LLM responses can call deliver() before the 1000ms throttle fires.
+    // The fix (await draftStream?.flush() before reading messageId()) relies on the
+    // guarantee that flush() sends any pending update and makes messageId() non-undefined.
+    const { stream } = createDraftStreamHarness();
+
+    stream.update("partial text");
+    expect(stream.messageId()).toBeUndefined(); // throttle hasn't fired yet
+    await stream.flush();
+    expect(stream.messageId()).toBe("111.222"); // available after flush
+  });
+
   it("clear is a no-op when no preview message exists", async () => {
     const { stream, remove } = createDraftStreamHarness();
 

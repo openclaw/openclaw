@@ -340,6 +340,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       const reply = resolveSendableOutboundReplyParts(payload);
       const slackBlocks = readSlackReplyBlocks(payload);
+      // Flush any pending draft update so messageId() is reliable even if the
+      // throttle window hasn't fired yet. Fast LLM responses can race ahead of
+      // the 1000ms draft-stream throttle, leaving messageId() undefined and
+      // causing canFinalizeViaPreviewEdit to fall through to deliverNormally —
+      // which sends a second message while the throttled draft posts shortly after.
+      await draftStream?.flush();
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
       const finalText = reply.text;
