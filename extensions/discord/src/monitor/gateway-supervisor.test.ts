@@ -40,9 +40,7 @@ describe("createDiscordGatewaySupervisor", () => {
       error: vi.fn(),
     };
     const supervisor = createDiscordGatewaySupervisor({
-      client: {
-        getPlugin: vi.fn(() => ({ emitter })),
-      } as never,
+      gateway: { emitter },
       isDisallowedIntentsError: (err) => String(err).includes("4014"),
       runtime: runtime as never,
     });
@@ -72,9 +70,7 @@ describe("createDiscordGatewaySupervisor", () => {
 
   it("is idempotent on dispose and noops without an emitter", () => {
     const supervisor = createDiscordGatewaySupervisor({
-      client: {
-        getPlugin: vi.fn(() => undefined),
-      } as never,
+      gateway: undefined,
       isDisallowedIntentsError: () => false,
       runtime: { error: vi.fn() } as never,
     });
@@ -90,9 +86,7 @@ describe("createDiscordGatewaySupervisor", () => {
     const emitter = new EventEmitter();
     const runtime = { error: vi.fn() };
     const supervisor = createDiscordGatewaySupervisor({
-      client: {
-        getPlugin: vi.fn(() => ({ emitter })),
-      } as never,
+      gateway: { emitter },
       isDisallowedIntentsError: () => false,
       runtime: runtime as never,
     });

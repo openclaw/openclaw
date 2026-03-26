@@ -947,15 +947,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     gatewaySupervisor = (
       createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor
     )({
-      client,
+      gateway: lifecycleGateway,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
       runtime,
     });
 
-    lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = gatewaySupervisor.emitter;
     onEarlyGatewayDebug = (msg: unknown) => {
       if (!(isVerboseForTesting ?? isVerbose)()) {
@@ -1164,7 +1164,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     onEarlyGatewayDebug = undefined;
     await (runDiscordGatewayLifecycleForTesting ?? runDiscordGatewayLifecycle)({
       accountId: account.accountId,
-      client,
+      gateway: lifecycleGateway,
       runtime,
       abortSignal: opts.abortSignal,
       statusSink: opts.setStatus,

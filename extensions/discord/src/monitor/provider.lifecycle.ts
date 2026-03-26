@@ -1,4 +1,3 @@
-import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -70,7 +69,7 @@ async function waitForDiscordGatewayReady(params: {
 
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
-  client: Client;
+  gateway?: GatewayPlugin;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   isDisallowedIntentsError: (err: unknown) => boolean;
@@ -85,7 +84,7 @@ export async function runDiscordGatewayLifecycle(params: {
   const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   const RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
-  const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
+  const gateway = params.gateway;
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
