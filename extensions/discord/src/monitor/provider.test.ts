@@ -225,6 +225,26 @@ describe("monitorDiscordProvider", () => {
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("disconnects the gateway when startup fails before lifecycle begins after client creation", async () => {
+    const disconnect = vi.fn();
+    clientGetPluginMock.mockImplementation((name: string) =>
+      name === "gateway" ? { emitter: new EventEmitter(), disconnect, isConnected: false } : undefined,
+    );
+    createDiscordMessageHandlerMock.mockImplementationOnce(() => {
+      throw new Error("handler init failed");
+    });
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime: baseRuntime(),
+      }),
+    ).rejects.toThrow("handler init failed");
+
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
