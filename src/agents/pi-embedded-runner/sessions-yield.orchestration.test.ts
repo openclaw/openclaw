@@ -77,6 +77,24 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
   });
 
+  it("clientToolCalls takes precedence over promptError", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: new Error("request_too_large: Request size exceeds model context window"),
+        clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-client-tool-vs-prompt-error",
+    });
+
+    expect(result.meta.stopReason).toBe("tool_calls");
+    expect(result.meta.pendingToolCalls).toHaveLength(1);
+    expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
+  });
+
   it("normal attempt without yield has no stopReason override", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 

@@ -1036,6 +1036,83 @@ export async function runEmbeddedPiAgent(
             provider,
             model: modelId,
           });
+
+          // Client-hosted tools must short-circuit before later error handling.
+          // The adapter returns a synthetic pending tool result to the model, so
+          // follow-up prompt/overflow branches can otherwise swallow the
+          // side-channel pendingToolCalls metadata and cause `/v1/responses` to
+          // return plain text instead of OpenResponses function_call items.
+          if (attempt.clientToolCalls && attempt.clientToolCalls.length > 0) {
+            const usageMeta = buildUsageAgentMetaFields({
+              usageAccumulator,
+              lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
+              lastRunPromptUsage,
+              lastTurnTotal,
+            });
+            const agentMeta: EmbeddedPiAgentMeta = {
+              sessionId: sessionIdUsed,
+              provider: lastAssistant?.provider ?? provider,
+              model: lastAssistant?.model ?? model.id,
+              usage: usageMeta.usage,
+              lastCallUsage: usageMeta.lastCallUsage,
+              promptTokens: usageMeta.promptTokens,
+              compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            };
+            const payloads = buildEmbeddedRunPayloads({
+              assistantTexts: attempt.assistantTexts,
+              toolMetas: attempt.toolMetas,
+              lastAssistant: attempt.lastAssistant,
+              lastToolError: attempt.lastToolError,
+              config: params.config,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              verboseLevel: params.verboseLevel,
+              reasoningLevel: params.reasoningLevel,
+              toolResultFormat: resolvedToolResultFormat,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+              inlineToolResultsAllowed: false,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            });
+
+            if (lastProfileId) {
+              await markAuthProfileGood({
+                store: authStore,
+                provider,
+                profileId: lastProfileId,
+                agentDir: params.agentDir,
+              });
+              await markAuthProfileUsed({
+                store: authStore,
+                profileId: lastProfileId,
+                agentDir: params.agentDir,
+              });
+            }
+
+            return {
+              payloads: payloads.length ? payloads : undefined,
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                stopReason: "tool_calls",
+                pendingToolCalls: attempt.clientToolCalls.map((call) => ({
+                  id: randomBytes(5).toString("hex").slice(0, 9),
+                  name: call.name,
+                  arguments: JSON.stringify(call.params),
+                })),
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
                 cfg: params.config,
