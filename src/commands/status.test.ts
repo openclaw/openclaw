@@ -1063,7 +1063,7 @@ describe("statusCommand", () => {
       "+1000",
       "50%",
       "40% cached",
-      "LaunchAgent",
+      "Daemon",
       "FAQ:",
       "Troubleshooting:",
       "Next steps:",
