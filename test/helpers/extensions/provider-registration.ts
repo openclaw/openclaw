@@ -5,6 +5,8 @@ type RegisteredProviderCollections = {
   speechProviders: unknown[];
   mediaProviders: unknown[];
   imageProviders: unknown[];
+  services: unknown[];
+  managedMcpServers: unknown[];
 };
 
 type ProviderPluginModule = {
@@ -20,6 +22,8 @@ export function registerProviderPlugin(params: {
   const speechProviders: unknown[] = [];
   const mediaProviders: unknown[] = [];
   const imageProviders: unknown[] = [];
+  const services: unknown[] = [];
+  const managedMcpServers: unknown[] = [];
 
   params.plugin.register(
     createTestPluginApi({
@@ -40,10 +44,23 @@ export function registerProviderPlugin(params: {
       registerImageGenerationProvider: (provider) => {
         imageProviders.push(provider);
       },
+      registerService: (service) => {
+        services.push(service);
+      },
+      registerMcpServer: (server) => {
+        managedMcpServers.push(server);
+      },
     }),
   );
 
-  return { providers, speechProviders, mediaProviders, imageProviders };
+  return {
+    providers,
+    speechProviders,
+    mediaProviders,
+    imageProviders,
+    services,
+    managedMcpServers,
+  };
 }
 
 export function requireRegisteredProvider<T = unknown>(

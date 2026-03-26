@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1316,
+            "line": 1328,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3072,7 +3072,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 88,
+            "line": 90,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -3414,7 +3414,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1316,
+            "line": 1328,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3441,7 +3441,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1298,
+            "line": 1310,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3875,7 +3875,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 88,
+            "line": 90,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -3920,7 +3920,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1316,
+            "line": 1328,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3945,6 +3945,15 @@
         {
           "declaration": "export type OpenClawPluginDefinition = OpenClawPluginDefinition;",
           "exportName": "OpenClawPluginDefinition",
+          "kind": "type",
+          "source": {
+            "line": 1310,
+            "path": "src/plugins/types.ts"
+          }
+        },
+        {
+          "declaration": "export type OpenClawPluginManagedMcpServer = OpenClawPluginManagedMcpServer;",
+          "exportName": "OpenClawPluginManagedMcpServer",
           "kind": "type",
           "source": {
             "line": 1298,

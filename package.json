@@ -237,6 +237,10 @@
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
     },
+    "./plugin-sdk/browser": {
+      "types": "./dist/plugin-sdk/browser.d.ts",
+      "default": "./dist/plugin-sdk/browser.js"
+    },
     "./plugin-sdk/bluebubbles": {
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"

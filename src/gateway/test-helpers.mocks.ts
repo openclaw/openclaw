@@ -171,6 +171,7 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   services: [],
   commands: [],
   conversationBindingResolvedHandlers: [],
+  managedMcpServers: [],
   diagnostics: [],
 });
 

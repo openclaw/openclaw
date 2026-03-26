@@ -4,6 +4,7 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginManagedMcpServer,
   PluginInteractiveTelegramHandlerContext,
 } from "../plugins/types.js";
 
@@ -38,6 +39,7 @@ export type {
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  OpenClawPluginManagedMcpServer,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethodNonInteractiveContext,

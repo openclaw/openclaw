@@ -122,6 +122,7 @@ export function createPluginLoadResult(
     services: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
+    managedMcpServers: [],
     ...rest,
   };
 }

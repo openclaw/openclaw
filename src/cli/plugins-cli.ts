@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { Command } from "commander";
+import { inspectChatgptApps } from "../../extensions/openai/chatgpt-apps/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -42,6 +43,7 @@ export type PluginsListOptions = {
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
+  hardRefresh?: boolean;
 };
 
 export type PluginUpdateOptions = {
@@ -319,7 +321,11 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin id")
     .option("--all", "Inspect all plugins")
     .option("--json", "Print JSON")
-    .action((id: string | undefined, opts: PluginInspectOptions) => {
+    .option(
+      "--hard-refresh",
+      "Force a fresh ChatGPT apps directory fetch when inspecting the OpenAI plugin",
+    )
+    .action(async (id: string | undefined, opts: PluginInspectOptions) => {
       const cfg = loadConfig();
       const report = buildPluginStatusReport({ config: cfg });
       if (opts.all) {
@@ -404,11 +410,22 @@ export function registerPluginsCli(program: Command) {
         return defaultRuntime.exit(1);
       }
       const install = cfg.plugins?.installs?.[inspect.plugin.id];
+      const openaiRuntimeInspect =
+        inspect.plugin.id === "openai"
+          ? await inspectChatgptApps({
+              config: cfg,
+              pluginConfig: cfg.plugins?.entries?.openai?.config,
+              stateDir: resolveStateDir(),
+              workspaceDir: report.workspaceDir,
+              forceRefetch: opts.hardRefresh ?? false,
+            })
+          : null;
 
       if (opts.json) {
         defaultRuntime.writeJson({
           ...inspect,
           install,
+          runtime: openaiRuntimeInspect ? { chatgptApps: openaiRuntimeInspect } : undefined,
         });
         return;
       }
@@ -502,6 +519,74 @@ export function registerPluginsCli(program: Command) {
       );
       if (inspect.httpRouteCount > 0) {
         lines.push(...formatInspectSection("HTTP routes", [String(inspect.httpRouteCount)]));
+      }
+      if (openaiRuntimeInspect) {
+        const appsSummary =
+          openaiRuntimeInspect.inventory.apps.length > 0
+            ? openaiRuntimeInspect.inventory.apps.map((app) => {
+                const flags = [
+                  app.isAccessible ? "accessible" : "not accessible",
+                  app.isEnabled ? "enabled" : "disabled",
+                ].join(", ");
+                return `${app.id}: ${app.name} (${flags})`;
+              })
+            : [openaiRuntimeInspect.inventory.message ?? "No apps reported."];
+        const mcpSummary =
+          openaiRuntimeInspect.mcpServers.servers.length > 0
+            ? openaiRuntimeInspect.mcpServers.servers.map(
+                (server) =>
+                  `${server.name}: auth=${server.authStatus}, tools=${server.toolCount}, resources=${server.resourceCount}, templates=${server.resourceTemplateCount}`,
+              )
+            : [openaiRuntimeInspect.mcpServers.message ?? "No MCP server status reported."];
+        const connectorSummary =
+          openaiRuntimeInspect.config.connectors.length > 0
+            ? openaiRuntimeInspect.config.connectors.map(
+                (connector) => `${connector.id}: ${connector.enabled ? "enabled" : "disabled"}`,
+              )
+            : ["No ChatGPT app connector overrides configured."];
+        lines.push(
+          ...formatInspectSection("ChatGPT apps runtime", [
+            `Enabled: ${openaiRuntimeInspect.enabled ? "yes" : "no"}`,
+            `Refresh mode: ${opts.hardRefresh ? "hard" : "cached"}`,
+            `Sandbox: ${shortenHomeInString(openaiRuntimeInspect.layout.sandboxDir)}`,
+            `Config file: ${shortenHomeInString(openaiRuntimeInspect.layout.configFilePath)}`,
+            `ChatGPT base URL: ${openaiRuntimeInspect.config.chatgptBaseUrl}`,
+            `App-server command: ${openaiRuntimeInspect.config.appServer.command}${
+              openaiRuntimeInspect.config.appServer.args.length > 0
+                ? ` ${openaiRuntimeInspect.config.appServer.args.join(" ")}`
+                : ""
+            }`,
+            `Sidecar: ${openaiRuntimeInspect.sidecar.status}${
+              openaiRuntimeInspect.sidecar.message
+                ? ` (${openaiRuntimeInspect.sidecar.message})`
+                : ""
+            }`,
+            `Auth: ${openaiRuntimeInspect.auth.status}${
+              openaiRuntimeInspect.auth.accountId
+                ? ` (account ${openaiRuntimeInspect.auth.accountId})`
+                : ""
+            }${openaiRuntimeInspect.auth.message ? ` - ${openaiRuntimeInspect.auth.message}` : ""}`,
+            `Inventory: ${openaiRuntimeInspect.inventory.status} (${openaiRuntimeInspect.inventory.total} total, ${openaiRuntimeInspect.inventory.accessible} accessible, ${openaiRuntimeInspect.inventory.enabled} enabled)`,
+            `Inventory source: ${openaiRuntimeInspect.inventory.source ?? "none"}`,
+            `Inventory updated at: ${openaiRuntimeInspect.inventory.updatedAt ?? "-"}`,
+            `MCP server status: ${openaiRuntimeInspect.mcpServers.status}${
+              openaiRuntimeInspect.mcpServers.message
+                ? ` (${openaiRuntimeInspect.mcpServers.message})`
+                : ""
+            }`,
+          ]),
+        );
+        lines.push(...formatInspectSection("ChatGPT app config", connectorSummary));
+        lines.push(
+          ...formatInspectSection(
+            "ChatGPT apps diagnostics",
+            openaiRuntimeInspect.diagnostics.map(
+              (entry) => `${entry.scope}: ${entry.status} - ${entry.message}`,
+            ),
+          ),
+        );
+        lines.push(...formatInspectSection("ChatGPT apps", appsSummary));
+        lines.push(...formatInspectSection("ChatGPT MCP servers", mcpSummary));
       }
       const policyLines: string[] = [];
       if (typeof inspect.policy.allowPromptInjection === "boolean") {

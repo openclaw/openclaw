@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config.js";
 import type { BundleMcpDiagnostic, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import { resolveManagedMcpServers } from "../plugins/managed-mcp.js";
 
 export type EmbeddedPiMcpConfig = {
   mcpServers: Record<string, BundleMcpServerConfig>;
@@ -16,12 +17,17 @@ export function loadEmbeddedPiMcpConfig(params: {
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
   });
+  const managedMcp = resolveManagedMcpServers({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+  });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
 
   return {
     // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
     mcpServers: {
       ...bundleMcp.config.mcpServers,
+      ...managedMcp,
       ...configuredMcp,
     },
     diagnostics: bundleMcp.diagnostics,

@@ -2311,7 +2311,62 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       configSchema: {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          chatgptApps: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              chatgptBaseUrl: {
+                type: "string",
+              },
+              appServer: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  command: {
+                    type: "string",
+                  },
+                  args: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+              },
+              linking: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  waitTimeoutMs: {
+                    type: "number",
+                  },
+                  pollIntervalMs: {
+                    type: "number",
+                  },
+                },
+              },
+              connectors: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {

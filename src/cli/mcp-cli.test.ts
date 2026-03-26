@@ -14,6 +14,14 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
+const bridgeMocks = vi.hoisted(() => ({
+  runChatgptAppsMcpBridgeStdio: vi.fn(async () => undefined),
+}));
+
+vi.mock("../../extensions/openai/chatgpt-apps/index.js", () => ({
+  runChatgptAppsMcpBridgeStdio: bridgeMocks.runChatgptAppsMcpBridgeStdio,
+}));
+
 const tempDirs: string[] = [];
 
 async function createWorkspace(): Promise<string> {
@@ -71,6 +79,22 @@ describe("mcp cli", () => {
       await expect(runMcpCommand(["mcp", "unset", "missing"])).rejects.toThrow("__exit__:1");
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining('No MCP server named "missing"'),
+      );
+    });
+  });
+
+  it("runs the internal OpenAI ChatGPT apps bridge entrypoint", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "openai-chatgpt-apps"]);
+      expect(bridgeMocks.runChatgptAppsMcpBridgeStdio).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stateDir: expect.any(String),
+          workspaceDir,
+          pluginConfig: undefined,
+        }),
       );
     });
   });

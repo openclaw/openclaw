@@ -16,6 +16,10 @@ export const enablePluginInConfig = vi.fn();
 export const recordPluginInstall = vi.fn();
 export const clearPluginManifestRegistryCache = vi.fn();
 export const buildPluginStatusReport = vi.fn();
+export const buildAllPluginInspectReports = vi.fn();
+export const buildPluginCompatibilityNotices = vi.fn();
+export const buildPluginInspectReport = vi.fn();
+export const formatPluginCompatibilityNotice = vi.fn();
 export const applyExclusiveSlotSelection = vi.fn();
 export const uninstallPlugin = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
@@ -28,6 +32,7 @@ export const parseClawHubPluginSpec = vi.fn();
 export const installHooksFromNpmSpec = vi.fn();
 export const installHooksFromPath = vi.fn();
 export const recordHookInstall = vi.fn();
+export const inspectChatgptApps = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -68,7 +73,11 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("../plugins/status.js", () => ({
+  buildAllPluginInspectReports: (...args: unknown[]) => buildAllPluginInspectReports(...args),
+  buildPluginCompatibilityNotices: (...args: unknown[]) => buildPluginCompatibilityNotices(...args),
+  buildPluginInspectReport: (...args: unknown[]) => buildPluginInspectReport(...args),
   buildPluginStatusReport: (...args: unknown[]) => buildPluginStatusReport(...args),
+  formatPluginCompatibilityNotice: (...args: unknown[]) => formatPluginCompatibilityNotice(...args),
 }));
 
 vi.mock("../plugins/slots.js", () => ({
@@ -128,6 +137,10 @@ vi.mock("../infra/clawhub.js", () => ({
   parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpec(...args),
 }));
 
+vi.mock("../../extensions/openai/chatgpt-apps/index.js", () => ({
+  inspectChatgptApps: (...args: unknown[]) => inspectChatgptApps(...args),
+}));
+
 const { registerPluginsCli } = await import("./plugins-cli.js");
 
 export function runPluginsCommand(argv: string[]) {
@@ -150,6 +163,10 @@ export function resetPluginsCliTestState() {
   recordPluginInstall.mockReset();
   clearPluginManifestRegistryCache.mockReset();
   buildPluginStatusReport.mockReset();
+  buildAllPluginInspectReports.mockReset();
+  buildPluginCompatibilityNotices.mockReset();
+  buildPluginInspectReport.mockReset();
+  formatPluginCompatibilityNotice.mockReset();
   applyExclusiveSlotSelection.mockReset();
   uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
@@ -162,6 +179,7 @@ export function resetPluginsCliTestState() {
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();
   recordHookInstall.mockReset();
+  inspectChatgptApps.mockReset();
 
   loadConfig.mockReturnValue({} as OpenClawConfig);
   readConfigFileSnapshot.mockResolvedValue({
@@ -190,6 +208,12 @@ export function resetPluginsCliTestState() {
     plugins: [],
     diagnostics: [],
   });
+  buildAllPluginInspectReports.mockReturnValue([]);
+  buildPluginCompatibilityNotices.mockReturnValue([]);
+  buildPluginInspectReport.mockReturnValue(null);
+  formatPluginCompatibilityNotice.mockImplementation(
+    (entry: { message?: string }) => entry.message ?? "",
+  );
   applyExclusiveSlotSelection.mockImplementation(({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],
@@ -237,4 +261,5 @@ export function resetPluginsCliTestState() {
     error: "hook npm install disabled in test",
   });
   recordHookInstall.mockImplementation((cfg: OpenClawConfig) => cfg);
+  inspectChatgptApps.mockResolvedValue(null);
 }

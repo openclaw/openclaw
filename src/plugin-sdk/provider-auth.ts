@@ -5,6 +5,7 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
+export type { ProviderAuth } from "../infra/provider-usage.auth.js";
 
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -15,6 +16,7 @@ export {
   resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";
+export { resolveProviderAuths } from "../infra/provider-usage.auth.js";
 export { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 export {
   formatApiKeyPreview,

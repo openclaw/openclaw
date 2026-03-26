@@ -9,6 +9,7 @@ import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
 } from "../../plugins/bundle-mcp.js";
+import { resolveManagedMcpServers } from "../../plugins/managed-mcp.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -95,6 +96,12 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+  mergedConfig = applyMergePatch(mergedConfig, {
+    mcpServers: resolveManagedMcpServers({
+      workspaceDir: params.workspaceDir,
+      cfg: params.config,
+    }),
+  }) as BundleMcpConfig;
 
   if (Object.keys(mergedConfig.mcpServers).length === 0) {
     return { backend: params.backend };

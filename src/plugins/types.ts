@@ -1290,6 +1290,18 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
+export type OpenClawPluginManagedMcpServerContext = {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+};
+
+export type OpenClawPluginManagedMcpServer = {
+  name: string;
+  config:
+    | Record<string, unknown>
+    | ((ctx: OpenClawPluginManagedMcpServerContext) => Record<string, unknown> | null | undefined);
+};
+
 export type OpenClawPluginChannelRegistration = {
   plugin: ChannelPlugin;
 };
@@ -1346,6 +1358,8 @@ export type OpenClawPluginApi = {
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: OpenClawPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a managed stdio MCP server injected into supported OpenClaw runtimes. */
+  registerMcpServer: (server: OpenClawPluginManagedMcpServer) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */

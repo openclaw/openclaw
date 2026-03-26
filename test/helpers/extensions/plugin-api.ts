@@ -30,5 +30,6 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     },
     on() {},
     ...api,
+    registerMcpServer: api.registerMcpServer ?? (() => {}),
   };
 }

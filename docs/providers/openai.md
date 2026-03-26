@@ -66,6 +66,90 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
+### ChatGPT apps via Codex app-server
+
+ChatGPT apps in OpenClaw use the local `codex app-server` runtime. The
+OpenAI plugin projects your existing `openai-codex` OAuth session into that
+sidecar and exposes already-linked ChatGPT app tools through a managed local
+MCP bridge.
+
+Prerequisites:
+
+- `openclaw models auth login --provider openai-codex`
+- a compatible `codex` binary on `PATH`
+
+Minimal config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        enabled: true,
+        config: {
+          chatgptApps: {
+            enabled: true,
+            linking: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Advanced operator controls:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          chatgptApps: {
+            enabled: true,
+            chatgptBaseUrl: "https://chatgpt.com",
+            appServer: {
+              command: "/usr/local/bin/codex",
+              args: ["--verbose"],
+            },
+            linking: {
+              enabled: true,
+              waitTimeoutMs: 60000,
+              pollIntervalMs: 3000,
+            },
+            connectors: {
+              gmail: { enabled: false },
+              google_drive: { enabled: true },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Use `openclaw plugins inspect openai` to inspect the ChatGPT apps runtime. Add
+`--hard-refresh` when you want OpenClaw to force a fresh app-directory fetch
+from the sidecar instead of reusing the current cached snapshot.
+
+When `chatgptApps.linking.enabled` is on, OpenClaw also exposes two owner-only
+local tools:
+
+- `chatgpt_apps` lists the authoritative app inventory grouped into accessible,
+  linkable, linked-but-locally-disabled, and unavailable buckets.
+- `chatgpt_app_link` opens or prints the ChatGPT install URL for one app id and
+  can wait for the sidecar inventory to report that the link completed.
+
+These tools are intentionally local-only. OpenClaw does not expose them in
+external chat channels such as Slack or Discord because the flow depends on the
+operator completing an interactive browser step. After the link completes, the
+managed MCP bridge refreshes its tool list automatically so newly linked app
+tools appear without restarting the gateway.
+
 OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
 maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 

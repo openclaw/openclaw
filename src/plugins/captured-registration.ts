@@ -3,6 +3,7 @@ import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
+  OpenClawPluginManagedMcpServer,
   ProviderPlugin,
   SpeechProviderPlugin,
   VideoGenerationProviderPlugin,
@@ -18,6 +19,7 @@ export type CapturedPluginRegistration = {
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   tools: AnyAgentTool[];
+  managedMcpServers: OpenClawPluginManagedMcpServer[];
 };
 
 export function createCapturedPluginRegistration(): CapturedPluginRegistration {
@@ -28,6 +30,7 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const tools: AnyAgentTool[] = [];
+  const managedMcpServers: OpenClawPluginManagedMcpServer[] = [];
 
   return {
     providers,
@@ -37,6 +40,7 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
     videoGenerationProviders,
     webSearchProviders,
     tools,
+    managedMcpServers,
     api: {
       registerProvider(provider: ProviderPlugin) {
         providers.push(provider);
@@ -58,6 +62,9 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       },
       registerTool(tool: AnyAgentTool) {
         tools.push(tool);
+      },
+      registerMcpServer(server: OpenClawPluginManagedMcpServer) {
+        managedMcpServers.push(server);
       },
     } as OpenClawPluginApi,
   };

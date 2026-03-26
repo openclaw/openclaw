@@ -248,6 +248,7 @@ const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginReg
   services: [],
   commands: [],
   conversationBindingResolvedHandlers: [],
+  managedMcpServers: [],
   diagnostics: [],
 });
 

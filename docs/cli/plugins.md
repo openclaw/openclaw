@@ -196,6 +196,7 @@ global `--yes` to bypass prompts in CI/non-interactive runs.
 ```bash
 openclaw plugins inspect <id>
 openclaw plugins inspect <id> --json
+openclaw plugins inspect openai --hard-refresh
 ```
 
 Deep introspection for a single plugin. Shows identity, load status, source,
@@ -213,5 +214,31 @@ See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capabil
 
 The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.
+
+For the bundled `openai` plugin, `inspect` also reports the ChatGPT apps
+sidecar runtime when `chatgptApps.enabled` is on. That includes:
+
+- sidecar launch status
+- projected `openai-codex` auth status
+- app inventory counts and current source
+- remote MCP server status
+- explicit diagnostic categories for `sidecar`, `auth`, `inventory`, and
+  `remote-mcp`
+
+Use `--hard-refresh` with `plugins inspect openai` to force a new ChatGPT apps
+directory fetch from the Codex app-server instead of inspecting the current
+cached snapshot.
+
+If `chatgptApps.linking.enabled` is also on, the bundled `openai` plugin
+registers two owner-only local tools:
+
+- `chatgpt_apps`
+- `chatgpt_app_link`
+
+Those tools are only exposed in local interactive contexts because the ChatGPT
+link flow requires an operator-completed browser step. When the link succeeds,
+the managed ChatGPT apps MCP bridge invalidates its cached tool inventory and
+announces a tool-list change so the new app tools appear without restarting the
+gateway.
 
 `info` is an alias for `inspect`.

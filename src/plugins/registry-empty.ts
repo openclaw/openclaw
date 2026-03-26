@@ -18,6 +18,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     httpRoutes: [],
     cliRegistrars: [],
     services: [],
+    managedMcpServers: [],
     commands: [],
     conversationBindingResolvedHandlers: [],
     diagnostics: [],

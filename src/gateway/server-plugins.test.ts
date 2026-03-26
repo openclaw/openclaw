@@ -69,6 +69,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   cliRegistrars: [],
   services: [],
   conversationBindingResolvedHandlers: [],
+  managedMcpServers: [],
   diagnostics,
 });
 

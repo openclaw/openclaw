@@ -38,6 +38,7 @@ import type {
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   MediaUnderstandingProviderPlugin,
+  OpenClawPluginManagedMcpServer,
   ProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -145,6 +146,14 @@ export type PluginServiceRegistration = {
   rootDir?: string;
 };
 
+export type PluginManagedMcpServerRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  server: OpenClawPluginManagedMcpServer;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginCommandRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -215,6 +224,7 @@ export type PluginRegistry = {
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
+  managedMcpServers: PluginManagedMcpServerRegistration[];
   commands: PluginCommandRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
@@ -736,6 +746,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerMcpServer = (record: PluginRecord, server: OpenClawPluginManagedMcpServer) => {
+    const name = server.name.trim();
+    if (!name) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "managed MCP registration missing name",
+      });
+      return;
+    }
+    const existing = registry.managedMcpServers.find((entry) => entry.server.name === name);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `managed MCP server already registered: ${name} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.managedMcpServers.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      server: {
+        ...server,
+        name,
+      },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -954,6 +997,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           : () => {},
       registerService:
         registrationMode === "full" ? (service) => registerService(record, service) : () => {},
+      registerMcpServer:
+        registrationMode === "full" ? (server) => registerMcpServer(record, server) : () => {},
       registerInteractiveHandler:
         registrationMode === "full"
           ? (registration) => {

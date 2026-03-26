@@ -1,10 +1,13 @@
 import { Command } from "commander";
+import { runChatgptAppsMcpBridgeStdio } from "../../extensions/openai/chatgpt-apps/index.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
+import { loadConfig } from "../config/config.js";
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../config/mcp-config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { defaultRuntime } from "../runtime.js";
 
 function fail(message: string): never {
@@ -100,5 +103,26 @@ export function registerMcpCli(program: Command) {
         fail(`No MCP server named "${name}" in ${result.path}.`);
       }
       defaultRuntime.log(`Removed MCP server "${name}" from ${result.path}.`);
+    });
+
+  mcp
+    .command("openai-chatgpt-apps")
+    .description("Internal OpenAI ChatGPT apps MCP bridge")
+    .action(async () => {
+      try {
+        const config = loadConfig();
+        await runChatgptAppsMcpBridgeStdio({
+          stateDir: resolveStateDir(),
+          workspaceDir: process.cwd(),
+          config,
+          pluginConfig: config.plugins?.entries?.openai?.config,
+        });
+      } catch (error) {
+        fail(
+          error instanceof Error
+            ? error.message
+            : `Failed to start OpenAI ChatGPT apps bridge: ${String(error)}`,
+        );
+      }
     });
 }

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadConfig } from "../../src/config/config.js";
 import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
 import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
+import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -190,7 +191,14 @@ describe("openai plugin", () => {
   });
 
   it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
+    const {
+      providers,
+      speechProviders,
+      mediaProviders,
+      imageProviders,
+      services,
+      managedMcpServers,
+    } = registerOpenAIPlugin();
 
     expect(providers).toHaveLength(2);
     expect(
@@ -203,6 +211,116 @@ describe("openai plugin", () => {
     expect(speechProviders).toHaveLength(1);
     expect(mediaProviders).toHaveLength(1);
     expect(imageProviders).toHaveLength(1);
+    expect(services).toHaveLength(0);
+    expect(managedMcpServers).toHaveLength(0);
+  });
+
+  it("registers the ChatGPT apps service and managed MCP bridge when enabled", () => {
+    const services: unknown[] = [];
+    const managedMcpServers: unknown[] = [];
+    const toolRegistrations: Array<{
+      tool: Parameters<NonNullable<ReturnType<typeof createTestPluginApi>["registerTool"]>>[0];
+      opts: Parameters<NonNullable<ReturnType<typeof createTestPluginApi>["registerTool"]>>[1];
+    }> = [];
+
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        rootDir: path.resolve("extensions/openai"),
+        config: {} as OpenClawConfig,
+        pluginConfig: {
+          chatgptApps: {
+            enabled: true,
+          },
+        },
+        runtime: {} as never,
+        registerProvider() {},
+        registerSpeechProvider() {},
+        registerMediaUnderstandingProvider() {},
+        registerImageGenerationProvider() {},
+        registerTool: (tool, opts) => {
+          toolRegistrations.push({ tool, opts });
+        },
+        registerService: (service) => {
+          services.push(service);
+        },
+        registerMcpServer: (server) => {
+          managedMcpServers.push(server);
+        },
+      }),
+    );
+
+    expect(services).toHaveLength(1);
+    expect(
+      services.map(
+        (service) =>
+          // oxlint-disable-next-line typescript/no-explicit-any
+          (service as any).id,
+      ),
+    ).toEqual(["openai-chatgpt-apps"]);
+    expect(managedMcpServers).toHaveLength(1);
+    const managedServer =
+      // oxlint-disable-next-line typescript/no-explicit-any
+      managedMcpServers[0] as any;
+    expect(managedServer.name).toBe("openai-chatgpt-apps");
+    expect(typeof managedServer.config).toBe("function");
+    expect(
+      managedServer.config({
+        config: {},
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    ).toMatchObject({
+      command: process.execPath,
+      args: expect.arrayContaining(["mcp", "openai-chatgpt-apps"]),
+      cwd: "/tmp/openclaw-workspace",
+    });
+    expect(toolRegistrations).toHaveLength(0);
+  });
+
+  it("registers the native ChatGPT app link tools when linking is enabled", () => {
+    const toolRegistrations: Array<{
+      tool: Parameters<NonNullable<ReturnType<typeof createTestPluginApi>["registerTool"]>>[0];
+      opts: Parameters<NonNullable<ReturnType<typeof createTestPluginApi>["registerTool"]>>[1];
+    }> = [];
+
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        rootDir: path.resolve("extensions/openai"),
+        config: {} as OpenClawConfig,
+        pluginConfig: {
+          chatgptApps: {
+            enabled: true,
+            linking: {
+              enabled: true,
+            },
+          },
+        },
+        runtime: {
+          state: {
+            resolveStateDir: () => "/tmp/openclaw-state",
+          },
+        } as never,
+        registerProvider() {},
+        registerSpeechProvider() {},
+        registerMediaUnderstandingProvider() {},
+        registerImageGenerationProvider() {},
+        registerTool: (tool, opts) => {
+          toolRegistrations.push({ tool, opts });
+        },
+        registerService() {},
+        registerMcpServer() {},
+      }),
+    );
+
+    expect(toolRegistrations).toHaveLength(1);
+    expect(toolRegistrations[0]?.opts).toEqual({
+      names: ["chatgpt_apps", "chatgpt_app_link"],
+    });
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {
