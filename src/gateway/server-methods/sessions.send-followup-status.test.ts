@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
-const getSubagentRunByChildSessionKeyMock = vi.fn();
+const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
 
@@ -22,8 +23,8 @@ vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
   return {
     ...actual,
-    getSubagentRunByChildSessionKey: (...args: unknown[]) =>
-      getSubagentRunByChildSessionKeyMock(...args),
+    getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
+      getLatestSubagentRunByChildSessionKeyMock(...args),
     replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
   };
 });
@@ -41,7 +42,7 @@ describe("sessions.send completed subagent follow-up status", () => {
     loadSessionEntryMock.mockReset();
     readSessionMessagesMock.mockReset();
     loadGatewaySessionRowMock.mockReset();
-    getSubagentRunByChildSessionKeyMock.mockReset();
+    getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
   });
@@ -68,7 +69,7 @@ describe("sessions.send completed subagent follow-up status", () => {
       entry: { sessionId: "sess-followup" },
     });
     readSessionMessagesMock.mockReturnValue([]);
-    getSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
+    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(completedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);
     loadGatewaySessionRowMock.mockReturnValue({
       status: "running",
@@ -111,23 +112,11 @@ describe("sessions.send completed subagent follow-up status", () => {
       undefined,
       undefined,
     );
-    expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
-      previousRunId: "run-old",
-      nextRunId: "run-new",
-      fallback: completedRun,
-      runTimeoutSeconds: 0,
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
     });
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        sessionKey: childSessionKey,
-        reason: "send",
-        status: "running",
-        startedAt: 123,
-        endedAt: undefined,
-      }),
-      new Set(["conn-1"]),
-      { dropIfSlow: true },
-    );
   });
 });

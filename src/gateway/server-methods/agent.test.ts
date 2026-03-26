@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentHandlers } from "./agent.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
-  getSubagentRunByChildSessionKey: vi.fn(),
+  getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
@@ -67,7 +68,7 @@ vi.mock("../../infra/agent-events.js", () => ({
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
-  getSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
@@ -484,7 +485,7 @@ describe("gateway agent handler", () => {
       };
       return await updater(store);
     });
-    mocks.getSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     mocks.loadGatewaySessionRow.mockReturnValueOnce({
       status: "running",
@@ -526,24 +527,12 @@ describe("gateway agent handler", () => {
       undefined,
       { runId: "run-new" },
     );
-    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-old",
-      nextRunId: "run-new",
-      fallback: completedRun,
-      runTimeoutSeconds: 0,
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
     });
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        sessionKey: childSessionKey,
-        reason: "send",
-        status: "running",
-        startedAt: 123,
-        endedAt: undefined,
-      }),
-      new Set(["conn-1"]),
-      { dropIfSlow: true },
-    );
   });
 
   it("injects a timestamp into the message passed to agentCommand", async () => {
