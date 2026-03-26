@@ -8,6 +8,9 @@
     "@sinclair/typebox": "0.34.48",
     "pg": "^8.13.0"
   },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

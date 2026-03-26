@@ -69,7 +69,7 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps): void {
       return;
     }
 
-    const sessionId = ctx.sessionId;
+    const sessionId = ctx.sessionId ?? "unknown";
     const agentId = ctx.agentId ?? "unknown";
     // Use agentId as userId fallback; real user id comes from session context
     const userId = agentId;
