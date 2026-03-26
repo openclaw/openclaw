@@ -15,6 +15,7 @@ vi.mock("./loader.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 function makeTool(name: string) {
   return {
@@ -96,6 +97,7 @@ describe("resolvePluginTools optional tools", () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
     ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
+    ({ setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
@@ -193,5 +195,36 @@ describe("resolvePluginTools optional tools", () => {
         },
       }),
     );
+  });
+
+  it("reloads when the active registry lacks gateway subagent binding", () => {
+    const activeRegistry = {
+      tools: [
+        {
+          pluginId: "optional-demo",
+          optional: true,
+          source: "/tmp/active-default.js",
+          factory: () => makeTool("stale_optional_tool"),
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(activeRegistry as never, "active-default");
+    setOptionalDemoRegistry();
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["optional_tool"]);
   });
 });

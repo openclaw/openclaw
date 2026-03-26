@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistryKey } from "../plugins/runtime.js";
+import {
+  activePluginRegistryAllowsGatewaySubagentBinding,
+  getActivePluginRegistryKey,
+} from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 
 export function ensureRuntimePluginsLoaded(params: {
@@ -8,7 +11,10 @@ export function ensureRuntimePluginsLoaded(params: {
   workspaceDir?: string | null;
   allowGatewaySubagentBinding?: boolean;
 }): void {
-  if (getActivePluginRegistryKey()) {
+  if (
+    getActivePluginRegistryKey() &&
+    (!params.allowGatewaySubagentBinding || activePluginRegistryAllowsGatewaySubagentBinding())
+  ) {
     return;
   }
 

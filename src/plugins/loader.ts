@@ -657,8 +657,12 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
+function activatePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey: string,
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
+): void {
+  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode);
   initializeGlobalHookRunner(registry);
 }
 
@@ -682,6 +686,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const shouldActivate = options.activate !== false;
+  const runtimeSubagentMode =
+    options.runtimeOptions?.allowGatewaySubagentBinding === true
+      ? "gateway-bindable"
+      : options.runtimeOptions?.subagent
+        ? "explicit"
+        : "default";
   // NOTE: `activate` is intentionally excluded from the cache key. All non-activating
   // (snapshot) callers pass `cache: false` via loadOnboardingPluginRegistry(), so they
   // never read from or write to the cache. Including `activate` here would be misleading
@@ -694,12 +704,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
-    runtimeSubagentMode:
-      options.runtimeOptions?.allowGatewaySubagentBinding === true
-        ? "gateway-bindable"
-        : options.runtimeOptions?.subagent
-          ? "explicit"
-          : "default",
+    runtimeSubagentMode,
   });
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
@@ -707,7 +712,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (cached) {
       restoreMemoryPromptSection(cached.memoryPromptBuilder);
       if (shouldActivate) {
-        activatePluginRegistry(cached.registry, cacheKey);
+        activatePluginRegistry(cached.registry, cacheKey, runtimeSubagentMode);
       }
       return cached.registry;
     }
@@ -1275,7 +1280,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
   if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey);
+    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode);
   }
   return registry;
 }
