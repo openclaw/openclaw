@@ -127,5 +127,6 @@ dist/protocol.schema.json
 # Local evidence receipts (do not commit)
 ops/ledger/gate_*.json
 ops/ledger/gate_*.md
+tmp/
 patch.diff
 patch.diff
