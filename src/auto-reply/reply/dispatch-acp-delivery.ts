@@ -100,7 +100,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeDeliveryChannel(params.ctx.Surface ?? params.ctx.Provider);
+  const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
 
   const settleDirectVisibleText = async () => {

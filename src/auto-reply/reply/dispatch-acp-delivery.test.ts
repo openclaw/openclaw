@@ -102,6 +102,26 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
+  it("prefers provider over surface when detecting direct telegram visibility", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "webchat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+    await coordinator.settleVisibleText();
+
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+  });
+
   it("does not treat non-telegram direct block text as visible", async () => {
     const coordinator = createCoordinator();
 
