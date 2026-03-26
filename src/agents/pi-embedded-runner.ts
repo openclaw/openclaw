@@ -14,7 +14,11 @@ export {
   limitHistoryTurns,
 } from "./pi-embedded-runner/history.js";
 export { resolveEmbeddedSessionLane } from "./pi-embedded-runner/lanes.js";
-export { disposeSessionMcpRuntime, runEmbeddedPiAgent } from "./pi-embedded-runner/run.js";
+export {
+  disposeAllSessionMcpRuntimes,
+  disposeSessionMcpRuntime,
+  runEmbeddedPiAgent,
+} from "./pi-embedded-runner/run.js";
 export {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,

@@ -14,13 +14,21 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
-import { createEmbeddedBundleMcpRuntime, type BundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  createEmbeddedBundleMcpRuntime,
+  type BundleMcpToolRuntime,
+} from "../pi-bundle-mcp-tools.js";
 
 // Session-level MCP runtime cache: keyed by sessionId so stateful MCP servers
 // (e.g. patchright browser) survive across message turns within the same conversation.
 const sessionMcpRuntimes = new Map<string, BundleMcpToolRuntime>();
 
-async function disposeAllSessionMcpRuntimes() {
+/**
+ * Dispose all cached session MCP runtimes. Call this from the process entry point's
+ * shutdown handler (CLI exit, gateway close handler) rather than relying on module-level
+ * signal handlers, which would race with the host's own graceful shutdown sequence.
+ */
+export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   const entries = Array.from(sessionMcpRuntimes.values());
   sessionMcpRuntimes.clear();
   await Promise.allSettled(entries.map((r) => r.dispose()));
@@ -38,18 +46,6 @@ export function disposeSessionMcpRuntime(sessionId: string): void {
     void runtime.dispose();
   }
 }
-
-process.once("exit", () => {
-  void disposeAllSessionMcpRuntimes();
-});
-process.once("SIGINT", async () => {
-  await disposeAllSessionMcpRuntimes();
-  process.exit(0);
-});
-process.once("SIGTERM", async () => {
-  await disposeAllSessionMcpRuntimes();
-  process.exit(0);
-});
 import {
   type AuthProfileFailureReason,
   isProfileInCooldown,
@@ -877,6 +873,10 @@ export async function runEmbeddedPiAgent(
       const mcpCacheKey = params.sessionId;
       let sharedMcpRuntime = sessionMcpRuntimes.get(mcpCacheKey);
       if (!sharedMcpRuntime) {
+        // Note: reservedToolNames (built-in tool names) are not passed here because
+        // the built-in tool list is assembled later in attempt.ts and varies per attempt.
+        // MCP-to-MCP name dedup is still enforced inside createEmbeddedBundleMcpRuntime.
+        // MCP-to-built-in collisions are handled by attempt.ts when it merges the tool lists.
         sharedMcpRuntime = await createEmbeddedBundleMcpRuntime({
           workspaceDir: resolvedWorkspace,
           cfg: params.config,
