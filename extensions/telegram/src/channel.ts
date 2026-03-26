@@ -408,13 +408,25 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       buildPluginPendingPayload: ({ request, nowMs }) => {
         const text = buildPluginApprovalRequestMessage(request, nowMs);
-        const buttons = buildTelegramExecApprovalButtons(request.id);
+        const approvalSlug = request.id.slice(0, 8);
+        const buttons = buildTelegramExecApprovalButtons(approvalSlug);
+        const execApproval = {
+          approvalId: request.id,
+          approvalSlug: approvalSlug,
+          allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
+        };
         if (!buttons) {
-          return { text };
+          return {
+            text,
+            channelData: {
+              execApproval,
+            },
+          };
         }
         return {
           text,
           channelData: {
+            execApproval,
             telegram: {
               buttons,
             },

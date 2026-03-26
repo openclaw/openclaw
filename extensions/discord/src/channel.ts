@@ -435,19 +435,35 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         shouldSuppressForwardingFallback: ({ cfg, target }) =>
           (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
           isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
-        buildPluginPendingPayload: ({ request, nowMs }) => ({
-          text: buildPluginApprovalRequestMessage(request, nowMs),
-          channelData: {
-            execApproval: {
-              approvalId: request.id,
-              approvalSlug: request.id.slice(0, 8),
-              allowedDecisions: ["allow-once", "allow-always", "deny"],
+        buildPluginPendingPayload: ({ cfg, request, target, nowMs }) => {
+          const text = buildPluginApprovalRequestMessage(request, nowMs);
+          const execApproval = {
+            approvalId: request.id,
+            approvalSlug: request.id.slice(0, 8),
+            allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
+          };
+          const normalizedChannel = normalizeMessageChannel(target.channel) ?? target.channel;
+          const interactiveEnabled =
+            normalizedChannel === "discord" &&
+            isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId });
+          if (!interactiveEnabled) {
+            return {
+              text,
+              channelData: {
+                execApproval,
+              },
+            };
+          }
+          return {
+            text,
+            channelData: {
+              execApproval,
+              discord: {
+                components: buildDiscordPluginPendingComponentSpec({ request }),
+              },
             },
-            discord: {
-              components: buildDiscordPluginPendingComponentSpec({ request }),
-            },
-          },
-        }),
+          };
+        },
         buildPluginResolvedPayload: ({ resolved }) => {
           const componentSpec = buildDiscordPluginResolvedComponentSpec({ resolved });
           return componentSpec

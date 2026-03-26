@@ -146,8 +146,13 @@ describe("discordPlugin outbound", () => {
   });
 
   it("builds interactive plugin approval pending payloads for Discord forwarding", () => {
+    const cfg = createCfg();
+    cfg.channels!.discord!.execApprovals = {
+      enabled: true,
+      approvers: ["123"],
+    };
     const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
-      cfg: createCfg(),
+      cfg,
       request: createPluginApprovalRequest(),
       target: { channel: "discord", to: "user:123" },
       nowMs: 2_000,
@@ -160,6 +165,29 @@ describe("discordPlugin outbound", () => {
     const componentsJson = JSON.stringify(discordData?.components ?? {});
     expect(componentsJson).toContain("Plugin Approval Required");
     expect(componentsJson).toContain("execapproval:id=plugin%3Aapproval-1;action=allow-once");
+    const execApproval = (payload?.channelData as { execApproval?: { approvalId?: string } })
+      ?.execApproval;
+    expect(execApproval?.approvalId).toBe("plugin:approval-1");
+  });
+
+  it("falls back to non-interactive plugin approval pending payload when Discord exec approvals are disabled", () => {
+    const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
+      cfg: createCfg(),
+      request: createPluginApprovalRequest(),
+      target: { channel: "discord", to: "user:123" },
+      nowMs: 2_000,
+    });
+
+    expect(payload?.text).toContain("Plugin approval required");
+    const channelData = payload?.channelData as
+      | {
+          execApproval?: { approvalId?: string; approvalSlug?: string };
+          discord?: { components?: unknown };
+        }
+      | undefined;
+    expect(channelData?.execApproval?.approvalId).toBe("plugin:approval-1");
+    expect(channelData?.execApproval?.approvalSlug).toBe("plugin:a");
+    expect(channelData?.discord?.components).toBeUndefined();
   });
 
   it("builds rich plugin approval resolved payloads when request snapshot is available", () => {
