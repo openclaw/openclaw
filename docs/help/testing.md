@@ -55,8 +55,13 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Extension-only local runs now also use a checked-in extensions timing snapshot so the shared extensions lane can split into a few measured batches instead of one oversized run.
+  - Extension-only local runs now also use a checked-in extensions timing snapshot plus a slightly coarser shared batch target on high-memory hosts, so the shared extensions lane avoids spawning an extra batch when two measured shared runs are enough.
+  - High-memory local extension shared batches also run with a slightly higher worker cap than before, which shortened the two remaining shared extension batches without changing the isolated extension lanes.
   - High-memory local channel runs now reuse the checked-in channel timing snapshot to split the shared channels lane into a few measured batches instead of one long shared worker.
+  - High-memory local channel shared batches also run with a slightly lower worker cap than shared unit batches, which helped targeted channel reruns avoid CPU oversubscription once isolated channel lanes are already in flight.
+  - Targeted local channel reruns now start splitting shared channel work a bit earlier, which keeps medium-sized targeted reruns from leaving one oversized shared channel batch on the critical path.
+  - Targeted local unit reruns also split medium-sized shared unit selections into measured batches, which helps large focused reruns overlap instead of waiting behind one long shared unit lane.
+  - High-memory local multi-surface runs also use slightly coarser shared `unit-fast` batches so the mixed planner spends less time spinning up extra shared unit workers before the later surfaces can overlap.
   - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
   - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
@@ -85,7 +90,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
   - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
   - `pnpm test:max` exposes that same planner profile for a full local run.
-  - On Node 25, the normal local profile keeps top-level lane parallelism off; `pnpm test:max` re-enables it. On Node 22/24 LTS, normal local runs can also use top-level lane parallelism.
+  - On supported local Node versions, including Node 25, the normal profile can use top-level lane parallelism. `pnpm test:max` still pushes the planner harder when you want a more aggressive local run.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
   - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
   - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.

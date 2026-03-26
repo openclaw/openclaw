@@ -91,6 +91,7 @@ const LOCAL_MEMORY_BUDGETS = {
   constrained: {
     vitestCap: 2,
     unitShared: 2,
+    channelsShared: 2,
     unitIsolated: 1,
     unitHeavy: 1,
     extensions: 1,
@@ -107,6 +108,7 @@ const LOCAL_MEMORY_BUDGETS = {
   moderate: {
     vitestCap: 3,
     unitShared: 3,
+    channelsShared: 3,
     unitIsolated: 1,
     unitHeavy: 1,
     extensions: 2,
@@ -123,6 +125,7 @@ const LOCAL_MEMORY_BUDGETS = {
   mid: {
     vitestCap: 4,
     unitShared: 4,
+    channelsShared: 4,
     unitIsolated: 1,
     unitHeavy: 1,
     extensions: 3,
@@ -139,9 +142,10 @@ const LOCAL_MEMORY_BUDGETS = {
   high: {
     vitestCap: 6,
     unitShared: 6,
+    channelsShared: 5,
     unitIsolated: 2,
     unitHeavy: 2,
-    extensions: 4,
+    extensions: 5,
     gateway: 3,
     topLevelNoIsolate: 14,
     topLevelIsolated: 4,
@@ -160,6 +164,7 @@ const withIntentBudgetAdjustments = (budget, intentProfile, cpuCount) => {
       ...budget,
       vitestMaxWorkers: 1,
       unitSharedWorkers: 1,
+      channelSharedWorkers: 1,
       unitIsolatedWorkers: 1,
       unitHeavyWorkers: 1,
       extensionWorkers: 1,
@@ -182,6 +187,11 @@ const withIntentBudgetAdjustments = (budget, intentProfile, cpuCount) => {
       ...budget,
       vitestMaxWorkers: clamp(Math.max(budget.vitestMaxWorkers, Math.min(8, cpuCount)), 1, 16),
       unitSharedWorkers: clamp(Math.max(budget.unitSharedWorkers, Math.min(8, cpuCount)), 1, 16),
+      channelSharedWorkers: clamp(
+        Math.max(budget.channelSharedWorkers ?? budget.unitSharedWorkers, Math.min(6, cpuCount)),
+        1,
+        16,
+      ),
       unitIsolatedWorkers: clamp(Math.max(budget.unitIsolatedWorkers, Math.min(4, cpuCount)), 1, 4),
       unitHeavyWorkers: clamp(Math.max(budget.unitHeavyWorkers, Math.min(4, cpuCount)), 1, 4),
       extensionWorkers: clamp(Math.max(budget.extensionWorkers, Math.min(6, cpuCount)), 1, 6),
@@ -263,6 +273,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     return {
       vitestMaxWorkers: runtime.isWindows ? 2 : runtime.isMacOS ? 1 : 3,
       unitSharedWorkers: macCiWorkers,
+      channelSharedWorkers: macCiWorkers,
       unitIsolatedWorkers: macCiWorkers,
       unitHeavyWorkers: macCiWorkers,
       extensionWorkers: macCiWorkers,
@@ -286,6 +297,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
   const baseBudget = {
     vitestMaxWorkers: Math.min(cpuCount, bandBudget.vitestCap),
     unitSharedWorkers: Math.min(cpuCount, bandBudget.unitShared),
+    channelSharedWorkers: Math.min(cpuCount, bandBudget.channelsShared ?? bandBudget.unitShared),
     unitIsolatedWorkers: Math.min(cpuCount, bandBudget.unitIsolated),
     unitHeavyWorkers: Math.min(cpuCount, bandBudget.unitHeavy),
     extensionWorkers: Math.min(cpuCount, bandBudget.extensions),
@@ -301,13 +313,14 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     unitFastLaneCount: 1,
     unitFastBatchTargetMs: bandBudget.unitFastBatchTargetMs,
     channelsBatchTargetMs: bandBudget.channelsBatchTargetMs ?? 0,
-    extensionsBatchTargetMs: 240_000,
+    extensionsBatchTargetMs: 300_000,
   };
 
   const loadAdjustedBudget = {
     ...baseBudget,
     vitestMaxWorkers: scaleForLoad(baseBudget.vitestMaxWorkers, runtime.loadBand),
     unitSharedWorkers: scaleForLoad(baseBudget.unitSharedWorkers, runtime.loadBand),
+    channelSharedWorkers: scaleForLoad(baseBudget.channelSharedWorkers, runtime.loadBand),
     unitHeavyWorkers: scaleForLoad(baseBudget.unitHeavyWorkers, runtime.loadBand),
     extensionWorkers: scaleForLoad(baseBudget.extensionWorkers, runtime.loadBand),
     gatewayWorkers: scaleForLoad(baseBudget.gatewayWorkers, runtime.loadBand),
