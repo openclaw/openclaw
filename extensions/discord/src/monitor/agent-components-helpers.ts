@@ -137,6 +137,8 @@ export function buildAgentSelectCustomId(componentId: string): string {
   return `${AGENT_SELECT_KEY}:componentId=${encodeURIComponent(componentId)}`;
 }
 
+const { resolvePinnedMainDmOwnerFromAllowlist } = securityRuntime;
+
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
   rawGuildId: string | undefined;

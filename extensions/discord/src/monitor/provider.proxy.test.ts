@@ -244,7 +244,8 @@ describe("createDiscordGatewayPlugin", () => {
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
       __testing: {
-        HttpsProxyAgentCtor: HttpsProxyAgent as typeof import("https-proxy-agent").HttpsProxyAgent,
+        HttpsProxyAgentCtor:
+          HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
         ProxyAgentCtor: class {
           proxyUrl: string;
           constructor(proxyUrl: string) {
@@ -258,7 +259,10 @@ describe("createDiscordGatewayPlugin", () => {
           constructor(url: string, options?: { agent?: unknown }) {
             webSocketSpy(url, options);
           }
-        } as unknown as new (url: string, options?: { agent?: unknown }) => unknown,
+        } as unknown as new (
+          url: string,
+          options?: { agent?: unknown },
+        ) => import("ws").WebSocket,
         registerClient: async (_plugin, client) => {
           baseRegisterClientSpy(client);
         },
@@ -299,7 +303,8 @@ describe("createDiscordGatewayPlugin", () => {
       discordConfig: { proxy: "http://proxy.test:8080" },
       runtime,
       __testing: {
-        HttpsProxyAgentCtor: HttpsProxyAgent as typeof import("https-proxy-agent").HttpsProxyAgent,
+        HttpsProxyAgentCtor:
+          HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
         ProxyAgentCtor: class {
           proxyUrl: string;
           constructor(proxyUrl: string) {
@@ -313,7 +318,10 @@ describe("createDiscordGatewayPlugin", () => {
           constructor(url: string, options?: { agent?: unknown }) {
             webSocketSpy(url, options);
           }
-        } as unknown as new (url: string, options?: { agent?: unknown }) => unknown,
+        } as unknown as new (
+          url: string,
+          options?: { agent?: unknown },
+        ) => import("ws").WebSocket,
         registerClient: async (_plugin, client) => {
           baseRegisterClientSpy(client);
         },
