@@ -236,7 +236,9 @@ async function bootstrapLaunchAgentOrThrow(params: {
     if (isUnsupportedGuiDomain(effectiveDetail)) {
       const isLoadDifferentError = loadDetail && !isUnsupportedGuiDomain(loadDetail);
       throwBootstrapGuiSessionError({
-        detail: isLoadDifferentError ? `${loadDetail} (bootstrap: ${effectiveDetail})` : effectiveDetail,
+        detail: isLoadDifferentError
+          ? `${loadDetail} (bootstrap: ${effectiveDetail})`
+          : effectiveDetail,
         domain: params.domain,
         actionHint: params.actionHint,
       });
@@ -491,10 +493,7 @@ function isAlreadyBootstrapped(detail: string): boolean {
   // (Input/output error) because that code also fires for malformed or
   // unreadable plists, and treating those as "already loaded" would mask
   // real bootstrap failures.
-  return (
-    normalized.includes("already loaded") ||
-    normalized.includes("already bootstrapped")
-  );
+  return normalized.includes("already loaded") || normalized.includes("already bootstrapped");
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {

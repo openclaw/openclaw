@@ -491,8 +491,7 @@ describe("launchd install", () => {
     // Verify bootout was called between the two bootstrap attempts.
     const bootoutAfterBootstrap = state.launchctlCalls.findIndex(
       (c, i) =>
-        c[0] === "bootout" &&
-        i > state.launchctlCalls.findIndex((b) => b[0] === "bootstrap"),
+        c[0] === "bootout" && i > state.launchctlCalls.findIndex((b) => b[0] === "bootstrap"),
     );
     expect(bootoutAfterBootstrap).toBeGreaterThanOrEqual(0);
   });
