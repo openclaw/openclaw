@@ -102,6 +102,7 @@ function renderFilterChips(
                 class="filter-chip-remove"
                 @click=${onClearDays}
                 title=${t("usage.filters.remove")}
+                aria-label="Remove days filter"
               >
                 ×
               </button>
@@ -118,6 +119,7 @@ function renderFilterChips(
                 class="filter-chip-remove"
                 @click=${onClearHours}
                 title=${t("usage.filters.remove")}
+                aria-label="Remove hours filter"
               >
                 ×
               </button>
@@ -134,6 +136,7 @@ function renderFilterChips(
                 class="filter-chip-remove"
                 @click=${onClearSessions}
                 title=${t("usage.filters.remove")}
+                aria-label="Remove session filter"
               >
                 ×
               </button>
@@ -144,7 +147,7 @@ function renderFilterChips(
       ${
         (selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
           ? html`
-            <button class="btn btn-sm filter-clear-btn" @click=${onClearFilters}>
+            <button class="btn btn--sm" @click=${onClearFilters}>
               ${t("usage.filters.clearAll")}
             </button>
           `
@@ -175,6 +178,22 @@ function renderDailyChartCompact(
   const values = daily.map((d) => (isTokenMode ? d.totalTokens : d.totalCost));
   const maxValue = Math.max(...values, isTokenMode ? 1 : 0.0001);
 
+  // Adaptive scaling: when the spread between largest and smallest non-zero
+  // values is extreme (>50×), use square-root compression so small bars stay
+  // visible instead of collapsing to a single pixel.
+  const nonZero = values.filter((v) => v > 0);
+  const minNonZero = nonZero.length > 0 ? Math.min(...nonZero) : maxValue;
+  const spread = maxValue / minNonZero;
+  const chartAreaPx = 200;
+  const minBarPx = 6;
+  const barHeights = values.map((v): number => {
+    if (v <= 0) {
+      return 0;
+    }
+    const ratio = spread > 50 ? Math.sqrt(v / maxValue) : v / maxValue;
+    return Math.max(minBarPx, ratio * chartAreaPx);
+  });
+
   // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
@@ -184,13 +203,13 @@ function renderDailyChartCompact(
       <div class="daily-chart-header">
         <div class="chart-toggle small sessions-toggle">
           <button
-            class="toggle-btn ${dailyChartMode === "total" ? "active" : ""}"
+            class="btn btn--sm toggle-btn ${dailyChartMode === "total" ? "active" : ""}"
             @click=${() => onDailyChartModeChange("total")}
           >
             ${t("usage.daily.total")}
           </button>
           <button
-            class="toggle-btn ${dailyChartMode === "by-type" ? "active" : ""}"
+            class="btn btn--sm toggle-btn ${dailyChartMode === "by-type" ? "active" : ""}"
             @click=${() => onDailyChartModeChange("by-type")}
           >
             ${t("usage.daily.byType")}
@@ -203,8 +222,7 @@ function renderDailyChartCompact(
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
           ${daily.map((d, idx) => {
-            const value = values[idx];
-            const heightPct = (value / maxValue) * 100;
+            const heightPx = barHeights[idx];
             const isSelected = selectedDays.includes(d.date);
             const label = formatDayLabel(d.date);
             // Shorter label for many days (just day number)
@@ -254,7 +272,7 @@ function renderDailyChartCompact(
                     ? html`
                         <div
                           class="daily-bar daily-bar--stacked"
-                          style="height: ${heightPct.toFixed(1)}%;"
+                          style="height: ${heightPx.toFixed(0)}px;"
                         >
                           ${(() => {
                             const total = segments.reduce((sum, seg) => sum + seg.value, 0) || 1;
@@ -270,7 +288,7 @@ function renderDailyChartCompact(
                         </div>
                       `
                     : html`
-                        <div class="daily-bar" style="height: ${heightPct.toFixed(1)}%"></div>
+                        <div class="daily-bar" style="height: ${heightPx.toFixed(0)}px"></div>
                       `
                 }
                 ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
@@ -763,7 +781,7 @@ function renderSessionsCard(
         </div>
         <div class="session-bar-actions">
           <button
-            class="session-copy-btn"
+            class="btn btn--sm btn--ghost"
             title=${t("usage.sessions.copyName")}
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
@@ -808,13 +826,13 @@ function renderSessionsCard(
         </div>
         <div class="chart-toggle small">
           <button
-            class="toggle-btn ${sessionsTab === "all" ? "active" : ""}"
+            class="btn btn--sm toggle-btn ${sessionsTab === "all" ? "active" : ""}"
             @click=${() => onSessionsTabChange("all")}
           >
             ${t("usage.sessions.all")}
           </button>
           <button
-            class="toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
+            class="btn btn--sm toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
             @click=${() => onSessionsTabChange("recent")}
           >
             ${t("usage.sessions.recent")}
@@ -833,7 +851,7 @@ function renderSessionsCard(
           </select>
         </label>
         <button
-          class="btn btn-sm sessions-action-btn icon"
+          class="btn btn--sm"
           @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
           title=${
             sessionSortDir === "desc"
@@ -846,7 +864,7 @@ function renderSessionsCard(
         ${
           selectedCount > 0
             ? html`
-                <button class="btn btn-sm sessions-action-btn sessions-clear-btn" @click=${onClearSessions}>
+                <button class="btn btn--sm" @click=${onClearSessions}>
                   ${t("usage.sessions.clearSelection")}
                 </button>
               `

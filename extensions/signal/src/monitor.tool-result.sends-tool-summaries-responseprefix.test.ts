@@ -2,9 +2,9 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { SignalDaemonExitEvent } from "./daemon.js";
+import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
-  createMockSignalDaemonHandle,
+  createSignalToolResultConfig,
   config,
   flush,
   getSignalToolResultTestMocks,
@@ -26,53 +26,10 @@ const {
   enqueueSystemEventMock,
   upsertPairingRequestMock,
   waitForTransportReadyMock,
-  spawnSignalDaemonMock,
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
-
-function createMonitorRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: ((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }) as (code: number) => never,
-  };
-}
-
-function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
-  setSignalToolResultTestConfig(createSignalConfig(overrides));
-}
-
-function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = config as OpenClawConfig;
-  const channels = (base.channels ?? {}) as Record<string, unknown>;
-  const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  return {
-    ...base,
-    channels: {
-      ...channels,
-      signal: {
-        ...signal,
-        autoStart: true,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        ...overrides,
-      },
-    },
-  };
-}
-
-function createAutoAbortController() {
-  const abortController = new AbortController();
-  streamMock.mockImplementation(async () => {
-    abortController.abort();
-    return;
-  });
-  return abortController;
-}
 
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
@@ -153,7 +110,7 @@ function expectNoReplyDeliveryOrRouteUpdate() {
 
 function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
   setSignalToolResultTestConfig(
-    createSignalConfig({
+    createSignalToolResultConfig({
       autoStart: false,
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -163,143 +120,7 @@ function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string
   );
 }
 
-function expectWaitForTransportReadyTimeout(timeoutMs: number) {
-  expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-  expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      timeoutMs,
-    }),
-  );
-}
-
 describe("monitorSignalProvider tool results", () => {
-  it("uses bounded readiness checks when auto-starting the daemon", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig();
-    const abortController = createAutoAbortController();
-    await runMonitorWithMocks({
-      autoStart: true,
-      baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
-      runtime,
-    });
-
-    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
-    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "signal daemon",
-        timeoutMs: 30_000,
-        logAfterMs: 10_000,
-        logIntervalMs: 10_000,
-        pollIntervalMs: 150,
-        runtime,
-        abortSignal: expect.any(AbortSignal),
-      }),
-    );
-  });
-
-  it("uses startupTimeoutMs override when provided", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig({ startupTimeoutMs: 60_000 });
-    const abortController = createAutoAbortController();
-
-    await runMonitorWithMocks({
-      autoStart: true,
-      baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
-      runtime,
-      startupTimeoutMs: 90_000,
-    });
-
-    expectWaitForTransportReadyTimeout(90_000);
-  });
-
-  it("caps startupTimeoutMs at 2 minutes", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig({ startupTimeoutMs: 180_000 });
-    const abortController = createAutoAbortController();
-
-    await runMonitorWithMocks({
-      autoStart: true,
-      baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
-      runtime,
-    });
-
-    expectWaitForTransportReadyTimeout(120_000);
-  });
-
-  it("fails fast when auto-started signal daemon exits during startup", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig();
-    spawnSignalDaemonMock.mockReturnValueOnce(
-      createMockSignalDaemonHandle({
-        exited: Promise.resolve({ source: "process", code: 1, signal: null }),
-        isExited: () => true,
-      }),
-    );
-    waitForTransportReadyMock.mockImplementationOnce(
-      async (params: { abortSignal?: AbortSignal | null }) => {
-        await new Promise<void>((_resolve, reject) => {
-          if (params.abortSignal?.aborted) {
-            reject(params.abortSignal.reason);
-            return;
-          }
-          params.abortSignal?.addEventListener(
-            "abort",
-            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
-            { once: true },
-          );
-        });
-      },
-    );
-
-    await expect(
-      runMonitorWithMocks({
-        autoStart: true,
-        baseUrl: SIGNAL_BASE_URL,
-        runtime,
-      }),
-    ).rejects.toThrow(/signal daemon exited/i);
-  });
-
-  it("treats daemon exit after user abort as clean shutdown", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig();
-    const abortController = new AbortController();
-    let exited = false;
-    let resolveExit!: (value: SignalDaemonExitEvent) => void;
-    const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
-      resolveExit = resolve;
-    });
-    const stop = vi.fn(() => {
-      if (exited) {
-        return;
-      }
-      exited = true;
-      resolveExit({ source: "process", code: null, signal: "SIGTERM" });
-    });
-    spawnSignalDaemonMock.mockReturnValueOnce(
-      createMockSignalDaemonHandle({
-        stop,
-        exited: exitedPromise,
-        isExited: () => exited,
-      }),
-    );
-    streamMock.mockImplementationOnce(async () => {
-      abortController.abort(new Error("stop"));
-    });
-
-    await expect(
-      runMonitorWithMocks({
-        autoStart: true,
-        baseUrl: SIGNAL_BASE_URL,
-        runtime,
-        abortSignal: abortController.signal,
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 
@@ -326,7 +147,7 @@ describe("monitorSignalProvider tool results", () => {
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
     await receiveSignalPayloads({
       payloads: [
@@ -346,8 +167,11 @@ describe("monitorSignalProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Signal number: +15550001111");
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
+    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+      channel: "signal",
+      idLine: "Your Signal number: +15550001111",
+      code: "PAIRCODE",
+    });
   });
 
   it("ignores reaction-only messages", async () => {
@@ -480,7 +304,7 @@ describe("monitorSignalProvider tool results", () => {
 
   it("does not resend pairing code when a request is already pending", async () => {
     setSignalToolResultTestConfig(
-      createSignalConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
+      createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })

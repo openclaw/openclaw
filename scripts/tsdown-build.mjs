@@ -49,7 +49,7 @@ function findFatalUnresolvedImport(lines) {
     }
 
     const normalizedLine = line.replace(ANSI_ESCAPE_RE, "");
-    if (!normalizedLine.includes("extensions/")) {
+    if (!normalizedLine.includes("extensions/") && !normalizedLine.includes("node_modules/")) {
       return normalizedLine;
     }
   }

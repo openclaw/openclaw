@@ -32,6 +32,8 @@ export type StoredConversationReference = {
    * Graph-native chat ID so we don't need to re-query the API on every send.
    */
   graphChatId?: string;
+  /** IANA timezone from Teams clientInfo entity (e.g. "America/New_York") */
+  timezone?: string;
 };
 
 export type MSTeamsConversationStoreEntry = {

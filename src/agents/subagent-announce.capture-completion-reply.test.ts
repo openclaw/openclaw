@@ -18,10 +18,14 @@ describe("captureSubagentCompletionReply", () => {
   let previousFastTestEnv: string | undefined;
   let captureSubagentCompletionReply: (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
 
+  async function loadFreshSubagentAnnounceModuleForTest() {
+    vi.resetModules();
+    ({ captureSubagentCompletionReply } = await import("./subagent-announce.js"));
+  }
+
   beforeAll(async () => {
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ captureSubagentCompletionReply } = await import("./subagent-announce.js"));
   });
 
   afterAll(() => {
@@ -32,7 +36,8 @@ describe("captureSubagentCompletionReply", () => {
     process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await loadFreshSubagentAnnounceModuleForTest();
     chatHistoryMock.mockReset().mockResolvedValue({ messages: [] });
   });
 
@@ -54,26 +59,29 @@ describe("captureSubagentCompletionReply", () => {
 
   it("polls briefly and returns late tool output once available", async () => {
     vi.useFakeTimers();
-    chatHistoryMock.mockResolvedValueOnce({ messages: [] }).mockResolvedValueOnce({
-      messages: [
-        {
-          role: "toolResult",
-          content: [
-            {
-              type: "text",
-              text: "Late tool result completion",
-            },
-          ],
-        },
-      ],
-    });
+    chatHistoryMock
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({ messages: [] })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "toolResult",
+            content: [
+              {
+                type: "text",
+                text: "Late tool result completion",
+              },
+            ],
+          },
+        ],
+      });
 
     const pending = captureSubagentCompletionReply("agent:main:subagent:child");
     await vi.runAllTimersAsync();
     const result = await pending;
 
     expect(result).toBe("Late tool result completion");
-    expect(chatHistoryMock).toHaveBeenCalledTimes(2);
+    expect(chatHistoryMock).toHaveBeenCalledTimes(3);
     vi.useRealTimers();
   });
 

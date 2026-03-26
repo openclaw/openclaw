@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -58,6 +59,7 @@ describe("runMessageAction plugin dispatch", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
+      vi.unstubAllEnvs();
     });
 
     it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
@@ -114,6 +116,10 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
+      const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
+      const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
       await runMessageAction({
         cfg: {
           channels: {
@@ -148,6 +154,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
           toolContext: expect.objectContaining({
             currentChannelId: "chat:oc_123",
             currentThreadTs: "thread-456",
@@ -214,6 +221,66 @@ describe("runMessageAction plugin dispatch", () => {
         expect.objectContaining({
           text: "caption-only text",
           mediaUrl: "https://example.com/cat.png",
+        }),
+      );
+    });
+
+    it("does not misclassify send as poll when zero-valued poll params are present", async () => {
+      const sendMedia = vi.fn().mockResolvedValue({
+        channel: "testchat",
+        messageId: "m2",
+        chatId: "c1",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: vi.fn().mockResolvedValue({
+                  channel: "testchat",
+                  messageId: "t2",
+                  chatId: "c1",
+                }),
+                sendMedia,
+              },
+            }),
+          },
+        ]),
+      );
+      const cfg = {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          media: "https://example.com/file.txt",
+          message: "hello",
+          pollDurationHours: 0,
+          pollDurationSeconds: 0,
+          pollMulti: false,
+          pollQuestion: "",
+          pollOption: [],
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello",
+          mediaUrl: "https://example.com/file.txt",
         }),
       );
     });
