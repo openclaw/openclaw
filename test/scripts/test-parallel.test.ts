@@ -18,6 +18,10 @@ const clearPlannerShardEnv = (env) => {
   const nextEnv = { ...env };
   delete nextEnv.OPENCLAW_TEST_SHARDS;
   delete nextEnv.OPENCLAW_TEST_SHARD_INDEX;
+  delete nextEnv.OPENCLAW_TEST_FORCE_THREADS;
+  delete nextEnv.OPENCLAW_TEST_FORCE_FORKS;
+  delete nextEnv.OPENCLAW_TEST_DISABLE_THREAD_EXPANSION;
+  delete nextEnv.OPENCLAW_TEST_SHOW_POOL_DECISION;
   return nextEnv;
 };
 
