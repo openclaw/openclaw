@@ -89,6 +89,66 @@ function createJwt(payload: Record<string, unknown>): string {
   return `${header}.${body}.signature`;
 }
 
+function getOpenAICodexProvider() {
+  return requireProvider(registerProviders(openAIPlugin), "openai-codex");
+}
+
+function buildOpenAICodexOAuthResult(params: {
+  profileId: string;
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+}) {
+  return {
+    profiles: [
+      {
+        profileId: params.profileId,
+        credential: {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: params.access,
+          refresh: params.refresh,
+          expires: params.expires,
+          ...(params.email ? { email: params.email } : {}),
+        },
+      },
+    ],
+    configPatch: {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    },
+    defaultModel: "openai-codex/gpt-5.4",
+    notes: undefined,
+  };
+}
+
+async function expectOpenAICodexStableFallbackProfile(params: {
+  access: string;
+  profileId: string;
+}) {
+  const provider = getOpenAICodexProvider();
+  loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+    refresh: "refresh-token",
+    access: params.access,
+    expires: 1_700_000_000_000,
+  });
+  const result = await provider.auth[0]?.run(buildAuthContext() as never);
+  expect(result).toEqual(
+    buildOpenAICodexOAuthResult({
+      profileId: params.profileId,
+      access: params.access,
+      refresh: "refresh-token",
+      expires: 1_700_000_000_000,
+    }),
+  );
+}
+
 describe("provider auth contract", () => {
   let authStore: AuthProfileStore;
 
@@ -113,7 +173,7 @@ describe("provider auth contract", () => {
   });
 
   it("keeps OpenAI Codex OAuth auth results provider-owned", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const provider = getOpenAICodexProvider();
     loginOpenAICodexOAuthMock.mockResolvedValueOnce({
       email: "user@example.com",
       refresh: "refresh-token",
@@ -123,36 +183,19 @@ describe("provider auth contract", () => {
 
     const result = await provider.auth[0]?.run(buildAuthContext() as never);
 
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: "openai-codex:user@example.com",
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-            email: "user@example.com",
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
-    });
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:user@example.com",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+        email: "user@example.com",
+      }),
+    );
   });
 
   it("backfills OpenAI Codex OAuth email from the JWT profile claim", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const provider = getOpenAICodexProvider();
     const access = createJwt({
       "https://api.openai.com/profile": {
         email: "jwt-user@example.com",
@@ -166,79 +209,31 @@ describe("provider auth contract", () => {
 
     const result = await provider.auth[0]?.run(buildAuthContext() as never);
 
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: "openai-codex:jwt-user@example.com",
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access,
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-            email: "jwt-user@example.com",
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
-    });
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:jwt-user@example.com",
+        access,
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+        email: "jwt-user@example.com",
+      }),
+    );
   });
 
   it("uses a stable fallback id when OpenAI Codex JWT email is missing", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
     const access = createJwt({
       "https://api.openai.com/auth": {
         chatgpt_account_user_id: "user-123__acct-456",
       },
     });
     const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
-    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
-      refresh: "refresh-token",
+    await expectOpenAICodexStableFallbackProfile({
       access,
-      expires: 1_700_000_000_000,
-    });
-
-    const result = await provider.auth[0]?.run(buildAuthContext() as never);
-
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: `openai-codex:id-${expectedStableId}`,
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access,
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
+      profileId: `openai-codex:id-${expectedStableId}`,
     });
   });
 
   it("uses iss and sub to build a stable fallback id when auth claims are missing", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
     const access = createJwt({
       iss: "https://accounts.openai.com",
       sub: "user-abc",
@@ -246,84 +241,25 @@ describe("provider auth contract", () => {
     const expectedStableId = Buffer.from("https://accounts.openai.com|user-abc").toString(
       "base64url",
     );
-    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
-      refresh: "refresh-token",
+    await expectOpenAICodexStableFallbackProfile({
       access,
-      expires: 1_700_000_000_000,
-    });
-
-    const result = await provider.auth[0]?.run(buildAuthContext() as never);
-
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: `openai-codex:id-${expectedStableId}`,
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access,
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
+      profileId: `openai-codex:id-${expectedStableId}`,
     });
   });
 
   it("uses sub alone to build a stable fallback id when iss is missing", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
     const access = createJwt({
       sub: "user-abc",
     });
     const expectedStableId = Buffer.from("user-abc").toString("base64url");
-    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
-      refresh: "refresh-token",
+    await expectOpenAICodexStableFallbackProfile({
       access,
-      expires: 1_700_000_000_000,
-    });
-
-    const result = await provider.auth[0]?.run(buildAuthContext() as never);
-
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: `openai-codex:id-${expectedStableId}`,
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access,
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
+      profileId: `openai-codex:id-${expectedStableId}`,
     });
   });
 
   it("falls back to the default OpenAI Codex profile when JWT parsing yields no identity", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const provider = getOpenAICodexProvider();
     loginOpenAICodexOAuthMock.mockResolvedValueOnce({
       refresh: "refresh-token",
       access: "not-a-jwt-token",
@@ -332,31 +268,14 @@ describe("provider auth contract", () => {
 
     const result = await provider.auth[0]?.run(buildAuthContext() as never);
 
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: "openai-codex:default",
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "not-a-jwt-token",
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
-      },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
-    });
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:default",
+        access: "not-a-jwt-token",
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+      }),
+    );
   });
 
   it("keeps OpenAI Codex OAuth failures non-fatal at the provider layer", async () => {
