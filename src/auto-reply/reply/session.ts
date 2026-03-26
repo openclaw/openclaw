@@ -380,7 +380,14 @@ export async function initSessionState(params: {
   // the recovery response) correctly mark the session as answered,
   // preventing a restart loop where each recovery dispatch refreshes
   // the timestamp and keeps the session looking "unanswered".
-  if (ctx.Surface !== "recovery") {
+  // Skip updating user message timestamps for recovery (re-injected by
+  // startup recovery) and heartbeat/exec-event (system-initiated, not
+  // real user messages). Without this guard, heartbeat prompts would
+  // reset the user idle timer used by proactive messaging, making the
+  // user appear active when they haven't said anything.
+  const isSystemMessage =
+    ctx.Surface === "recovery" || ctx.Provider === "heartbeat" || ctx.Provider === "exec-event";
+  if (!isSystemMessage) {
     const userMessageText = (
       ctx.BodyForCommands ??
       ctx.CommandBody ??
