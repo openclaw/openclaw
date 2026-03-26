@@ -8,16 +8,12 @@ title: "MiniMax"
 
 # MiniMax
 
-OpenClaw's MiniMax provider defaults to **MiniMax M2.7** and keeps
-**MiniMax M2.5** in the catalog for compatibility.
+OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 ## Model lineup
 
 - `MiniMax-M2.7`: default hosted text model.
 - `MiniMax-M2.7-highspeed`: faster M2.7 text tier.
-- `MiniMax-M2.5`: previous text model, still available in the MiniMax catalog.
-- `MiniMax-M2.5-highspeed`: faster M2.5 text tier.
-- `MiniMax-VL-01`: vision model for text + image inputs.
 
 ## Choose a setup
 
@@ -80,24 +76,6 @@ Configure via CLI:
             contextWindow: 200000,
             maxTokens: 8192,
           },
-          {
-            id: "MiniMax-M2.5",
-            name: "MiniMax M2.5",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
-          {
-            id: "MiniMax-M2.5-highspeed",
-            name: "MiniMax M2.5 Highspeed",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
-          },
         ],
       },
     },
@@ -128,46 +106,6 @@ Example below uses Opus as a concrete primary; swap to your preferred latest-gen
 }
 ```
 
-### Optional: Local via LM Studio (manual)
-
-**Best for:** local inference with LM Studio.
-We have seen strong results with MiniMax M2.5 on powerful hardware (e.g. a
-desktop/server) using LM Studio's local server.
-
-Configure manually via `openclaw.json`:
-
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
-    },
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
-        models: [
-          {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 196608,
-            maxTokens: 8192,
-          },
-        ],
-      },
-    },
-  },
-}
-```
-
 ## Configure via `openclaw configure`
 
 Use the interactive config wizard to set MiniMax without editing JSON:
@@ -190,7 +128,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 - Model refs are `minimax/<model>`.
 - Default text model: `MiniMax-M2.7`.
-- Alternate text models: `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`, `MiniMax-M2.5-highspeed`.
+- Alternate text model: `MiniMax-M2.7-highspeed`.
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
@@ -203,7 +141,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 This usually means the **MiniMax provider isn’t configured** (no provider entry
 and no MiniMax auth profile/env key found). A fix for this detection is in
-**2026.1.12** (unreleased at the time of writing). Fix by:
+**2026.1.12**. Fix by:
 
 - Upgrading to **2026.1.12** (or run from source `main`), then restarting the gateway.
 - Running `openclaw configure` and selecting a **MiniMax** auth option, or
@@ -214,8 +152,6 @@ Make sure the model id is **case‑sensitive**:
 
 - `minimax/MiniMax-M2.7`
 - `minimax/MiniMax-M2.7-highspeed`
-- `minimax/MiniMax-M2.5`
-- `minimax/MiniMax-M2.5-highspeed`
 
 Then recheck with:
 

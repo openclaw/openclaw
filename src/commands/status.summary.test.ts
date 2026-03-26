@@ -7,6 +7,10 @@ vi.mock("../channels/config-presence.js", () => ({
 vi.mock("./status.summary.runtime.js", () => ({
   statusSummaryRuntime: {
     classifySessionKey: vi.fn(() => "direct"),
+    resolveConfiguredStatusModelRef: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-5.2",
+    })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
       model: "gpt-5.2",

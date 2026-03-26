@@ -115,3 +115,59 @@ describe("bash process registry", () => {
     expect(listFinishedSessions()).toHaveLength(1);
   });
 });
+
+describe("cursorKeyMode", () => {
+  function createRegistrySession(params: {
+    id?: string;
+    maxOutputChars: number;
+    pendingMaxOutputChars: number;
+    backgrounded: boolean;
+    cursorKeyMode?: ProcessSession["cursorKeyMode"];
+  }): ProcessSession {
+    return createProcessSessionFixture({
+      id: params.id ?? "sess",
+      command: "echo test",
+      child: { pid: 123, removeAllListeners: vi.fn() } as unknown as ChildProcessWithoutNullStreams,
+      maxOutputChars: params.maxOutputChars,
+      pendingMaxOutputChars: params.pendingMaxOutputChars,
+      backgrounded: params.backgrounded,
+      cursorKeyMode: params.cursorKeyMode,
+    });
+  }
+
+  it("session cursorKeyMode can start unknown", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+      cursorKeyMode: "unknown",
+    });
+    expect(session.cursorKeyMode).toBe("unknown");
+  });
+
+  it("session cursorKeyMode can be set to application", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+    session.cursorKeyMode = "application";
+    expect(session.cursorKeyMode).toBe("application");
+  });
+
+  it("session cursorKeyMode can be toggled between normal and application", () => {
+    const session = createRegistrySession({
+      maxOutputChars: 100,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+      cursorKeyMode: "unknown",
+    });
+    expect(session.cursorKeyMode).toBe("unknown");
+
+    session.cursorKeyMode = "application";
+    expect(session.cursorKeyMode).toBe("application");
+
+    session.cursorKeyMode = "normal";
+    expect(session.cursorKeyMode).toBe("normal");
+  });
+});

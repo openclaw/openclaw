@@ -117,6 +117,23 @@ describe("resolveTelegramToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("resolves per-account tokens when config keys normalize spaces to dashes", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": { botToken: "acct-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "carey-notifications" });
+    expect(res.token).toBe("acct-token");
+    expect(res.source).toBe("config");
+  });
+
   it("falls back to top-level token for non-default accounts without account token", () => {
     const cfg = {
       channels: {
@@ -218,6 +235,42 @@ describe("resolveTelegramToken", () => {
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created accountIds should inherit the channel-level token in
+  // single-bot setups (no accounts section).
+  it("falls through to channel-level token for binding-created accountId without accounts section", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
+    expect(res.token).toBe("channel-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
   });
 });
 

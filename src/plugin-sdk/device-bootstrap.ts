@@ -6,3 +6,10 @@ export {
   issueDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
+export {
+  normalizeDeviceBootstrapProfile,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  sameDeviceBootstrapProfile,
+  type DeviceBootstrapProfile,
+  type DeviceBootstrapProfileInput,
+} from "../shared/device-bootstrap-profile.js";

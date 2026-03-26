@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DiscoveredModel = { id: string; contextWindow: number };
 
@@ -67,6 +67,16 @@ describe("lookupContextTokens", () => {
     vi.resetModules();
   });
 
+  afterEach(async () => {
+    try {
+      const { resetContextWindowCacheForTest } = await import("./context.js");
+      resetContextWindowCacheForTest();
+    } catch {
+      // Ignore reset failures when a test aborts before the module loads.
+    }
+    await flushAsyncWarmup();
+  });
+
   it("returns configured model context window on first lookup", async () => {
     mockContextModuleDeps(() => ({
       models: {
@@ -82,8 +92,8 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
-  it("can skip async warmup for read-only callers", async () => {
-    const { ensureOpenClawModelsJson } = mockContextModuleDeps(() => ({
+  it("returns sync config overrides for read-only callers", async () => {
+    mockContextModuleDeps(() => ({
       models: {
         providers: {
           openrouter: {
@@ -94,11 +104,9 @@ describe("lookupContextTokens", () => {
     }));
 
     const { lookupContextTokens } = await import("./context.js");
-    expect(
-      lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false }),
-    ).toBeUndefined();
-    await flushAsyncWarmup();
-    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
+      321_000,
+    );
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {

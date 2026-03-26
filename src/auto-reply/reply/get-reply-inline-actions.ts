@@ -441,6 +441,19 @@ export async function handleInlineActions(params: {
     abortedLastRun = getAbortMemory(command.abortKey) ?? false;
   }
 
+  const shouldRunCommandHandlers =
+    inlineCommand !== null ||
+    directiveAck !== undefined ||
+    inlineStatusRequested ||
+    command.commandBodyNormalized.trim().startsWith("/");
+  if (!shouldRunCommandHandlers) {
+    return {
+      kind: "continue",
+      directives,
+      abortedLastRun,
+    };
+  }
+
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();

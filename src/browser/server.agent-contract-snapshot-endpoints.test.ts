@@ -1,4 +1,3 @@
-import { fetch as realFetch } from "undici";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 import {
@@ -11,6 +10,7 @@ import {
   getCdpMocks,
   getPwMocks,
 } from "./server.control-server.test-harness.js";
+import { getBrowserTestFetch } from "./test-fetch.js";
 
 const state = getBrowserControlServerTestState();
 const cdpMocks = getCdpMocks();
@@ -21,6 +21,7 @@ describe("browser control server", () => {
 
   it("agent contract: snapshot endpoints", async () => {
     const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
 
     const snapAria = (await realFetch(`${base}/snapshot?format=aria&limit=1`).then((r) =>
       r.json(),
@@ -58,6 +59,7 @@ describe("browser control server", () => {
 
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
 
     const nav = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
       url: "https://example.com",

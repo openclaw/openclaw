@@ -4,15 +4,12 @@ import {
   killSubagentRunAdmin,
   resolveSubagentController,
 } from "../agents/subagent-control.js";
-import { getSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
+import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-registry.js";
 import { loadConfig } from "../config/config.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import {
-  authorizeHttpGatewayConnect,
-  isLocalDirectRequest,
-  type ResolvedGatewayAuth,
-} from "./auth.js";
-import { sendGatewayAuthFailure, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { isLocalDirectRequest, type ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
+import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
 import { ADMIN_SCOPE, WRITE_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -69,16 +66,15 @@ export async function handleSessionKillHttpRequest(
   }
 
   const token = getBearerToken(req);
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  const ok = await authorizeGatewayBearerRequestOrReply({
     req,
+    res,
+    auth: opts.auth,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
-  if (!authResult.ok) {
-    sendGatewayAuthFailure(res, authResult);
+  if (!ok) {
     return true;
   }
 
@@ -98,7 +94,7 @@ export async function handleSessionKillHttpRequest(
   const allowRealIpFallback = opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback;
   const requesterSessionKey = req.headers[REQUESTER_SESSION_KEY_HEADER]?.toString().trim();
   const allowLocalAdminKill = isLocalDirectRequest(req, trustedProxies, allowRealIpFallback);
-  const allowBearerOperatorKill = canBearerTokenKillSessions(token, authResult.ok);
+  const allowBearerOperatorKill = canBearerTokenKillSessions(token, true);
 
   if (!requesterSessionKey && !allowLocalAdminKill && !allowBearerOperatorKill) {
     sendJson(res, 403, {
@@ -116,7 +112,7 @@ export async function handleSessionKillHttpRequest(
 
   let killed = false;
   if (!allowAdminKill && requesterSessionKey) {
-    const runEntry = getSubagentRunByChildSessionKey(canonicalKey);
+    const runEntry = getLatestSubagentRunByChildSessionKey(canonicalKey);
     if (runEntry) {
       const result = await killControlledSubagentRun({
         cfg,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
 import type {
@@ -68,11 +68,9 @@ describe("memory manager mistral provider wiring", () => {
   let indexPath = "";
   let manager: MemoryIndexManager | null = null;
 
-  beforeAll(async () => {
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
   beforeEach(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     vi.clearAllMocks();
     createEmbeddingProviderMock.mockReset();
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-mistral-"));
@@ -113,8 +111,13 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
 
-    const internal = manager as unknown as { mistral?: MistralEmbeddingClient };
+    const internal = manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
+      mistral?: MistralEmbeddingClient;
+    };
+    await internal.ensureProviderInitialized();
     expect(internal.mistral).toBe(mistralClient);
   });
 
@@ -146,12 +149,15 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;
       mistral?: MistralEmbeddingClient;
     };
 
+    await internal.ensureProviderInitialized();
     const activated = await internal.activateFallbackProvider("forced test");
     expect(activated).toBe(true);
     expect(internal.openAi).toBeUndefined();
@@ -187,12 +193,15 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
+    await manager.probeEmbeddingAvailability();
     const internal = manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
       openAi?: OpenAiEmbeddingClient;
       ollama?: OllamaEmbeddingClient;
     };
 
+    await internal.ensureProviderInitialized();
     const activated = await internal.activateFallbackProvider("forced ollama fallback");
     expect(activated).toBe(true);
     expect(internal.openAi).toBeUndefined();
