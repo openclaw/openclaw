@@ -288,7 +288,7 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("auto-allowlists serverUrl hostname when allowPrivateNetwork is not set", async () => {
+  it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
     mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
@@ -298,10 +298,10 @@ describe("downloadBlueBubblesAttachment", () => {
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["localhost"] });
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
   });
 
-  it("auto-allowlists private IP serverUrl hostname when allowPrivateNetwork is not set", async () => {
+  it("auto-enables private-network fetches for private IP serverUrl when allowPrivateNetwork is not set", async () => {
     mockSuccessfulAttachmentDownload();
 
     const attachment: BlueBubblesAttachment = { guid: "att-private-ip" };
@@ -311,7 +311,20 @@ describe("downloadBlueBubblesAttachment", () => {
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
-    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["192.168.1.5"] });
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("allowlists public serverUrl hostname when allowPrivateNetwork is not set", async () => {
+    mockSuccessfulAttachmentDownload();
+
+    const attachment: BlueBubblesAttachment = { guid: "att-public-host" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "https://bluebubbles.example.com:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowedHostnames: ["bluebubbles.example.com"] });
   });
 });
 
