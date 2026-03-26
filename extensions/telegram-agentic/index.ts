@@ -2,6 +2,7 @@ import type { AnyAgentTool } from "./api.js";
 import { definePluginEntry } from "./api.js";
 import { registerNotificationBatching } from "./src/hooks/notification-batching.js";
 import { registerSessionObservability } from "./src/hooks/session-observability.js";
+import { registerVaultReporter } from "./src/hooks/vault-reporter.js";
 import {
   createGithubSearchTool,
   createGithubRepoInfoTool,
@@ -24,8 +25,9 @@ export default definePluginEntry({
     // Hooks
     registerSessionObservability(api);
     registerNotificationBatching(api);
+    registerVaultReporter(api);
 
-    api.logger.info("telegram-agentic plugin registered (4 TS tools, 2 hooks)");
+    api.logger.info("telegram-agentic plugin registered (4 TS tools, 3 hooks)");
     api.logger.info(
       "MCP servers (fleet, knowledge, delegation, pipeline, self) configured via gateway mcpServers",
     );
