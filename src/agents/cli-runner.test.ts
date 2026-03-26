@@ -272,6 +272,56 @@ describe("runCliAgent with process supervisor", () => {
     expect(allArgs).toContain("You are a helpful assistant.");
   });
 
+  it("injects a strict empty MCP config for bundle-MCP-enabled Claude CLI runs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: JSON.stringify({
+          session_id: "session-123",
+          message: "ok",
+        }),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "node",
+                args: ["/tmp/fake-claude.mjs"],
+                clearEnv: [],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      timeoutMs: 1_000,
+      runId: "run-bundle-mcp-empty",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv?.[0]).toBe("node");
+    expect(input.argv).toContain("/tmp/fake-claude.mjs");
+    expect(input.argv).toContain("--strict-mcp-config");
+    const configFlagIndex = input.argv?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[configFlagIndex + 1]).toMatch(/^\/.+\/mcp\.json$/);
+  });
+
   it("runs CLI through supervisor and returns payload", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
