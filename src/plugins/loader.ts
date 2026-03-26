@@ -104,6 +104,13 @@ const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
 const registryCache = new Map<string, CachedPluginState>();
 const openAllowlistWarningCache = new Set<string>();
+/**
+ * Tracks plugin IDs whose `register()` function has already been called
+ * successfully during this process lifetime. Used to mute duplicate log
+ * output when the same plugin is loaded into multiple registries with
+ * different cache keys (e.g. different scopes or runtime options).
+ */
+const globalRegisteredPluginIds = new Set<string>();
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "config",
@@ -124,6 +131,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
 export function clearPluginLoaderCache(): void {
   registryCache.clear();
   openAllowlistWarningCache.clear();
+  globalRegisteredPluginIds.clear();
   clearMemoryPromptSection();
 }
 
@@ -1211,12 +1219,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    // When a plugin has already been registered in a prior loadOpenClawPlugins
+    // call (different cache key), mute the logger passed to the plugin API so
+    // the plugin's register() function does not emit duplicate log messages.
+    const isReRegistration = globalRegisteredPluginIds.has(pluginId);
+    const effectiveLogger = isReRegistration
+      ? { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }
+      : registryParams.logger;
+
     const api = createApi(record, {
       config: cfg,
       pluginConfig: validatedConfig.value,
       hookPolicy: entry?.hooks,
       registrationMode,
     });
+    // Override the logger on the API for re-registrations to suppress duplicate output.
+    if (isReRegistration) {
+      (api as { logger: typeof effectiveLogger }).logger = effectiveLogger;
+    }
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
 
     try {
@@ -1233,6 +1253,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!shouldActivate) {
         restoreMemoryPromptSection(previousMemoryPromptBuilder);
       }
+      globalRegisteredPluginIds.add(pluginId);
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
