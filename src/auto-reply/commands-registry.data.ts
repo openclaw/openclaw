@@ -27,6 +27,28 @@ let cachedNativeRegistry: ReturnType<typeof getActivePluginRegistry> | null = nu
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
     ...buildBuiltinChatCommands(),
+    defineChatCommand({
+      key: "trust",
+      nativeName: "trust",
+      description: "Trust all exec in this session for X minutes (set exec security to full), default 15m, max 480m",
+      textAlias: "/trust",
+      category: "options",
+      args: [
+        {
+          name: "minutes",
+          description: "trust duration in minutes (1-480, default 15)",
+          type: "number",
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "untrust",
+      nativeName: "untrust",
+      description: "End trust window for this session",
+      textAlias: "/untrust",
+      category: "options",
+    }),
     ...listChannelPlugins()
       .filter((plugin) => plugin.capabilities.nativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
