@@ -83,6 +83,9 @@ jobs:
 
           echo "Publishing openclaw@${PACKAGE_VERSION}"
 
+      - name: Install dependencies (triggers postinstall for platform binaries)
+        run: pnpm install --frozen-lockfile
+
       - name: Check
         run: pnpm check
 
@@ -154,6 +157,9 @@ jobs:
           # for older tagged commits that are still contained in main.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           pnpm release:openclaw:npm:check
+
+      - name: Install dependencies (triggers postinstall for platform binaries)
+        run: pnpm install --frozen-lockfile
 
       - name: Ensure version is not already published
         run: |
