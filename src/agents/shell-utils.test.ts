@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getShellConfig, resolvePowerShellPath, resolveShellFromPath } from "./shell-utils.js";
+import {
+  applyProfilePrefix,
+  getShellConfig,
+  resolvePowerShellPath,
+  resolveShellFromPath,
+} from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 
@@ -45,6 +50,27 @@ describe("getShellConfig", () => {
       const normalized = shell.toLowerCase();
       expect(normalized.includes("powershell") || normalized.includes("pwsh")).toBe(true);
     });
+
+    it("includes profile sourcing when shellProfile is set on Windows", () => {
+      const { args } = getShellConfig("C:\\Users\\test\\profile.ps1");
+      expect(args).toContain(". 'C:\\Users\\test\\profile.ps1'; ");
+    });
+
+    it("escapes single quotes in shellProfile path on Windows", () => {
+      const { args } = getShellConfig("C:\\Users\\test's\\profile.ps1");
+      expect(args).toContain(". 'C:\\Users\\test''s\\profile.ps1'; ");
+    });
+
+    it("uses -NoProfile when shellProfile is not set on Windows", () => {
+      const { args } = getShellConfig();
+      expect(args).toContain("-NoProfile");
+    });
+
+    it("trims whitespace from shellProfile path on Windows", () => {
+      const { args } = getShellConfig("  C:\\Users\\test\\profile.ps1  ");
+      expect(args).toContain(". 'C:\\Users\\test\\profile.ps1'; ");
+    });
+
     return;
   }
 
@@ -73,6 +99,70 @@ describe("getShellConfig", () => {
     process.env.PATH = "";
     const { shell } = getShellConfig();
     expect(shell).toBe("sh");
+  });
+
+  it("uses source command for bash when shellProfile is set", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "bash");
+    const { shell, args } = getShellConfig("/home/user/.bashrc");
+    expect(shell).toBe(path.join(binDir, "bash"));
+    expect(args).toContain("-c");
+    expect(args).toContain(". '/home/user/.bashrc'; ");
+  });
+
+  it("ignores empty shellProfile", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "bash");
+    const { args } = getShellConfig("");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("ignores whitespace-only shellProfile", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "bash" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "bash");
+    const { args } = getShellConfig("   ");
+    expect(args).toEqual(["-c"]);
+  });
+
+  it("uses source command for zsh when shellProfile is set", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "zsh");
+    const { shell, args } = getShellConfig("/home/user/.zshrc");
+    expect(shell).toBe(path.join(binDir, "zsh"));
+    expect(args).toContain("-c");
+    expect(args).toContain(". '/home/user/.zshrc'; ");
+  });
+
+  it("escapes single quotes in shellProfile path for zsh", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "zsh");
+    const { args } = getShellConfig("/home/user's/.zshrc");
+    expect(args).toContain(". '/home/user'\\''s/.zshrc'; ");
+  });
+
+  it("uses source command for sh when shellProfile is set", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = path.join(binDir, "sh");
+    const { shell, args } = getShellConfig("/home/user/.profile");
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toContain("-c");
+    expect(args).toContain(". '/home/user/.profile'; ");
+  });
+
+  it("uses source command for sh fallback when fish is default and shellProfile is set", () => {
+    const binDir = createTempCommandDir(tempDirs, [{ name: "sh" }]);
+    process.env.PATH = binDir;
+    process.env.SHELL = "/usr/bin/fish";
+    const { shell, args } = getShellConfig("/home/user/.profile");
+    expect(shell).toBe(path.join(binDir, "sh"));
+    expect(args).toContain("-c");
+    expect(args).toContain(". '/home/user/.profile'; ");
   });
 });
 
@@ -205,5 +295,45 @@ describe("resolvePowerShellPath", () => {
     delete process.env.WINDIR;
 
     expect(resolvePowerShellPath()).toBe(ps51Path);
+  });
+});
+
+describe("applyProfilePrefix", () => {
+  it("merges command with Unix shell args ending with '; '", () => {
+    const shellArgs = ["-c", ". '/home/user/.profile'; "];
+    const command = "echo hello";
+    const result = applyProfilePrefix(shellArgs, command);
+    expect(result).toEqual(["-c", ". '/home/user/.profile'; echo hello"]);
+  });
+
+  it("merges command with Windows PowerShell args ending with '; '", () => {
+    const shellArgs = [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      ". 'C:\\Users\\test\\profile.ps1'; ",
+    ];
+    const command = "echo hello";
+    const result = applyProfilePrefix(shellArgs, command);
+    expect(result).toEqual([
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      ". 'C:\\Users\\test\\profile.ps1'; echo hello",
+    ]);
+  });
+
+  it("appends command to shell args when no profile prefix is present", () => {
+    const shellArgs = ["-c"];
+    const command = "echo hello";
+    const result = applyProfilePrefix(shellArgs, command);
+    expect(result).toEqual(["-c", "echo hello"]);
+  });
+
+  it("appends command to shell args when args do not end with '; '", () => {
+    const shellArgs = ["-c", "some-other-arg"];
+    const command = "echo hello";
+    const result = applyProfilePrefix(shellArgs, command);
+    expect(result).toEqual(["-c", "some-other-arg", "echo hello"]);
   });
 });

@@ -171,6 +171,12 @@ export type CommandsConfig = {
    * Example: { "*": ["user1"], discord: ["user:123"] }
    */
   allowFrom?: CommandAllowFrom;
+  /**
+   * Path to shell profile file to source when executing commands.
+   * When set and non-empty, PowerShell, bash, and other shells will load
+   * this profile before executing commands (e.g., for custom env vars, aliases).
+   */
+  shellProfile?: string;
 };
 
 export type ProviderCommandsConfig = {

@@ -67,6 +67,7 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  shellProfile?: string;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -284,6 +285,14 @@ export async function processGatewayAllowlist(
 
       recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
+      // Security: when an enforced command from allowlist mode is used, ignore shellProfile
+      // to prevent profile-defined functions/aliases from bypassing allowlist enforcement.
+      if (enforcedCommand && params.shellProfile) {
+        params.warnings.push(
+          "Note: shellProfile ignored in allowlist mode to prevent bypass of enforced command.",
+        );
+      }
+
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
         run = await runExecProcess({
@@ -302,6 +311,7 @@ export async function processGatewayAllowlist(
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey,
           timeoutSec: effectiveTimeout,
+          shellProfile: enforcedCommand ? undefined : params.shellProfile,
         });
       } catch {
         await sendExecApprovalFollowupResult(

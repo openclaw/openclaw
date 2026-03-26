@@ -511,6 +511,7 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          shellProfile: defaults?.shellProfile,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
@@ -531,6 +532,15 @@ export function createExecTool(
       // before we execute and burn tokens in cron loops.
       await validateScriptFileForShellBleed({ command: params.command, workdir });
 
+      // Security: when an enforced command from allowlist mode is used, ignore shellProfile
+      // to prevent profile-defined functions/aliases from bypassing allowlist enforcement.
+      const effectiveShellProfile = execCommandOverride ? undefined : defaults?.shellProfile;
+      if (execCommandOverride && defaults?.shellProfile) {
+        warnings.push(
+          "Note: shellProfile ignored in allowlist mode to prevent bypass of enforced command.",
+        );
+      }
+
       const run = await runExecProcess({
         command: params.command,
         execCommand: execCommandOverride,
@@ -547,6 +557,7 @@ export function createExecTool(
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,
+        shellProfile: effectiveShellProfile,
         onUpdate,
       });
 

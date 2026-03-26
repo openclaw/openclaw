@@ -158,6 +158,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     notifyOnExitEmptySuccess:
       agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
     applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+    shellProfile: cfg?.commands?.shellProfile,
   };
 }
 
@@ -444,6 +445,7 @@ export function createOpenClawCodingTools(options?: {
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
       options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+    shellProfile: options?.exec?.shellProfile ?? execConfig.shellProfile,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
