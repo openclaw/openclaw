@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
 import "./test-runtime-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
+import type { OpenClawConfig } from "../config/config.js";
 
-type MemoryIndexModule = typeof import("./index.js");
-type ManagerModule = typeof import("./manager.js");
+type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
+type ManagerModule = typeof import("../../extensions/memory-core/src/memory/manager.js");
 
 const hoisted = vi.hoisted(() => ({
   providerCreateCalls: 0,
@@ -43,9 +43,10 @@ describe("memory manager cache hydration", () => {
   let workspaceDir = "";
 
   beforeAll(async () => {
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } =
+      await import("../../extensions/memory-core/src/memory/index.js"));
     ({ closeAllMemoryIndexManagers, MemoryIndexManager: RawMemoryIndexManager } =
-      await import("./manager.js"));
+      await import("../../extensions/memory-core/src/memory/manager.js"));
   });
 
   beforeEach(async () => {
