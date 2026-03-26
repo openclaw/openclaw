@@ -626,6 +626,25 @@ async function runAttachmentEntries(params: {
       );
     } catch (err) {
       if (isMediaUnderstandingSkipError(err)) {
+        if (err.reason === "tooSmall" && capability === "audio") {
+          attempts.push(
+            buildModelDecision({
+              entry,
+              entryType,
+              outcome: "success",
+              reason: `synthetic: ${err.message}`,
+            }),
+          );
+          return {
+            output: {
+              kind: "audio.transcription",
+              text: "[Audio attachment was too short to transcribe]",
+              attachmentIndex: params.attachmentIndex,
+              provider: "synthetic",
+            },
+            attempts,
+          };
+        }
         attempts.push(
           buildModelDecision({
             entry,
