@@ -166,8 +166,8 @@ function createBaiduToolDefinition(
                 ? "freshness filtering"
                 : "language filtering";
           return {
-            error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
-            message: `${label} is not supported by the baidu provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
+            error: `unsupported_${name}`,
+            message: `${label} is not supported by the baidu provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : "freshness filtering"}.`,
             docs: "https://docs.openclaw.ai/tools/web",
           };
         }
