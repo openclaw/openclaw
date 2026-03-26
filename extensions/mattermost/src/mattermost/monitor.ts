@@ -1455,6 +1455,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // the current value and compares it after the async POST resolves; if
     // the value has changed the turn boundary has passed and the result is stale.
     let currentTurnSeq = 0;
+    // Turn sequence for which the current patchInterval is scheduled.
+    // Used to prevent turn B partials from corrupting turn A finalization (ID=2991100636).
+    let scheduledTurnSeq = 0;
     // Count of turns already posted via streaming (flushed at assistant message boundaries).
     // Used to skip re-delivery of those turns in the final reply array.
     let streamedTurnCount = 0;
@@ -1547,9 +1550,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!blockStreamingClient) return;
       // Do not re-arm if a permanent send/edit failure has been latched.
       if (previewSendFailed) return;
+      // Only accept partials for the currently scheduled turn to prevent
+      // turn B partials from corrupting turn A finalization text (ID=2991100636).
+      if (patchInterval && currentTurnSeq !== scheduledTurnSeq) return;
       pendingPatchText = fullText;
       if (patchInterval) return;
+      // Capture current turn sequence when the interval is first armed.
+      scheduledTurnSeq = currentTurnSeq;
       patchInterval = setInterval(() => {
+        // Skip if we're no longer on the same turn. This prevents stale
+        // turn B partials from corrupting turn A finalization (ID=2991100636).
+        if (currentTurnSeq !== scheduledTurnSeq) return;
         const rawText = pendingPatchText;
         if (!rawText || patchSending) return;
         // Truncate to textLimit so intermediate patches never exceed the server limit.
