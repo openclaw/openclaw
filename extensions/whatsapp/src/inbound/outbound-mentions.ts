@@ -46,8 +46,9 @@ export function extractOutboundMentions(
     const digits = match[1]!; // e.g. "85251159218"
     const normalized = `+${digits}`;
     const originalJid = participantJidMap?.get(normalized);
-    if (originalJid && originalJid.endsWith("@lid")) {
-      // LID participant: use LID JID and rewrite text token to match
+    if (originalJid && (originalJid.endsWith("@lid") || originalJid.includes("@lid"))) {
+      // LID participant: use LID JID and rewrite text token to match.
+      // Baileys 7 rc9 uses "@lid" suffix; future versions may use "@hosted.lid".
       jids.add(originalJid);
       const lidDigits = originalJid.replace(/@.*/, "");
       const newToken = `@${lidDigits}`;
@@ -62,7 +63,7 @@ export function extractOutboundMentions(
   // Apply text replacements
   let updatedText = text;
   for (const { from, to } of replacements) {
-    updatedText = updatedText.replace(from, to);
+    updatedText = updatedText.replaceAll(from, to);
   }
   return { jids: Array.from(jids), text: updatedText };
 }
