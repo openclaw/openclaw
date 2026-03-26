@@ -10,10 +10,32 @@ import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
 function extractSurfaceSectionsFromRawArgs(rawArgs: string[]): string[] {
-  const surfaceIndex = rawArgs.lastIndexOf("surface");
+  const configureIndex = rawArgs.indexOf("configure");
+  if (configureIndex === -1) {
+    return [];
+  }
+
+  let surfaceIndex = -1;
+  for (let index = configureIndex + 1; index < rawArgs.length; index += 1) {
+    const token = rawArgs[index];
+    if (token === "--section") {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--section=")) {
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    surfaceIndex = token === "surface" ? index : -1;
+    break;
+  }
+
   if (surfaceIndex === -1) {
     return [];
   }
+
   const sections: string[] = [];
   for (let index = surfaceIndex + 1; index < rawArgs.length; index += 1) {
     const token = rawArgs[index];

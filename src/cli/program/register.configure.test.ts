@@ -106,4 +106,15 @@ describe("registerConfigureCommand", () => {
       runtime,
     });
   });
+
+  it("does not anchor section parsing to json-out values named surface", async () => {
+    await runCli(["configure", "surface", "--json-out", "surface", "--section", "channels"]);
+
+    expect(configureSurfaceCommandMock).toHaveBeenCalledWith({
+      jsonOut: "surface",
+      section: ["channels"],
+      installedOnly: false,
+      runtime,
+    });
+  });
 });
