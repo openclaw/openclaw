@@ -281,6 +281,34 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Plugin approval");
       expect(text).toContain("allowed once");
     });
+
+    it("reconstructs targets from resolved request snapshot when pending cache is missing", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+
+      await forwarder.handlePluginApprovalResolved!({
+        id: "plugin-req-late",
+        decision: "deny",
+        resolvedBy: "telegram:user123",
+        ts: 2_000,
+        request: {
+          pluginId: "sage",
+          title: "Sensitive tool call",
+          description: "The agent wants to call a sensitive tool",
+          severity: "warning",
+          toolName: "bash",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        },
+      });
+
+      expect(deliver).toHaveBeenCalled();
+      const text =
+        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
+          ?.text ?? "";
+      expect(text).toContain("Plugin approval");
+      expect(text).toContain("denied");
+    });
   });
 
   describe("stop", () => {

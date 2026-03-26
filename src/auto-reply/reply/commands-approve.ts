@@ -125,8 +125,9 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   if (!parsed.ok) {
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
+  const isPluginId = parsed.id.startsWith("plugin:");
 
-  if (params.command.channel === "telegram") {
+  if (params.command.channel === "telegram" && !isPluginId) {
     if (
       !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
     ) {
@@ -171,7 +172,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   // Plugin approval IDs are kind-prefixed (`plugin:<uuid>`); route directly when detected.
   // Unprefixed IDs try exec first, then fall back to plugin for backward compat.
-  const isPluginId = parsed.id.startsWith("plugin:");
   if (isPluginId) {
     try {
       await callApprovalMethod("plugin.approval.resolve");

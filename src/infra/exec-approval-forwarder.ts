@@ -473,6 +473,26 @@ export function createExecApprovalForwarder(
     pending.clear();
   };
 
+  const toSyntheticExecRequestFromPlugin = (params: {
+    id: string;
+    request: PluginApprovalRequest["request"];
+    createdAtMs: number;
+    expiresAtMs: number;
+  }): ExecApprovalRequest => ({
+    id: params.id,
+    request: {
+      command: params.request.title,
+      agentId: params.request.agentId ?? null,
+      sessionKey: params.request.sessionKey ?? null,
+      turnSourceChannel: params.request.turnSourceChannel ?? null,
+      turnSourceTo: params.request.turnSourceTo ?? null,
+      turnSourceAccountId: params.request.turnSourceAccountId ?? null,
+      turnSourceThreadId: params.request.turnSourceThreadId ?? null,
+    },
+    createdAtMs: params.createdAtMs,
+    expiresAtMs: params.expiresAtMs,
+  });
+
   const pluginPending = new Map<string, PendingApproval>();
 
   const handlePluginApprovalRequested = async (
@@ -480,21 +500,12 @@ export function createExecApprovalForwarder(
   ): Promise<boolean> => {
     const cfg = getConfig();
     const config = cfg.approvals?.plugin;
-    // Build a synthetic ExecApprovalRequest for target resolution.
-    const syntheticExecRequest: ExecApprovalRequest = {
+    const syntheticExecRequest = toSyntheticExecRequestFromPlugin({
       id: request.id,
-      request: {
-        command: request.request.title,
-        agentId: request.request.agentId ?? null,
-        sessionKey: request.request.sessionKey ?? null,
-        turnSourceChannel: request.request.turnSourceChannel ?? null,
-        turnSourceTo: request.request.turnSourceTo ?? null,
-        turnSourceAccountId: request.request.turnSourceAccountId ?? null,
-        turnSourceThreadId: request.request.turnSourceThreadId ?? null,
-      },
+      request: request.request,
       createdAtMs: request.createdAtMs,
       expiresAtMs: request.expiresAtMs,
-    };
+    });
 
     const filteredTargets = [
       ...(shouldForward({ config, request: syntheticExecRequest })
@@ -574,6 +585,7 @@ export function createExecApprovalForwarder(
   };
 
   const handlePluginApprovalResolved = async (resolved: PluginApprovalResolved) => {
+    const cfg = getConfig();
     const entry = pluginPending.get(resolved.id);
     if (entry) {
       if (entry.timeoutId) {
@@ -581,11 +593,31 @@ export function createExecApprovalForwarder(
       }
       pluginPending.delete(resolved.id);
     }
-    const targets = entry?.targets;
+    let targets = entry?.targets;
+    if (!targets && resolved.request) {
+      const syntheticExecRequest = toSyntheticExecRequestFromPlugin({
+        id: resolved.id,
+        request: resolved.request,
+        createdAtMs: resolved.ts,
+        expiresAtMs: resolved.ts,
+      });
+      const config = cfg.approvals?.plugin;
+      targets = [
+        ...(shouldForward({ config, request: syntheticExecRequest })
+          ? resolveForwardTargets({
+              cfg,
+              config,
+              request: syntheticExecRequest,
+              resolveSessionTarget,
+            })
+          : []),
+      ].filter(
+        (target) => !shouldSkipForwardingFallback({ target, cfg, request: syntheticExecRequest }),
+      );
+    }
     if (!targets || targets.length === 0) {
       return;
     }
-    const cfg = getConfig();
     await deliverToTargets({
       cfg,
       targets,

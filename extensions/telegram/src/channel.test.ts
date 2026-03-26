@@ -489,7 +489,7 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
   });
 
-  it("builds plugin approval pending payload with short callback ids so allow-always is preserved", () => {
+  it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
     const request = createPluginApprovalRequest();
     const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
       cfg: createCfg(),
@@ -506,7 +506,7 @@ describe("telegramPlugin duplicate token guard", () => {
         }
       | undefined;
     expect(channelData?.execApproval?.approvalId).toBe(request.id);
-    expect(channelData?.execApproval?.approvalSlug).toBe("plugin:1");
+    expect(channelData?.execApproval?.approvalSlug).toBe(request.id);
     const buttons = channelData?.telegram?.buttons;
     expect(buttons).toBeDefined();
     expect(buttons?.[0]?.some((button) => button.text === "Allow Always")).toBe(true);
