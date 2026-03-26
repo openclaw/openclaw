@@ -138,7 +138,8 @@ describe("runBootOnce", () => {
       const call = agentCommand.mock.calls[0]?.[0];
       expect(call).toEqual(
         expect.objectContaining({
-          deliver: false,
+          deliver: true,
+          bestEffortDeliver: true,
           sessionKey: resolveMainSessionKey({}),
         }),
       );
