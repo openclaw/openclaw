@@ -214,8 +214,8 @@ export function wrapStreamFnWithReActFallback(
     let currentStatus = "native";
     if (isLocal && configDir) {
       currentStatus = await getModelCapability(configDir, config.providerId, config.modelId);
-      if (currentStatus === "unknown") {
-        // Trigger background probe for all new models
+      if (currentStatus === "unknown" && config.toolFallback !== "none") {
+        // Trigger background probe for all new models unless explicitly disabled
         queueMicrotask(() =>
           runBackgroundCapabilityProbe({
             streamFn: nativeStreamFn,
