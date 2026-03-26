@@ -41,6 +41,50 @@ describe("matrix thread bindings", () => {
     userId: "@bot:example.org",
     accessToken: "token",
   } as const;
+  const accountId = "ops";
+  const idleTimeoutMs = 24 * 60 * 60 * 1000;
+  const matrixClient = {} as never;
+
+  function currentThreadConversation(params?: {
+    conversationId?: string;
+    parentConversationId?: string;
+  }) {
+    return {
+      channel: "matrix" as const,
+      accountId,
+      conversationId: params?.conversationId ?? "$thread",
+      parentConversationId: params?.parentConversationId ?? "!room:example",
+    };
+  }
+
+  async function createStaticThreadBindingManager() {
+    return createMatrixThreadBindingManager({
+      accountId,
+      auth,
+      client: matrixClient,
+      idleTimeoutMs,
+      maxAgeMs: 0,
+      enableSweeper: false,
+    });
+  }
+
+  async function bindCurrentThread(params?: {
+    targetSessionKey?: string;
+    conversationId?: string;
+    parentConversationId?: string;
+    metadata?: { introText?: string };
+  }) {
+    return getSessionBindingService().bind({
+      targetSessionKey: params?.targetSessionKey ?? "agent:ops:subagent:child",
+      targetKind: "subagent",
+      conversation: currentThreadConversation({
+        conversationId: params?.conversationId,
+        parentConversationId: params?.parentConversationId,
+      }),
+      placement: "current",
+      ...(params?.metadata ? { metadata: params.metadata } : {}),
+    });
+  }
 
   function resolveBindingsFilePath(customStateDir?: string) {
     return path.join(
@@ -77,10 +121,10 @@ describe("matrix thread bindings", () => {
 
   it("creates child Matrix thread bindings from a top-level room context", async () => {
     await createMatrixThreadBindingManager({
-      accountId: "ops",
+      accountId,
       auth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      client: matrixClient,
+      idleTimeoutMs,
       maxAgeMs: 0,
       enableSweeper: false,
     });
@@ -112,25 +156,9 @@ describe("matrix thread bindings", () => {
   });
 
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
-    await createMatrixThreadBindingManager({
-      accountId: "ops",
-      auth,
-      client: {} as never,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
-      enableSweeper: false,
-    });
+    await createStaticThreadBindingManager();
 
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      },
-      placement: "current",
+    const binding = await bindCurrentThread({
       metadata: {
         introText: "intro thread",
       },
@@ -574,25 +602,8 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      await createMatrixThreadBindingManager({
-        accountId: "ops",
-        auth,
-        client: {} as never,
-        idleTimeoutMs: 24 * 60 * 60 * 1000,
-        maxAgeMs: 0,
-        enableSweeper: false,
-      });
-      const binding = await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-      });
+      await createStaticThreadBindingManager();
+      const binding = await bindCurrentThread();
 
       const bindingsPath = resolveBindingsFilePath();
       const originalLastActivityAt = await readPersistedLastActivityAt(bindingsPath);
@@ -618,25 +629,8 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      const manager = await createMatrixThreadBindingManager({
-        accountId: "ops",
-        auth,
-        client: {} as never,
-        idleTimeoutMs: 24 * 60 * 60 * 1000,
-        maxAgeMs: 0,
-        enableSweeper: false,
-      });
-      const binding = await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread",
-          parentConversationId: "!room:example",
-        },
-        placement: "current",
-      });
+      const manager = await createStaticThreadBindingManager();
+      const binding = await bindCurrentThread();
       const touchedAt = Date.parse("2026-03-06T12:00:00.000Z");
       getSessionBindingService().touch(binding.bindingId, touchedAt);
 
