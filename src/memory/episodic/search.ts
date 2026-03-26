@@ -69,13 +69,8 @@ export class EpisodicSearch {
       return [];
     }
 
-    // Get query embedding
-    let queryEmbedding = options.queryEmbedding;
-    if (!queryEmbedding) {
-      queryEmbedding = await this.encoder.generateEmbedding(query);
-    }
-
-    // Apply filters
+    // Apply filters before generating the query embedding so that we skip the
+    // embedding API call entirely when no candidates survive the filter pass.
     if (timeRange?.after) {
       const after = timeRange.after;
       episodes = episodes.filter((e) => e.created_at >= after);
@@ -103,16 +98,36 @@ export class EpisodicSearch {
       });
     }
 
+    // Re-check after filters — no point generating an embedding for zero candidates.
+    if (episodes.length === 0) {
+      return [];
+    }
+
+    // Check if any episode actually has an embedding before paying for the API call.
+    // If none do, we will rely entirely on keyword fallback and can skip the round-trip.
+    const anyHasEmbedding = episodes.some((e) => e.embedding && e.embedding.length > 0);
+
+    // Lazily resolve the query embedding only when we need semantic comparison.
+    let queryEmbedding: Float32Array | undefined = options.queryEmbedding;
+    if (anyHasEmbedding && !queryEmbedding) {
+      try {
+        queryEmbedding = await this.encoder.generateEmbedding(query);
+      } catch {
+        // Embedding API outage / missing credentials: fall back to keyword scoring
+        // for all episodes rather than throwing and losing episodic results entirely.
+      }
+    }
+
     // Score episodes
     const results: EpisodeSearchResult[] = [];
 
     for (const episode of episodes) {
       // Semantic similarity
       let semanticScore = 0;
-      if (episode.embedding && episode.embedding.length > 0) {
+      if (queryEmbedding && episode.embedding && episode.embedding.length > 0) {
         semanticScore = Math.max(0, cosineSimilarity(queryEmbedding, episode.embedding));
       } else {
-        // Fallback: keyword matching
+        // Fallback: keyword matching (also used when embedding API is unavailable)
         const queryWords = query.toLowerCase().split(/\s+/);
         const text = (episode.summary + " " + (episode.details ?? "")).toLowerCase();
         const matches = queryWords.filter((w) => text.includes(w)).length;

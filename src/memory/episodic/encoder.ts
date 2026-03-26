@@ -238,7 +238,11 @@ export async function createEpisodeEncoder(
       | { episodic?: { encoderModel?: string; importanceThreshold?: number } }
       | undefined
   )?.episodic;
-  const episodicCfg = agentEpisodic ?? defaultEpisodic;
+  // Merge defaults first, then let agent-level keys override individual fields.
+  // Using `??` would drop all default fields when the agent specifies even one
+  // episodic key, causing silent config drift across agents.
+  const episodicCfg =
+    defaultEpisodic || agentEpisodic ? { ...defaultEpisodic, ...agentEpisodic } : undefined;
 
   const openaiProvider = cfg.models?.providers?.["openai"] as
     | { apiKey?: unknown; baseUrl?: string }

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../../../src/agents/memory-search.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
@@ -82,6 +82,36 @@ export async function readAgentMemoryFile(params: {
   from?: number;
   lines?: number;
 }): Promise<{ text: string; path: string }> {
+  // Episodic search hits are emitted with path "episodes/<uuid>".
+  // The standard readMemoryFile only handles .md workspace paths, so intercept
+  // these here and read directly from EpisodicStore before falling through.
+  const episodicMatch = /^episodes\/([^/]+)$/.exec(params.relPath.trim());
+  if (episodicMatch) {
+    const episodeId = episodicMatch[1];
+    // Lazy import to avoid pulling in better-sqlite3 unless needed.
+    const { EpisodicStore } = await import("./episodic/store.js");
+    const agentBaseDir = resolveAgentDir(params.cfg, params.agentId);
+    const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
+    const store = new EpisodicStore(dbPath);
+    try {
+      const episode = store.getById(episodeId);
+      if (!episode) {
+        return { text: "", path: params.relPath };
+      }
+      const lines: string[] = [
+        `# Episode: ${episode.summary}`,
+        `Date: ${episode.created_at}`,
+        `Importance: ${episode.importance.toFixed(2)}`,
+        ...(episode.topic_tags?.length ? [`Tags: ${episode.topic_tags.join(", ")}`] : []),
+        "",
+        ...(episode.details ? [episode.details] : []),
+      ];
+      return { text: lines.join("\n"), path: params.relPath };
+    } finally {
+      store.close();
+    }
+  }
+
   const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
   if (!settings) {
     throw new Error("memory search disabled");
