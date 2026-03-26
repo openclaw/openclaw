@@ -278,7 +278,7 @@ describe("lookupContextTokens", () => {
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
-    // When both "qwen" and "qwen-portal" exist as config keys (alias pattern),
+    // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
     // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
     mockDiscoveryDeps([]);
@@ -286,8 +286,8 @@ describe("lookupContextTokens", () => {
     const cfg = {
       models: {
         providers: {
-          "qwen-portal": { models: [{ id: "qwen-max", contextWindow: 32_000 }] },
-          qwen: { models: [{ id: "qwen-max", contextWindow: 128_000 }] },
+          "amazon-bedrock": { models: [{ id: "claude-alias-test", contextWindow: 32_000 }] },
+          bedrock: { models: [{ id: "claude-alias-test", contextWindow: 128_000 }] },
         },
       },
     };
@@ -295,21 +295,21 @@ describe("lookupContextTokens", () => {
     const { resolveContextTokensForModel } = await import("./context.js");
     await flushAsyncWarmup();
 
-    // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
-    const qwenResult = resolveContextTokensForModel({
+    // Exact key "bedrock" wins over the alias-normalized match "amazon-bedrock".
+    const bedrockResult = resolveContextTokensForModel({
       cfg: cfg as never,
-      provider: "qwen",
-      model: "qwen-max",
+      provider: "bedrock",
+      model: "claude-alias-test",
     });
-    expect(qwenResult).toBe(128_000);
+    expect(bedrockResult).toBe(128_000);
 
-    // Exact key "qwen-portal" wins (no alias lookup needed).
-    const portalResult = resolveContextTokensForModel({
+    // Exact key "amazon-bedrock" wins (no alias lookup needed).
+    const canonicalResult = resolveContextTokensForModel({
       cfg: cfg as never,
-      provider: "qwen-portal",
-      model: "qwen-max",
+      provider: "amazon-bedrock",
+      model: "claude-alias-test",
     });
-    expect(portalResult).toBe(32_000);
+    expect(canonicalResult).toBe(32_000);
   });
 
   it("resolveContextTokensForModel(model-only) does not apply config scan for inferred provider", async () => {
