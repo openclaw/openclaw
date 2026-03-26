@@ -4,6 +4,7 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+type EnqueueQueuedMessageMock = ReturnType<typeof vi.fn> & ((text: string) => number);
 
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
@@ -11,7 +12,7 @@ function createHarness(params?: {
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   setActivityStatus?: SetActivityStatusMock;
-  enqueueQueuedMessage?: ReturnType<typeof vi.fn>;
+  enqueueQueuedMessage?: EnqueueQueuedMessageMock;
   isConnected?: boolean;
   activeChatRunId?: string | null;
 }) {
@@ -23,7 +24,8 @@ function createHarness(params?: {
   const requestRender = vi.fn();
   const noteLocalRunId = vi.fn();
   const noteLocalBtwRunId = vi.fn();
-  const enqueueQueuedMessage = params?.enqueueQueuedMessage ?? vi.fn().mockReturnValue(1);
+  const enqueueQueuedMessage =
+    params?.enqueueQueuedMessage ?? (vi.fn().mockReturnValue(1) as EnqueueQueuedMessageMock);
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
