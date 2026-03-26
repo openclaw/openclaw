@@ -309,7 +309,9 @@ describe("isPermanentDeliveryError", () => {
   });
 
   it("detects 'invalid form body'", () => {
-    expect(isPermanentDeliveryError("Invalid Form Body: content must be 2000 characters or fewer")).toBe(true);
+    expect(
+      isPermanentDeliveryError("Invalid Form Body: content must be 2000 characters or fewer"),
+    ).toBe(true);
   });
 
   // HTTP status code detection

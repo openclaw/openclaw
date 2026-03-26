@@ -36,6 +36,7 @@ type QueuedDeliveryPayload = {
   forceDocument?: boolean;
   silent?: boolean;
   mirror?: OutboundMirror;
+  gatewayClientScopes?: readonly string[];
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
