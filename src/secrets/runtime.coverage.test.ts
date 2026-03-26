@@ -320,6 +320,9 @@ function applyConfigForOpenClawTarget(
       "webhook",
     );
   }
+  if (entry.id === "plugins.entries.baidu.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "baidu");
+  }
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");
   }

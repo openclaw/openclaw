@@ -212,7 +212,6 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
       changes,
     });
   }
-
   for (const providerId of LEGACY_WEB_SEARCH_PROVIDER_IDS) {
     if (providerId === LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID) {
       continue;

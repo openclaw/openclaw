@@ -1,0 +1,29 @@
+{
+  "id": "baidu",
+  "providerAuthEnvVars": {
+    "baidu": ["BAIDU_SEARCH_API_KEY"]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Baidu Search API Key",
+      "help": "Baidu Search API key (fallback: BAIDU_SEARCH_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "bce-..."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}
