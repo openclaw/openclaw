@@ -167,7 +167,7 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
         }
 
         string? rawUri = mode == ConnectionMode.Remote && settings.RemoteTransport == RemoteTransport.Ssh
-            ? $"ws://localhost:18789"
+            ? ResolveSshLocalUri(settings)
             : mode == ConnectionMode.Remote && !string.IsNullOrWhiteSpace(settings.RemoteUrl)
                 ? settings.RemoteUrl
                 : settings.GatewayEndpointUri;
@@ -178,6 +178,21 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
 
         var result = GatewayEndpoint.Create(normalized, "gateway");
         return result.IsError ? null : result.Value;
+    }
+
+    // The SSH tunnel is a transparent TCP forward, so TLS (for wss://) is end-to-end
+    // between the client and the remote gateway — the local tunnel port carries whatever
+    // protocol the remote expects. Preserve the scheme from settings.RemoteUrl so wss://
+    // remotes receive a TLS ClientHello through the tunnel rather than plaintext WS.
+    private static string ResolveSshLocalUri(AppSettings settings)
+    {
+        var raw = settings.RemoteUrl?.Trim();
+        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
+        {
+            var scheme = url.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+            return $"{scheme}://localhost:18789";
+        }
+        return "ws://localhost:18789";
     }
 
     private static int ComputeBackoffMs(int attempt)

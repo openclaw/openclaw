@@ -503,11 +503,14 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
 
     private static ConnectionMode ResolveEffectiveMode(AppSettings settings, Dictionary<string, object?> root)
     {
-        // Only Remote wins over openclaw.json — it reflects an intentional deep-link or UI switch.
-        // Local is set by onboarding heuristics and must not downgrade an operator-configured remote mode.
+        // Explicit Remote or Local in AppSettings are definitive — honour them before any
+        // heuristic (including the legacy RemoteUrl signal).
         if (settings.ConnectionMode == ConnectionMode.Remote)
             return ConnectionMode.Remote;
-        // Legacy: a saved remote URL implies remote mode.
+        if (settings.ConnectionMode == ConnectionMode.Local)
+            return ConnectionMode.Local;
+        // Only apply the legacy RemoteUrl heuristic when mode is Unconfigured — a stale
+        // RemoteUrl must not silently override an explicit Local selection.
         if (!string.IsNullOrWhiteSpace(settings.RemoteUrl))
             return ConnectionMode.Remote;
         // Config file is authoritative for local/remote when AppSettings is neutral.
