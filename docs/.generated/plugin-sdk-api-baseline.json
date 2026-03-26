@@ -6,33 +6,6 @@
       "entrypoint": "index",
       "exports": [
         {
-          "declaration": "export function buildFalImageGenerationProvider(): ImageGenerationProvider;",
-          "exportName": "buildFalImageGenerationProvider",
-          "kind": "function",
-          "source": {
-            "line": 190,
-            "path": "extensions/fal/image-generation-provider.ts"
-          }
-        },
-        {
-          "declaration": "export function buildGoogleImageGenerationProvider(): ImageGenerationProvider;",
-          "exportName": "buildGoogleImageGenerationProvider",
-          "kind": "function",
-          "source": {
-            "line": 98,
-            "path": "extensions/google/image-generation-provider.ts"
-          }
-        },
-        {
-          "declaration": "export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider;",
-          "exportName": "buildOpenAIImageGenerationProvider",
-          "kind": "function",
-          "source": {
-            "line": 22,
-            "path": "extensions/openai/image-generation-provider.ts"
-          }
-        },
-        {
           "declaration": "export function delegateCompactionToRuntime(params: { sessionId: string; sessionKey?: string | undefined; sessionFile: string; tokenBudget?: number | undefined; force?: boolean | undefined; currentTokenCount?: number | undefined; compactionTarget?: \"budget\" | ... 1 more ... | undefined; customInstructions?: string | undefined; runtimeContext?: ContextEngineRuntimeContext | undefined; }): Promise<...>;",
           "exportName": "delegateCompactionToRuntime",
           "kind": "function",
@@ -923,7 +896,7 @@
           "exportName": "createMessageToolButtonsSchema",
           "kind": "function",
           "source": {
-            "line": 11,
+            "line": 12,
             "path": "src/plugin-sdk/channel-actions.ts"
           }
         },
@@ -932,7 +905,7 @@
           "exportName": "createMessageToolCardSchema",
           "kind": "function",
           "source": {
-            "line": 29,
+            "line": 30,
             "path": "src/plugin-sdk/channel-actions.ts"
           }
         },
@@ -955,12 +928,30 @@
           }
         },
         {
+          "declaration": "export function optionalStringEnum<T extends readonly string[]>(values: T, options?: StringEnumOptions<T>): TOptional<TUnsafe<T[number]>>;",
+          "exportName": "optionalStringEnum",
+          "kind": "function",
+          "source": {
+            "line": 31,
+            "path": "src/agents/schema/typebox.ts"
+          }
+        },
+        {
           "declaration": "export function resolveReactionMessageId(params: { args: Record<string, unknown>; toolContext?: ReactionToolContext | undefined; }): string | number | undefined;",
           "exportName": "resolveReactionMessageId",
           "kind": "function",
           "source": {
             "line": 7,
             "path": "src/channels/plugins/actions/reaction-message-id.ts"
+          }
+        },
+        {
+          "declaration": "export function stringEnum<T extends readonly string[]>(values: T, options?: StringEnumOptions<T>): TUnsafe<T[number]>;",
+          "exportName": "stringEnum",
+          "kind": "function",
+          "source": {
+            "line": 15,
+            "path": "src/agents/schema/typebox.ts"
           }
         }
       ],

@@ -544,6 +544,36 @@ describe("plugin-sdk subpath exports", () => {
       "buildOptionalSecretInputSchema",
       "normalizeSecretInputString",
     ]);
+    expectSourceMentions("provider-http", [
+      "assertOkOrThrowHttpError",
+      "normalizeBaseUrl",
+      "postJsonRequest",
+      "postTranscriptionRequest",
+      "requireTranscriptionText",
+    ]);
+    expectSourceOmits("speech", [
+      "buildElevenLabsSpeechProvider",
+      "buildMicrosoftSpeechProvider",
+      "buildOpenAISpeechProvider",
+      "edgeTTS",
+      "elevenLabsTTS",
+      "inferEdgeExtension",
+      "openaiTTS",
+      "OPENAI_TTS_MODELS",
+      "OPENAI_TTS_VOICES",
+    ]);
+    expectSourceOmits("media-understanding", [
+      "deepgramMediaUnderstandingProvider",
+      "groqMediaUnderstandingProvider",
+      "assertOkOrThrowHttpError",
+      "postJsonRequest",
+      "postTranscriptionRequest",
+    ]);
+    expectSourceOmits("image-generation", [
+      "buildFalImageGenerationProvider",
+      "buildGoogleImageGenerationProvider",
+      "buildOpenAIImageGenerationProvider",
+    ]);
     expectSourceOmits("config-runtime", [
       "hasConfiguredSecretInput",
       "normalizeResolvedSecretInputString",

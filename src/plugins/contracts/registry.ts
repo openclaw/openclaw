@@ -39,6 +39,7 @@ import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
 import zaiPlugin from "../../../extensions/zai/index.js";
 import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import { resolvePluginProviders } from "../provider-auth-choice.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
@@ -85,21 +86,6 @@ const bundledWebSearchPlugins: Array<RegistrablePlugin & { credentialValue: unkn
     ...plugin,
     credentialValue,
   }));
-const bundledSpeechPlugins: RegistrablePlugin[] = [elevenLabsPlugin, microsoftPlugin, openAIPlugin];
-
-const bundledMediaUnderstandingPlugins: RegistrablePlugin[] = [
-  anthropicPlugin,
-  deepgramPlugin,
-  googlePlugin,
-  groqPlugin,
-  minimaxPlugin,
-  mistralPlugin,
-  moonshotPlugin,
-  openAIPlugin,
-  zaiPlugin,
-];
-
-const bundledImageGenerationPlugins: RegistrablePlugin[] = [falPlugin, googlePlugin, openAIPlugin];
 
 function captureRegistrations(plugin: RegistrablePlugin) {
   const captured = createCapturedPluginRegistration();
@@ -389,6 +375,43 @@ const bundledProviderPlugins = dedupePlugins([
   xiaomiPlugin,
   zaiPlugin,
 ]);
+
+const bundledRegistrablePluginsById = new Map(
+  dedupePlugins([
+    ...bundledProviderPlugins,
+    elevenLabsPlugin,
+    microsoftPlugin,
+    deepgramPlugin,
+    groqPlugin,
+    ...bundledWebSearchPlugins,
+  ]).map((plugin) => [plugin.id, plugin]),
+);
+
+function resolveBundledCapabilityPluginIds(
+  capability: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders",
+): string[] {
+  return loadPluginManifestRegistry({})
+    .plugins.filter(
+      (plugin) => plugin.origin === "bundled" && (plugin[capability]?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveBundledCapabilityPlugins(
+  capability: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders",
+): RegistrablePlugin[] {
+  return resolveBundledCapabilityPluginIds(capability).flatMap((pluginId) => {
+    const plugin = bundledRegistrablePluginsById.get(pluginId);
+    return plugin ? [plugin] : [];
+  });
+}
+
+const bundledSpeechPlugins = resolveBundledCapabilityPlugins("speechProviders");
+const bundledMediaUnderstandingPlugins = resolveBundledCapabilityPlugins(
+  "mediaUnderstandingProviders",
+);
+const bundledImageGenerationPlugins = resolveBundledCapabilityPlugins("imageGenerationProviders");
 
 const bundledPluginRegistrationList = dedupePlugins([
   ...bundledSpeechPlugins,
