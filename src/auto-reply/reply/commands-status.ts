@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -28,6 +31,8 @@ import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
 export async function buildStatusReply(params: {
   cfg: OpenClawConfig;
@@ -212,5 +217,46 @@ export async function buildStatusReply(params: {
     includeTranscriptUsage: false,
   });
 
-  return { text: statusText };
+  // Best-effort: append render-monitor incidents summary to /status.
+  try {
+    const root = resolveStateDir(process.env, () => os.homedir());
+    const statePath = path.join(root, "plugins", "render-monitor", "state.json");
+    const raw = await fs.readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      incidentsById?: Record<
+        string,
+        {
+          incidentType?: string;
+          serviceId?: string;
+          lastDetectedAtMs?: number;
+          acknowledgedAtMs?: number | null;
+          summary?: string;
+        }
+      >;
+    };
+    const incidents = Object.values(parsed.incidentsById ?? {});
+    const active = incidents
+      .filter((i) => i.acknowledgedAtMs == null)
+      .toSorted((a, b) => (b.lastDetectedAtMs ?? 0) - (a.lastDetectedAtMs ?? 0));
+    const top = active.slice(0, 3);
+    const section =
+      top.length > 0
+        ? [
+            "",
+            "🚨 Render Monitor (active incidents):",
+            ...top.map((i) => {
+              const when = typeof i.lastDetectedAtMs === "number" ? `(${formatTimeAgo(i.lastDetectedAtMs)} ago)` : "";
+              const type = i.incidentType ?? "unknown";
+              const service = i.serviceId ?? "unknown";
+              return `- ${type} · ${service} ${when}`.trimEnd();
+            }),
+          ].join("\n")
+        : [
+            "",
+            "✅ Render Monitor: no active incidents.",
+          ].join("\n");
+    return { text: statusText + section };
+  } catch {
+    return { text: statusText };
+  }
 }

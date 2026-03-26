@@ -358,6 +358,18 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 }
 ```
 
+### Render Monitor (optional)
+
+Adds periodic polling of your Render services and sends incident alerts to Telegram.
+
+- Set `RENDER_API_KEY` and `TELEGRAM_CHAT_ID`.
+- Configure `RENDER_MONITOR_SERVICES_JSON` as an array of service targets (each can include a `git` block with `repoPath` + `githubRepo`).
+- Uses Telegram native commands from authorized senders:
+  - `/ack <incidentId>` suppresses further alerts for that incident
+  - `/logs <incidentId>` shows cached incident context and the latest investigation proposal
+  - `/investigate <incidentId>` runs an OpenClaw subagent to propose a remediation (no git push)
+  - `/apply <incidentId>` applies and pushes the proposed fix, then verifies CI + Render health
+
 ### [Slack](https://docs.openclaw.ai/channels/slack)
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `channels.slack.botToken` + `channels.slack.appToken`).

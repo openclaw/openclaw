@@ -519,6 +519,12 @@ importers:
 
   extensions/qianfan: {}
 
+  extensions/render-monitor:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+
   extensions/sglang: {}
 
   extensions/signal: {}

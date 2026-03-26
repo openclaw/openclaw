@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/render-monitor",
+  "version": "2026.3.14",
+  "private": true,
+  "description": "OpenClaw Render monitoring plugin (Telegram alerts + investigate/apply remediation)",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
