@@ -751,13 +751,19 @@ describe("monitorDiscordProvider", () => {
 
     clientFetchUserMock.mockRejectedValueOnce(new Error("network timeout"));
 
+    // Make the gateway lifecycle hang so the provider doesn't resolve immediately.
+    monitorLifecycleMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+
     // Should NOT throw — the code now falls back to applicationId as botUserId
     // instead of aborting. We race with a short timeout to confirm no immediate rejection.
     const result = await Promise.race([
       monitorDiscordProvider({
         config: baseConfig(),
         runtime,
-      }).then(() => "resolved", (err: Error) => `rejected: ${err.message}`),
+      }).then(
+        () => "resolved",
+        (err: Error) => `rejected: ${err.message}`,
+      ),
       new Promise<string>((r) => setTimeout(() => r("still-running"), 200)),
     ]);
     expect(result).toBe("still-running");
