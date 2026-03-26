@@ -234,6 +234,25 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   };
 }
 
+function stripToolResultMediaDetails(result: unknown): unknown {
+  if (!result || typeof result !== "object") {
+    return result;
+  }
+  const record = result as Record<string, unknown>;
+  const details = record.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return result;
+  }
+  const detailsRecord = { ...(details as Record<string, unknown>) };
+  if ("media" in detailsRecord) {
+    delete detailsRecord.media;
+  }
+  if ("path" in detailsRecord) {
+    delete detailsRecord.path;
+  }
+  return { ...record, details: detailsRecord };
+}
+
 async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
@@ -292,7 +311,7 @@ async function emitToolResultOutput(params: {
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText && ctx.params.onToolResult) {
-      const outputResult = isToolError ? undefined : result;
+      const outputResult = isToolError ? stripToolResultMediaDetails(result) : result;
       ctx.emitToolOutput(toolName, meta, outputText, outputResult);
       // In verbose/full mode, emitToolOutput handles media delivery.
       // Do not also queue pending media to avoid duplicate sends.

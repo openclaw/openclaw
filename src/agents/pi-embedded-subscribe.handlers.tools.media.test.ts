@@ -297,9 +297,42 @@ describe("handleToolExecutionEnd media emission", () => {
     const [toolName, _meta, outputText, outputResult] = emitToolOutput.mock.calls[0] ?? [];
     expect(toolName).toBe("tts");
     expect(outputText).toBe("Generated audio reply.");
-    expect(outputResult).toBeUndefined();
+    expect(
+      (outputResult as { details?: { media?: unknown } } | undefined)?.details?.media,
+    ).toBeUndefined();
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  it("preserves MCP provenance when suppressing error media", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: vi.fn() });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "browser",
+      toolCallId: "tc-1",
+      isError: true,
+      result: {
+        content: [{ type: "text", text: "MEDIA:/tmp/secret.png" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/secret.png",
+          },
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      },
+    });
+
+    const emitToolOutput = ctx.emitToolOutput as ReturnType<typeof vi.fn>;
+    const outputResult = emitToolOutput.mock.calls[0]?.[3] as
+      | { details?: { mcpServer?: string; mcpTool?: string; media?: unknown; path?: unknown } }
+      | undefined;
+    expect(outputResult?.details?.mcpServer).toBe("probe");
+    expect(outputResult?.details?.mcpTool).toBe("browser");
+    expect(outputResult?.details?.media).toBeUndefined();
+    expect(outputResult?.details?.path).toBeUndefined();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
   it("does NOT emit when tool result has no media", async () => {
