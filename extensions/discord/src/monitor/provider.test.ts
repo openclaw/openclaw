@@ -37,6 +37,7 @@ const {
 } = getProviderMonitorTestMocks();
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
+let providerTesting: typeof import("./provider.js").__testing;
 
 function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
   return {
@@ -129,7 +130,7 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    ({ monitorDiscordProvider } = await import("./provider.js"));
+    ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
   });
 
   beforeEach(() => {
@@ -354,9 +355,26 @@ describe("monitorDiscordProvider", () => {
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {
     const emitter = new EventEmitter();
+    const drained: Array<{ message: string; type: string }> = [];
     clientGetPluginMock.mockImplementation((name: string) =>
       name === "gateway" ? { emitter, disconnect: vi.fn() } : undefined,
     );
+    monitorLifecycleMock.mockImplementationOnce(async (params) => {
+      (
+        params as {
+          gatewaySupervisor?: {
+            drainPending: (
+              handler: (event: { message: string; type: string }) => "continue" | "stop",
+            ) => "continue" | "stop";
+          };
+          threadBindings: { stop: () => void };
+        }
+      ).gatewaySupervisor?.drainPending((event) => {
+        drained.push(event);
+        return "continue";
+      });
+      params.threadBindings.stop();
+    });
     clientFetchUserMock.mockImplementationOnce(async () => {
       emitter.emit("error", new Error("Fatal Gateway error: 4014"));
       return { id: "bot-1" };
@@ -368,11 +386,9 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    const lifecycleArgs = monitorLifecycleMock.mock.calls[0]?.[0] as {
-      pendingGatewayErrors?: unknown[];
-    };
-    expect(lifecycleArgs.pendingGatewayErrors).toHaveLength(1);
-    expect(String(lifecycleArgs.pendingGatewayErrors?.[0])).toContain("4014");
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.type).toBe("disallowed-intents");
+    expect(drained[0]?.message).toContain("4014");
   });
 
   it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
@@ -535,6 +551,57 @@ describe("monitorDiscordProvider", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("native command deploy skipped"),
     );
+  });
+
+  it("formats rejected Discord deploy entries with command details", () => {
+    const details = providerTesting.formatDiscordDeployErrorDetails({
+      status: 400,
+      discordCode: 50035,
+      rawBody: {
+        code: 50035,
+        message: "Invalid Form Body",
+        errors: {
+          63: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          65: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          66: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+          67: {
+            description: {
+              _errors: [{ code: "BASE_TYPE_MAX_LENGTH", message: "Must be 100 or fewer." }],
+            },
+          },
+        },
+      },
+      deployRequestBody: Array.from({ length: 68 }, (_entry, index) => ({
+        name: `command-${index}`,
+        description: `description-${index}`,
+      })),
+    });
+
+    expect(details).toContain("status=400");
+    expect(details).toContain("code=50035");
+    expect(details).toContain("rejected=");
+    expect(details).toContain(
+      '#63 fields=description name=command-63 description="description-63"',
+    );
+    expect(details).toContain(
+      '#65 fields=description name=command-65 description="description-65"',
+    );
+    expect(details).toContain(
+      '#66 fields=description name=command-66 description="description-66"',
+    );
+    expect(details).not.toContain("command-67");
   });
 
   it("configures Carbon native deploy by default", async () => {
