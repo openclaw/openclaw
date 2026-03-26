@@ -548,12 +548,17 @@ export function createOpenClawCodingTools(options?: {
   ];
   // Add Python Orchestrator after all other tools are built
   // It needs access to the full filtered tool list for the bridge server
-  tools.push(
-    createPythonOrchestratorTool({
-      availableTools: tools,
-      maxToolCalls: options?.config?.tools?.pythonOrchestrator?.maxToolCalls ?? 100,
-    }) as unknown as AnyAgentTool,
-  );
+  const pythonOrchestratorConfig = options?.config?.tools?.pythonOrchestrator;
+  if (pythonOrchestratorConfig?.enabled !== false) {
+    tools.push(
+      createPythonOrchestratorTool({
+        availableTools: tools,
+        maxToolCalls: pythonOrchestratorConfig?.maxToolCalls ?? 100,
+        timeoutSeconds: pythonOrchestratorConfig?.timeoutSeconds ?? 180,
+        allowedTools: pythonOrchestratorConfig?.allowedTools,
+      }) as unknown as AnyAgentTool,
+    );
+  }
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {

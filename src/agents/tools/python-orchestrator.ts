@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { tmpdir, cpus, totalmem } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -15,7 +15,7 @@ const PythonOrchestratorSchema = Type.Object({
   }),
   timeout_seconds: Type.Optional(
     Type.Number({
-      default: 60,
+      default: 180,
       description: "Maximum execution time in seconds",
     }),
   ),
@@ -26,7 +26,136 @@ interface ToolCallRecord {
   params: unknown;
   result: unknown;
   durationMs: number;
+  cached?: boolean;
 }
+
+// LRU Cache for tool call results
+interface CacheEntry {
+  result: unknown;
+  timestamp: number;
+}
+
+class ToolCallCache {
+  private cache = new Map<string, CacheEntry>();
+  private maxEntries: number;
+  private ttlMs: number;
+
+  constructor(maxEntries = 200, ttlSeconds = 300) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlSeconds * 1000;
+  }
+
+  private makeKey(tool: string, params: unknown): string {
+    return `${tool}:${JSON.stringify(params)}`;
+  }
+
+  get(tool: string, params: unknown): { result: unknown; cached: boolean } | null {
+    const key = this.makeKey(tool, params);
+    const entry = this.cache.get(key);
+
+    if (!entry) {
+      return null;
+    }
+
+    // Evict expired entries
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    // LRU: delete and re-insert to move to end (most recently used)
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+    return { result: entry.result, cached: true };
+  }
+
+  set(tool: string, params: unknown, result: unknown): void {
+    const key = this.makeKey(tool, params);
+
+    // Update existing entry if present (moves to end)
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    }
+
+    // Evict if at capacity (LRU - remove oldest/least recently used)
+    if (this.cache.size >= this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+      }
+    }
+
+    this.cache.set(key, { result, timestamp: Date.now() });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  get stats() {
+    return {
+      size: this.cache.size,
+      maxEntries: this.maxEntries,
+      ttlSeconds: this.ttlMs / 1000,
+    };
+  }
+}
+
+// RAM-aware concurrency limiter
+class ConcurrencyLimiter {
+  private running = 0;
+  private readonly maxConcurrent: number;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.running >= this.maxConcurrent) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.running++;
+    try {
+      return await fn();
+    } finally {
+      this.running--;
+      const next = this.queue.shift();
+      if (next) {
+        next();
+      }
+    }
+  }
+
+  get status() {
+    return {
+      running: this.running,
+      maxConcurrent: this.maxConcurrent,
+      queued: this.queue.length,
+    };
+  }
+}
+
+// Calculate max concurrent Python processes based on available RAM
+// With 64GB total, keep ~16GB for system + agent overhead (~48GB for Python processes)
+// Each Python orchestrator typically uses 50-200MB baseline, assume 256MB max per process
+function calculateMaxConcurrent(): number {
+  const total = totalmem();
+  const cpuCount = cpus().length;
+  const reservedBytes = 16 * 1024 * 1024 * 1024; // 16GB reserved
+
+  const availableBytes = total > reservedBytes ? total - reservedBytes : total * 0.5;
+  const bytesPerProcess = 256 * 1024 * 1024; // 256MB per process
+
+  const maxByRam = Math.floor(availableBytes / bytesPerProcess);
+  const maxByCpu = cpuCount * 4; // 4x CPU count for I/O bound work
+
+  // Take the minimum of RAM-based and CPU-based limits, but ensure at least 2
+  return Math.max(2, Math.min(maxByRam, maxByCpu));
+}
+
+// Global concurrency limiter instance
+const concurrencyLimiter = new ConcurrencyLimiter(calculateMaxConcurrent());
 
 async function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -40,9 +169,14 @@ async function readBody(req: IncomingMessage): Promise<string> {
 async function startToolBridgeServer(
   availableTools: AnyAgentTool[],
   maxCalls: number = 100,
+  allowedTools?: string[],
+  sessionCache?: ToolCallCache,
 ): Promise<{ port: number; toolCalls: ToolCallRecord[]; stop: () => void }> {
   const toolCalls: ToolCallRecord[] = [];
   let callCount = 0;
+
+  // Build allowed tools set if specified
+  const allowedToolsSet = allowedTools ? new Set(allowedTools) : null;
 
   const server = createServer(async (req, res) => {
     // Enable CORS for local requests
@@ -69,7 +203,31 @@ async function startToolBridgeServer(
           return;
         }
 
-        // Limit check
+        // Security: Check if tool is in allowed list
+        if (allowedToolsSet && !allowedToolsSet.has(toolName)) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Tool '${toolName}' not allowed by configuration` }));
+          return;
+        }
+
+        // Check cache first (before incrementing callCount)
+        if (sessionCache) {
+          const cached = sessionCache.get(toolName, params);
+          if (cached) {
+            toolCalls.push({
+              tool: toolName,
+              params,
+              result: cached.result,
+              durationMs: 0,
+              cached: true,
+            });
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(cached.result));
+            return;
+          }
+        }
+
+        // Limit check (only for non-cached calls)
         callCount++;
         if (callCount > maxCalls) {
           res.writeHead(429, { "Content-Type": "application/json" });
@@ -81,6 +239,11 @@ async function startToolBridgeServer(
         const start = Date.now();
         const result = await toolDef.execute(`bridge-${callCount}`, params);
         const durationMs = Date.now() - start;
+
+        // Cache the result
+        if (sessionCache) {
+          sessionCache.set(toolName, params, result);
+        }
 
         toolCalls.push({ tool: toolName, params, result, durationMs });
 
@@ -149,64 +312,64 @@ async def call_tool(name: str, params: dict) -> dict:
 
     try:
         with urllib.request.urlopen(req, timeout=300) as response:
-            result = json.loads(response.read().decode())
-            if "error" in result:
-                raise ToolError(result["error"])
-            return result
+            return json.loads(response.read().decode())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
         try:
             error_data = json.loads(error_body)
-            raise ToolError(error_data.get("error", f"HTTP {e.code}"))
+            raise ToolError(f"Tool '{name}' failed: {error_data.get('error', error_body)}")
         except json.JSONDecodeError:
-            raise ToolError(f"HTTP {e.code}: {error_body}")
+            raise ToolError(f"Tool '{name}' failed: {error_body}")
     except Exception as e:
-        raise ToolError(f"Failed to call tool: {e}")
+        raise ToolError(f"Tool '{name}' failed: {str(e)}")
 
-# Convenience wrappers for common tools
-from typing import Optional, List, Dict, Any
-
-async def exec_bash(command: str, cwd: Optional[str] = None, timeout: int = 60) -> Dict[str, Any]:
-    """Execute a bash command"""
-    params: Dict[str, Any] = { "command": command, "timeout": timeout }
-    if cwd:
-        params["cwd"] = cwd
-    return await call_tool("exec", params)
-
-async def read_file(path: str, limit: Optional[int] = None) -> str:
-    """Read a file"""
-    params: Dict[str, Any] = { "path": path }
+# Create convenience functions for common tools
+async def read_file(path: str, limit: int = None, offset: int = None) -> str:
+    """Read a file's contents"""
+    params = {"path": path}
     if limit is not None:
         params["limit"] = limit
+    if offset is not None:
+        params["offset"] = offset
     result = await call_tool("read", params)
     return result.get("content", "")
 
 async def write_file(path: str, content: str) -> None:
-    """Write to a file"""
-    await call_tool("write", { "path": path, "content": content })
+    """Write content to a file"""
+    await call_tool("write", {"path": path, "content": content})
 
-async def list_files(path: str = ".", recursive: bool = False) -> List[str]:
-    """List files in a directory using exec"""
-    cmd = f"ls -1 {'-R' if recursive else ''} {path}"
-    result = await exec_bash(cmd)
-    if result.get("success"):
-        stdout = result.get("stdout", "")
-        return [f for f in stdout.strip().split("\\n") if f]
-    return []
+async def list_files(path: str = ".", recursive: bool = False) -> list:
+    """List files in a directory"""
+    result = await call_tool("list", {"path": path, "recursive": recursive})
+    return result.get("files", [])
 
-async def search_files(pattern: str, path: str = ".") -> List[str]:
-    """Search for files matching a pattern using find"""
-    cmd = f"find {path} -name '{pattern}' -type f"
-    result = await exec_bash(cmd)
-    if result.get("success"):
-        stdout = result.get("stdout", "")
-        return [f for f in stdout.strip().split("\\n") if f]
-    return []
+async def search_files(query: str, path: str = ".") -> list:
+    """Search for files by name"""
+    result = await call_tool("search", {"query": query, "path": path})
+    return result.get("files", [])
 
-async def glob_files(pattern: str, path: str = ".") -> List[str]:
+async def exec_bash(command: str, cwd: str = None) -> dict:
+    """Execute a bash command"""
+    params = {"command": command}
+    if cwd:
+        params["cwd"] = cwd
+    return await call_tool("bash", params)
+
+async def exec_process(command: str, args: list = None, cwd: str = None, timeout: int = None) -> dict:
+    """Execute a process with arguments"""
+    params = {"command": command}
+    if args:
+        params["args"] = args
+    if cwd:
+        params["cwd"] = cwd
+    if timeout:
+        params["timeout"] = timeout
+    return await call_tool("process", params)
+
+# Glob helper
+async def glob_files(pattern: str, path: str = ".") -> list:
     """Find files matching a glob pattern"""
-    # Use bash glob expansion
-    cmd = f"ls -1 {path}/{pattern} 2>/dev/null || echo ''"
+    cmd = f"find {path} -name '{pattern}' -type f 2>/dev/null"
     result = await exec_bash(cmd)
     if result.get("success"):
         stdout = result.get("stdout", "")
@@ -236,6 +399,8 @@ if __name__ == "__main__":
 export function createPythonOrchestratorTool(opts?: {
   availableTools?: AnyAgentTool[];
   maxToolCalls?: number;
+  timeoutSeconds?: number;
+  allowedTools?: string[];
 }): AnyAgentTool {
   return {
     label: "Python Orchestrator",
@@ -257,31 +422,17 @@ Available async functions:
 - await read_file(path, limit=None) -> str
 - await write_file(path, content) -> None
 - await list_files(path=".", recursive=False) -> List[str]
-- await search_files(pattern, path=".") -> List[str]
+- await search_files(query, path=".") -> List[str]
+- await exec_bash(command, cwd=None) -> dict
 - await glob_files(pattern, path=".") -> List[str]
-- await exec_bash(command, cwd=None, timeout=60) -> dict
-- await call_tool(name, params) -> dict
+- await call_tool(name, params) -> dict (for any OpenClaw tool)
 
-**Example - processing multiple files efficiently:**
-\`\`\`python
-# List all files
-files = await list_files("/path/to/dir", recursive=True)
-
-# Filter and process in batch
-results = []
-for f in files:
-    if f.endswith(".log"):
-        content = await read_file(f, limit=50)
-        results.append(f"{f}: {len(content)} chars")
-
-print("\\n".join(results))
-print(f"\\nTotal files processed: {len(results)}")
-\`\`\``,
+All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execution for safety.`,
     parameters: PythonOrchestratorSchema,
     execute: async (_toolCallId, args): Promise<AgentToolResult<unknown>> => {
       const params = args as Record<string, unknown>;
       const userCode = readStringParam(params, "code", { required: true });
-      const timeoutSeconds = (params.timeout_seconds as number) ?? 60;
+      const timeoutSeconds = (params.timeout_seconds as number) ?? opts?.timeoutSeconds ?? 180;
 
       if (!userCode) {
         return {
@@ -290,103 +441,118 @@ print(f"\\nTotal files processed: {len(results)}")
         };
       }
 
-      const tempDir = await mkdtemp(join(tmpdir(), "openclaw-ptc-"));
-      let bridgeServer: { stop: () => void; port: number; toolCalls: ToolCallRecord[] } | null =
-        null;
+      // Use concurrency limiter to control resource usage
+      return concurrencyLimiter.run(async () => {
+        const tempDir = await mkdtemp(join(tmpdir(), "openclaw-ptc-"));
+        let bridgeServer: { stop: () => void; port: number; toolCalls: ToolCallRecord[] } | null =
+          null;
 
-      try {
-        // Start the tool bridge server
-        bridgeServer = await startToolBridgeServer(
-          opts?.availableTools ?? [],
-          opts?.maxToolCalls ?? 100,
-        );
+        // Create session-scoped cache for tool calls
+        const sessionCache = new ToolCallCache(200, 300);
 
-        // Create the Python script
-        const scriptPath = await createPythonScript(tempDir, userCode, bridgeServer.port);
+        try {
+          // Start the tool bridge server
+          bridgeServer = await startToolBridgeServer(
+            opts?.availableTools ?? [],
+            opts?.maxToolCalls ?? 100,
+            opts?.allowedTools,
+            sessionCache,
+          );
 
-        // Execute Python
-        const { stdout, stderr, exitCode } = await new Promise<{
-          stdout: string;
-          stderr: string;
-          exitCode: number;
-        }>((resolve, reject) => {
-          const pythonProcess = spawn("python3", [scriptPath], {
-            cwd: tempDir,
-            env: {
-              ...process.env,
-              OPENCLAW_BRIDGE_PORT: String(bridgeServer!.port),
-              PYTHONUNBUFFERED: "1",
-            },
-            timeout: timeoutSeconds * 1000,
+          // Create the Python script
+          const scriptPath = await createPythonScript(tempDir, userCode, bridgeServer.port);
+
+          // Execute Python
+          const { stdout, stderr, exitCode } = await new Promise<{
+            stdout: string;
+            stderr: string;
+            exitCode: number;
+          }>((resolve, reject) => {
+            const pythonProcess = spawn("python3", [scriptPath], {
+              cwd: tempDir,
+              env: {
+                ...process.env,
+                OPENCLAW_BRIDGE_PORT: String(bridgeServer!.port),
+                PYTHONUNBUFFERED: "1",
+              },
+              timeout: timeoutSeconds * 1000,
+            });
+
+            let output = "";
+            let errorOutput = "";
+
+            pythonProcess.stdout?.on("data", (data) => {
+              output += data.toString();
+            });
+
+            pythonProcess.stderr?.on("data", (data) => {
+              errorOutput += data.toString();
+            });
+
+            // Timeout handler - stored to clear on normal completion
+            const timeoutHandle = setTimeout(() => {
+              pythonProcess.kill("SIGTERM");
+              reject(new Error(`Timeout after ${timeoutSeconds}s`));
+            }, timeoutSeconds * 1000);
+
+            pythonProcess.on("close", (procExitCode) => {
+              clearTimeout(timeoutHandle);
+              resolve({ stdout: output, stderr: errorOutput, exitCode: procExitCode ?? 0 });
+            });
+
+            pythonProcess.on("error", (error) => {
+              clearTimeout(timeoutHandle);
+              reject(error);
+            });
           });
 
-          let output = "";
-          let errorOutput = "";
+          // Build result
+          const details: Record<string, unknown> = {
+            exit_code: exitCode,
+            tool_calls_count: bridgeServer.toolCalls.length,
+            tool_calls: bridgeServer.toolCalls.map((tc) => ({
+              tool: tc.tool,
+              duration_ms: tc.durationMs,
+              cached: tc.cached ?? false,
+            })),
+            cache_stats: sessionCache.stats,
+          };
 
-          pythonProcess.stdout?.on("data", (data) => {
-            output += data.toString();
-          });
+          if (stderr) {
+            details.stderr = stderr;
+          }
 
-          pythonProcess.stderr?.on("data", (data) => {
-            errorOutput += data.toString();
-          });
+          if (exitCode !== 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Execution failed (exit ${exitCode}):\\n${stderr || stdout}`,
+                },
+              ],
+              details,
+            };
+          }
 
-          pythonProcess.on("close", (procExitCode) => {
-            resolve({ stdout: output, stderr: errorOutput, exitCode: procExitCode ?? 0 });
-          });
-
-          pythonProcess.on("error", (error) => {
-            reject(error);
-          });
-
-          // Timeout handler
-          setTimeout(() => {
-            pythonProcess.kill("SIGTERM");
-            reject(new Error(`Timeout after ${timeoutSeconds}s`));
-          }, timeoutSeconds * 1000);
-        });
-
-        // Build result
-        const details: Record<string, unknown> = {
-          exit_code: exitCode,
-          tool_calls_count: bridgeServer.toolCalls.length,
-          tool_calls: bridgeServer.toolCalls.map((tc) => ({
-            tool: tc.tool,
-            duration_ms: tc.durationMs,
-          })),
-        };
-
-        if (stderr) {
-          details.stderr = stderr;
-        }
-
-        if (exitCode !== 0) {
           return {
-            content: [
-              { type: "text", text: `Execution failed (exit ${exitCode}):\n${stderr || stdout}` },
-            ],
+            content: [{ type: "text", text: stdout || "(no output)" }],
             details,
           };
+        } catch (error) {
+          return {
+            content: [{ type: "text", text: `Error: ${String(error)}` }],
+            details: { error: String(error) },
+          };
+        } finally {
+          // Cleanup
+          bridgeServer?.stop();
+          try {
+            await rm(tempDir, { recursive: true, force: true });
+          } catch {
+            // Ignore cleanup errors
+          }
         }
-
-        return {
-          content: [{ type: "text", text: stdout || "(no output)" }],
-          details,
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error: ${String(error)}` }],
-          details: { error: String(error) },
-        };
-      } finally {
-        // Cleanup
-        bridgeServer?.stop();
-        try {
-          await rm(tempDir, { recursive: true, force: true });
-        } catch {
-          // Ignore cleanup errors
-        }
-      }
+      });
     },
   };
 }
