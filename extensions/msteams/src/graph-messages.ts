@@ -399,21 +399,31 @@ export async function searchMessagesMSTeams(
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
 
-  const top = Math.min(
-    Math.max(Math.floor(params.limit ?? SEARCH_DEFAULT_LIMIT), 1),
-    SEARCH_MAX_LIMIT,
-  );
+  const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;
+  const top = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
+    : SEARCH_DEFAULT_LIMIT;
 
-  const qp = new URLSearchParams();
-  qp.set("$search", `"${params.query}"`);
-  qp.set("$top", String(top));
+  // Strip double quotes from the query to prevent OData $search injection
+  const sanitizedQuery = params.query.replace(/"/g, "");
 
+  // Build query string manually (not URLSearchParams) to preserve literal $
+  // in OData parameter names, consistent with other Graph calls in this module.
+  const parts = [`$search=${encodeURIComponent(`"${sanitizedQuery}"`)}`];
+  parts.push(`$top=${top}`);
   if (params.from) {
-    qp.set("$filter", `from/user/displayName eq '${escapeOData(params.from)}'`);
+    parts.push(
+      `$filter=${encodeURIComponent(`from/user/displayName eq '${escapeOData(params.from)}'`)}`,
+    );
   }
 
-  const path = `${basePath}/messages?${qp.toString()}`;
-  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({ token, path });
+  const path = `${basePath}/messages?${parts.join("&")}`;
+  // ConsistencyLevel: eventual is required by Graph API for $search queries
+  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({
+    token,
+    path,
+    headers: { ConsistencyLevel: "eventual" },
+  });
 
   const messages = (res.value ?? []).map((msg) => ({
     id: msg.id ?? "",

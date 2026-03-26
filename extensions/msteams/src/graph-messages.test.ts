@@ -582,8 +582,10 @@ describe("searchMessagesMSTeams", () => {
     ]);
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
     expect(calledPath).toContain(`/chats/${encodeURIComponent(CHAT_ID)}/messages?`);
-    expect(calledPath).toContain("%24search=%22meeting+notes%22");
-    expect(calledPath).toContain("%24top=25");
+    expect(calledPath).toContain("$search=");
+    expect(calledPath).toContain("$top=25");
+    const decoded = decodeURIComponent(calledPath);
+    expect(decoded).toContain('$search="meeting notes"');
   });
 
   it("searches channel messages", async () => {
@@ -620,7 +622,7 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    expect(calledPath).toContain("%24top=10");
+    expect(calledPath).toContain("$top=10");
   });
 
   it("clamps limit to max 50", async () => {
@@ -634,7 +636,7 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    expect(calledPath).toContain("%24top=50");
+    expect(calledPath).toContain("$top=50");
   });
 
   it("clamps limit to min 1", async () => {
@@ -648,7 +650,7 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    expect(calledPath).toContain("%24top=1");
+    expect(calledPath).toContain("$top=1");
   });
 
   it("applies from filter", async () => {
@@ -662,8 +664,9 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    expect(calledPath).toContain("%24filter=");
-    expect(calledPath).toContain("Alice");
+    expect(calledPath).toContain("$filter=");
+    const decoded = decodeURIComponent(calledPath);
+    expect(decoded).toContain("from/user/displayName eq 'Alice'");
   });
 
   it("escapes single quotes in from filter", async () => {
@@ -677,9 +680,40 @@ describe("searchMessagesMSTeams", () => {
     });
 
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    // URLSearchParams encodes the escaped OData value; decode to verify escaping
     const decoded = decodeURIComponent(calledPath);
     expect(decoded).toContain("O''Brien");
+  });
+
+  it("strips double quotes from query to prevent injection", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: 'say "hello" world',
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    const decoded = decodeURIComponent(calledPath);
+    expect(decoded).toContain('$search="say hello world"');
+    // No unbalanced/injected quotes
+    expect(decoded).not.toContain('""');
+  });
+
+  it("passes ConsistencyLevel: eventual header", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "test",
+    });
+
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: { ConsistencyLevel: "eventual" },
+      }),
+    );
   });
 
   it("returns empty array when no messages match", async () => {
