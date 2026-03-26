@@ -482,6 +482,7 @@ export function createAgentEventHandler({
       isControlUiVisible: boolean;
     }
   >();
+  const sessionActiveRuns = new Map<string, string>();
 
   const clearPendingLifecycleError = (runId: string) => {
     const pending = pendingLifecycleErrors.get(runId);
@@ -490,6 +491,33 @@ export function createAgentEventHandler({
     }
     clearTimeout(pending.timer);
     pendingLifecycleErrors.delete(runId);
+  };
+
+  const clearSessionActiveRunIfMatch = (sessionKey: string | undefined, runId: string) => {
+    if (!sessionKey) {
+      return;
+    }
+    if (sessionActiveRuns.get(sessionKey) === runId) {
+      sessionActiveRuns.delete(sessionKey);
+    }
+  };
+
+  const cleanupLifecycleTerminalState = (params: {
+    runId: string;
+    clientRunId: string;
+    sessionKey?: string;
+  }) => {
+    chatRunState.abortedRuns.delete(params.clientRunId);
+    chatRunState.abortedRuns.delete(params.runId);
+    chatRunState.buffers.delete(params.clientRunId);
+    chatRunState.deltaSentAt.delete(params.clientRunId);
+    chatRunState.deltaLastBroadcastLen.delete(params.clientRunId);
+    chatRunState.registry.remove(params.runId, params.clientRunId, params.sessionKey);
+    toolEventRecipients.markFinal(params.runId);
+    clearAgentRunContext(params.runId);
+    agentRunSeq.delete(params.runId);
+    agentRunSeq.delete(params.clientRunId);
+    clearSessionActiveRunIfMatch(params.sessionKey, params.runId);
   };
 
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
@@ -700,45 +728,31 @@ export function createAgentEventHandler({
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
     const stopReason = typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
 
-    if (isControlUiVisible && sessionKey) {
-      if (!isAborted) {
-        const linked = chatRunState.registry.peek(evt.runId);
-        if (linked) {
-          chatRunState.registry.shift(evt.runId);
-          emitChatFinal(
-            linked.sessionKey,
-            linked.clientRunId,
-            evt.runId,
-            evt.seq,
-            phase === "error" ? "error" : "done",
-            evt.data?.error,
-            stopReason,
-          );
-        } else {
-          emitChatFinal(
-            sessionKey,
-            clientRunId,
-            evt.runId,
-            evt.seq,
-            phase === "error" ? "error" : "done",
-            evt.data?.error,
-            stopReason,
-          );
-        }
+    if (isControlUiVisible && sessionKey && !isAborted) {
+      const linked = chatRunState.registry.peek(evt.runId);
+      if (linked) {
+        chatRunState.registry.shift(evt.runId);
+        emitChatFinal(
+          linked.sessionKey,
+          linked.clientRunId,
+          evt.runId,
+          evt.seq,
+          phase === "error" ? "error" : "done",
+          evt.data?.error,
+          stopReason,
+        );
       } else {
-        chatRunState.abortedRuns.delete(clientRunId);
-        chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
-        chatRunState.deltaLastBroadcastLen.delete(clientRunId);
-        chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
+        emitChatFinal(
+          sessionKey,
+          clientRunId,
+          evt.runId,
+          evt.seq,
+          phase === "error" ? "error" : "done",
+          evt.data?.error,
+          stopReason,
+        );
       }
     }
-
-    toolEventRecipients.markFinal(evt.runId);
-    clearAgentRunContext(evt.runId);
-    agentRunSeq.delete(evt.runId);
-    agentRunSeq.delete(clientRunId);
 
     if (sessionKey) {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
@@ -758,6 +772,12 @@ export function createAgentEventHandler({
         );
       }
     }
+
+    cleanupLifecycleTerminalState({
+      runId: evt.runId,
+      clientRunId,
+      sessionKey,
+    });
   };
 
   const schedulePendingLifecycleError = (params: {
@@ -769,10 +789,22 @@ export function createAgentEventHandler({
     clearPendingLifecycleError(params.evt.runId);
     const timer = setTimeout(() => {
       const pending = pendingLifecycleErrors.get(params.evt.runId);
-      if (!pending) {
+      if (!pending || pending.timer !== timer) {
         return;
       }
       pendingLifecycleErrors.delete(params.evt.runId);
+      if (
+        pending.sessionKey &&
+        sessionActiveRuns.has(pending.sessionKey) &&
+        sessionActiveRuns.get(pending.sessionKey) !== pending.evt.runId
+      ) {
+        cleanupLifecycleTerminalState({
+          runId: pending.evt.runId,
+          clientRunId: pending.clientRunId,
+          sessionKey: pending.sessionKey,
+        });
+        return;
+      }
       finalizeLifecycleTerminal({
         evt: pending.evt,
         phase: "error",
@@ -819,14 +851,17 @@ export function createAgentEventHandler({
     const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
-    if (lifecyclePhase !== "error") {
-      clearPendingLifecycleError(evt.runId);
-    }
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
+    if (sessionKey && lifecyclePhase === "start") {
+      sessionActiveRuns.set(sessionKey, evt.runId);
+    }
+    if (lifecyclePhase !== "error" && evt.seq > last) {
+      clearPendingLifecycleError(evt.runId);
+    }
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     // Build tool payload: strip result/partialResult unless verbose=full

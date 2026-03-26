@@ -279,6 +279,131 @@ describe("agent event handler", () => {
     expect(errorPayloads()).toHaveLength(1);
   });
 
+  it("does not let a stale deferred-error timer finalize a rescheduled error early", async () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-race",
+    });
+    chatRunState.registry.add("run-race", {
+      sessionKey: "session-race",
+      clientRunId: "client-race",
+    });
+
+    emitLifecycleError(handler, "run-race", "boom-1", 1);
+    await vi.advanceTimersByTimeAsync(14_999);
+    emitLifecycleError(handler, "run-race", "boom-2", 2);
+
+    const errorPayloads = () =>
+      chatBroadcastCalls(broadcast).filter(([, payload]) => {
+        const typed = payload as { state?: string };
+        return typed.state === "error";
+      });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(errorPayloads()).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(errorPayloads()).toHaveLength(1);
+  });
+
+  it("does not clear deferred lifecycle errors on older out-of-order events", async () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-out-of-order",
+    });
+    chatRunState.registry.add("run-out-of-order", {
+      sessionKey: "session-out-of-order",
+      clientRunId: "client-out-of-order",
+    });
+
+    emitLifecycleError(handler, "run-out-of-order", "boom", 2);
+    handler({
+      runId: "run-out-of-order",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "stale recovery" },
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const errorPayloads = chatBroadcastCalls(broadcast).filter(([, payload]) => {
+      const typed = payload as { state?: string };
+      return typed.state === "error";
+    });
+    expect(errorPayloads).toHaveLength(1);
+  });
+
+  it("ignores deferred lifecycle errors after the session moves to a newer run", async () => {
+    vi.useFakeTimers();
+    const {
+      agentRunSeq,
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      handler,
+      sessionEventSubscribers,
+    } = createHarness({
+      resolveSessionKeyForRun: (runId) =>
+        runId === "run-old" || runId === "run-new" ? "session-shared" : undefined,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("run-old", {
+      sessionKey: "session-shared",
+      clientRunId: "client-old",
+    });
+
+    handler({
+      runId: "run-old",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitLifecycleError(handler, "run-old", "temporary fallback", 2);
+    handler({
+      runId: "run-new",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 2_000,
+      data: { phase: "start", startedAt: 2_000 },
+    });
+
+    broadcastToConnIds.mockClear();
+    persistGatewaySessionLifecycleEventMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const oldRunErrorPayloads = chatBroadcastCalls(broadcast).filter(([, payload]) => {
+      const typed = payload as { state?: string; runId?: string };
+      return typed.state === "error" && typed.runId === "client-old";
+    });
+    expect(oldRunErrorPayloads).toHaveLength(0);
+
+    const sessionErrorCalls = broadcastToConnIds.mock.calls.filter(([event, payload]) => {
+      const typed = payload as { phase?: string; runId?: string };
+      return event === "sessions.changed" && typed.phase === "error" && typed.runId === "run-old";
+    });
+    expect(sessionErrorCalls).toHaveLength(0);
+
+    const persistedErrorCalls = persistGatewaySessionLifecycleEventMock.mock.calls.filter(
+      ([params]) => {
+        const typed = params as {
+          sessionKey?: string;
+          event?: { runId?: string; data?: { phase?: string } };
+        };
+        return (
+          typed.sessionKey === "session-shared" &&
+          typed.event?.runId === "run-old" &&
+          typed.event?.data?.phase === "error"
+        );
+      },
+    );
+    expect(persistedErrorCalls).toHaveLength(0);
+    expect(chatRunState.registry.peek("run-old")).toBeUndefined();
+    expect(agentRunSeq.has("run-old")).toBe(false);
+    expect(agentRunSeq.has("client-old")).toBe(false);
+  });
+
   it("strips inline directives from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
