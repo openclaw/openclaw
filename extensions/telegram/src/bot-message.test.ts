@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramBotDeps } from "./bot-deps.js";
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
+const upsertChannelPairingRequest = vi.hoisted(() =>
+  vi.fn(async () => ({ code: "PAIRCODE", created: true })),
+);
 
 vi.mock("./bot-message-context.js", () => ({
   buildTelegramMessageContext,
@@ -11,13 +15,20 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
-import { createTelegramMessageProcessor } from "./bot-message.js";
+let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 
 describe("telegram bot message processor", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
+    upsertChannelPairingRequest.mockClear();
+    ({ createTelegramMessageProcessor } = await import("./bot-message.js"));
   });
+
+  const telegramDepsForTest = {
+    upsertChannelPairingRequest,
+  } as unknown as TelegramBotDeps;
 
   const baseDeps = {
     bot: {},
@@ -38,6 +49,7 @@ describe("telegram bot message processor", () => {
     replyToMode: "auto",
     streamMode: "partial",
     textLimit: 4096,
+    telegramDeps: telegramDepsForTest,
     opts: {},
   } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
 

@@ -19,8 +19,11 @@ import {
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle, ChannelType } from "discord-api-types/v10";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
@@ -31,14 +34,14 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import {
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+  dispatchPluginInteractiveHandler,
+  type PluginInteractiveDiscordHandlerContext,
+} from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
@@ -56,6 +59,7 @@ import {
   type DiscordComponentEntry,
   type DiscordModalEntry,
 } from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
@@ -117,10 +121,34 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
   let responded = false;
-  const respond = {
+  let acknowledged = false;
+  const updateOriginalMessage = async (input: {
+    text?: string;
+    components?: TopLevelComponents[];
+  }) => {
+    const payload = {
+      ...(input.text !== undefined ? { content: input.text } : {}),
+      ...(input.components !== undefined ? { components: input.components } : {}),
+    };
+    if (acknowledged) {
+      // Carbon edits @original on reply() after acknowledge(), which preserves
+      // plugin edit/clear flows without consuming a second interaction callback.
+      await params.interaction.reply(payload);
+      return;
+    }
+    if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
+      throw new Error("Discord interaction cannot update the source message");
+    }
+    await params.interaction.update(payload);
+  };
+  const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
     acknowledge: async () => {
-      responded = true;
+      if (responded) {
+        return;
+      }
       await params.interaction.acknowledge();
+      acknowledged = true;
+      responded = true;
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
@@ -136,67 +164,59 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
         ephemeral,
       });
     },
-    editMessage: async ({
-      text,
-      components,
-    }: {
-      text?: string;
-      components?: TopLevelComponents[];
-    }) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot update the source message");
-      }
+    editMessage: async (input) => {
+      const { text, components } = input;
       responded = true;
-      await params.interaction.update({
-        ...(text !== undefined ? { content: text } : {}),
-        ...(components !== undefined ? { components } : {}),
+      await updateOriginalMessage({
+        text,
+        components: components as TopLevelComponents[] | undefined,
       });
     },
     clearComponents: async (input?: { text?: string }) => {
-      if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
-        throw new Error("Discord interaction cannot clear components on the source message");
-      }
       responded = true;
-      await params.interaction.update({
-        ...(input?.text !== undefined ? { content: input.text } : {}),
+      await updateOriginalMessage({
+        text: input?.text,
         components: [],
       });
     },
   };
   const pluginBindingApproval = parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // Interaction may have expired; try to continue anyway.
+    }
     const resolved = await resolvePluginConversationBindingApproval({
       approvalId: pluginBindingApproval.approvalId,
       decision: pluginBindingApproval.decision,
       senderId: params.interactionCtx.userId,
     });
-    let cleared = false;
-    try {
-      await respond.clearComponents();
-      cleared = true;
-    } catch {
+    const approvalMessageId = params.messageId?.trim() || params.interaction.message?.id?.trim();
+    if (approvalMessageId) {
       try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may already be acknowledged; continue with best-effort follow-up.
+        await editDiscordComponentMessage(
+          normalizedConversationId,
+          approvalMessageId,
+          {
+            text: buildPluginBindingResolvedText(resolved),
+          },
+          {
+            accountId: params.ctx.accountId,
+          },
+        );
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to clear prompt: ${String(err)}`);
       }
     }
-    try {
-      await respond.followUp({
-        text: buildPluginBindingResolvedText(resolved),
-        ephemeral: true,
-      });
-    } catch (err) {
-      logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
-      if (!cleared) {
-        try {
-          await respond.reply({
-            text: buildPluginBindingResolvedText(resolved),
-            ephemeral: true,
-          });
-        } catch {
-          // Interaction may no longer accept a direct reply.
-        }
+    if (resolved.status !== "approved") {
+      try {
+        await respond.followUp({
+          text: buildPluginBindingResolvedText(resolved),
+          ephemeral: true,
+        });
+      } catch (err) {
+        logError(`discord plugin binding approval: failed to follow up: ${String(err)}`);
       }
     }
     return "handled";
@@ -222,6 +242,13 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       },
     },
     respond,
+    onMatched: async () => {
+      try {
+        await respond.acknowledge();
+      } catch {
+        // Interaction may have expired before the plugin handler ran.
+      }
+    },
   });
   if (!dispatched.matched) {
     return "unmatched";
@@ -400,7 +427,7 @@ async function dispatchDiscordComponentEvent(params: {
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: ctx.cfg,
     agentId,
     channel: "discord",
@@ -428,7 +455,7 @@ async function dispatchDiscordComponentEvent(params: {
     cfg: ctx.cfg,
     replyOptions: { onModelSelected },
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
       deliver: async (payload) => {
         const replyToId = replyReference.use();
@@ -511,6 +538,7 @@ async function handleDiscordComponentEvent(params: {
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
+    defer: false,
   });
   if (!interactionCtx) {
     return;
@@ -616,11 +644,16 @@ async function handleDiscordComponentEvent(params: {
       return;
     }
   }
-  const eventText = formatDiscordComponentEventText({
-    kind: consumed.kind === "select" ? "select" : "button",
-    label: consumed.label,
-    values,
-  });
+  // Preserve explicit callback payloads for button fallbacks so Discord
+  // behaves like Telegram when buttons carry synthetic command text. Select
+  // fallbacks still need their chosen values in the synthesized event text.
+  const eventText =
+    (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
+    formatDiscordComponentEventText({
+      kind: consumed.kind === "select" ? "select" : "button",
+      label: consumed.label,
+      values,
+    });
 
   try {
     await params.interaction.reply({ content: "✓", ...replyOpts });
@@ -811,6 +844,7 @@ export class AgentComponentButton extends Button {
       interaction,
       label: "agent button",
       componentLabel: "button",
+      defer: false,
     });
     if (!interactionCtx) {
       return;
@@ -900,6 +934,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       interaction,
       label: "agent select",
       componentLabel: "select menu",
+      defer: false,
     });
     if (!interactionCtx) {
       return;

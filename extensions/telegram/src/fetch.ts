@@ -8,7 +8,10 @@ import {
 } from "openclaw/plugin-sdk/infra-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
-import { resolveTelegramApiHostname } from "./api-base.js";
+import {
+  resolveTelegramApiBase as resolveEnvTelegramApiBase,
+  resolveTelegramApiHostname,
+} from "./api-base.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
   resolveTelegramDnsResultOrderDecision,
@@ -254,11 +257,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
-    const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
-    const proxyOptions = proxyTlsOptions
+    const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
+    const proxyOptions = requestTlsOptions
       ? ({
           uri: policy.proxyUrl,
-          proxyTls: proxyTlsOptions,
+          requestTls: requestTlsOptions,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
       : policy.proxyUrl;
     try {
@@ -590,4 +593,19 @@ export function resolveTelegramFetch(
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
+}
+
+/**
+ * Resolve the Telegram Bot API base URL.
+ *
+ * Priority:
+ * 1. Explicit `apiRoot` config value (e.g. `channels.telegram.accounts.default.apiRoot`)
+ * 2. `TELEGRAM_BOT_API_HOST` environment variable
+ * 3. Default `https://api.telegram.org`
+ */
+export function resolveTelegramApiBase(apiRoot?: string): string {
+  const trimmed = apiRoot?.trim();
+  if (trimmed) return trimmed.replace(/\/+$/, "");
+  // Fall back to TELEGRAM_BOT_API_HOST env var
+  return resolveEnvTelegramApiBase();
 }

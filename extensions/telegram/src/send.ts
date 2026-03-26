@@ -4,7 +4,8 @@ import type {
   ReactionType,
   ReactionTypeEmoji,
 } from "@grammyjs/types";
-import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import * as grammy from "grammy";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
@@ -21,12 +22,11 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { redactSensitiveText } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramApiBase } from "./api-base.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { resolveTelegramFetch } from "./fetch.js";
+import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -44,7 +44,16 @@ import {
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramApi = Bot["api"];
-type TelegramApiOverride = Partial<TelegramApi>;
+export type TelegramApiOverride = Partial<TelegramApi>;
+const InputFileCtor: typeof grammy.InputFile =
+  typeof grammy.InputFile === "function"
+    ? grammy.InputFile
+    : (class InputFileFallback {
+        constructor(
+          public readonly buffer: Buffer,
+          public readonly fileName?: string,
+        ) {}
+      } as unknown as typeof grammy.InputFile);
 
 type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
@@ -193,9 +202,10 @@ function buildTelegramClientOptionsCacheKey(params: {
   const autoSelectFamilyKey =
     typeof autoSelectFamily === "boolean" ? String(autoSelectFamily) : "default";
   const dnsResultOrderKey = params.account.config.network?.dnsResultOrder ?? "default";
+  const apiRootKey = params.account.config.apiRoot?.trim() ?? "";
   const timeoutSecondsKey =
     typeof params.timeoutSeconds === "number" ? String(params.timeoutSeconds) : "default";
-  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${timeoutSecondsKey}`;
+  return `${params.account.accountId}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}::${timeoutSecondsKey}`;
 }
 
 function setCachedTelegramClientOptions(
@@ -237,7 +247,8 @@ function resolveTelegramClientOptions(
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });
-  const apiRoot = resolveTelegramApiBase();
+  // Prefer config-level apiRoot; fall back to TELEGRAM_BOT_API_HOST env var.
+  const apiRoot = resolveTelegramApiBase(account.config.apiRoot?.trim() || undefined);
   const useCustomApiRoot = apiRoot !== "https://api.telegram.org";
   const clientOptions =
     fetchImpl || timeoutSeconds || useCustomApiRoot
@@ -395,9 +406,11 @@ function buildTelegramThreadReplyParams(params: {
       threadParams.reply_parameters = {
         message_id: replyToMessageId,
         quote: params.quoteText.trim(),
+        allow_sending_without_reply: true,
       };
     } else {
       threadParams.reply_to_message_id = replyToMessageId;
+      threadParams.allow_sending_without_reply = true;
     }
   }
   return threadParams;
@@ -780,7 +793,7 @@ export async function sendMessageTelegram(
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
-    const file = new InputFile(media.buffer, fileName);
+    const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
     let followUpText: string | undefined;
 

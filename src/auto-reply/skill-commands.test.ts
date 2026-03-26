@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Avoid importing the full chat command registry for reserved-name calculation.
 vi.mock("./commands-registry.js", () => ({
@@ -71,12 +71,76 @@ let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCo
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
 let skillCommandsTesting: typeof import("./skill-commands.js").__testing;
 
-beforeAll(async () => {
+async function loadFreshSkillCommandsModuleForTest() {
+  vi.resetModules();
+  vi.doMock("./commands-registry.js", () => ({
+    listChatCommands: () => [],
+  }));
+  vi.doMock("../infra/skills-remote.js", () => ({
+    getRemoteSkillEligibility: () => ({}),
+  }));
+  vi.doMock("../agents/skills.js", () => {
+    function resolveUniqueName(base: string, used: Set<string>): string {
+      let name = base;
+      let suffix = 2;
+      while (used.has(name.toLowerCase())) {
+        name = `${base}_${suffix}`;
+        suffix += 1;
+      }
+      used.add(name.toLowerCase());
+      return name;
+    }
+
+    function resolveWorkspaceSkills(
+      workspaceDir: string,
+    ): Array<{ skillName: string; description: string }> {
+      const dirName = path.basename(workspaceDir);
+      if (dirName === "main") {
+        return [{ skillName: "demo-skill", description: "Demo skill" }];
+      }
+      if (dirName === "research") {
+        return [
+          { skillName: "demo-skill", description: "Demo skill 2" },
+          { skillName: "extra-skill", description: "Extra skill" },
+        ];
+      }
+      return [];
+    }
+
+    return {
+      buildWorkspaceSkillCommandSpecs: (
+        workspaceDir: string,
+        opts?: { reservedNames?: Set<string>; skillFilter?: string[] },
+      ) => {
+        const used = new Set<string>();
+        for (const reserved of opts?.reservedNames ?? []) {
+          used.add(String(reserved).toLowerCase());
+        }
+        const filter = opts?.skillFilter;
+        const entries =
+          filter === undefined
+            ? resolveWorkspaceSkills(workspaceDir)
+            : resolveWorkspaceSkills(workspaceDir).filter((entry) =>
+                filter.some((skillName) => skillName === entry.skillName),
+              );
+
+        return entries.map((entry) => {
+          const base = entry.skillName.replace(/-/g, "_");
+          const name = resolveUniqueName(base, used);
+          return { name, skillName: entry.skillName, description: entry.description };
+        });
+      },
+    };
+  });
   ({
     listSkillCommandsForAgents,
     resolveSkillCommandInvocation,
     __testing: skillCommandsTesting,
   } = await import("./skill-commands.js"));
+}
+
+beforeEach(async () => {
+  await loadFreshSkillCommandsModuleForTest();
 });
 
 describe("resolveSkillCommandInvocation", () => {
