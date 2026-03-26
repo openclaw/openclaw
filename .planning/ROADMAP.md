@@ -32,7 +32,7 @@
   5. The existing `parseFrontmatterBlock()` in `src/markdown/frontmatter.ts` remains unmodified
 **Plans:** 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — Zod schemas, TypeScript types, and error types
+- [x] 01-01-PLAN.md — Zod schemas, TypeScript types, and error types
 - [ ] 01-02-PLAN.md — Typed frontmatter parser (YAML extraction + Zod validation)
 - [ ] 01-03-PLAN.md — Queue.md section parser and public API barrel
 **Estimated complexity**: M
