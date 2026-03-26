@@ -22,6 +22,7 @@ import type {
 } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -108,6 +109,10 @@ export type OpenClawPluginToolContext = {
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  browser?: {
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  };
   messageChannel?: string;
   agentAccountId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
@@ -1369,7 +1374,11 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
-  registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
+  registerGatewayMethod: (
+    method: string,
+    handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
+  ) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {

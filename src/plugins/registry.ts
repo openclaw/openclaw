@@ -2,6 +2,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import type { OperatorScope } from "../gateway/method-scopes.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
@@ -220,6 +221,7 @@ export type PluginRegistry = {
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
@@ -378,6 +380,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
+    opts?: { scope?: OperatorScope },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -393,6 +396,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     registry.gatewayHandlers[trimmed] = handler;
+    if (opts?.scope) {
+      registry.gatewayMethodScopes ??= {};
+      registry.gatewayMethodScopes[trimmed] = opts.scope;
+    }
     record.gatewayMethods.push(trimmed);
   };
 
@@ -984,7 +991,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           : () => {},
       registerGatewayMethod:
         registrationMode === "full"
-          ? (method, handler) => registerGatewayMethod(record, method, handler)
+          ? (method, handler, opts) => registerGatewayMethod(record, method, handler, opts)
           : () => {},
       registerCli:
         registrationMode === "full"
