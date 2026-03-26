@@ -30,6 +30,14 @@ type MemoryIndexModule = typeof import("./index.js");
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
+async function ensureProviderInitialized(manager: MemoryIndexManager): Promise<void> {
+  await (
+    manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
+    }
+  ).ensureProviderInitialized();
+}
+
 function createProvider(id: string): EmbeddingProvider {
   return {
     id,
@@ -111,7 +119,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
+    await ensureProviderInitialized(manager);
 
     const internal = manager as unknown as {
       ensureProviderInitialized: () => Promise<void>;
@@ -149,7 +157,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
+    await ensureProviderInitialized(manager);
     const internal = manager as unknown as {
       ensureProviderInitialized: () => Promise<void>;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
@@ -193,7 +201,7 @@ describe("memory manager mistral provider wiring", () => {
       throw new Error(`manager missing: ${result.error ?? "no error provided"}`);
     }
     manager = result.manager as unknown as MemoryIndexManager;
-    await manager.probeEmbeddingAvailability();
+    await ensureProviderInitialized(manager);
     const internal = manager as unknown as {
       ensureProviderInitialized: () => Promise<void>;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
