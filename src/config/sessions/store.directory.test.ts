@@ -5,9 +5,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../../infra/json-files.js";
 import { loadConfig } from "../config.js";
+import { detectSessionStoreMigrationState } from "./store-directory.js";
 import {
   clearSessionStoreCacheForTest,
-  detectSessionStoreMigrationState,
   decodeDirectorySessionStoreEntryFileName,
   encodeDirectorySessionStoreKey,
   loadSessionStore,

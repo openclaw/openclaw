@@ -217,7 +217,7 @@ openclaw models auth paste-token --provider anthropic
 openclaw onboard --auth-choice setup-token
 ```
 
-### Config snippet (setup-token)
+### Setup-token config snippet
 
 ```json5
 {

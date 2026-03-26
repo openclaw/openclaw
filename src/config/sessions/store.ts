@@ -58,7 +58,6 @@ import {
 const log = createSubsystemLogger("sessions/store");
 
 export {
-  detectSessionStoreMigrationState,
   decodeDirectorySessionStoreEntryFileName,
   encodeDirectorySessionStoreKey,
   resolveSessionStoreDir,
