@@ -62,26 +62,33 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
 
 /**
  * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout to prevent indefinite hangs
- * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ * but injects a default request timeout and proxy agent to prevent indefinite hangs
+ * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks)
+ * and ensure HTTP API requests respect proxy environment variables.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: Lark.HttpInstance =
     feishuClientSdk.defaultHttpInstance as unknown as Lark.HttpInstance;
 
-  function injectTimeout<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
-    return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
+  const proxyAgent = getWsProxyAgent();
+
+  function injectDefaults<D>(opts?: Lark.HttpRequestOptions<D>): Lark.HttpRequestOptions<D> {
+    return {
+      timeout: defaultTimeoutMs,
+      ...(proxyAgent ? { httpAgent: proxyAgent, httpsAgent: proxyAgent } : {}),
+      ...opts,
+    } as Lark.HttpRequestOptions<D>;
   }
 
   return {
-    request: (opts) => base.request(injectTimeout(opts)),
-    get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
-    put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
-    patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
-    delete: (url, opts) => base.delete(url, injectTimeout(opts)),
-    head: (url, opts) => base.head(url, injectTimeout(opts)),
-    options: (url, opts) => base.options(url, injectTimeout(opts)),
+    request: (opts) => base.request(injectDefaults(opts)),
+    get: (url, opts) => base.get(url, injectDefaults(opts)),
+    post: (url, data, opts) => base.post(url, data, injectDefaults(opts)),
+    put: (url, data, opts) => base.put(url, data, injectDefaults(opts)),
+    patch: (url, data, opts) => base.patch(url, data, injectDefaults(opts)),
+    delete: (url, opts) => base.delete(url, injectDefaults(opts)),
+    head: (url, opts) => base.head(url, injectDefaults(opts)),
+    options: (url, opts) => base.options(url, injectDefaults(opts)),
   };
 }
 
