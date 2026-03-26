@@ -127,7 +127,6 @@ describe("plugin-sdk subpath exports", () => {
       "lobster",
       "pairing-access",
       "provider-model-definitions",
-      "qwen-portal-auth",
       "reply-prefix",
       "secret-input-runtime",
       "secret-input-schema",

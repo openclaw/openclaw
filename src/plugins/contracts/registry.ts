@@ -27,7 +27,6 @@ import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
@@ -378,7 +377,6 @@ const bundledProviderPlugins = dedupePlugins([
   opencodeGoPlugin,
   openrouterPlugin,
   qianfanPlugin,
-  qwenPortalAuthPlugin,
   sglangPlugin,
   syntheticPlugin,
   togetherPlugin,

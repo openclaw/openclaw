@@ -108,7 +108,6 @@ Current bundled examples:
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
   `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -347,22 +346,6 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
   },
 }
 ```
-
-### Qwen OAuth (free tier)
-
-Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-The bundled provider plugin is enabled by default, so just log in:
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-Model refs:
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-See [/providers/qwen](/providers/qwen) for setup details and notes.
 
 ### Volcano Engine (Doubao)
 

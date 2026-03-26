@@ -34,10 +34,6 @@ describe("bundled provider auth env vars", () => {
       "PERPLEXITY_API_KEY",
       "OPENROUTER_API_KEY",
     ]);
-    expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES["qwen-portal"]).toEqual([
-      "QWEN_OAUTH_TOKEN",
-      "QWEN_PORTAL_API_KEY",
-    ]);
     expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES.tavily).toEqual(["TAVILY_API_KEY"]);
     expect(BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES["minimax-portal"]).toEqual([
       "MINIMAX_OAUTH_TOKEN",

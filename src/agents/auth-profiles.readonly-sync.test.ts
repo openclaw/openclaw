@@ -7,9 +7,9 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const mocks = vi.hoisted(() => ({
   syncExternalCliCredentials: vi.fn((store: AuthProfileStore) => {
-    store.profiles["qwen-portal:default"] = {
+    store.profiles["minimax-portal:default"] = {
       type: "oauth",
-      provider: "qwen-portal",
+      provider: "minimax-portal",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
@@ -61,13 +61,13 @@ describe("auth profiles read-only external CLI sync", () => {
         expect.any(Object),
         expect.objectContaining({ log: false }),
       );
-      expect(loaded.profiles["qwen-portal:default"]).toMatchObject({
+      expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
         type: "oauth",
-        provider: "qwen-portal",
+        provider: "minimax-portal",
       });
 
       const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
-      expect(persisted.profiles["qwen-portal:default"]).toBeUndefined();
+      expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
       expect(persisted.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",

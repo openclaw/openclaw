@@ -328,7 +328,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "qwen-portal" ||
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
