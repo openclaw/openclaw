@@ -45,7 +45,7 @@ describe("injectAutoRouterPlugin", () => {
       const payload: Record<string, unknown> = {};
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
-      return Promise.resolve({ type: "text", text: "" }) as ReturnType<StreamFn>;
+      return {} as ReturnType<StreamFn>;
     };
   }
 
@@ -70,7 +70,7 @@ describe("injectAutoRouterPlugin", () => {
       const payload: Record<string, unknown> = { plugins: [{ id: "existing" }] };
       options?.onPayload?.(payload, _model);
       payloads.push(payload);
-      return Promise.resolve({ type: "text", text: "" }) as ReturnType<StreamFn>;
+      return {} as ReturnType<StreamFn>;
     };
     const wrapped = injectAutoRouterPlugin(base, ["anthropic/*"]);
     void wrapped({} as never, {} as never, {});
