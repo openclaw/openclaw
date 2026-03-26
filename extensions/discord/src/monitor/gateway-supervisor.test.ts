@@ -85,4 +85,25 @@ describe("createDiscordGatewaySupervisor", () => {
     expect(() => supervisor.dispose()).not.toThrow();
     expect(() => supervisor.dispose()).not.toThrow();
   });
+
+  it("keeps suppressing late gateway errors after dispose", () => {
+    const emitter = new EventEmitter();
+    const runtime = { error: vi.fn() };
+    const supervisor = createDiscordGatewaySupervisor({
+      client: {
+        getPlugin: vi.fn(() => ({ emitter })),
+      } as never,
+      isDisallowedIntentsError: () => false,
+      runtime: runtime as never,
+    });
+
+    supervisor.dispose();
+
+    expect(() =>
+      emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
+    ).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    );
+  });
 });
