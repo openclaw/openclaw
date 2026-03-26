@@ -23,7 +23,7 @@ import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 
 function signFeishuPayload(params: {
   encryptKey: string;
-  payload: Record<string, unknown>;
+  rawBody: string;
   timestamp?: string;
   nonce?: string;
 }): Record<string, string> {
@@ -31,7 +31,7 @@ function signFeishuPayload(params: {
   const nonce = params.nonce ?? "nonce-test";
   const signature = crypto
     .createHash("sha256")
-    .update(timestamp + nonce + params.encryptKey + JSON.stringify(params.payload))
+    .update(timestamp + nonce + params.encryptKey + params.rawBody)
     .digest("hex");
   return {
     "content-type": "application/json",
@@ -51,10 +51,11 @@ function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknow
 }
 
 async function postSignedPayload(url: string, payload: Record<string, unknown>) {
+  const rawBody = JSON.stringify(payload);
   return await fetch(url, {
     method: "POST",
-    headers: signFeishuPayload({ encryptKey: "encrypt_key", payload }),
-    body: JSON.stringify(payload),
+    headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody }),
+    body: rawBody,
   });
 }
 
@@ -76,12 +77,13 @@ describe("Feishu webhook signed-request e2e", () => {
       monitorFeishuProvider,
       async (url) => {
         const payload = { type: "url_verification", challenge: "challenge-token" };
+        const rawBody = JSON.stringify(payload);
         const response = await fetch(url, {
           method: "POST",
           headers: {
-            ...signFeishuPayload({ encryptKey: "wrong_key", payload }),
+            ...signFeishuPayload({ encryptKey: "wrong_key", rawBody }),
           },
-          body: JSON.stringify(payload),
+          body: rawBody,
         });
 
         expect(response.status).toBe(401);
@@ -127,7 +129,10 @@ describe("Feishu webhook signed-request e2e", () => {
       monitorFeishuProvider,
       async (url) => {
         const payload = { type: "url_verification", challenge: "challenge-token" };
-        const headers = signFeishuPayload({ encryptKey: "encrypt_key", payload });
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+        });
         headers["x-lark-signature"] = headers["x-lark-signature"].slice(0, 12);
 
         const response = await fetch(url, {
@@ -142,7 +147,7 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
-  it("returns 400 for invalid json before invoking the sdk", async () => {
+  it("returns 401 for unsigned invalid json before parsing", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
     await withRunningWebhookMonitor(
@@ -158,6 +163,31 @@ describe("Feishu webhook signed-request e2e", () => {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: "{not-json",
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
+  });
+
+  it("returns 400 for signed invalid json after signature validation", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "signed-invalid-json",
+        path: "/hook-e2e-signed-invalid-json",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const rawBody = "{not-json";
+        const response = await fetch(url, {
+          method: "POST",
+          headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody }),
+          body: rawBody,
         });
 
         expect(response.status).toBe(400);
