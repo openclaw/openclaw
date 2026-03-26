@@ -939,6 +939,7 @@
                   "install/fly",
                   "install/gcp",
                   "install/hetzner",
+                  "install/linode",
                   "install/kubernetes",
                   "vps",
                   "install/macos-vm",
