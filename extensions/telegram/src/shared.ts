@@ -1,9 +1,11 @@
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   buildChannelConfigSchema,
   getChatChannelMeta,
@@ -56,6 +58,39 @@ export function formatDuplicateTelegramTokenReason(params: {
   );
 }
 
+/**
+ * Returns true when the runtime token resolver (`resolveTelegramToken`) would
+ * block channel-level fallthrough for the given accountId.  This mirrors the
+ * guard in `token.ts` so that status-check functions (`isConfigured`,
+ * `unconfiguredReason`, `describeAccount`) stay consistent with the gateway
+ * runtime behaviour.
+ *
+ * The guard fires when:
+ *   1. The accountId is not the default account, AND
+ *   2. The config has an explicit `accounts` section with entries, AND
+ *   3. The accountId is not found in that `accounts` section.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/53876
+ */
+function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boolean {
+  if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
+    return false;
+  }
+  const accounts = cfg.channels?.telegram?.accounts;
+  const hasConfiguredAccounts =
+    !!accounts &&
+    typeof accounts === "object" &&
+    !Array.isArray(accounts) &&
+    Object.keys(accounts).length > 0;
+  if (!hasConfiguredAccounts) {
+    return false;
+  }
+  // Use resolveNormalizedAccountEntry (same as resolveTelegramToken in token.ts)
+  // instead of resolveAccountEntry to handle keys that require full normalization
+  // (e.g. "Carey Notifications" → "carey-notifications").
+  return !resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId);
+}
+
 export const telegramConfigAdapter = createScopedChannelConfigAdapter<ResolvedTelegramAccount>({
   sectionKey: TELEGRAM_CHANNEL,
   listAccountIds: listTelegramAccountIds,
@@ -97,13 +132,32 @@ export function createTelegramPluginBase(params: {
     config: {
       ...telegramConfigAdapter,
       isConfigured: (account, cfg) => {
-        if (!account.token?.trim()) {
+        // Use inspectTelegramAccount for a complete token resolution that includes
+        // channel-level fallback paths not available in resolveTelegramAccount.
+        // This ensures binding-created accountIds that inherit the channel-level
+        // token are correctly detected as configured.
+        // See: https://github.com/openclaw/openclaw/issues/53876
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return false;
+        }
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        // Gate on actually available token, not just "configured" — the latter
+        // includes "configured_unavailable" (unreadable tokenFile, unresolved
+        // SecretRef) which would pass here but fail at runtime.
+        if (!inspected.token?.trim()) {
           return false;
         }
         return !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId });
       },
       unconfiguredReason: (account, cfg) => {
-        if (!account.token?.trim()) {
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return `not configured: unknown accountId "${account.accountId}" in multi-bot setup`;
+        }
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        if (!inspected.token?.trim()) {
+          if (inspected.tokenStatus === "configured_unavailable") {
+            return `not configured: token ${inspected.tokenSource} is configured but unavailable`;
+          }
           return "not configured";
         }
         const ownerAccountId = findTelegramTokenOwnerAccountId({
@@ -118,15 +172,27 @@ export function createTelegramPluginBase(params: {
           ownerAccountId,
         });
       },
-      describeAccount: (account, cfg) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured:
-          Boolean(account.token?.trim()) &&
-          !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
-        tokenSource: account.tokenSource,
-      }),
+      describeAccount: (account, cfg) => {
+        if (isBlockedByMultiBotGuard(cfg, account.accountId)) {
+          return {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: false,
+            tokenSource: "none" as const,
+          };
+        }
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
+        return {
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured:
+            !!inspected.token?.trim() &&
+            !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
+          tokenSource: inspected.tokenSource,
+        };
+      },
     },
     setup: params.setup,
   }) as Pick<
