@@ -156,8 +156,6 @@ export function createExecApprovalHandlers(
       };
       const record = manager.create(request, timeoutMs, explicitId);
       record.requestedByConnId = client?.connId ?? null;
-      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
-      record.requestedByClientId = client?.connect?.client?.id ?? null;
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       let decisionPromise: Promise<
@@ -316,21 +314,29 @@ export function createExecApprovalHandlers(
       }
       const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
-      // Security: prevent self-approval — the device/client that submitted the
-      // request cannot also *allow* it.  Self-deny is permitted so that a
-      // requester can cancel their own pending approval.  Identity is matched
-      // on deviceId / clientId (stable across reconnects) rather than connId
-      // which changes on every WebSocket reconnection.
+      // Security: prevent self-approval — the connection that submitted the
+      // request cannot also *allow* it.  Self-deny is permitted so a
+      // requester can cancel their own pending approval.
+      //
+      // We match on connId (the WebSocket connection identifier) rather than
+      // deviceId or clientId because those are shared identifiers:
+      // - deviceId is a host-level identity returned by loadOrCreateDeviceIdentity()
+      //   and is shared across all operator clients running on the same machine.
+      // - clientId is a client-family enum (e.g. "cli", "openclaw-macos") and is
+      //   shared across all instances of the same client type.
+      // Using either would block legitimate approvers that happen to be on the
+      // same device or use the same client type as the requester.
+      //
+      // NOTE: connId is regenerated on WebSocket reconnect, so a determined
+      // requester can bypass this guard by opening a second connection.  This
+      // is an accepted trade-off; a stronger identity mechanism would require
+      // protocol-level changes (e.g. a per-session user identity).
       if (decision !== "deny") {
-        const sameDevice =
-          snapshot?.requestedByDeviceId != null &&
-          client?.connect?.device?.id != null &&
-          client.connect.device.id === snapshot.requestedByDeviceId;
-        const sameClient =
-          snapshot?.requestedByClientId != null &&
-          client?.connect?.client?.id != null &&
-          client.connect.client.id === snapshot.requestedByClientId;
-        if (sameDevice || sameClient) {
+        const sameConn =
+          snapshot?.requestedByConnId != null &&
+          client?.connId != null &&
+          client.connId === snapshot.requestedByConnId;
+        if (sameConn) {
           respond(
             false,
             undefined,
