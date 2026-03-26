@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 554,
+            "line": 556,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 559,
+            "line": 561,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 563,
+            "line": 565,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 239,
+            "line": 241,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1581,7 +1581,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 498,
+            "line": 500,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1590,7 +1590,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 363,
+            "line": 365,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1635,7 +1635,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 445,
+            "line": 447,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1653,7 +1653,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 554,
+            "line": 556,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1662,7 +1662,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 559,
+            "line": 561,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1671,7 +1671,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 563,
+            "line": 565,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1680,7 +1680,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 407,
+            "line": 409,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1707,7 +1707,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 438,
+            "line": 440,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1716,7 +1716,7 @@
           "exportName": "ChannelExecApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 464,
+            "line": 466,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1743,7 +1743,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 347,
+            "line": 349,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1752,7 +1752,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 239,
+            "line": 241,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1779,7 +1779,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 373,
+            "line": 375,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1806,7 +1806,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 450,
+            "line": 452,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1815,7 +1815,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 318,
+            "line": 320,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1824,7 +1824,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 323,
+            "line": 325,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1833,7 +1833,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 328,
+            "line": 330,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1842,7 +1842,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 312,
+            "line": 314,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 155,
+            "line": 157,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1977,7 +1977,7 @@
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 336,
+            "line": 338,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2013,7 +2013,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 418,
+            "line": 420,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2022,7 +2022,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 428,
+            "line": 430,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2031,7 +2031,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 420,
+            "line": 422,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2040,7 +2040,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 576,
+            "line": 578,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2085,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 185,
+            "line": 187,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -4884,7 +4884,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 239,
+            "line": 241,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
