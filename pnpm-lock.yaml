@@ -131,6 +131,9 @@ importers:
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@5.9.3)
+      nostr-tools:
+        specifier: ^2.23.3
+        version: 2.23.3(typescript@5.9.3)
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
