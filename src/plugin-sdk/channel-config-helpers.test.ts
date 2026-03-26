@@ -17,6 +17,28 @@ import {
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
+function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
+  const channelAdapter = adapter as {
+    resolveAllowFrom?: (params: { cfg: object; accountId: string }) => unknown;
+    resolveDefaultTo?: (params: { cfg: object; accountId: string }) => unknown;
+    setAccountEnabled?: (params: { cfg: object; accountId: string; enabled: boolean }) => {
+      channels?: {
+        demo?: unknown;
+      };
+    };
+  };
+
+  expect(channelAdapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
+  expect(channelAdapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
+  expect(
+    channelAdapter.setAccountEnabled?.({
+      cfg: {},
+      accountId: "default",
+      enabled: true,
+    })?.channels?.demo,
+  ).toEqual({ enabled: true });
+}
+
 describe("mapAllowFromEntries", () => {
   it("coerces allowFrom entries to strings", () => {
     expect(mapAllowFromEntries(["user", 42])).toEqual(["user", "42"]);
@@ -218,15 +240,7 @@ describe("createScopedChannelConfigAdapter", () => {
       allowFrom: ["alt"],
       defaultTo: " room:123 ",
     });
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
   });
 });
 
@@ -467,15 +481,7 @@ describe("createHybridChannelConfigAdapter", () => {
       resolveDefaultTo: (account) => account.defaultTo,
     });
 
-    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "alt" })).toEqual(["alt"]);
-    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "alt" })).toBe("room:123");
-    expect(
-      adapter.setAccountEnabled!({
-        cfg: {},
-        accountId: "default",
-        enabled: true,
-      }).channels?.demo,
-    ).toEqual({ enabled: true });
+    expectAdapterAllowFromAndDefaultTo(adapter);
     expect(
       adapter.deleteAccount!({
         cfg: {
