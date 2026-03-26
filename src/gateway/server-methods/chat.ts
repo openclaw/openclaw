@@ -1527,11 +1527,24 @@ export const chatHandlers: GatewayRequestHandlers = {
         // (from fallback chain inference) instead of the agent default provider.
         // For example, with imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"] },
         // imageModelProvider would be "openai" and resolvedImageModelPrimary would be "openai/gpt-4o".
+        // CRITICAL: Use resolveModelRefFromString to properly resolve aliases (e.g., "vision" -> "openai/gpt-4o")
+        // instead of just concatenating provider + raw primary which would produce invalid keys like "openai/vision".
         const resolvedImageModelPrimary = primaryHasProvider
           ? imageModelPrimary
-          : imageModelProvider
-            ? modelKey(imageModelProvider, imageModelPrimary.trim())
-            : imageModelPrimary;
+          : (() => {
+              const resolved = resolveModelRefFromString({
+                raw: imageModelPrimary.trim(),
+                defaultProvider: imageModelProvider ?? defaultProvider,
+                aliasIndex: imageFallbackAliasIndex,
+              });
+              if (resolved) {
+                return modelKey(resolved.ref.provider, resolved.ref.model);
+              }
+              // Fallback to original behavior if resolution fails
+              return imageModelProvider
+                ? modelKey(imageModelProvider, imageModelPrimary.trim())
+                : imageModelPrimary;
+            })();
 
         // Check if user has a stored model override that is already an image model
         // If so, respect user's choice and don't switch
