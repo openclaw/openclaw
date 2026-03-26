@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/profiles.js";
+export * from "../compat/browser/profiles.js";

@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/cli/browser-cli-state.js";
+export * from "../compat/browser/cli/browser-cli-state.js";

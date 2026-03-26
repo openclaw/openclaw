@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/pw-session.page-cdp.js";
+export * from "../compat/browser/pw-session.page-cdp.js";

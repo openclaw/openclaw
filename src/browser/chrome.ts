@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/chrome.js";
+export * from "../compat/browser/chrome.js";
