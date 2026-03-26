@@ -300,6 +300,91 @@ describe("session.message websocket events", () => {
     }
   });
 
+  test("includes spawnedBy metadata on session.message and sessions.changed transcript events", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-child.jsonl");
+    await writeSessionStore({
+      entries: {
+        child: {
+          sessionId: "sess-child",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+        },
+      },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "spawn metadata snapshot" }],
+      timestamp: Date.now(),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+        JSON.stringify({ id: "msg-spawn", message: transcriptMessage }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const ws = await harness.openWs();
+      try {
+        await connectOk(ws, { scopes: ["operator.read"] });
+        await rpcReq(ws, "sessions.subscribe");
+
+        const messageEventPromise = onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:child",
+        );
+        const changedEventPromise = onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "sessions.changed" &&
+            (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
+              "message" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:child",
+        );
+
+        emitSessionTranscriptUpdate({
+          sessionFile: transcriptPath,
+          sessionKey: "agent:main:child",
+          message: transcriptMessage,
+          messageId: "msg-spawn",
+        });
+
+        const [messageEvent, changedEvent] = await Promise.all([
+          messageEventPromise,
+          changedEventPromise,
+        ]);
+        expect(messageEvent.payload).toMatchObject({
+          sessionKey: "agent:main:child",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+        });
+        expect(changedEvent.payload).toMatchObject({
+          sessionKey: "agent:main:child",
+          phase: "message",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+        });
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
   test("sessions.messages.subscribe only delivers transcript events for the requested session", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
