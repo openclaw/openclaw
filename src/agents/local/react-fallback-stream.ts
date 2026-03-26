@@ -85,7 +85,7 @@ export function parseReActResponse(
   let textOutput = "";
 
   while (true) {
-    const markerRegex = /(?:^|[\r\n])Action:/g;
+    const markerRegex = /(?:^|[\r\n])\s*Action:/g;
     markerRegex.lastIndex = lastIndex;
     const match = markerRegex.exec(cleanedText);
 
@@ -283,8 +283,8 @@ export function wrapStreamFnWithReActFallback(
                 const hasTools = (context.tools?.length ?? 0) > 0;
                 if (
                   hasTools &&
-                  (/(?:^|[\r\n])Action:/g.test(textOutput) ||
-                    /(?:^|[\r\n])Thought:/g.test(textOutput))
+                  (/(?:^|[\r\n])\s*Action:/g.test(textOutput) ||
+                    /(?:^|[\r\n])\s*Thought:/g.test(textOutput))
                 ) {
                   hasReActAction = true;
                 }

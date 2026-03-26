@@ -234,11 +234,47 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     expect(toolCalls[0].name).toBe("get_weather");
     expect(toolCalls[1].name).toBe("get_time");
 
-    // Check text retention
     const textPart = (content.find((p) => p.type === "text") as { type: string; text: string })
       .text;
     expect(textPart).toContain("Thought: I need to check both weather and time.");
     expect(textPart).toContain("I'll wait for the data.");
+  });
+
+  it("should handle indented Action: markers with spaces and tabs", async () => {
+    const indentedText =
+      'Thought: I need to call a tool.\n\n  \t Action: {"tool": "get_weather", "args": {"location": "San Francisco"}}\n\nSome follow up text.';
+    const nativeStreamFn = createMockNativeStreamFn(indentedText);
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId: "llama3",
+      providerId: "llama3",
+      providerType: "ollama",
+      toolFallback: "react",
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line no-explicit-any
+      { id: "llama3", api: "test" } as any,
+      // eslint-disable-next-line no-explicit-any
+      { tools: [{ name: "get_weather", description: "test" }] } as any,
+      {},
+    );
+
+    const events: any[] = []; // eslint-disable-line no-explicit-any
+    for await (const chunk of stream) {
+      events.push(chunk);
+    }
+
+    const doneEvent = events[0] as DoneEvent;
+    const toolCalls = doneEvent.message.content.filter((p: any) => p.type === "toolCall"); // eslint-disable-line no-explicit-any
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].name).toBe("get_weather");
+    expect(toolCalls[0].arguments).toEqual({ location: "San Francisco" });
+
+    const textPart = doneEvent.message.content.find((p: any) => p.type === "text")?.text; // eslint-disable-line no-explicit-any
+    expect(textPart).toBeDefined();
+    expect(textPart).toContain("Thought: I need to call a tool.");
+    expect(textPart).toContain("Some follow up text.");
+    expect(textPart).not.toContain("Action:");
   });
 
   it("should cleanly ignore and return malformed JSON as text", async () => {
