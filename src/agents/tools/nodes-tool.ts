@@ -10,6 +10,7 @@ import {
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
@@ -661,25 +662,34 @@ export function createNodesTool(options?: {
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
                 : undefined;
-            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-              "node.invoke",
-              gatewayOpts,
-              {
-                nodeId,
-                command: "system.run.prepare",
-                params: {
-                  command,
-                  cwd,
+            let prepared: ReturnType<typeof parsePreparedSystemRunPayload>;
+            try {
+              const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+                "node.invoke",
+                gatewayOpts,
+                {
+                  nodeId,
+                  command: "system.run.prepare",
+                  params: { command, cwd, agentId, sessionKey },
+                  timeoutMs: invokeTimeoutMs,
+                  idempotencyKey: crypto.randomUUID(),
+                },
+              );
+              prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+            } catch {
+              prepared = null;
+            }
+            if (!prepared) {
+              prepared = {
+                plan: {
+                  argv: command,
+                  cwd: cwd ?? null,
+                  commandText: formatExecCommand(command),
+                  commandPreview: null,
                   agentId,
                   sessionKey,
                 },
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              },
-            );
-            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-            if (!prepared) {
-              throw new Error("invalid system.run.prepare response");
+              };
             }
             const runParams = {
               command: prepared.plan.argv,

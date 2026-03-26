@@ -15,6 +15,7 @@ import {
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
+import { formatExecCommand } from "../infra/system-run-command.js";
 import { logInfo } from "../logger.js";
 import {
   buildExecApprovalRequesterContext,
@@ -96,25 +97,39 @@ export async function executeNodeHostCommand(
     );
   }
   const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
-  const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-    "node.invoke",
-    { timeoutMs: 15_000 },
-    {
-      nodeId,
-      command: "system.run.prepare",
-      params: {
-        command: argv,
-        rawCommand: params.command,
-        cwd: params.workdir,
+  let prepared: ReturnType<typeof parsePreparedSystemRunPayload>;
+  try {
+    const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
+      "node.invoke",
+      { timeoutMs: 15_000 },
+      {
+        nodeId,
+        command: "system.run.prepare",
+        params: {
+          command: argv,
+          rawCommand: params.command,
+          cwd: params.workdir,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        },
+        idempotencyKey: crypto.randomUUID(),
+      },
+    );
+    prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
+  } catch {
+    prepared = null;
+  }
+  if (!prepared) {
+    prepared = {
+      plan: {
+        argv,
+        cwd: params.workdir ?? null,
+        commandText: params.command ?? formatExecCommand(argv),
+        commandPreview: null,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       },
-      idempotencyKey: crypto.randomUUID(),
-    },
-  );
-  const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-  if (!prepared) {
-    throw new Error("invalid system.run.prepare response");
+    };
   }
   const runArgv = prepared.plan.argv;
   const runRawCommand = prepared.plan.commandText;
