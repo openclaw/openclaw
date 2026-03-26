@@ -21,6 +21,59 @@ import {
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
 
+function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        [pluginId]: {
+          enabled: true,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createClawHubInstalledConfig(params: {
+  pluginId: string;
+  install: Record<string, unknown>;
+}): OpenClawConfig {
+  const enabledCfg = createEnabledPluginConfig(params.pluginId);
+  return {
+    ...enabledCfg,
+    plugins: {
+      ...enabledCfg.plugins,
+      installs: {
+        [params.pluginId]: params.install,
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createClawHubInstallResult(params: {
+  pluginId: string;
+  packageName: string;
+  version: string;
+  channel: string;
+}): Awaited<ReturnType<typeof installPluginFromClawHub>> {
+  return {
+    ok: true,
+    pluginId: params.pluginId,
+    targetDir: `/tmp/openclaw-state/extensions/${params.pluginId}`,
+    version: params.version,
+    packageName: params.packageName,
+    clawhub: {
+      source: "clawhub",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: params.packageName,
+      clawhubFamily: "code-plugin",
+      clawhubChannel: params.channel,
+      version: params.version,
+      integrity: "sha256-abc",
+      resolvedAt: "2026-03-22T00:00:00.000Z",
+    },
+  };
+}
+
 describe("plugins cli install", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
@@ -142,51 +195,29 @@ describe("plugins cli install", () => {
         entries: {},
       },
     } as OpenClawConfig;
-    const enabledCfg = {
-      plugins: {
-        entries: {
-          demo: {
-            enabled: true,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const installedCfg = {
-      ...enabledCfg,
-      plugins: {
-        ...enabledCfg.plugins,
-        installs: {
-          demo: {
-            source: "clawhub",
-            spec: "clawhub:demo@1.2.3",
-            installPath: "/tmp/openclaw-state/extensions/demo",
-            clawhubPackage: "demo",
-            clawhubFamily: "code-plugin",
-            clawhubChannel: "official",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    loadConfig.mockReturnValue(cfg);
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue({
-      ok: true,
+    const enabledCfg = createEnabledPluginConfig("demo");
+    const installedCfg = createClawHubInstalledConfig({
       pluginId: "demo",
-      targetDir: "/tmp/openclaw-state/extensions/demo",
-      version: "1.2.3",
-      packageName: "demo",
-      clawhub: {
+      install: {
         source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
+        spec: "clawhub:demo@1.2.3",
+        installPath: "/tmp/openclaw-state/extensions/demo",
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
-        version: "1.2.3",
-        integrity: "sha256-abc",
-        resolvedAt: "2026-03-22T00:00:00.000Z",
       },
     });
+
+    loadConfig.mockReturnValue(cfg);
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+      }),
+    );
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(installedCfg);
     applyExclusiveSlotSelection.mockReturnValue({
@@ -223,48 +254,26 @@ describe("plugins cli install", () => {
         entries: {},
       },
     } as OpenClawConfig;
-    const enabledCfg = {
-      plugins: {
-        entries: {
-          demo: {
-            enabled: true,
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const installedCfg = {
-      ...enabledCfg,
-      plugins: {
-        ...enabledCfg.plugins,
-        installs: {
-          demo: {
-            source: "clawhub",
-            spec: "clawhub:demo@1.2.3",
-            installPath: "/tmp/openclaw-state/extensions/demo",
-            clawhubPackage: "demo",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    loadConfig.mockReturnValue(cfg);
-    installPluginFromClawHub.mockResolvedValue({
-      ok: true,
+    const enabledCfg = createEnabledPluginConfig("demo");
+    const installedCfg = createClawHubInstalledConfig({
       pluginId: "demo",
-      targetDir: "/tmp/openclaw-state/extensions/demo",
-      version: "1.2.3",
-      packageName: "demo",
-      clawhub: {
+      install: {
         source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
+        spec: "clawhub:demo@1.2.3",
+        installPath: "/tmp/openclaw-state/extensions/demo",
         clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "community",
-        version: "1.2.3",
-        integrity: "sha256-abc",
-        resolvedAt: "2026-03-22T00:00:00.000Z",
       },
     });
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "community",
+      }),
+    );
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(installedCfg);
     applyExclusiveSlotSelection.mockReturnValue({
