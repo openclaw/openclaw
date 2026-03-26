@@ -1,5 +1,5 @@
 import { intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
-import { loadVitestReportFromArgs, parseVitestReportArgs } from "./lib/vitest-report-cli-utils.mjs";
+import { loadVitestReportFromArgs } from "./lib/vitest-report-cli-utils.mjs";
 import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
@@ -35,15 +35,19 @@ function parseArgs(argv) {
   return parseFlagArgs(
     argv,
     {
-      ...parseVitestReportArgs(argv, {
-        config: "vitest.unit.config.ts",
-        limit: 256,
-        reportPath: "",
-      }),
+      config: "vitest.unit.config.ts",
+      limit: 256,
+      reportPath: "",
       out: unitTimingManifestPath,
       defaultDurationMs: 250,
     },
-    [stringFlag("--out", "out"), intFlag("--default-duration-ms", "defaultDurationMs", { min: 1 })],
+    [
+      stringFlag("--config", "config"),
+      intFlag("--limit", "limit", { min: 1 }),
+      stringFlag("--report", "reportPath"),
+      stringFlag("--out", "out"),
+      intFlag("--default-duration-ms", "defaultDurationMs", { min: 1 }),
+    ],
   );
 }
 
