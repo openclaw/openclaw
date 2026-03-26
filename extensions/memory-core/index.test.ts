@@ -8,6 +8,7 @@ import plugin, {
   DEFAULT_MEMORY_FLUSH_PROMPT,
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./index.js";
+import { memoryRuntime } from "./src/runtime-provider.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
@@ -57,11 +58,13 @@ describe("plugin registration", () => {
     const registerTool = vi.fn();
     const registerMemoryPromptSection = vi.fn();
     const registerMemoryFlushPlan = vi.fn();
+    const registerMemoryRuntime = vi.fn();
     const registerCli = vi.fn();
     const api = {
       registerTool,
       registerMemoryPromptSection,
       registerMemoryFlushPlan,
+      registerMemoryRuntime,
       registerCli,
     };
 
@@ -69,6 +72,7 @@ describe("plugin registration", () => {
 
     expect(registerMemoryPromptSection).toHaveBeenCalledWith(buildPromptSection);
     expect(registerMemoryFlushPlan).toHaveBeenCalledWith(buildMemoryFlushPlan);
+    expect(registerMemoryRuntime).toHaveBeenCalledWith(memoryRuntime);
     expect(registerTool).toHaveBeenCalledTimes(2);
     expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
     expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });

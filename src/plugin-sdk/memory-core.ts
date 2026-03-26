@@ -33,6 +33,7 @@ export type { MemorySearchResult } from "../memory/types.js";
 export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
+  MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
