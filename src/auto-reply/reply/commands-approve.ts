@@ -204,23 +204,24 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (params.command.channel === "slack") {
-    if (!isSlackExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ Slack exec approvals are not enabled for this bot account." },
-      };
-    }
-    if (
-      !isSlackExecApprovalApprover({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-        senderId: params.command.senderId,
-      })
-    ) {
-      return {
-        shouldContinue: false,
-        reply: { text: "❌ You are not authorized to approve exec requests on Slack." },
-      };
+    // Only enforce the approver allowlist when native Slack exec approval
+    // buttons are enabled. When native is disabled, forwarded approval
+    // messages (from the general `approvals.exec` forwarder) can still land
+    // in Slack and instruct users to `/approve`; blocking the command here
+    // would break that fallback path.
+    if (isSlackExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })) {
+      if (
+        !isSlackExecApprovalApprover({
+          cfg: params.cfg,
+          accountId: params.ctx.AccountId,
+          senderId: params.command.senderId,
+        })
+      ) {
+        return {
+          shouldContinue: false,
+          reply: { text: "❌ You are not authorized to approve exec requests on Slack." },
+        };
+      }
     }
   }
 

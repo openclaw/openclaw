@@ -316,11 +316,16 @@ export class SlackExecApprovalHandler {
     if (targetMode === "channel" || targetMode === "both") {
       if (sourceTarget) {
         targets.push(sourceTarget);
-        // When the source is a DM (kind === "user") and target mode is
-        // "channel", also fall back to approver DMs. A DM-origin source
-        // target only reaches the requester, who may not be an approver and
-        // therefore cannot action the buttons.
-        if (sourceTarget.kind === "user" && targetMode === "channel") {
+        // When the source is a DM and target mode is "channel", also fall
+        // back to approver DMs. A DM-origin source target only reaches the
+        // requester, who may not be an approver and therefore cannot action
+        // the buttons. Slack DM-origin requests may resolve as kind "user"
+        // (explicit user: prefix) or kind "channel" with a DM channel ID
+        // (starts with "D"), so check both.
+        const isDmOrigin =
+          sourceTarget.kind === "user" ||
+          (sourceTarget.kind === "channel" && sourceTarget.id.startsWith("D"));
+        if (isDmOrigin && targetMode === "channel") {
           fallbackToDm = true;
         }
       } else {
