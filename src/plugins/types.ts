@@ -1407,12 +1407,10 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register the system prompt section builder for this memory plugin (exclusive slot). */
   registerMemoryPromptSection: (
-    builder: import("../memory/prompt-section.js").MemoryPromptSectionBuilder,
+    builder: import("./memory-state.js").MemoryPromptSectionBuilder,
   ) => void;
   /** Register the pre-compaction flush plan resolver for this memory plugin (exclusive slot). */
-  registerMemoryFlushPlan: (
-    resolver: import("../memory/flush-plan.js").MemoryFlushPlanResolver,
-  ) => void;
+  registerMemoryFlushPlan: (resolver: import("./memory-state.js").MemoryFlushPlanResolver) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
