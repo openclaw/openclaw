@@ -159,7 +159,7 @@ export type ClawHubDownloadResult = {
   integrity: string;
 };
 
-type FetchLike = typeof fetch;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type ClawHubRequestParams = {
   baseUrl?: string;
