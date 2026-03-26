@@ -6,6 +6,7 @@ import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
   chunkMarkdown,
+  cosineSimilarity,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   remapChunkLines,
@@ -310,5 +311,59 @@ describe("remapChunkLines", () => {
     for (const chunk of chunks) {
       expect(chunk.startLine).toBeLessThanOrEqual(chunk.endLine);
     }
+  });
+});
+
+describe("cosineSimilarity", () => {
+  it("returns 1 for identical vectors", () => {
+    expect(cosineSimilarity([1, 0], [1, 0])).toBeCloseTo(1);
+    expect(cosineSimilarity([0.5, 0.5], [0.5, 0.5])).toBeCloseTo(1);
+  });
+
+  it("returns 0 for orthogonal vectors", () => {
+    expect(cosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0);
+  });
+
+  it("returns 0 when either vector is empty", () => {
+    expect(cosineSimilarity([], [1, 2])).toBe(0);
+    expect(cosineSimilarity([1, 2], [])).toBe(0);
+  });
+
+  it("returns 0 when either vector is all zeros", () => {
+    expect(cosineSimilarity([0, 0], [1, 2])).toBe(0);
+    expect(cosineSimilarity([1, 2], [0, 0])).toBe(0);
+  });
+
+  it("handles vectors of different lengths correctly", () => {
+    // [1, 0, 0, 1] vs [1, 0] — shorter vector is zero-padded to [1, 0, 0, 0]
+    // dot = 1*1 + 0*0 = 1
+    // normA = sqrt(1 + 0 + 0 + 1) = sqrt(2)
+    // normB = sqrt(1 + 0) = 1
+    // similarity = 1 / sqrt(2) ≈ 0.7071
+    const result = cosineSimilarity([1, 0, 0, 1], [1, 0]);
+    expect(result).toBeCloseTo(1 / Math.sqrt(2));
+
+    // Reversed argument order should give the same result
+    const reversed = cosineSimilarity([1, 0], [1, 0, 0, 1]);
+    expect(reversed).toBeCloseTo(1 / Math.sqrt(2));
+  });
+
+  it("does not inflate similarity for different-length vectors", () => {
+    // Without the fix, the old code would compute:
+    // dot = 1*1 = 1, normA = sqrt(1) = 1, normB = sqrt(1) = 1
+    // result = 1.0 (incorrect — ignores extra dimensions)
+    //
+    // With the fix:
+    // dot = 1*1 = 1, normA = sqrt(1+1) = sqrt(2), normB = sqrt(1) = 1
+    // result = 1/sqrt(2) ≈ 0.7071
+    const result = cosineSimilarity([1, 1], [1]);
+    expect(result).toBeLessThan(1);
+    expect(result).toBeCloseTo(1 / Math.sqrt(2));
+  });
+
+  it("is symmetric", () => {
+    const a = [0.3, 0.7, 0.1];
+    const b = [0.5, 0.2];
+    expect(cosineSimilarity(a, b)).toBeCloseTo(cosineSimilarity(b, a));
   });
 });
