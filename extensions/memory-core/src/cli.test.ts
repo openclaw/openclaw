@@ -24,10 +24,17 @@ vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api.js")>();
   return {
     ...actual,
-    getMemorySearchManager,
     loadConfig,
     resolveDefaultAgentId,
     resolveCommandSecretRefsViaGateway,
+  };
+});
+
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  return {
+    ...actual,
+    getMemorySearchManager,
   };
 });
 

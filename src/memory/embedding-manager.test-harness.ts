@@ -2,11 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import type {
+  MemoryIndexManager,
+  MemorySearchManager,
+} from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { MemoryIndexManager, MemorySearchManager } from "./index.js";
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");
-type MemoryIndexModule = typeof import("./index.js");
+type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
 
 export function installEmbeddingManagerFixture(opts: {
   fixturePrefix: string;
@@ -61,7 +64,7 @@ export function installEmbeddingManagerFixture(opts: {
     const embeddingMocks = await import("./embedding.test-mocks.js");
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
-    ({ getMemorySearchManager } = await import("./index.js"));
+    ({ getMemorySearchManager } = await import("../../extensions/memory-core/src/memory/index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), opts.fixturePrefix));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");

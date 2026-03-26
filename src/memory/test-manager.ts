@@ -1,5 +1,8 @@
+import {
+  getMemorySearchManager,
+  type MemoryIndexManager,
+} from "../../extensions/memory-core/src/memory/index.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 export async function createMemoryManagerOrThrow(
   cfg: OpenClawConfig,
