@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
