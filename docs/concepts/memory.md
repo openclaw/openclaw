@@ -56,6 +56,9 @@ When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
 agentic turn** that reminds the model to write durable memory **before** the
 context is compacted. The default prompts explicitly say the model _may reply_,
 but usually `NO_REPLY` is the correct response so the user never sees this turn.
+The active memory plugin owns the prompt/path policy for that flush; the
+default `memory-core` plugin writes to the canonical daily file under
+`memory/YYYY-MM-DD.md`.
 
 This is controlled by `agents.defaults.compaction.memoryFlush`:
 
