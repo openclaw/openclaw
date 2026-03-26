@@ -48915,6 +48915,20 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.exa.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Exa Search Base URL",
+      "help": "Exa Search base URL override.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.exa.enabled",
       "kind": "plugin",
       "type": "boolean",
