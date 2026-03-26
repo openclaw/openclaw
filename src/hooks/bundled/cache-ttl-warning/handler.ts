@@ -28,6 +28,8 @@ const DEFAULT_EXPIRED_SECONDS = 300; // 5 minutes
 interface ConversationTimer {
   warningTimer: ReturnType<typeof setTimeout> | undefined;
   expiredTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The original "to" target set when the timer was first created (e.g. chat ID). */
+  originalTo: string;
   /** Message ID of the most recent TTL notice (warning or expired), so we can delete it on reset. */
   lastNoticeMessageId?: string;
   /** Channel + to needed to delete the notice when the timer is reset by new activity. */
@@ -310,16 +312,10 @@ const handler: HookHandler = async (event) => {
       log.info(`cache-ttl-warning: llm-request for ${key} but no active timer — skipping`);
       return;
     }
-    // Re-derive "to" from the existing timer entry so we can restart the full
-    // timer cycle (including notices) using the original recipient.
-    to = existing.lastNoticeTo;
-    if (!to) {
-      // No prior notice sent yet — just clear and restart using conversationId
-      // as a fallback "to". The timer will fire notices to this address.
-      log.info(`cache-ttl-warning: llm-request reset for ${key} (no prior notice target)`);
-      clearConversationTimers(timerStore, key);
-      return;
-    }
+    // Use the original "to" target stored when the timer was first created.
+    // Falls back to lastNoticeTo (set after a notice is sent), then bare conversationId.
+    to = existing.originalTo ?? existing.lastNoticeTo ?? bareConversationId;
+    log.info(`cache-ttl-warning: llm-request reset for ${key} (to=${to})`);
   }
 
   if (!to) {
@@ -369,6 +365,7 @@ const handler: HookHandler = async (event) => {
   const entry: ConversationTimer = {
     warningTimer: undefined,
     expiredTimer: undefined,
+    originalTo: to,
   };
 
   // Set warning timer
