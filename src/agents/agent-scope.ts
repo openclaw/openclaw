@@ -33,6 +33,8 @@ type ResolvedAgentConfig = {
   thinkingDefault?: AgentEntry["thinkingDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  compaction?: AgentEntry["compaction"];
+  contextPruning?: AgentEntry["contextPruning"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -138,6 +140,8 @@ export function resolveAgentConfig(
     thinkingDefault: entry.thinkingDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,
+    compaction: entry.compaction,
+    contextPruning: entry.contextPruning,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
