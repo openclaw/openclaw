@@ -4,10 +4,15 @@ import {
   formatExplanation,
   formatPlanOutput,
 } from "./test-planner/executor.mjs";
-import { buildExecutionPlan, explainExecutionTarget } from "./test-planner/planner.mjs";
+import {
+  buildCIExecutionManifest,
+  buildExecutionPlan,
+  explainExecutionTarget,
+} from "./test-planner/planner.mjs";
 
 const parseCliArgs = (args) => {
   const wrapper = {
+    ciManifest: false,
     plan: false,
     explain: null,
     mode: null,
@@ -30,6 +35,10 @@ const parseCliArgs = (args) => {
     }
     if (arg === "--plan") {
       wrapper.plan = true;
+      continue;
+    }
+    if (arg === "--ci-manifest") {
+      wrapper.ciManifest = true;
       continue;
     }
     if (arg === "--help") {
@@ -104,6 +113,7 @@ if (rawCli.showHelp) {
       "",
       "Wrapper flags:",
       "  --plan                 Print the resolved execution plan",
+      "  --ci-manifest          Print the planner-backed CI execution manifest as JSON",
       "  --explain <file>       Explain how a file is classified and run",
       "  --surface <name>       Select a surface (repeatable or comma-separated)",
       "  --files <pattern>      Add targeted files/patterns (repeatable)",
@@ -128,6 +138,12 @@ if (rawCli.explain) {
     { env: process.env },
   );
   console.log(formatExplanation(explanation));
+  process.exit(0);
+}
+
+if (rawCli.ciManifest) {
+  const manifest = buildCIExecutionManifest(undefined, { env: process.env });
+  console.log(`${JSON.stringify(manifest, null, 2)}\n`);
   process.exit(0);
 }
 
