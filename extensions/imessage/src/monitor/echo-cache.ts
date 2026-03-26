@@ -17,9 +17,9 @@ export type SentMessageCache = {
   has: (scope: string, lookup: SentMessageLookup, skipIdShortCircuit?: boolean) => boolean;
 };
 
-// Keep the text fallback short so repeated user replies like "ok" are not
-// suppressed for long; delayed reflections should match the stronger message-id key.
-// 4s gives ~2s margin above the observed 2.2s echo arrival time under normal load.
+// Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
+// 4s provides ~80% margin. If echoes arrive after TTL expiry, the system degrades to
+// duplicate delivery (noisy but not lossy) — never message loss.
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 

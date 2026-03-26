@@ -32,7 +32,7 @@ function createParams(
   const { message: msgOverrides, ...restOverrides } = overrides;
   const message = {
     id: 100,
-    sender: "+14155480405",
+    sender: "+15551234567",
     text: "Hello",
     is_from_me: false,
     is_group: false,
@@ -61,6 +61,73 @@ function createParams(
   };
 }
 
+describe("echo cache — message ID type canary (#47830)", () => {
+  // Tests the implicit contract that outbound GUIDs (e.g. "p:0/abc-def-123")
+  // never match inbound SQLite row IDs (e.g. "200"). If iMessage ever changes
+  // ID schemes, this test should break loudly.
+  it("outbound GUID format and inbound SQLite row ID format never collide", () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    // Outbound messageId is a GUID format string
+    echoCache.remember(scope, { text: "test", messageId: "p:0/abc-def-123" });
+
+    // An inbound SQLite row ID (numeric string) should NOT match the GUID
+    expect(echoCache.has(scope, { text: "different", messageId: "200" })).toBe(false);
+
+    // The original GUID should still match
+    expect(echoCache.has(scope, { text: "different", messageId: "p:0/abc-def-123" })).toBe(true);
+  });
+});
+
+describe("echo cache — backward compat for channels without messageId", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Proves text-fallback echo detection still works when no messageId is present
+  // on either side. Critical for backward compat with channels that don't
+  // populate messageId.
+  it("text-only remember/has works within TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "no id message" });
+
+    vi.advanceTimersByTime(2000);
+    expect(echoCache.has(scope, { text: "no id message" })).toBe(true);
+  });
+
+  it("text-only has returns false after TTL expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "no id message" });
+
+    vi.advanceTimersByTime(5000);
+    expect(echoCache.has(scope, { text: "no id message" })).toBe(false);
+  });
+
+  it("text-only has returns false for different text", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "no id message" });
+
+    vi.advanceTimersByTime(1000);
+    expect(echoCache.has(scope, { text: "totally different text" })).toBe(false);
+  });
+});
+
 describe("self-chat dedupe — #47830", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -73,8 +140,8 @@ describe("self-chat dedupe — #47830", () => {
     const echoCache = createSentMessageCache();
     const selfChatCache = createSelfChatCache();
 
-    // Agent sends "Hello" to self-chat target +14155480405
-    const scope = "default:imessage:+14155480405";
+    // Agent sends "Hello" to self-chat target +15551234567
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
 
     // 2 seconds later, user sends "Hello" to themselves (different message id)
@@ -84,7 +151,7 @@ describe("self-chat dedupe — #47830", () => {
       createParams({
         message: {
           id: 200,
-          sender: "+14155480405",
+          sender: "+15551234567",
           text: "Hello",
           is_from_me: false,
         },
@@ -109,7 +176,7 @@ describe("self-chat dedupe — #47830", () => {
     const echoCache = createSentMessageCache();
 
     // Agent sends "Hello" to target
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
 
     // 1 second later, iMessage reflects it back with same message id
@@ -119,7 +186,7 @@ describe("self-chat dedupe — #47830", () => {
       createParams({
         message: {
           id: "agent-msg-1" as unknown as number,
-          sender: "+14155480405",
+          sender: "+15551234567",
           text: "Hello",
           is_from_me: false,
         },
@@ -139,7 +206,7 @@ describe("self-chat dedupe — #47830", () => {
     const echoCache = createSentMessageCache();
 
     // Agent sends "Hello"
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
 
     vi.advanceTimersByTime(1000);
@@ -148,7 +215,7 @@ describe("self-chat dedupe — #47830", () => {
       createParams({
         message: {
           id: 201,
-          sender: "+14155480405",
+          sender: "+15551234567",
           text: "Goodbye",
           is_from_me: false,
         },
@@ -166,7 +233,7 @@ describe("self-chat dedupe — #47830", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
     const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
 
     // Agent sends a multi-chunk reply: "Part one", "Part two", "Part three"
     echoCache.remember(scope, { text: "Part one", messageId: "agent-chunk-1" });
@@ -180,7 +247,7 @@ describe("self-chat dedupe — #47830", () => {
       createParams({
         message: {
           id: 300,
-          sender: "+14155480405",
+          sender: "+15551234567",
           text: "Part two",
           is_from_me: false,
         },
@@ -208,6 +275,27 @@ describe("self-chat dedupe — #47830", () => {
     vi.advanceTimersByTime(5000);
 
     const result = echoCache.has(scope, { text: "Hello there" });
+    expect(result).toBe(false);
+  });
+
+  // Safe failure mode: TTL expiry causes duplicate delivery (noisy), never message loss (lossy)
+  it("does NOT catch echo after TTL expiry — safe failure mode is duplicate delivery", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15551234567";
+
+    // Agent sends "Delayed echo test"
+    echoCache.remember(scope, { text: "Delayed echo test", messageId: "agent-msg-delayed" });
+
+    // 4.5 seconds later — beyond 4s TTL
+    vi.advanceTimersByTime(4500);
+
+    // Echo arrives with no messageId (text-only fallback path)
+    const result = echoCache.has(scope, { text: "Delayed echo test" });
+
+    // TTL expired → not caught → duplicate delivery (noisy but safe, not lossy)
     expect(result).toBe(false);
   });
 
@@ -242,8 +330,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123703,
-          sender: "+14155480405",
-          chat_identifier: "+14155480405",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
           text: "Hello this is a test message",
           is_from_me: true,
           is_group: false,
@@ -267,7 +355,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     const selfChatCache = createSelfChatCache();
 
     // Agent sends "Hi there!" to self-chat
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Hi there!", messageId: "p:0/GUID-abc-def" });
 
     // 1 second later, iMessage delivers the agent reply as is_from_me=true
@@ -278,8 +366,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123706,
-          sender: "+14155480405",
-          chat_identifier: "+14155480405",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
           text: "Hi there!",
           is_from_me: true,
           is_group: false,
@@ -307,8 +395,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123703,
-          sender: "+14155480405",
-          chat_identifier: "+14155480405",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
           text: "Hello",
           created_at: createdAt,
           is_from_me: true,
@@ -327,8 +415,8 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123704,
-          sender: "+14155480405",
-          chat_identifier: "+14155480405",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
           text: "Hello",
           created_at: createdAt,
           is_from_me: false,
@@ -353,7 +441,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 9999,
-          sender: "+14155480405", // local user sent this
+          sender: "+15551234567", // local user sent this
           chat_identifier: "+15555550123", // sent TO this other person
           text: "Hello",
           is_from_me: true,
@@ -374,7 +462,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
 
     const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Cached reply", messageId: "p:0/some-guid" });
 
     vi.advanceTimersByTime(1000);
@@ -397,7 +485,7 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
     const selfChatCache = createSelfChatCache();
 
     // Agent sends "Sounds good" — no messageId available (edge case)
-    const scope = "default:imessage:+14155480405";
+    const scope = "default:imessage:+15551234567";
     echoCache.remember(scope, { text: "Sounds good" });
 
     // 1 second later, inbound reflection arrives with id: null
@@ -407,7 +495,7 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
       createParams({
         message: {
           id: null as unknown as number,
-          sender: "+14155480405",
+          sender: "+15551234567",
           text: "Sounds good",
           is_from_me: false,
         },
