@@ -184,7 +184,10 @@ describe("plugin contract registry", () => {
     ]);
     expect(findMediaUnderstandingProviderIdsForPlugin("mistral")).toEqual(["mistral"]);
     expect(findMediaUnderstandingProviderIdsForPlugin("moonshot")).toEqual(["moonshot"]);
-    expect(findMediaUnderstandingProviderIdsForPlugin("openai")).toEqual(["openai"]);
+    expect(findMediaUnderstandingProviderIdsForPlugin("openai")).toEqual([
+      "openai",
+      "openai-codex",
+    ]);
     expect(findMediaUnderstandingProviderIdsForPlugin("zai")).toEqual(["zai"]);
   });
 
@@ -244,7 +247,7 @@ describe("plugin contract registry", () => {
     expect(findRegistrationForPlugin("openai")).toMatchObject({
       providerIds: ["openai", "openai-codex"],
       speechProviderIds: ["openai"],
-      mediaUnderstandingProviderIds: ["openai"],
+      mediaUnderstandingProviderIds: ["openai", "openai-codex"],
       imageGenerationProviderIds: ["openai"],
       videoGenerationProviderIds: [],
     });
