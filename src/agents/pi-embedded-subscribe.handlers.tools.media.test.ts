@@ -190,7 +190,7 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
-  it("still queues structured media when verbose is full", async () => {
+  it("does not queue structured media when verbose is full", async () => {
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: vi.fn() });
 
     await handleToolExecutionEnd(ctx, {
@@ -210,8 +210,8 @@ describe("handleToolExecutionEnd media emission", () => {
     });
 
     expect(ctx.emitToolOutput).toHaveBeenCalled();
-    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
-    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
   });
 
   it("does NOT emit media for error results", async () => {

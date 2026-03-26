@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 import {
   extractToolResultMediaArtifact,
   extractToolResultMediaPaths,
@@ -285,5 +286,57 @@ describe("extractToolResultMediaPaths", () => {
         },
       }),
     ).toEqual(["https://example.com/screenshot.png"]);
+  });
+});
+
+describe("subscribeEmbeddedPiSession tool-result media forwarding", () => {
+  it("emits structured tool-result media even when message text has no MEDIA directive", async () => {
+    const delivered: Array<{ text?: string; mediaUrls?: string[]; audioAsVoice?: boolean }> = [];
+    let handler: ((evt: unknown) => void) | undefined;
+    const session = {
+      subscribe: (fn: (evt: unknown) => void) => {
+        handler = fn;
+        return () => {
+          handler = undefined;
+        };
+      },
+      isCompacting: false,
+      abortCompaction: () => {},
+    };
+
+    const sub = subscribeEmbeddedPiSession({
+      session: session as never,
+      runId: "run-1",
+      sessionId: "session-1",
+      verboseLevel: "full",
+      onToolResult: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+
+    expect(handler).toBeTypeOf("function");
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated-image.png"],
+          },
+        },
+        content: [{ type: "text", text: "Generated 1 image with openai/gpt-image-1." }],
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.mediaUrls).toEqual(["/tmp/generated-image.png"]);
+    expect(delivered[0]?.text).toContain("Generated 1 image with openai/gpt-image-1.");
+
+    sub.unsubscribe();
   });
 });
