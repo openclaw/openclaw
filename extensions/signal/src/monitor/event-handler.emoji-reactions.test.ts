@@ -14,12 +14,7 @@
  *    as system event
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSignalEventHandler } from "./event-handler.js";
-import {
-  createBaseSignalEventHandlerDeps,
-  createSignalReceiveEvent,
-} from "./event-handler.test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { dispatchInboundMessageMock, enqueueSystemEventMock } = vi.hoisted(() => ({
   dispatchInboundMessageMock: vi.fn().mockResolvedValue({
@@ -45,16 +40,31 @@ vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/infra/system-events.js", () => ({
-  enqueueSystemEvent: enqueueSystemEventMock,
-}));
+vi.mock("../../../../src/infra/system-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../src/infra/system-events.js")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: enqueueSystemEventMock,
+  };
+});
 
-vi.mock("../../pairing/pairing-store.js", () => ({
+vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn(),
 }));
 
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
+
 describe("signal createSignalEventHandler emoji reaction handling", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ createSignalEventHandler } = await import("./event-handler.js"));
+    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+      await import("./event-handler.test-harness.js"));
+  });
+
   beforeEach(() => {
     dispatchInboundMessageMock.mockClear();
     enqueueSystemEventMock.mockClear();
