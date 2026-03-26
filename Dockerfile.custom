@@ -1,0 +1,20 @@
+FROM openclaw:latest
+
+USER root
+
+# Install Python pip and dependencies for weather skill
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-venv && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python packages globally
+RUN pip3 install --no-cache-dir --break-system-packages \
+    litellm==1.52.0 \
+    pydantic==2.5.0 \
+    requests==2.31.0
+
+USER node
+
+CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
