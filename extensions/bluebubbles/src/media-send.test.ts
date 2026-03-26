@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesMedia } from "./media-send.js";
+import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 
 const sendBlueBubblesAttachmentMock = vi.hoisted(() => vi.fn());
@@ -70,6 +70,70 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
+async function makeTempFile(
+  fileName: string,
+  contents: string,
+  dir?: string,
+): Promise<{ dir: string; filePath: string }> {
+  const resolvedDir = dir ?? (await makeTempDir());
+  const filePath = path.join(resolvedDir, fileName);
+  await fs.writeFile(filePath, contents, "utf8");
+  return { dir: resolvedDir, filePath };
+}
+
+async function sendLocalMedia(params: {
+  cfg: OpenClawConfig;
+  mediaPath: string;
+  accountId?: string;
+}) {
+  return sendBlueBubblesMedia({
+    cfg: params.cfg,
+    to: "chat:123",
+    accountId: params.accountId,
+    mediaPath: params.mediaPath,
+  });
+}
+
+async function expectRejectedLocalMedia(params: {
+  cfg: OpenClawConfig;
+  mediaPath: string;
+  error: RegExp;
+  accountId?: string;
+}) {
+  await expect(
+    sendLocalMedia({
+      cfg: params.cfg,
+      mediaPath: params.mediaPath,
+      accountId: params.accountId,
+    }),
+  ).rejects.toThrow(params.error);
+
+  expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+}
+
+async function expectAllowedLocalMedia(params: {
+  cfg: OpenClawConfig;
+  mediaPath: string;
+  expectedAttachment: Record<string, unknown>;
+  accountId?: string;
+  expectMimeDetection?: boolean;
+}) {
+  const result = await sendLocalMedia({
+    cfg: params.cfg,
+    mediaPath: params.mediaPath,
+    accountId: params.accountId,
+  });
+
+  expect(result).toEqual({ messageId: "msg-1" });
+  expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
+  expect(sendBlueBubblesAttachmentMock.mock.calls[0]?.[0]).toEqual(
+    expect.objectContaining(params.expectedAttachment),
+  );
+  if (params.expectMimeDetection) {
+    expect(runtimeMocks.detectMime).toHaveBeenCalled();
+  }
+}
+
 beforeEach(() => {
   const runtime = createMockRuntime();
   runtimeMocks = runtime.mocks;
@@ -110,57 +174,67 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
     const outsideFile = path.join(outsideDir, "outside.txt");
     await fs.writeFile(outsideFile, "not allowed", "utf8");
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
-        to: "chat:123",
-        mediaPath: outsideFile,
-      }),
-    ).rejects.toThrow(/not under any configured mediaLocalRoots/i);
-
-    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    await expectRejectedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      mediaPath: outsideFile,
+      error: /not under any configured mediaLocalRoots/i,
+    });
   });
 
   it("allows local paths that are explicitly configured", async () => {
-    const allowedRoot = await makeTempDir();
-    const allowedFile = path.join(allowedRoot, "allowed.txt");
-    await fs.writeFile(allowedFile, "allowed", "utf8");
+    const { dir: allowedRoot, filePath: allowedFile } = await makeTempFile(
+      "allowed.txt",
+      "allowed",
+    );
 
-    const result = await sendBlueBubblesMedia({
+    await expectAllowedLocalMedia({
       cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
-      to: "chat:123",
       mediaPath: allowedFile,
-    });
-
-    expect(result).toEqual({ messageId: "msg-1" });
-    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
-    expect(sendBlueBubblesAttachmentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
+      expectedAttachment: {
         filename: "allowed.txt",
         contentType: "text/plain",
-      }),
-    );
-    expect(runtimeMocks.detectMime).toHaveBeenCalled();
+      },
+      expectMimeDetection: true,
+    });
   });
 
   it("allows file:// media paths and file:// local roots", async () => {
-    const allowedRoot = await makeTempDir();
-    const allowedFile = path.join(allowedRoot, "allowed.txt");
-    await fs.writeFile(allowedFile, "allowed", "utf8");
-
-    const result = await sendBlueBubblesMedia({
-      cfg: createConfig({ mediaLocalRoots: [pathToFileURL(allowedRoot).toString()] }),
-      to: "chat:123",
-      mediaPath: pathToFileURL(allowedFile).toString(),
-    });
-
-    expect(result).toEqual({ messageId: "msg-1" });
-    expect(sendBlueBubblesAttachmentMock).toHaveBeenCalledTimes(1);
-    expect(sendBlueBubblesAttachmentMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        filename: "allowed.txt",
-      }),
+    const { dir: allowedRoot, filePath: allowedFile } = await makeTempFile(
+      "allowed.txt",
+      "allowed",
     );
+
+    await expectAllowedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [pathToFileURL(allowedRoot).toString()] }),
+      mediaPath: pathToFileURL(allowedFile).toString(),
+      expectedAttachment: {
+        filename: "allowed.txt",
+      },
+    });
+  });
+
+  it("rejects remote-host file:// media paths", async () => {
+    const allowedRoot = await makeTempDir();
+
+    await expectRejectedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      mediaPath: "file://attacker/share/evil.txt",
+      error: /Invalid file:\/\/ URL/i,
+    });
+  });
+
+  it("rejects remote-host file:// mediaLocalRoots entries", async () => {
+    const { filePath: allowedFile } = await makeTempFile("allowed.txt", "allowed");
+
+    await expect(
+      sendBlueBubblesMedia({
+        cfg: createConfig({ mediaLocalRoots: ["file://attacker/share"] }),
+        to: "chat:123",
+        mediaPath: allowedFile,
+      }),
+    ).rejects.toThrow(/Invalid file:\/\/ URL in mediaLocalRoots/i);
+
+    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
   });
 
   it("uses account-specific mediaLocalRoots over top-level roots", async () => {
@@ -213,15 +287,11 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
       return;
     }
 
-    await expect(
-      sendBlueBubblesMedia({
-        cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
-        to: "chat:123",
-        mediaPath: linkPath,
-      }),
-    ).rejects.toThrow(/not under any configured mediaLocalRoots/i);
-
-    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
+    await expectRejectedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      mediaPath: linkPath,
+      error: /not under any configured mediaLocalRoots/i,
+    });
   });
 
   it("rejects relative mediaLocalRoots entries", async () => {

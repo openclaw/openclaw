@@ -27,6 +27,7 @@ import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
+import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
@@ -82,6 +83,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...wizardHandlers,
   ...talkHandlers,
   ...toolsCatalogHandlers,
+  ...toolsEffectiveHandlers,
   ...ttsHandlers,
   ...skillsHandlers,
   ...sessionsHandlers,
@@ -153,5 +155,5 @@ export async function handleGatewayRequest(
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
-  await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect }, invokeHandler);
+  await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
 }

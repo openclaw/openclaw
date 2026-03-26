@@ -1,27 +1,14 @@
 import os from "node:os";
 import path from "node:path";
+import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { getPrimaryCommand } from "./argv.js";
 import { isValidProfileName } from "./profile-utils.js";
+import { takeCliRootOptionValue } from "./root-option-value.js";
 
 export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
-
-function takeValue(
-  raw: string,
-  next: string | undefined,
-): {
-  value: string | null;
-  consumedNext: boolean;
-} {
-  if (raw.includes("=")) {
-    const [, value] = raw.split("=", 2);
-    const trimmed = (value ?? "").trim();
-    return { value: trimmed || null, consumedNext: false };
-  }
-  const trimmed = (next ?? "").trim();
-  return { value: trimmed || null, consumedNext: Boolean(next) };
-}
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   if (argv.length < 2) {
@@ -31,7 +18,6 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   const out: string[] = argv.slice(0, 2);
   let profile: string | null = null;
   let sawDev = false;
-  let sawCommand = false;
 
   const args = argv.slice(2);
   for (let i = 0; i < args.length; i += 1) {
@@ -39,13 +25,16 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     if (arg === undefined) {
       continue;
     }
-
-    if (sawCommand) {
-      out.push(arg);
-      continue;
+    if (arg === FLAG_TERMINATOR) {
+      out.push(arg, ...args.slice(i + 1));
+      break;
     }
 
     if (arg === "--dev") {
+      if (getPrimaryCommand(out) === "gateway") {
+        out.push(arg);
+        continue;
+      }
       if (profile && profile !== "dev") {
         return { ok: false, error: "Cannot combine --dev with --profile" };
       }
@@ -59,7 +48,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
         return { ok: false, error: "Cannot combine --dev with --profile" };
       }
       const next = args[i + 1];
-      const { value, consumedNext } = takeValue(arg, next);
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (consumedNext) {
         i += 1;
       }
@@ -76,9 +65,15 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    if (!arg.startsWith("-")) {
-      sawCommand = true;
-      out.push(arg);
+    const consumedRootOption = consumeRootOptionToken(args, i);
+    if (consumedRootOption > 0) {
+      for (let offset = 0; offset < consumedRootOption; offset += 1) {
+        const token = args[i + offset];
+        if (token !== undefined) {
+          out.push(token);
+        }
+      }
+      i += consumedRootOption - 1;
       continue;
     }
 

@@ -4,6 +4,7 @@ import {
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];
@@ -11,13 +12,17 @@ type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSele
 export type ReplyPrefixContextBundle = {
   prefixContext: ResponsePrefixContext;
   responsePrefix?: string;
+  enableSlackInteractiveReplies?: boolean;
   responsePrefixContextProvider: () => ResponsePrefixContext;
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
 export type ReplyPrefixOptions = Pick<
   ReplyPrefixContextBundle,
-  "responsePrefix" | "responsePrefixContextProvider" | "onModelSelected"
+  | "responsePrefix"
+  | "enableSlackInteractiveReplies"
+  | "responsePrefixContextProvider"
+  | "onModelSelected"
 >;
 
 export function createReplyPrefixContext(params: {
@@ -45,6 +50,12 @@ export function createReplyPrefixContext(params: {
       channel: params.channel,
       accountId: params.accountId,
     }).responsePrefix,
+    enableSlackInteractiveReplies: params.channel
+      ? (getChannelPlugin(params.channel)?.messaging?.enableInteractiveReplies?.({
+          cfg,
+          accountId: params.accountId,
+        }) ?? undefined)
+      : undefined,
     responsePrefixContextProvider: () => prefixContext,
     onModelSelected,
   };
@@ -56,7 +67,16 @@ export function createReplyPrefixOptions(params: {
   channel?: string;
   accountId?: string;
 }): ReplyPrefixOptions {
-  const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
-    createReplyPrefixContext(params);
-  return { responsePrefix, responsePrefixContextProvider, onModelSelected };
+  const {
+    responsePrefix,
+    enableSlackInteractiveReplies,
+    responsePrefixContextProvider,
+    onModelSelected,
+  } = createReplyPrefixContext(params);
+  return {
+    responsePrefix,
+    enableSlackInteractiveReplies,
+    responsePrefixContextProvider,
+    onModelSelected,
+  };
 }

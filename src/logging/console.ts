@@ -1,14 +1,14 @@
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
+import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -73,7 +73,7 @@ function resolveConsoleSettings(): ConsoleSettings {
 
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
@@ -145,6 +145,12 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
+  "DiscordMessageListener",
+  "DiscordReactionListener",
+  "DiscordReactionRemoveListener",
+] as const;
+
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -154,7 +160,7 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   }
   if (
     message.startsWith("[EventQueue] Slow listener detected") &&
-    message.includes("DiscordMessageListener")
+    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
   ) {
     return true;
   }
@@ -169,10 +175,7 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    return formatTimestamp(now, { style: "short" });
   }
   return formatLocalIsoWithOffset(now);
 }
@@ -181,19 +184,6 @@ function hasTimestampPrefix(value: string): boolean {
   return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
     value,
   );
-}
-
-function isJsonPayload(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return false;
-  }
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -256,10 +246,7 @@ export function enableConsoleCapture(): void {
       }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix &&
-        trimmed.length > 0 &&
-        !hasTimestampPrefix(trimmed) &&
-        !isJsonPayload(trimmed);
+        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
       const timestamp = shouldPrefixTimestamp
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
@@ -283,7 +270,7 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+        // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);
