@@ -231,7 +231,7 @@ function resolveMemoryErrorHint(error?: string | null): string | undefined {
     return undefined;
   }
   const lower = error.toLowerCase();
-  if (lower.includes("leaked") || lower.includes("reported as leaked")) {
+  if (lower.includes("leaked")) {
     return "The embedding API key was flagged as leaked. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
   }
   if (lower.includes("quota") || lower.includes("rate limit")) {

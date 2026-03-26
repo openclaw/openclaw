@@ -38,7 +38,7 @@ function resolveEmbeddingErrorRemediation(
 ): string | null {
   const lower = error.toLowerCase();
 
-  if (lower.includes("leaked") || lower.includes("reported as leaked")) {
+  if (lower.includes("leaked")) {
     const keyEnvHint =
       provider === "gemini" || provider === "google"
         ? "GEMINI_API_KEY"
@@ -60,7 +60,7 @@ function resolveEmbeddingErrorRemediation(
     return "Embedding provider quota exhausted. Wait and retry, or switch provider via: openclaw configure";
   }
 
-  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid.*key")) {
+  if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("invalid key") || lower.includes("invalid_key")) {
     return "API key is invalid or expired. Update it via: openclaw configure";
   }
 
