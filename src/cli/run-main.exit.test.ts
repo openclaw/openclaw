@@ -9,6 +9,9 @@ const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const maintainLocalConfigJsonSchemaArtifactsMock = vi.hoisted(() => vi.fn(async () => {}));
+const registerPluginCliCommandsMock = vi.hoisted(() => vi.fn());
+const loadValidatedConfigForPluginRegistrationMock = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -52,6 +55,20 @@ vi.mock("./program.js", () => ({
   buildProgram: buildProgramMock,
 }));
 
+vi.mock("../plugins/cli.js", () => ({
+  registerPluginCliCommands: registerPluginCliCommandsMock,
+}));
+
+vi.mock("./program/register.subclis.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./program/register.subclis.js")>()),
+  loadValidatedConfigForPluginRegistration: loadValidatedConfigForPluginRegistrationMock,
+}));
+
+vi.mock("../config/local-json-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/local-json-schema.js")>()),
+  maintainLocalConfigJsonSchemaArtifacts: maintainLocalConfigJsonSchemaArtifactsMock,
+}));
+
 const { runCli } = await import("./run-main.js");
 
 describe("runCli exit behavior", () => {
@@ -88,6 +105,30 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("maintains local schema artifacts on bare root invocation", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsyncMock = vi.fn(async () => {});
+    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: parseAsyncMock });
+
+    await runCli(["node", "openclaw"]);
+
+    expect(maintainLocalConfigJsonSchemaArtifactsMock).toHaveBeenCalledTimes(1);
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(parseAsyncMock).toHaveBeenCalledWith(["node", "openclaw"]);
+  });
+
+  it.each(["--version", "-v"])("does not maintain local schema artifacts for %s", async (flag) => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsyncMock = vi.fn(async () => {});
+    buildProgramMock.mockReturnValueOnce({ commands: [], parseAsync: parseAsyncMock });
+
+    await runCli(["node", "openclaw", flag]);
+
+    expect(maintainLocalConfigJsonSchemaArtifactsMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).toHaveBeenCalledTimes(1);
+    expect(parseAsyncMock).toHaveBeenCalledWith(["node", "openclaw", flag]);
   });
 
   it("returns after a handled container-target invocation", async () => {

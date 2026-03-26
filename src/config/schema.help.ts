@@ -55,6 +55,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
+  "update.maintainConfigJsonSchema":
+    "Keep a local openclaw_schema.json beside openclaw.json and default $schema to that file when missing or empty (default: true).",
   "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
   "update.auto.stableDelayHours":
     "Minimum delay before stable-channel auto-apply starts (default: 6).",

@@ -6,7 +6,6 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -1175,17 +1174,8 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 }
 
 async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
-  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
-    properties?: Record<string, unknown>;
-    required?: string[];
-  };
-
-  schema.properties = {
-    $schema: { type: "string" },
-    ...schema.properties,
-  };
-
-  return schema;
+  const { buildEditorConfigSchemaDocument } = await import("../config/local-json-schema.js");
+  return await buildEditorConfigSchemaDocument();
 }
 
 export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {

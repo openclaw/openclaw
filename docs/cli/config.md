@@ -42,7 +42,9 @@ Pipe it into a file when you want to inspect or validate it with other tools:
 openclaw config schema > openclaw.schema.json
 ```
 
-### Paths
+On normal CLI runs, when `update.maintainConfigJsonSchema` is `true` (default), OpenClaw also keeps a local `openclaw_schema.json` beside `openclaw.json` and sets `$schema: "openclaw_schema.json"` when `$schema` is missing or empty. Set `update.maintainConfigJsonSchema: false` to opt out.
+
+#### Paths
 
 Paths use dot or bracket notation:
 

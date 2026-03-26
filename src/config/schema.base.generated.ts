@@ -343,6 +343,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           checkOnStart: {
             type: "boolean",
           },
+          maintainConfigJsonSchema: {
+            type: "boolean",
+            default: true,
+          },
           auto: {
             type: "object",
             properties: {
@@ -11652,6 +11656,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Update Check on Start",
       help: "Check for npm updates when the gateway starts (default: true).",
       tags: ["automation"],
+    },
+    "update.maintainConfigJsonSchema": {
+      label: "Maintain Config JSON Schema",
+      help: "Keep a local openclaw_schema.json beside openclaw.json and default $schema to that file when missing or empty (default: true).",
+      tags: ["advanced"],
     },
     "update.auto.enabled": {
       label: "Auto Update Enabled",

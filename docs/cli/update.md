@@ -68,6 +68,7 @@ install method aligned:
 - `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable`/`beta` → installs from npm using the matching dist-tag.
+- When `update.maintainConfigJsonSchema` is `true` (default), CLI runs keep `openclaw_schema.json` updated beside `openclaw.json` and fill in `$schema: "openclaw_schema.json"` when the config leaves `$schema` empty.
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 

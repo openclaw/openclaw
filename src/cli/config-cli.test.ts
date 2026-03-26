@@ -439,8 +439,10 @@ describe("config cli", () => {
       const raw = mockLog.mock.calls.at(-1)?.[0];
       expect(typeof raw).toBe("string");
       const payload = JSON.parse(String(raw)) as {
+        meta?: { version?: string };
         properties?: Record<string, unknown>;
       };
+      expect(typeof payload.meta?.version).toBe("string");
       expect(payload.properties?.$schema).toEqual({ type: "string" });
       expect(payload.properties?.channels).toEqual({
         type: "object",
@@ -488,8 +490,10 @@ describe("config cli", () => {
 
       expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
       const payload = JSON.parse(String(mockLog.mock.calls.at(-1)?.[0])) as {
+        meta?: { version?: string };
         properties?: Record<string, unknown>;
       };
+      expect(typeof payload.meta?.version).toBe("string");
       expect(payload.properties?.$schema).toEqual({ type: "string" });
       expect(payload.properties?.channels).toBeTruthy();
       expect(payload.properties?.plugins).toBeUndefined();
