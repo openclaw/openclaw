@@ -261,6 +261,8 @@ importers:
 
   extensions/brave: {}
 
+  extensions/browser: {}
+
   extensions/byteplus: {}
 
   extensions/chutes: {}
