@@ -1200,6 +1200,30 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("prefers provider-qualified context windows for fresh bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "sess-anthropic-qualified-context",
+        updatedAt: 0,
+        totalTokens: 25_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 25k/1.0m");
+    expect(normalized).not.toContain("Context: 25k/200k");
+  });
+
   it("does not synthesize a 32k fallback window when the active runtime model is unknown", () => {
     const text = buildStatusMessage({
       config: {
