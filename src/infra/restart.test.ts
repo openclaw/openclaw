@@ -62,26 +62,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
+describe("parsePidsFromLsofOutput", () => {
+  // Tests the pure parser directly — no spawnSync mock needed, no flaky
+  // module-isolation issues. Covers the cases that were previously tested
+  // through findGatewayPidsOnPortSync with a fragile mock stack.
   it("parses lsof output and filters non-openclaw/current processes", () => {
+    const stdout = [
+      `p${process.pid}`,
+      "copenclaw",
+      "p4100",
+      "copenclaw-gateway",
+      "p4200",
+      "cnode",
+      "p4300",
+      "cOpenClaw",
+    ].join("\n");
+
+    const pids = __testing.parsePidsFromLsofOutput(stdout);
+
+    expect(pids).toEqual([4100, 4300]);
+  });
+
+  it("deduplicates dual-stack pids", () => {
+    const stdout = ["p4100", "copenclaw-gateway", "p4100", "copenclaw-gateway"].join("\n");
+    expect(__testing.parsePidsFromLsofOutput(stdout)).toEqual([4100]);
+  });
+
+  it("returns empty for output with no openclaw processes", () => {
+    const stdout = ["p4200", "cnode", "p4300", "cnginx"].join("\n");
+    expect(__testing.parsePidsFromLsofOutput(stdout)).toEqual([]);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
+  it("invokes lsof with correct args and returns parsed pids", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,
       status: 0,
-      stdout: [
-        `p${process.pid}`,
-        "copenclaw",
-        "p4100",
-        "copenclaw-gateway",
-        "p4200",
-        "cnode",
-        "p4300",
-        "cOpenClaw",
-      ].join("\n"),
+      stdout: ["p4100", "copenclaw-gateway"].join("\n"),
     });
 
     const pids = findGatewayPidsOnPortSync(18789);
 
-    expect(pids).toEqual([4100, 4300]);
+    expect(pids).toEqual([4100]);
     expect(spawnSyncMock).toHaveBeenCalledWith(
       "/usr/sbin/lsof",
       ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"],

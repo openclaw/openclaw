@@ -288,4 +288,6 @@ export const __testing = {
   },
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,
+  /** Expose pure parser for direct unit testing without spawnSync mocking. */
+  parsePidsFromLsofOutput,
 };
