@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
+import type { IncomingMessage } from "node:http";
 import * as grammy from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/infra-runtime";
@@ -14,6 +15,11 @@ import {
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  applyBasicWebhookRequestGuards,
+  createFixedWindowRateLimiter,
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
@@ -21,12 +27,21 @@ import { createTelegramBot } from "./bot.js";
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
+const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
+  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+});
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile
     : (class InputFileFallback {
         constructor(public readonly path: string) {}
       } as unknown as typeof grammy.InputFile);
+
+export function clearTelegramWebhookRateLimitStateForTest(): void {
+  telegramWebhookRateLimiter.clear();
+}
 
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
@@ -103,6 +118,10 @@ function hasValidTelegramWebhookSecret(
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
+function resolveTelegramWebhookRateLimitKey(req: IncomingMessage, path: string): string {
+  return `${path}:${req.socket.remoteAddress ?? "unknown"}`;
+}
+
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
@@ -170,6 +189,18 @@ export async function startTelegramWebhook(opts: {
     if (req.url !== path || req.method !== "POST") {
       res.writeHead(404);
       res.end();
+      return;
+    }
+    // Apply the per-source limit before auth so invalid secret guesses consume budget
+    // in the same window as any later request from that source.
+    if (
+      !applyBasicWebhookRequestGuards({
+        req,
+        res,
+        rateLimiter: telegramWebhookRateLimiter,
+        rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path),
+      })
+    ) {
       return;
     }
     const startTime = Date.now();

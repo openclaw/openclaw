@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { request, type IncomingMessage } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const handlerSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
@@ -24,6 +25,7 @@ const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
 const WEBHOOK_TEST_YIELD_MS = 0;
 const WEBHOOK_DRAIN_GUARD_MS = 5;
+const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
 
 function collectResponseBody(
   res: IncomingMessage,
@@ -97,6 +99,7 @@ vi.mock("./bot.js", () => ({
 }));
 
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
+let clearTelegramWebhookRateLimitStateForTest: typeof import("./webhook.js").clearTelegramWebhookRateLimitStateForTest;
 
 function resetTelegramWebhookMocks(): void {
   handlerSpy.mockReset();
@@ -120,11 +123,13 @@ function resetTelegramWebhookMocks(): void {
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ startTelegramWebhook } = await import("./webhook.js"));
+  ({ startTelegramWebhook, clearTelegramWebhookRateLimitStateForTest } =
+    await import("./webhook.js"));
 });
 
 beforeEach(() => {
   resetTelegramWebhookMocks();
+  clearTelegramWebhookRateLimitStateForTest();
 });
 
 async function fetchWithTimeout(
@@ -553,6 +558,47 @@ describe("startTelegramWebhook", () => {
 
         expect(response.statusCode).toBe(401);
         expect(response.body).toBe("unauthorized");
+        expect(handlerSpy).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("rate limits repeated invalid secret guesses before authentication succeeds", async () => {
+    handlerSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        let saw429 = false;
+
+        for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
+          const response = await postWebhookJson({
+            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+            payload: JSON.stringify({ update_id: i, message: { text: `guess ${i}` } }),
+            secret: `wrong-secret-${String(i).padStart(3, "0")}`,
+          });
+
+          if (response.status === 429) {
+            saw429 = true;
+            expect(await response.text()).toBe("Too Many Requests");
+            break;
+          }
+
+          expect(response.status).toBe(401);
+          expect(await response.text()).toBe("unauthorized");
+        }
+
+        expect(saw429).toBe(true);
+
+        const validResponse = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify({ update_id: 999, message: { text: "hello" } }),
+          secret: TELEGRAM_SECRET,
+        });
+        expect(validResponse.status).toBe(429);
+        expect(await validResponse.text()).toBe("Too Many Requests");
         expect(handlerSpy).not.toHaveBeenCalled();
       },
     );
