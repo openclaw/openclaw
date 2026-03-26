@@ -1153,9 +1153,7 @@ export function renderApp(state: AppViewState) {
                   onToolsOverridesChange: (agentId, alsoAllow, deny) => {
                     const hasOverrides = alsoAllow.length > 0 || deny.length > 0;
                     const existingIndex = findAgentIndex(agentId);
-                    const index = hasOverrides
-                      ? ensureAgentIndex(agentId)
-                      : existingIndex;
+                    const index = hasOverrides ? ensureAgentIndex(agentId) : existingIndex;
                     if (index < 0) {
                       return;
                     }
