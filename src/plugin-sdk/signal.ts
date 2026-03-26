@@ -72,10 +72,6 @@ export {
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 
-export {
-  listEnabledSignalAccounts,
-  listSignalAccountIds,
-  resolveDefaultSignalAccountId,
 } from "./signal-surface.js";
 export { isSignalSenderAllowed } from "./signal-surface.js";
 export type { SignalSender } from "./signal-surface.js";
@@ -85,3 +81,6 @@ export { resolveSignalReactionLevel } from "./signal-surface.js";
 export { removeReactionSignal, sendReactionSignal } from "./signal-surface.js";
 export { sendMessageSignal } from "./signal-surface.js";
 export { signalMessageActions } from "./signal-surface.js";
+
+export { resolveAckReaction } from "../agents/identity.js";
+export { shouldAckReaction } from "../channels/ack-reactions.js";

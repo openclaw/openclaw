@@ -3,10 +3,10 @@
  * Call this BEFORE inboundDebouncer.enqueue() in event-handler.ts.
  */
 
-import { resolveAckReaction } from "../../../../src/agents/identity.js";
-import { shouldAckReaction } from "../../../../src/channels/ack-reactions.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { logVerbose } from "../../../../src/globals.js";
+import { resolveAckReaction } from "../../src/agents/identity.js";
+import { shouldAckReaction } from "../../src/channels/ack-reactions.js";
+import type { OpenClawConfig } from "../../src/config/config.js";
+import { logVerbose } from "../../src/globals.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { sendReactionSignal } from "../send-reactions.js";
 
@@ -61,12 +61,14 @@ export function maybeSendSignalAckReaction(params: {
     return;
   }
 
+  // Fire-and-forget: send ACK reaction without blocking inbound message processing.
+  // Failures are logged by sendReactionSignal internally.
   sendReactionSignal(params.senderRecipient, params.targetTimestamp, emoji, {
     baseUrl: params.baseUrl,
     account: params.account,
     accountId: params.accountId,
     groupId: params.groupId,
-  }).catch((err) => {
-    logVerbose(`Signal ack reaction failed: ${String(err)}`);
+  }).catch(() => {
+    // Silently ignore ACK reaction send failures; they're non-critical.
   });
 }
