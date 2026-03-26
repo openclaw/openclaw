@@ -119,8 +119,9 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   };
 
   // Pattern for [media cached: path (mime) kind=<kind>] markers from context pruning.
+  // Path is captured up to the ` (` delimiter so paths with spaces are handled correctly.
   // Only inject images (kind=image); other kinds stay as text references for the agent.
-  const mediaCachedPattern = /\[media cached:\s*(\S+)\s*\(([^)]+)\)\s*kind=(\w+)\]/gi;
+  const mediaCachedPattern = /\[media cached:\s*(.+?)\s+\(([^)]+)\)\s*kind=(\w+)\]/gi;
   let cachedMatch: RegExpExecArray | null;
   while ((cachedMatch = mediaCachedPattern.exec(prompt)) !== null) {
     const cachedPath = cachedMatch[1]?.trim();
