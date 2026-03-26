@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax .qwen)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.claude .codex .minimax)
 
 openclaw_live_trim() {
   local value="${1:-}"
@@ -29,9 +29,6 @@ openclaw_live_should_include_auth_dir_for_provider() {
       ;;
     minimax | minimax-portal)
       printf '%s\n' ".minimax"
-      ;;
-    qwen | qwen-portal-auth)
-      printf '%s\n' ".qwen"
       ;;
   esac
 }

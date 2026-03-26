@@ -679,12 +679,12 @@ describe("resolveModel", () => {
 
   it("prefers exact provider config over normalized alias match when both keys exist", () => {
     mockDiscoveredModel({
-      provider: "qwen",
-      modelId: "qwen3-coder-plus",
+      provider: "bedrock",
+      modelId: "bedrock-alias-exact-test",
       templateModel: {
-        id: "qwen3-coder-plus",
-        name: "Qwen3 Coder Plus",
-        provider: "qwen",
+        id: "bedrock-alias-exact-test",
+        name: "Bedrock alias test",
+        provider: "bedrock",
         api: "openai-completions",
         baseUrl: "https://default-provider.example.com/v1",
         reasoning: false,
@@ -698,19 +698,19 @@ describe("resolveModel", () => {
     const cfg = {
       models: {
         providers: {
-          "qwen-portal": {
-            baseUrl: "https://canonical-provider.example.com/v1",
+          "amazon-bedrock": {
+            baseUrl: "https://canonical-bedrock.example.com/v1",
             api: "openai-completions",
             headers: { "X-Provider": "canonical" },
-            models: [{ ...makeModel("qwen3-coder-plus"), reasoning: false }],
+            models: [{ ...makeModel("bedrock-alias-exact-test"), reasoning: false }],
           },
-          qwen: {
-            baseUrl: "https://alias-provider.example.com/v1",
+          bedrock: {
+            baseUrl: "https://alias-bedrock.example.com/v1",
             api: "anthropic-messages",
             headers: { "X-Provider": "alias" },
             models: [
               {
-                ...makeModel("qwen3-coder-plus"),
+                ...makeModel("bedrock-alias-exact-test"),
                 api: "anthropic-messages",
                 reasoning: true,
                 contextWindow: 262144,
@@ -722,14 +722,14 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const result = resolveModelForTest("qwen", "qwen3-coder-plus", "/tmp/agent", cfg);
+    const result = resolveModelForTest("bedrock", "bedrock-alias-exact-test", "/tmp/agent", cfg);
 
     expect(result.error).toBeUndefined();
     expect(result.model).toMatchObject({
-      provider: "qwen",
-      id: "qwen3-coder-plus",
+      provider: "bedrock",
+      id: "bedrock-alias-exact-test",
       api: "anthropic-messages",
-      baseUrl: "https://alias-provider.example.com",
+      baseUrl: "https://alias-bedrock.example.com",
       reasoning: true,
       contextWindow: 262144,
       maxTokens: 32768,

@@ -22,7 +22,6 @@ export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
-  buildQwenPortalProvider,
   buildSyntheticProvider,
   buildTogetherProvider,
   buildDoubaoCodingProvider,
