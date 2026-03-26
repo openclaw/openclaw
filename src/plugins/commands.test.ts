@@ -331,3 +331,70 @@ describe("registerPluginCommand", () => {
     );
   });
 });
+
+describe("requiredGatewayScopes enforcement", () => {
+  const handler = async () => ({ text: "ok" });
+
+  function buildCommand(scopes: string[]) {
+    return {
+      name: "admin-cmd",
+      description: "Requires admin",
+      acceptsArgs: false,
+      requiredGatewayScopes: scopes,
+      handler,
+      pluginId: "demo-plugin",
+    };
+  }
+
+  it("blocks gateway client missing required scope", async () => {
+    const result = await executePluginCommand({
+      command: buildCommand(["operator.admin"]),
+      channel: "webchat",
+      senderId: "client-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      commandBody: "/admin-cmd",
+      config: {} as never,
+    });
+    expect(result.text).toContain("requires operator.admin");
+  });
+
+  it("allows gateway client with required scope", async () => {
+    const result = await executePluginCommand({
+      command: buildCommand(["operator.admin"]),
+      channel: "webchat",
+      senderId: "client-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.admin"],
+      commandBody: "/admin-cmd",
+      config: {} as never,
+    });
+    expect(result.text).toBe("ok");
+  });
+
+  it("does not gate external channel callers", async () => {
+    const result = await executePluginCommand({
+      command: buildCommand(["operator.admin"]),
+      channel: "telegram",
+      senderId: "user-1",
+      isAuthorizedSender: true,
+      // No gatewayClientScopes — external caller
+      commandBody: "/admin-cmd",
+      config: {} as never,
+    });
+    expect(result.text).toBe("ok");
+  });
+
+  it("allows when caller has any one of multiple required scopes", async () => {
+    const result = await executePluginCommand({
+      command: buildCommand(["operator.admin", "operator.superadmin"]),
+      channel: "webchat",
+      senderId: "client-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.superadmin"],
+      commandBody: "/admin-cmd",
+      config: {} as never,
+    });
+    expect(result.text).toBe("ok");
+  });
+});

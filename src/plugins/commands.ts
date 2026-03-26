@@ -203,6 +203,22 @@ export async function executePluginCommand(params: {
     return { text: "⚠️ This command requires authorization." };
   }
 
+  // Enforce gateway client scope requirements declared by the command.
+  // gatewayClientScopes is only present for internal (control-plane) callers;
+  // external channel callers are unaffected.
+  const requiredScopes = command.requiredGatewayScopes;
+  if (requiredScopes && requiredScopes.length > 0 && params.gatewayClientScopes) {
+    const hasScope = requiredScopes.some((scope) => params.gatewayClientScopes!.includes(scope));
+    if (!hasScope) {
+      logVerbose(
+        `Plugin command /${command.name} blocked: gateway client missing scope ${requiredScopes.join(" or ")}`,
+      );
+      return {
+        text: `⚠️ /${command.name} requires ${requiredScopes.join(" or ")} for gateway clients.`,
+      };
+    }
+  }
+
   // Sanitize args before passing to handler
   const sanitizedArgs = sanitizeArgs(args);
   const bindingConversation = resolveBindingConversationFromCommand({

@@ -205,85 +205,11 @@ describe("talk-voice plugin", () => {
     });
   });
 
-  it("rejects /voice set from gateway client with only operator.write scope", async () => {
-    const { command, runtime } = createHarness({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-          },
-        },
-      },
+  it("declares requiredGatewayScopes for operator.admin", () => {
+    const { command } = createHarness({
+      talk: { provider: "elevenlabs", providers: { elevenlabs: { apiKey: "sk" } } },
     });
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(
-      createCommandContext("set Claudia", "webchat", ["operator.write"]),
-    );
-
-    expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows /voice set from gateway client with operator.admin scope", async () => {
-    const { command, runtime } = createHarness({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-          },
-        },
-      },
-    });
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(
-      createCommandContext("set Claudia", "webchat", ["operator.admin"]),
-    );
-
-    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
-    expect(result.text).toContain("voice-a");
-  });
-
-  it("rejects /voice set from webchat channel with no scopes (TUI/internal)", async () => {
-    const { command, runtime } = createHarness({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-          },
-        },
-      },
-    });
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    // gatewayClientScopes omitted — simulates internal webchat session without scopes
-    const result = await command.handler(createCommandContext("set Claudia", "webchat"));
-
-    expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows /voice set from non-gateway channels without scope check", async () => {
-    const { command, runtime } = createHarness({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-          },
-        },
-      },
-    });
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(createCommandContext("set Claudia", "telegram"));
-
-    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
-    expect(result.text).toContain("voice-a");
+    expect(command.requiredGatewayScopes).toEqual(["operator.admin"]);
   });
 
   it("returns provider lookup errors cleanly", async () => {

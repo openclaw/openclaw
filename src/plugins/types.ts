@@ -1080,6 +1080,13 @@ export type OpenClawPluginCommandDefinition = {
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
+  /**
+   * Gateway client scopes required for internal (control-plane) callers.
+   * When set, core dispatch rejects internal callers whose
+   * `gatewayClientScopes` do not include at least one of the listed scopes.
+   * External channel callers are unaffected.
+   */
+  requiredGatewayScopes?: string[];
   /** The handler function */
   handler: PluginCommandHandler;
 };
