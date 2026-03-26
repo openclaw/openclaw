@@ -201,7 +201,22 @@ describe("openai plugin", () => {
       ),
     ).toEqual(["openai", "openai-codex"]);
     expect(speechProviders).toHaveLength(1);
-    expect(mediaProviders).toHaveLength(1);
+    expect(
+      mediaProviders.map(
+        (provider) =>
+          // oxlint-disable-next-line typescript/no-explicit-any
+          (provider as any).id,
+      ),
+    ).toEqual(["openai", "openai-codex"]);
+    const codexMediaProvider = requireRegisteredProvider(
+      mediaProviders,
+      "openai-codex",
+      "media provider",
+    );
+    expect(
+      // oxlint-disable-next-line typescript/no-explicit-any
+      (codexMediaProvider as any).capabilities,
+    ).toEqual(["image"]);
     expect(imageProviders).toHaveLength(1);
   });
 
