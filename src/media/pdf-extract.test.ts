@@ -10,7 +10,7 @@ describe("extractPdfContent", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes pdfjs standard font data URL to getDocument", async () => {
+  it("passes a filesystem standard font path to getDocument", async () => {
     const getDocument = vi.fn(() => ({
       promise: Promise.resolve({
         numPages: 1,
@@ -37,12 +37,22 @@ describe("extractPdfContent", () => {
 
     expect(result).toEqual({ text: "hello from pdf", images: [] });
     expect(getDocument).toHaveBeenCalledTimes(1);
-    expect(getDocument).toHaveBeenCalledWith(
+    const params = getDocument.mock.lastCall?.at(0) as
+      | {
+          data: Uint8Array;
+          disableWorker: boolean;
+          standardFontDataUrl?: string;
+        }
+      | undefined;
+    expect(params).toBeDefined();
+    expect(params).toEqual(
       expect.objectContaining({
         data: expect.any(Uint8Array),
         disableWorker: true,
-        standardFontDataUrl: expect.stringContaining("/pdfjs-dist/standard_fonts/"),
       }),
     );
+    expect(params?.standardFontDataUrl).toContain("/pdfjs-dist/standard_fonts/");
+    expect(params?.standardFontDataUrl).toMatch(/\/$/);
+    expect(params?.standardFontDataUrl).not.toMatch(/^file:\/\//);
   });
 });

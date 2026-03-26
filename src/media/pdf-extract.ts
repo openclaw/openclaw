@@ -1,6 +1,5 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -43,7 +42,11 @@ function resolvePdfJsStandardFontDataUrl(): string | undefined {
   try {
     const pdfJsPackageJsonPath = require.resolve("pdfjs-dist/package.json");
     const standardFontsDir = path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts");
-    pdfJsStandardFontDataUrl = pathToFileURL(`${standardFontsDir}${path.sep}`).href;
+    // In Node, PDF.js concatenates this value with the font filename and passes the
+    // resulting plain string to `fs.readFile(...)`, so this must be a filesystem path.
+    const normalizedStandardFontsDir =
+      path.sep === "/" ? standardFontsDir : standardFontsDir.replaceAll(path.sep, "/");
+    pdfJsStandardFontDataUrl = `${normalizedStandardFontsDir}/`;
   } catch {
     pdfJsStandardFontDataUrl = null;
   }
