@@ -5,14 +5,17 @@ import { afterEach, describe, expect, test } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { testState } from "./test-helpers.mocks.js";
 import {
+  connectReq,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
+  rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
 
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
+const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 
 afterEach(async () => {
@@ -93,7 +96,7 @@ describe("session history HTTP endpoints", () => {
       const res = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
         {
-          headers: AUTH_HEADER,
+          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
         },
       );
 
@@ -127,7 +130,7 @@ describe("session history HTTP endpoints", () => {
       const res = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:missing")}/history`,
         {
-          headers: AUTH_HEADER,
+          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
         },
       );
 
@@ -195,7 +198,7 @@ describe("session history HTTP endpoints", () => {
       const res = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
         {
-          headers: AUTH_HEADER,
+          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
         },
       );
 
@@ -231,7 +234,7 @@ describe("session history HTTP endpoints", () => {
       const firstPage = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=2`,
         {
-          headers: AUTH_HEADER,
+          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
         },
       );
       expect(firstPage.status).toBe(200);
@@ -254,7 +257,7 @@ describe("session history HTTP endpoints", () => {
       const secondPage = await fetch(
         `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
         {
-          headers: AUTH_HEADER,
+          headers: { ...AUTH_HEADER, ...READ_SCOPE_HEADER },
         },
       );
       expect(secondPage.status).toBe(200);
@@ -291,6 +294,7 @@ describe("session history HTTP endpoints", () => {
         {
           headers: {
             ...AUTH_HEADER,
+            ...READ_SCOPE_HEADER,
             Accept: "text/event-stream",
           },
         },
@@ -337,6 +341,7 @@ describe("session history HTTP endpoints", () => {
         {
           headers: {
             ...AUTH_HEADER,
+            ...READ_SCOPE_HEADER,
             Accept: "text/event-stream",
           },
         },
@@ -392,6 +397,63 @@ describe("session history HTTP endpoints", () => {
 
       await reader?.cancel();
     } finally {
+      await harness.close();
+    }
+  });
+
+  test("rejects session history when operator.read is not requested", async () => {
+    await seedSession({ text: "scope-guarded history" });
+
+    const harness = await createGatewaySuiteHarness();
+    const ws = await harness.openWs();
+    try {
+      const connect = await connectReq(ws, {
+        token: "test-gateway-token-1234567890",
+        scopes: ["operator.approvals"],
+      });
+      expect(connect.ok).toBe(true);
+
+      const wsHistory = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "agent:main:main",
+        limit: 1,
+      });
+      expect(wsHistory.ok).toBe(false);
+      expect(wsHistory.error?.message).toBe("missing scope: operator.read");
+
+      const httpHistory = await fetch(
+        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
+        {
+          headers: {
+            ...AUTH_HEADER,
+            "x-openclaw-scopes": "operator.approvals",
+          },
+        },
+      );
+      expect(httpHistory.status).toBe(403);
+      await expect(httpHistory.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: operator.read",
+        },
+      });
+
+      const httpHistoryWithoutScopes = await fetch(
+        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
+        {
+          headers: AUTH_HEADER,
+        },
+      );
+      expect(httpHistoryWithoutScopes.status).toBe(403);
+      await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: operator.read",
+        },
+      });
+    } finally {
+      ws.close();
       await harness.close();
     }
   });
