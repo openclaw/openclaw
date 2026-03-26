@@ -186,11 +186,49 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
-    bot.api.config.use((prev, method, payload, signal) => {
-      if (method === "getUpdates") {
-        lastGetUpdatesAt = Date.now();
+    let lastGetUpdatesStartedAt: number | null = null;
+    let lastGetUpdatesFinishedAt: number | null = null;
+    let lastGetUpdatesDurationMs: number | null = null;
+    let lastGetUpdatesOutcome = "not-started";
+    let lastGetUpdatesError: string | null = null;
+    let lastGetUpdatesOffset: number | null = null;
+    let inFlightGetUpdates = 0;
+    let stopSequenceLogged = false;
+    let stallDiagLoggedAt = 0;
+
+    bot.api.config.use(async (prev, method, payload, signal) => {
+      if (method !== "getUpdates") {
+        return prev(method, payload, signal);
       }
-      return prev(method, payload, signal);
+
+      const startedAt = Date.now();
+      lastGetUpdatesAt = startedAt;
+      lastGetUpdatesStartedAt = startedAt;
+      lastGetUpdatesOffset =
+        payload && typeof payload === "object" && "offset" in payload
+          ? ((payload as { offset?: number }).offset ?? null)
+          : null;
+      inFlightGetUpdates += 1;
+      lastGetUpdatesOutcome = "started";
+      lastGetUpdatesError = null;
+
+      try {
+        const result = await prev(method, payload, signal);
+        const finishedAt = Date.now();
+        lastGetUpdatesFinishedAt = finishedAt;
+        lastGetUpdatesDurationMs = finishedAt - startedAt;
+        lastGetUpdatesOutcome = Array.isArray(result) ? `ok:${result.length}` : "ok";
+        return result;
+      } catch (err) {
+        const finishedAt = Date.now();
+        lastGetUpdatesFinishedAt = finishedAt;
+        lastGetUpdatesDurationMs = finishedAt - startedAt;
+        lastGetUpdatesOutcome = "error";
+        lastGetUpdatesError = formatErrorMessage(err);
+        throw err;
+      } finally {
+        inFlightGetUpdates = Math.max(0, inFlightGetUpdates - 1);
+      }
     });
 
     const runner = run(bot, this.opts.runnerOptions);
@@ -210,20 +248,33 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
+
+    const logDiagStop = (label: string) => {
+      if (stopSequenceLogged) {
+        return;
+      }
+      stopSequenceLogged = true;
+      this.opts.log(
+        `[telegram][diag] ${label} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}`,
+      );
+    };
+
     const stopRunner = () => {
+      logDiagStop("stop sequence initiated");
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
         .then(() => undefined)
-        .catch(() => {
-          // Runner may already be stopped by abort/retry paths.
+        .catch((err) => {
+          this.opts.log(`[telegram][diag] runner.stop failed: ${formatErrorMessage(err)}`);
         });
       return stopPromise;
     };
     const stopBot = () => {
+      logDiagStop("stop sequence initiated");
       return Promise.resolve(bot.stop())
         .then(() => undefined)
-        .catch(() => {
-          // Bot may already be stopped by runner stop/abort paths.
+        .catch((err) => {
+          this.opts.log(`[telegram][diag] bot.stop failed: ${formatErrorMessage(err)}`);
         });
     };
     const stopOnAbort = () => {
@@ -236,11 +287,25 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         return;
       }
-      const elapsed = Date.now() - lastGetUpdatesAt;
+
+      const now = Date.now();
+      const activeElapsed =
+        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null ? now - lastGetUpdatesStartedAt : 0;
+      const idleElapsed = inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
+      const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+        if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
+          return;
+        }
+        stallDiagLoggedAt = now;
         stalledRestart = true;
+        const elapsedLabel =
+          inFlightGetUpdates > 0
+            ? `active getUpdates stuck for ${formatDurationPrecise(elapsed)}`
+            : `no completed getUpdates for ${formatDurationPrecise(elapsed)}`;
         this.opts.log(
-          `[telegram] Polling stall detected (no getUpdates for ${formatDurationPrecise(elapsed)}); forcing restart.`,
+          `[telegram] Polling stall detected (${elapsedLabel}); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
         );
         void stopRunner();
         void stopBot();
@@ -270,6 +335,9 @@ export class TelegramPollingSession {
           ? "unhandled network error"
           : "runner stopped (maxRetryTime exceeded or graceful stop)";
       this.#forceRestarted = false;
+      this.opts.log(
+        `[telegram][diag] polling cycle finished reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}`,
+      );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram polling runner stopped (${reason}); restarting in ${delay}.`,
       );
@@ -289,6 +357,9 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
+      this.opts.log(
+        `[telegram][diag] polling cycle error reason=${reason} inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"} err=${errMsg}${lastGetUpdatesError ? ` lastGetUpdatesError=${lastGetUpdatesError}` : ""}`,
+      );
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg}; retrying in ${delay}.`,
       );
