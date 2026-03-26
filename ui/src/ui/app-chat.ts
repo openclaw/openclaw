@@ -101,11 +101,19 @@ function resolveMainKeyForSwitch(host: ChatHost): string {
   return key || "main";
 }
 
-function switchChatAgent(host: ChatHost, targetAgentId: string): boolean {
+async function switchChatAgent(host: ChatHost, targetAgentId: string): Promise<boolean> {
   const normalizedTarget = normalizeAgentId(targetAgentId);
   const current = parseAgentSessionKey(host.sessionKey);
   if (current?.agentId === normalizedTarget) {
     return false;
+  }
+  // Abort the in-flight run on the previous session before switching so the
+  // old run does not continue executing in the background with no way to cancel
+  // it (once sessionKey changes, /stop targets the new session instead).
+  if (host.chatRunId) {
+    await abortChatRun(host as unknown as OpenClawApp).catch(() => {
+      // Best-effort: if the abort fails (e.g. disconnected) we still switch.
+    });
   }
   host.sessionKey = buildAgentMainSessionKey({
     agentId: normalizedTarget,
@@ -115,8 +123,7 @@ function switchChatAgent(host: ChatHost, targetAgentId: string): boolean {
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
   );
-  // Clear any in-flight run state from the previous agent session so the new
-  // session does not inherit a "busy" status that can never be cleared.
+  // Clear any residual run state after the abort so the new session starts clean.
   host.chatRunId = null;
   host.chatSending = false;
   return true;
@@ -262,7 +269,7 @@ export async function handleSendChat(
 
   const switchAgentId = parseAgentSwitchCommand(message);
   if (switchAgentId) {
-    const switched = switchChatAgent(host, switchAgentId);
+    const switched = await switchChatAgent(host, switchAgentId);
     if (messageOverride == null) {
       host.chatMessage = "";
       host.chatAttachments = [];
