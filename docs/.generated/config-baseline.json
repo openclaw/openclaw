@@ -15815,6 +15815,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.feishu.accounts.*.groups.*.respondToAtAll",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.feishu.accounts.*.groups.*.skills",
       "kind": "channel",
       "type": "array",
@@ -16117,6 +16127,16 @@
     },
     {
       "path": "channels.feishu.accounts.*.resolveSenderNames",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.accounts.*.respondToAtAll",
       "kind": "channel",
       "type": "boolean",
       "required": false,
@@ -16832,6 +16852,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.feishu.groups.*.respondToAtAll",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.feishu.groups.*.skills",
       "kind": "channel",
       "type": "array",
@@ -17129,6 +17159,16 @@
       "type": "boolean",
       "required": true,
       "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.respondToAtAll",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
