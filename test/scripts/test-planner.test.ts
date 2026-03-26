@@ -288,6 +288,11 @@ describe("test planner", () => {
     expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(9);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.macosSwift.enabled).toBe(true);
+    expect(manifest.requiredCheckNames).toContain("macos-swift");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-lint");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-build");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-test");
     expect(manifest.jobs.extensionFast.matrix.include).toEqual([
       { check_name: "extension-fast-discord", extension: "discord" },
     ]);

@@ -50,9 +50,7 @@ jobs:
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
       macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
-      run_macos_swift_lint: ${{ steps.manifest.outputs.run_macos_swift_lint }}
-      run_macos_swift_build: ${{ steps.manifest.outputs.run_macos_swift_build }}
-      run_macos_swift_test: ${{ steps.manifest.outputs.run_macos_swift_test }}
+      run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
@@ -867,10 +865,10 @@ jobs:
               ;;
           esac
 
-  macos-swift-lint:
-    name: "macos-swift-lint"
+  macos-swift:
+    name: "macos-swift"
     needs: [preflight]
-    if: needs.preflight.outputs.run_macos_swift_lint == 'true'
+    if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -887,6 +885,14 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
 
       - name: Show toolchain
         run: |
@@ -899,35 +905,6 @@ jobs:
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
-  macos-swift-build:
-    name: "macos-swift-build"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_macos_swift_build == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
-
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
-
       - name: Swift build (release)
         run: |
           set -euo pipefail
@@ -939,35 +916,6 @@ jobs:
             sleep $((attempt * 20))
           done
           exit 1
-
-  macos-swift-test:
-    name: "macos-swift-test"
-    needs: [preflight]
-    if: needs.preflight.outputs.run_macos_swift_test == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-
-      - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: brew install xcodegen swiftlint swiftformat
-
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
 
       - name: Swift test
         run: |

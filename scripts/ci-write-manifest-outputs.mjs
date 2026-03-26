@@ -63,9 +63,7 @@ if (workflow === "ci") {
   writeOutput("checks_windows_matrix", JSON.stringify(manifest.jobs.checksWindows.matrix));
   writeOutput("run_macos_node", String(manifest.jobs.macosNode.enabled));
   writeOutput("macos_node_matrix", JSON.stringify(manifest.jobs.macosNode.matrix));
-  writeOutput("run_macos_swift_lint", String(manifest.jobs.macosSwiftLint.enabled));
-  writeOutput("run_macos_swift_build", String(manifest.jobs.macosSwiftBuild.enabled));
-  writeOutput("run_macos_swift_test", String(manifest.jobs.macosSwiftTest.enabled));
+  writeOutput("run_macos_swift", String(manifest.jobs.macosSwift.enabled));
   writeOutput("run_android_job", String(manifest.jobs.android.enabled));
   writeOutput("android_matrix", JSON.stringify(manifest.jobs.android.matrix));
   writeOutput("required_check_names", JSON.stringify(manifest.requiredCheckNames));
