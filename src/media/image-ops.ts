@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { JsColorType, Transformer } from "@napi-rs/image";
 import { runExec } from "../process/exec.js";
-
-type Sharp = typeof import("sharp");
 
 export type ImageMetadata = {
   width: number;
@@ -26,14 +25,8 @@ function isBun(): boolean {
 function prefersSips(): boolean {
   return (
     process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+    (process.env.OPENCLAW_IMAGE_BACKEND !== "napi-rs" && isBun() && process.platform === "darwin")
   );
-}
-
-async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
-  const mod = (await import("sharp")) as unknown as { default?: Sharp };
-  const sharp = mod.default ?? (mod as unknown as Sharp);
-  return (buffer) => sharp(buffer, { failOnError: false });
 }
 
 /**
@@ -220,8 +213,8 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   }
 
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
+    const transformer = new Transformer(buffer);
+    const meta = await transformer.metadata();
     const width = Number(meta.width ?? 0);
     const height = Number(meta.height ?? 0);
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
@@ -301,11 +294,11 @@ export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> 
   }
 
   try {
-    const sharp = await loadSharp();
+    const transformer = new Transformer(buffer);
     // .rotate() with no args auto-rotates based on EXIF orientation
-    return await sharp(buffer).rotate().toBuffer();
+    return await transformer.rotate().jpeg(90);
   } catch {
-    // Sharp not available or failed - return original buffer
+    // @napi-rs/image not available or failed - return original buffer
     return buffer;
   }
 }
@@ -341,26 +334,33 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const sharp = await loadSharp();
+  let targetSide = params.maxSide;
+  // @napi-rs/image resize always scales to the target dimensions (no withoutEnlargement).
+  // Manually cap targetSide to the image's largest dimension to avoid enlarging.
+  if (params.withoutEnlargement !== false) {
+    const meta = await getImageMetadata(params.buffer);
+    if (meta) {
+      const maxDim = Math.max(meta.width, meta.height);
+      if (maxDim > 0 && maxDim <= targetSide) {
+        targetSide = maxDim;
+      }
+    }
+  }
+
+  const transformer = new Transformer(params.buffer);
   // Use .rotate() BEFORE .resize() to auto-rotate based on EXIF orientation
-  return await sharp(params.buffer)
+  return await transformer
     .rotate() // Auto-rotate based on EXIF before resizing
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .jpeg({ quality: params.quality, mozjpeg: true })
-    .toBuffer();
+    .resize({ width: targetSide, height: targetSide, fit: 2 })
+    .jpeg(params.quality);
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   if (prefersSips()) {
     return await sipsConvertToJpeg(buffer);
   }
-  const sharp = await loadSharp();
-  return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  const transformer = new Transformer(buffer);
+  return await transformer.jpeg(90);
 }
 
 /**
@@ -369,12 +369,26 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
  */
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   try {
-    const sharp = await loadSharp();
-    const meta = await sharp(buffer).metadata();
-    // Check if the image has an alpha channel
-    // PNG color types with alpha: 4 (grayscale+alpha), 6 (RGBA)
-    // Sharp reports this via 'channels' (4 = RGBA) or 'hasAlpha'
-    return meta.hasAlpha || meta.channels === 4;
+    const transformer = new Transformer(buffer);
+    const meta = await transformer.metadata();
+    // @napi-rs/image colorType alpha variants: La8 (1), Rgba8 (3), La16 (5), Rgba16 (7), Rgba32F (9)
+    const alphaColorTypes = [1, 3, 5, 7, 9];
+    if (!alphaColorTypes.includes(meta.colorType)) {
+      return false;
+    }
+    // For RGBA8 (the common case), scan pixels to distinguish truly transparent images
+    // from fully-opaque RGBA (e.g. fromRgbaPixels with a=255). This matches sharp's behavior.
+    if (meta.colorType === JsColorType.Rgba8) {
+      const raw = await new Transformer(buffer).rawPixels();
+      for (let i = 3; i < raw.length; i += 4) {
+        if (raw[i] < 255) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // For other alpha formats (La8, La16, Rgba16, Rgba32F), trust the format flag.
+    return true;
   } catch {
     return false;
   }
@@ -382,7 +396,7 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
 
 /**
  * Resizes an image to PNG format, preserving alpha channel (transparency).
- * Falls back to sharp only (no sips fallback for PNG with alpha).
+ * Falls back to @napi-rs/image only (no sips fallback for PNG with alpha).
  */
 export async function resizeToPng(params: {
   buffer: Buffer;
@@ -390,20 +404,34 @@ export async function resizeToPng(params: {
   compressionLevel?: number;
   withoutEnlargement?: boolean;
 }): Promise<Buffer> {
-  const sharp = await loadSharp();
-  // Compression level 6 is a good balance (0=fastest, 9=smallest)
+  // Map compression level (0-9) to @napi-rs/image CompressionType
+  // 0-3 = Fast (1), 4-6 = Default (0), 7-9 = Best (2)
   const compressionLevel = params.compressionLevel ?? 6;
+  let compressionType = 0; // Default
+  if (compressionLevel <= 3) {
+    compressionType = 1; // Fast
+  } else if (compressionLevel >= 7) {
+    compressionType = 2; // Best
+  }
 
-  return await sharp(params.buffer)
+  let targetSide = params.maxSide;
+  // @napi-rs/image resize always scales to the target dimensions (no withoutEnlargement).
+  // Manually cap targetSide to the image's largest dimension to avoid enlarging.
+  if (params.withoutEnlargement !== false) {
+    const meta = await getImageMetadata(params.buffer);
+    if (meta) {
+      const maxDim = Math.max(meta.width, meta.height);
+      if (maxDim > 0 && maxDim <= targetSide) {
+        targetSide = maxDim;
+      }
+    }
+  }
+
+  const transformer = new Transformer(params.buffer);
+  return await transformer
     .rotate() // Auto-rotate based on EXIF if present
-    .resize({
-      width: params.maxSide,
-      height: params.maxSide,
-      fit: "inside",
-      withoutEnlargement: params.withoutEnlargement !== false,
-    })
-    .png({ compressionLevel })
-    .toBuffer();
+    .resize({ width: targetSide, height: targetSide, fit: 2 })
+    .png({ compressionType });
 }
 
 export async function optimizeImageToPng(

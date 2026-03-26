@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import sharp from "sharp";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Transformer } from "@napi-rs/image";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
   installWebAutoReplyTestHomeHooks,
@@ -11,6 +11,17 @@ import {
 import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
+
+function solidColorRgba(w: number, h: number, r: number, g: number, b: number): Buffer {
+  const buf = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < buf.length; i += 4) {
+    buf[i] = r;
+    buf[i + 1] = g;
+    buf[i + 2] = b;
+    buf[i + 3] = 255;
+  }
+  return buf;
+}
 
 let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
 
@@ -134,39 +145,29 @@ describe("web auto-reply", () => {
       {
         name: "png",
         mime: "image/png",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .png({ compressionLevel: 0 })
-            .toBuffer(),
+        make: (rgba: Buffer, opts: { width: number; height: number }) =>
+          Transformer.fromRgbaPixels(rgba, opts.width, opts.height).png({ compressionType: 0 }),
       },
       {
         name: "jpeg",
         mime: "image/jpeg",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            // Keep source > cap with fewer pixels so the test runs faster.
-            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
-            .toBuffer(),
+        make: (rgba: Buffer, opts: { width: number; height: number }) =>
+          // Keep source > cap with fewer pixels so the test runs faster.
+          Transformer.fromRgbaPixels(rgba, opts.width, opts.height).jpeg(100),
       },
       {
         name: "webp",
         mime: "image/webp",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .webp({ quality: 100 })
-            .toBuffer(),
+        make: (rgba: Buffer, opts: { width: number; height: number }) =>
+          Transformer.fromRgbaPixels(rgba, opts.width, opts.height).webp(100),
       },
     ] as const;
 
     const width = 320;
     const height = 320;
-    const sharedRaw = crypto.randomBytes(width * height * 3);
+    const sharedRaw = crypto.randomBytes(width * height * 4);
+    // Set all alpha channels to opaque
+    for (let i = 3; i < sharedRaw.length; i += 4) sharedRaw[i] = 255;
 
     const renderedFormats = await Promise.all(
       formats.map(async (fmt) => ({
@@ -228,16 +229,11 @@ describe("web auto-reply", () => {
   });
 
   it("honors channels.whatsapp.mediaMaxMb for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const noiseRgba = crypto.randomBytes(256 * 256 * 4);
+    for (let i = 3; i < noiseRgba.length; i += 4) noiseRgba[i] = 255;
+    const bigPng = await Transformer.fromRgbaPixels(noiseRgba, 256, 256).png({
+      compressionType: 0,
+    });
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
     await expectCompressedImageWithinCap({
       mediaUrl: "https://example.com/big.png",
@@ -249,16 +245,11 @@ describe("web auto-reply", () => {
   });
 
   it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const noiseRgba = crypto.randomBytes(256 * 256 * 4);
+    for (let i = 3; i < noiseRgba.length; i += 4) noiseRgba[i] = 255;
+    const bigPng = await Transformer.fromRgbaPixels(noiseRgba, 256, 256).png({
+      compressionType: 0,
+    });
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
 
     setLoadConfigMock(() => ({
@@ -335,16 +326,8 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const smallPng = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 255, b: 0 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const greenRgba = solidColorRgba(64, 64, 0, 255, 0);
+    const smallPng = await Transformer.fromRgbaPixels(greenRgba, 64, 64).png();
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       body: true,
@@ -400,16 +383,8 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const png = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const pngRgba = solidColorRgba(64, 64, 0, 0, 255);
+    const png = await Transformer.fromRgbaPixels(pngRgba, 64, 64).png();
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

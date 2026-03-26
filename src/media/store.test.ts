@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Transformer } from "@napi-rs/image";
 import JSZip from "jszip";
-import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -54,11 +54,15 @@ describe("media store", () => {
       expect(saved.contentType).toBe("text/plain");
       expect(saved.path.endsWith(".txt")).toBe(true);
 
-      const jpeg = await sharp({
-        create: { width: 2, height: 2, channels: 3, background: "#123456" },
-      })
-        .jpeg({ quality: 80 })
-        .toBuffer();
+      // Create a 2x2 RGBA image with background color #123456
+      const rgbaPixels = Buffer.alloc(2 * 2 * 4);
+      for (let i = 0; i < rgbaPixels.length; i += 4) {
+        rgbaPixels[i] = 0x12; // R
+        rgbaPixels[i + 1] = 0x34; // G
+        rgbaPixels[i + 2] = 0x56; // B
+        rgbaPixels[i + 3] = 255; // A
+      }
+      const jpeg = await Transformer.fromRgbaPixels(rgbaPixels, 2, 2).jpeg(80);
       const savedJpeg = await store.saveMediaBuffer(jpeg, "image/jpeg");
       expect(savedJpeg.contentType).toBe("image/jpeg");
       expect(savedJpeg.path.endsWith(".jpg")).toBe(true);
@@ -284,11 +288,15 @@ describe("media store", () => {
 
   it("renames media based on detected mime even when extension is wrong", async () => {
     await withTempStore(async (store, home) => {
-      const pngBytes = await sharp({
-        create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
-      })
-        .png()
-        .toBuffer();
+      // Create a 2x2 RGBA image with green background
+      const rgbaPixels = Buffer.alloc(2 * 2 * 4);
+      for (let i = 0; i < rgbaPixels.length; i += 4) {
+        rgbaPixels[i] = 0; // R
+        rgbaPixels[i + 1] = 255; // G
+        rgbaPixels[i + 2] = 0; // B
+        rgbaPixels[i + 3] = 255; // A
+      }
+      const pngBytes = await Transformer.fromRgbaPixels(rgbaPixels, 2, 2).png();
       const bogusExt = path.join(home, "image-wrong.bin");
       await fs.writeFile(bogusExt, pngBytes);
 

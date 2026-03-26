@@ -83,7 +83,6 @@ Recommended for most interactive installs on macOS/Linux/WSL.
   <Step title="Post-install tasks">
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
-    - Defaults `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
   </Step>
 </Steps>
 
@@ -151,19 +150,18 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
   <Accordion title="Environment variables reference">
 
-| Variable                                                | Description                                   |
-| ------------------------------------------------------- | --------------------------------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm`                      | Install method                                |
-| `OPENCLAW_VERSION=latest\|next\|main\|<semver>\|<spec>` | npm version, dist-tag, or package spec        |
-| `OPENCLAW_BETA=0\|1`                                    | Use beta if available                         |
-| `OPENCLAW_GIT_DIR=<path>`                               | Checkout directory                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                              | Toggle git updates                            |
-| `OPENCLAW_NO_PROMPT=1`                                  | Disable prompts                               |
-| `OPENCLAW_NO_ONBOARD=1`                                 | Skip onboarding                               |
-| `OPENCLAW_DRY_RUN=1`                                    | Dry run mode                                  |
-| `OPENCLAW_VERBOSE=1`                                    | Debug mode                                    |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`             | npm log level                                 |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                      | Control sharp/libvips behavior (default: `1`) |
+| Variable                                                | Description                            |
+| ------------------------------------------------------- | -------------------------------------- |
+| `OPENCLAW_INSTALL_METHOD=git\|npm`                      | Install method                         |
+| `OPENCLAW_VERSION=latest\|next\|main\|<semver>\|<spec>` | npm version, dist-tag, or package spec |
+| `OPENCLAW_BETA=0\|1`                                    | Use beta if available                  |
+| `OPENCLAW_GIT_DIR=<path>`                               | Checkout directory                     |
+| `OPENCLAW_GIT_UPDATE=0\|1`                              | Toggle git updates                     |
+| `OPENCLAW_NO_PROMPT=1`                                  | Disable prompts                        |
+| `OPENCLAW_NO_ONBOARD=1`                                 | Skip onboarding                        |
+| `OPENCLAW_DRY_RUN=1`                                    | Dry run mode                           |
+| `OPENCLAW_VERBOSE=1`                                    | Debug mode                             |
+| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`             | npm log level                          |
 
   </Accordion>
 </AccordionGroup>
@@ -241,7 +239,6 @@ Designed for environments where you want everything under a local prefix (defaul
 | `OPENCLAW_NO_ONBOARD=1`                     | Skip onboarding                                                                   |
 | `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | npm log level                                                                     |
 | `OPENCLAW_GIT_DIR=<path>`                   | Legacy cleanup lookup path (used when removing old `Peekaboo` submodule checkout) |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | Control sharp/libvips behavior (default: `1`)                                     |
 
   </Accordion>
 </AccordionGroup>
@@ -378,15 +375,6 @@ Use non-interactive flags/env vars for predictable runs.
 
   <Accordion title="Why does npm hit EACCES on Linux?">
     Some Linux setups point npm global prefix to root-owned paths. `install.sh` can switch prefix to `~/.npm-global` and append PATH exports to shell rc files (when those files exist).
-  </Accordion>
-
-  <Accordion title="sharp/libvips issues">
-    The scripts default `SHARP_IGNORE_GLOBAL_LIBVIPS=1` to avoid sharp building against system libvips. To override:
-
-    ```bash
-    SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
-    ```
-
   </Accordion>
 
   <Accordion title='Windows: "npm error spawn git / ENOENT"'>

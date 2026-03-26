@@ -1,7 +1,8 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
+import { Transformer } from "@napi-rs/image";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../src/config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
@@ -60,41 +61,43 @@ beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
-  largeJpegBuffer = await sharp({
-    create: {
-      width: 400,
-      height: 400,
-      channels: 3,
-      background: "#ff0000",
-    },
-  })
-    .jpeg({ quality: 95 })
-    .toBuffer();
+  // Create a 400x400 noisy image (random data compresses poorly at q95 but well at lower quality,
+  // giving the optimizer room to shrink under an 80% cap).
+  const width = 400;
+  const height = 400;
+  const rgbaPixels = crypto.randomBytes(width * height * 4);
+  for (let i = 3; i < rgbaPixels.length; i += 4) rgbaPixels[i] = 255;
+  largeJpegBuffer = await Transformer.fromRgbaPixels(rgbaPixels, width, height).jpeg(95);
   largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
-  tinyPngBuffer = await sharp({
-    create: { width: 10, height: 10, channels: 3, background: "#00ff00" },
-  })
-    .png()
-    .toBuffer();
+  // Create a 10x10 green image
+  const tinyWidth = 10;
+  const tinyHeight = 10;
+  const tinyRgbaPixels = Buffer.alloc(tinyWidth * tinyHeight * 4);
+  for (let i = 0; i < tinyRgbaPixels.length; i += 4) {
+    tinyRgbaPixels[i] = 0; // R
+    tinyRgbaPixels[i + 1] = 255; // G
+    tinyRgbaPixels[i + 2] = 0; // B
+    tinyRgbaPixels[i + 3] = 255; // A
+  }
+  tinyPngBuffer = await Transformer.fromRgbaPixels(tinyRgbaPixels, tinyWidth, tinyHeight).png();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  alphaPngBuffer = await sharp({
-    create: {
-      width: 64,
-      height: 64,
-      channels: 4,
-      background: { r: 255, g: 0, b: 0, alpha: 0.5 },
-    },
-  })
-    .png()
-    .toBuffer();
+  // Create a 64x64 semi-transparent red image
+  const alphaWidth = 64;
+  const alphaHeight = 64;
+  const alphaRgbaPixels = Buffer.alloc(alphaWidth * alphaHeight * 4);
+  for (let i = 0; i < alphaRgbaPixels.length; i += 4) {
+    alphaRgbaPixels[i] = 255; // R
+    alphaRgbaPixels[i + 1] = 0; // G
+    alphaRgbaPixels[i + 2] = 0; // B
+    alphaRgbaPixels[i + 3] = 128; // A (50% transparent)
+  }
+  alphaPngBuffer = await Transformer.fromRgbaPixels(alphaRgbaPixels, alphaWidth, alphaHeight).png();
   alphaPngFile = await writeTempFile(alphaPngBuffer, ".png");
   // Keep this small so the alpha-fallback test stays deterministic but fast.
   const size = 24;
   const raw = buildDeterministicBytes(size * size * 4);
-  fallbackPngBuffer = await sharp(raw, { raw: { width: size, height: size, channels: 4 } })
-    .png()
-    .toBuffer();
+  fallbackPngBuffer = await Transformer.fromRgbaPixels(raw, size, size).png();
   fallbackPngFile = await writeTempFile(fallbackPngBuffer, ".png");
   const smallestPng = await optimizeImageToPng(fallbackPngBuffer, 1);
   fallbackPngCap = Math.max(1, smallestPng.optimizedSize - 1);
@@ -306,8 +309,8 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/png");
-    const meta = await sharp(result.buffer).metadata();
-    expect(meta.hasAlpha).toBe(true);
+    const meta = await new Transformer(result.buffer).metadata();
+    expect(meta.colorType).toBe(3); // Rgba8 in @napi-rs/image
   });
 
   it("falls back to JPEG when PNG alpha cannot fit under cap", async () => {
