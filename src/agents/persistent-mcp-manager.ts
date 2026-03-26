@@ -240,9 +240,21 @@ export class PersistentMcpManager {
     };
     this.handles.set(serverName, sentinel);
 
-    void this._doStartServer(serverName, rawServer, sentinel).then(resolveDedup, (err) => {
-      rejectDedup(err);
-    });
+    void this._doStartServer(serverName, rawServer, sentinel).then(
+      () => {
+        resolveDedup();
+        // Clear startPromise so getReadyClient() reaches the state-check path
+        // after startup. A settled non-null startPromise would cause getReadyClient()
+        // to return null for a failed-after-disconnect handle instead of reconnecting.
+        const h = this.handles.get(serverName);
+        if (h) h.startPromise = null;
+      },
+      (err) => {
+        rejectDedup(err);
+        const h = this.handles.get(serverName);
+        if (h) h.startPromise = null;
+      },
+    );
 
     return dedup;
   }
