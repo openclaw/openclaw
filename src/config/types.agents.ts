@@ -91,6 +91,8 @@ export type AgentConfig = {
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
   tools?: AgentToolsConfig;
+  /** Optional MCP server allowlist. Omit or ["*"] = all global servers (default); specific names = only those servers. */
+  mcpServers?: string[];
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;
 };

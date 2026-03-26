@@ -2120,6 +2120,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
       });
       applyPiAutoCompactionGuard({
         settingsManager,

@@ -801,6 +801,7 @@ export const AgentEntrySchema = z
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
+    mcpServers: z.array(z.string()).optional(),
     runtime: AgentRuntimeSchema,
   })
   .strict();

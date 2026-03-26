@@ -9,6 +9,7 @@ import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
+import { resolveAgentConfig } from "./agent-scope.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { applyPiCompactionSettingsFromConfig } from "./pi-settings.js";
 
@@ -66,9 +67,25 @@ function loadBundleSettingsFile(params: {
   }
 }
 
+/**
+ * Resolves the per-agent MCP server allowlist from config, if an agentId is provided.
+ * Returns undefined (= all servers) or a string[] allowlist.
+ */
+function resolveAgentMcpServers(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): string[] | undefined {
+  if (!cfg || !agentId) {
+    return undefined;
+  }
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return agentConfig?.mcpServers;
+}
+
 export function loadEnabledBundlePiSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
+  agentMcpServers?: string[];
 }): PiSettingsSnapshot {
   const workspaceDir = params.cwd.trim();
   if (!workspaceDir) {
@@ -114,6 +131,7 @@ export function loadEnabledBundlePiSettingsSnapshot(params: {
   const embeddedPiMcp = loadEmbeddedPiMcpConfig({
     workspaceDir,
     cfg: params.cfg,
+    agentMcpServers: params.agentMcpServers,
   });
   for (const diagnostic of embeddedPiMcp.diagnostics) {
     log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
@@ -160,12 +178,14 @@ export function createEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentMcpServers?: string[];
 }): SettingsManager {
   const fileSettingsManager = SettingsManager.create(params.cwd, params.agentDir);
   const policy = resolveEmbeddedPiProjectSettingsPolicy(params.cfg);
   const pluginSettings = loadEnabledBundlePiSettingsSnapshot({
     cwd: params.cwd,
     cfg: params.cfg,
+    agentMcpServers: params.agentMcpServers,
   });
   const hasPluginSettings = Object.keys(pluginSettings).length > 0;
   if (policy === "trusted" && !hasPluginSettings) {
@@ -184,8 +204,15 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
   cwd: string;
   agentDir: string;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): SettingsManager {
-  const settingsManager = createEmbeddedPiSettingsManager(params);
+  const agentMcpServers = resolveAgentMcpServers(params.cfg, params.agentId);
+  const settingsManager = createEmbeddedPiSettingsManager({
+    cwd: params.cwd,
+    agentDir: params.agentDir,
+    cfg: params.cfg,
+    agentMcpServers,
+  });
   applyPiCompactionSettingsFromConfig({
     settingsManager,
     cfg: params.cfg,
