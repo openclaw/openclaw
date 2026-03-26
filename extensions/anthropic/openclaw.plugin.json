@@ -1,6 +1,7 @@
 {
   "id": "anthropic",
   "providers": ["anthropic"],
+  "cliBackends": ["claude-cli"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
   },
