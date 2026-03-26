@@ -6,7 +6,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
+import { BUNDLED_ENABLED_BY_DEFAULT, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import type { PluginRegistry } from "./registry.js";
@@ -137,7 +138,14 @@ export function buildPluginStatusReport(params?: {
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  // Apply bundled allowlist compat so bundled-by-default plugins are not shown
+  // as disabled when plugins.allow is configured, matching gateway runtime behavior.
+  const config =
+    withBundledPluginAllowlistCompat({
+      config: rawConfig,
+      pluginIds: [...BUNDLED_ENABLED_BY_DEFAULT],
+    }) ?? rawConfig;
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??

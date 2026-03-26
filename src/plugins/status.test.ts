@@ -63,6 +63,23 @@ describe("buildPluginStatusReport", () => {
     } = await import("./status.js"));
   });
 
+  it("applies bundled allowlist compat so default bundled plugins are not excluded when plugins.allow is configured", () => {
+    buildPluginStatusReport({
+      config: { plugins: { allow: ["some-external-plugin"] } },
+      workspaceDir: "/workspace",
+    });
+
+    const call = loadOpenClawPluginsMock.mock.calls[0]?.[0] as {
+      config?: { plugins?: { allow?: string[] } };
+    };
+    // Bundled-by-default plugins should be injected into the allow list so
+    // the CLI status matches what the gateway actually loads at runtime.
+    expect(call?.config?.plugins?.allow).toContain("anthropic");
+    expect(call?.config?.plugins?.allow).toContain("openai");
+    expect(call?.config?.plugins?.allow).toContain("google");
+    expect(call?.config?.plugins?.allow).toContain("some-external-plugin");
+  });
+
   it("forwards an explicit env to plugin loading", () => {
     const env = { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
 
