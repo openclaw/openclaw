@@ -13,7 +13,7 @@ vi.mock("./cli.js", async (importOriginal) => {
 });
 
 import { createOpenShellSandboxBackendManager } from "./backend.js";
-import { buildSshSubprocessEnv } from "./backend.js";
+import { buildSshSubprocessEnv, SAFE_ENV_KEYS } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
 describe("openshell backend manager", () => {
@@ -115,6 +115,15 @@ describe("openshell backend manager", () => {
       }),
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
+  });
+});
+
+describe("SAFE_ENV_KEYS", () => {
+  it("is a module-level ReadonlySet allocated once", () => {
+    expect(SAFE_ENV_KEYS).toBeInstanceOf(Set);
+    expect(SAFE_ENV_KEYS.has("PATH")).toBe(true);
+    expect(SAFE_ENV_KEYS.has("HOME")).toBe(true);
+    expect(SAFE_ENV_KEYS.has("SSH_AUTH_SOCK")).toBe(true);
   });
 });
 

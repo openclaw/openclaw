@@ -49,7 +49,7 @@ export type OpenShellSandboxBackend = SandboxBackendHandle &
  * Hoisted to module scope so the Set is allocated once and is importable for
  * testing.
  */
-const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
+export const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
   // POSIX basics
   "PATH",
   "HOME",
@@ -70,6 +70,16 @@ const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Upper-cased version of SAFE_ENV_KEYS for case-insensitive matching on
+ * Windows, where environment variable names are case-insensitive but
+ * Object.entries(process.env) preserves the original casing from the OS
+ * (e.g. "Path" instead of "PATH").
+ */
+const SAFE_ENV_KEYS_UPPER: ReadonlySet<string> = new Set(
+  [...SAFE_ENV_KEYS].map((k) => k.toUpperCase()),
+);
+
+/**
  * Build a minimal environment object to pass to SSH subprocesses.
  *
  * Passing the full process.env to the SSH child process leaks every secret
@@ -83,6 +93,17 @@ const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
  * ANTHROPIC_API_KEY, OPENAI_API_KEY, gateway secrets, etc.) are stripped.
  */
 export function buildSshSubprocessEnv(): NodeJS.ProcessEnv {
+  // On Windows, environment variable names are case-insensitive ("Path" and
+  // "PATH" refer to the same variable) but Object.entries() returns the
+  // original casing from the OS.  Use case-insensitive matching to ensure
+  // variables like "Path" are correctly forwarded.
+  if (process.platform === "win32") {
+    return Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([k]) => SAFE_ENV_KEYS_UPPER.has(k.toUpperCase()) || k.toUpperCase().startsWith("LC_"),
+      ),
+    );
+  }
   return Object.fromEntries(
     Object.entries(process.env).filter(([k]) => SAFE_ENV_KEYS.has(k) || k.startsWith("LC_")),
   );
