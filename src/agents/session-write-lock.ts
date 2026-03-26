@@ -319,7 +319,6 @@ function resolveSessionStorePathForLock(sessionFile: string): string {
 
 function resolveStoredSessionFilePath(params: {
   sessionDir: string;
-  sessionFile: string;
   entry: SessionEntry;
 }): string | null {
   const stored = params.entry.sessionFile?.trim();
@@ -352,7 +351,6 @@ async function readArgusSessionContext(params: { sessionFile: string; nowMs: num
       }
       const resolved = resolveStoredSessionFilePath({
         sessionDir,
-        sessionFile: targetFile,
         entry,
       });
       if (!resolved || resolved !== targetFile) {
