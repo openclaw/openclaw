@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/unset/file/validate)"
+summary: "CLI reference for `openclaw config` (get/set/unset/file/schema/validate)"
 read_when:
   - You want to read or edit config non-interactively
 title: "config"
@@ -7,7 +7,7 @@ title: "config"
 
 # `openclaw config`
 
-Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/validate
+Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/file/schema/validate
 values by path and print the active config file. Run without a subcommand to
 open the configure wizard (same as `openclaw configure`).
 
@@ -15,19 +15,34 @@ open the configure wizard (same as `openclaw configure`).
 
 ```bash
 openclaw config file
+openclaw config schema
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
-openclaw config unset tools.web.search.apiKey
+openclaw config unset plugins.entries.brave.config.webSearch.apiKey
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
 openclaw config validate
 openclaw config validate --json
 ```
 
-## Paths
+### `config schema`
+
+Print the generated JSON schema for `openclaw.json` to stdout as plain text.
+
+```bash
+openclaw config schema
+```
+
+Pipe it into a file when you want to inspect or validate it with other tools:
+
+```bash
+openclaw config schema > openclaw.schema.json
+```
+
+### Paths
 
 Paths use dot or bracket notation:
 

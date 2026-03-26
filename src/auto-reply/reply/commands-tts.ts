@@ -1,13 +1,17 @@
 import { logVerbose } from "../../globals.js";
-import { listSpeechProviders, normalizeSpeechProviderId } from "../../tts/provider-registry.js";
 import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+} from "../../tts/provider-registry.js";
+import {
+  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
@@ -55,15 +59,13 @@ function ttsUsage(): ReplyPayload {
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n\n` +
       `**Providers:**\n` +
-      `• microsoft — Microsoft Edge-backed speech (default fallback)\n` +
-      `• openai — High quality (requires API key)\n` +
-      `• elevenlabs — Premium voices (requires API key)\n\n` +
+      `Use /tts provider to list the registered speech providers and their status.\n\n` +
       `**Text Limit (default: 1500, max: 4096):**\n` +
       `When text exceeds the limit:\n` +
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
-      `/tts provider microsoft\n` +
+      `/tts provider <id>\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
   };
@@ -160,31 +162,44 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "provider") {
     const currentProvider = getTtsProvider(config, prefsPath);
     if (!args.trim()) {
-      const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
-      const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
-      const hasMicrosoft = isTtsProviderConfigured(config, "microsoft", params.cfg);
+      const providers = listSpeechProviders(params.cfg);
       return {
         shouldContinue: false,
         reply: {
           text:
             `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Microsoft enabled: ${hasMicrosoft ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | microsoft`,
+            providers
+              .map(
+                (provider) =>
+                  `${provider.label}: ${
+                    provider.isConfigured({
+                      cfg: params.cfg,
+                      providerConfig: getResolvedSpeechProviderConfig(
+                        config,
+                        provider.id,
+                        params.cfg,
+                      ),
+                      timeoutMs: config.timeoutMs,
+                    })
+                      ? "✅"
+                      : "❌"
+                  }`,
+              )
+              .join("\n") +
+            `\nUsage: /tts provider <id>`,
         },
       };
     }
 
     const requested = args.trim().toLowerCase();
-    const knownProviders = new Set(listSpeechProviders(params.cfg).map((provider) => provider.id));
-    if (requested !== "edge" && !knownProviders.has(requested)) {
+    const resolvedProvider = getSpeechProvider(requested, params.cfg);
+    if (!resolvedProvider) {
       return { shouldContinue: false, reply: ttsUsage() };
     }
 
-    const nextProvider = normalizeSpeechProviderId(requested) ?? requested;
-    setTtsProvider(prefsPath, requested);
+    const nextProvider = canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+    setTtsProvider(prefsPath, nextProvider);
     return {
       shouldContinue: false,
       reply: { text: `✅ TTS provider set to ${nextProvider}.` },

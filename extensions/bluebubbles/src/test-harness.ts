@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
+import { _setFetchGuardForTesting } from "./types.js";
 
 export const BLUE_BUBBLES_PRIVATE_API_STATUS = {
   enabled: true,
@@ -62,18 +63,54 @@ export function createBlueBubblesProbeMockModule(): BlueBubblesProbeMockModule {
 export function installBlueBubblesFetchTestHooks(params: {
   mockFetch: ReturnType<typeof vi.fn>;
   privateApiStatusMock: {
-    mockReset: () => unknown;
+    mockReset?: () => unknown;
+    mockClear?: () => unknown;
     mockReturnValue: (value: boolean | null) => unknown;
   };
 }) {
+  const setFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
   beforeEach(() => {
     vi.stubGlobal("fetch", params.mockFetch);
+    // Replace the SSRF guard with a passthrough that delegates to the mocked global.fetch,
+    // wrapping the result in a real Response so callers can call .arrayBuffer() on it.
+    setFetchGuardPassthrough();
     params.mockFetch.mockReset();
-    params.privateApiStatusMock.mockReset();
+    params.privateApiStatusMock.mockReset?.();
+    params.privateApiStatusMock.mockClear?.();
     params.privateApiStatusMock.mockReturnValue(BLUE_BUBBLES_PRIVATE_API_STATUS.unknown);
   });
 
   afterEach(() => {
+    _setFetchGuardForTesting(null);
     vi.unstubAllGlobals();
   });
+}
+
+export function createBlueBubblesFetchGuardPassthroughInstaller() {
+  return (capturePolicy?: (policy: unknown) => void) => {
+    _setFetchGuardForTesting(async (params) => {
+      capturePolicy?.(params.policy);
+      const raw = await globalThis.fetch(params.url, params.init);
+      let body: ArrayBuffer;
+      if (typeof raw.arrayBuffer === "function") {
+        body = await raw.arrayBuffer();
+      } else {
+        const text =
+          typeof (raw as { text?: () => Promise<string> }).text === "function"
+            ? await (raw as { text: () => Promise<string> }).text()
+            : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
+              ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
+              : "";
+        body = new TextEncoder().encode(text).buffer;
+      }
+      return {
+        response: new Response(body, {
+          status: (raw as { status?: number }).status ?? 200,
+          headers: (raw as { headers?: HeadersInit }).headers,
+        }),
+        release: async () => {},
+        finalUrl: params.url,
+      };
+    });
+  };
 }

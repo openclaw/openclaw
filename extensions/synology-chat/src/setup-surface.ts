@@ -1,4 +1,6 @@
 import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
@@ -175,20 +177,19 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Synology Chat",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + incoming webhook",
     configuredHint: "configured",
     unconfiguredHint: "needs token + incoming webhook",
     configuredScore: 1,
     unconfiguredScore: 0,
+    includeStatusLine: true,
     resolveConfigured: ({ cfg }) =>
       listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `Synology Chat: ${configured ? "configured" : "needs token + incoming webhook"}`,
-      `Accounts: ${listAccountIds(cfg).length || 0}`,
-    ],
-  },
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "Synology Chat webhook setup",
     lines: SYNOLOGY_SETUP_HELP_LINES,
@@ -281,7 +282,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         }),
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Synology Chat allowlist",
     helpLines: SYNOLOGY_ALLOW_FROM_HELP_LINES,
     message: "Allowed Synology Chat user ids",
@@ -289,15 +290,6 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: "Synology Chat user ids must be numeric.",
     parseInputs: splitSetupEntries,
     parseId: parseSynologyUserId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseSynologyUserId(entry);
-        return {
-          input: entry,
-          resolved: Boolean(id),
-          id,
-        };
-      }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchSynologyChatAccountConfig({
         cfg,
@@ -311,7 +303,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
           ),
         },
       }),
-  },
+  }),
   completionNote: {
     title: "Synology Chat access control",
     lines: [

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
 
 function okDispatchResponse(): BrowserDispatchResponse {
@@ -13,30 +13,44 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
+  resolveBrowserControlAuth: vi.fn(() => ({
+    token: "loopback-token",
+    password: undefined,
+  })),
+  getBridgeAuthForPort: vi.fn(() => null),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../../extensions/browser/src/config/config.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../extensions/browser/src/config/config.js")>();
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
   };
 });
 
-vi.mock("./control-service.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-service.js", () => ({
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
 
-vi.mock("./routes/dispatcher.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-auth.js", () => ({
+  resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
+}));
+
+vi.mock("../../extensions/browser/src/browser/bridge-auth-registry.js", () => ({
+  getBridgeAuthForPort: mocks.getBridgeAuthForPort,
+}));
+
+vi.mock("../../extensions/browser/src/browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: vi.fn(() => ({
     dispatch: mocks.dispatch,
   })),
 }));
 
-import { fetchBrowserJson } from "./client-fetch.js";
+let fetchBrowserJson: typeof import("./client-fetch.js").fetchBrowserJson;
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -72,8 +86,14 @@ async function expectThrownBrowserFetchError(
 }
 
 describe("fetchBrowserJson loopback auth", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ fetchBrowserJson } = await import("./client-fetch.js"));
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "loopback-token");
     mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({
       gateway: {
@@ -84,10 +104,16 @@ describe("fetchBrowserJson loopback auth", () => {
     });
     mocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue({ ok: true });
     mocks.dispatch.mockReset().mockResolvedValue(okDispatchResponse());
+    mocks.resolveBrowserControlAuth.mockReset().mockReturnValue({
+      token: "loopback-token",
+      password: undefined,
+    });
+    mocks.getBridgeAuthForPort.mockReset().mockReturnValue(null);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it("adds bearer auth for loopback absolute HTTP URLs", async () => {

@@ -34,6 +34,27 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   return !isSessionArchiveArtifactName(fileName);
 }
 
+export function isUsageCountedSessionTranscriptFileName(fileName: string): boolean {
+  if (isPrimarySessionTranscriptFileName(fileName)) {
+    return true;
+  }
+  return hasArchiveSuffix(fileName, "reset") || hasArchiveSuffix(fileName, "deleted");
+}
+
+export function parseUsageCountedSessionIdFromFileName(fileName: string): string | null {
+  if (isPrimarySessionTranscriptFileName(fileName)) {
+    return fileName.slice(0, -".jsonl".length);
+  }
+  for (const reason of ["reset", "deleted"] as const) {
+    const marker = `.jsonl.${reason}.`;
+    const index = fileName.lastIndexOf(marker);
+    if (index > 0 && hasArchiveSuffix(fileName, reason)) {
+      return fileName.slice(0, index);
+    }
+  }
+  return null;
+}
+
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
   return new Date(nowMs).toISOString().replaceAll(":", "-");
 }

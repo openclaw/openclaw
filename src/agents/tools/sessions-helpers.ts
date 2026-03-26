@@ -46,18 +46,28 @@ export type SessionListDeliveryContext = {
   accountId?: string;
 };
 
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
 export type SessionListRow = {
   key: string;
   kind: SessionKind;
   channel: string;
+  spawnedBy?: string;
   label?: string;
   displayName?: string;
+  parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
   sessionId?: string;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
+  estimatedCostUsd?: number;
+  status?: SessionRunStatus;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  childSessions?: string[];
   thinkingLevel?: string;
   verboseLevel?: string;
   systemSent?: boolean;

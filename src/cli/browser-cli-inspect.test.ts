@@ -1,5 +1,8 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(async () => ({
@@ -43,20 +46,17 @@ const sharedMocks = vi.hoisted(() => ({
     },
   ),
 }));
-vi.mock("./browser-cli-shared.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-shared.js", () => ({
   callBrowserRequest: sharedMocks.callBrowserRequest,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
-vi.mock("../runtime.js", () => ({
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
   defaultRuntime: runtime,
+  loadConfig: configMocks.loadConfig,
 }));
 
-let registerBrowserInspectCommands: typeof import("./browser-cli-inspect.js").registerBrowserInspectCommands;
+let registerBrowserInspectCommands: typeof import("../../extensions/browser/src/cli/browser-cli-inspect.js").registerBrowserInspectCommands;
 
 type SnapshotDefaultsCase = {
   label: string;
@@ -80,11 +80,13 @@ describe("browser cli snapshot defaults", () => {
   const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
-    ({ registerBrowserInspectCommands } = await import("./browser-cli-inspect.js"));
+    ({ registerBrowserInspectCommands } =
+      await import("../../extensions/browser/src/cli/browser-cli-inspect.js"));
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
     configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
 

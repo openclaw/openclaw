@@ -112,15 +112,6 @@ describe("buildAuthChoiceOptions", () => {
         groupLabel: "Together AI",
       },
       {
-        pluginId: "qwen-portal-auth",
-        providerId: "qwen-portal",
-        methodId: "device",
-        choiceId: "qwen-portal",
-        choiceLabel: "Qwen OAuth",
-        groupId: "qwen",
-        groupLabel: "Qwen",
-      },
-      {
         pluginId: "xai",
         providerId: "xai",
         methodId: "api-key",
@@ -200,7 +191,6 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key",
       "together-api-key",
       "chutes",
-      "qwen-portal",
       "xai-api-key",
       "mistral-api-key",
       "volcengine-api-key",
@@ -353,5 +343,51 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(ollamaGroup).toBeDefined();
     expect(ollamaGroup?.options.some((opt) => opt.value === "ollama")).toBe(true);
+  });
+
+  it("hides image-generation-only providers from the interactive auth picker", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "fal",
+        providerId: "fal",
+        methodId: "api-key",
+        choiceId: "fal-api-key",
+        choiceLabel: "fal API key",
+        groupId: "fal",
+        groupLabel: "fal",
+        onboardingScopes: ["image-generation"],
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+      },
+    ]);
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "local-image-runtime",
+        label: "Local image runtime",
+        groupId: "local-image-runtime",
+        groupLabel: "Local image runtime",
+        onboardingScopes: ["image-generation"],
+      },
+      {
+        value: "ollama",
+        label: "Ollama",
+        groupId: "ollama",
+        groupLabel: "Ollama",
+      },
+    ]);
+
+    const options = getOptions();
+
+    expect(options.some((option) => option.value === "openai-api-key")).toBe(true);
+    expect(options.some((option) => option.value === "ollama")).toBe(true);
+    expect(options.some((option) => option.value === "fal-api-key")).toBe(false);
+    expect(options.some((option) => option.value === "local-image-runtime")).toBe(false);
   });
 });

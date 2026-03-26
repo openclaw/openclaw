@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
   embeddingCacheTable: string;
+  cacheEnabled: boolean;
   ftsTable: string;
   ftsEnabled: boolean;
 }): { ftsAvailable: boolean; ftsError?: string } {
@@ -35,21 +36,23 @@ export function ensureMemoryIndexSchema(params: {
       updated_at INTEGER NOT NULL
     );
   `);
-  params.db.exec(`
-    CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
-      provider TEXT NOT NULL,
-      model TEXT NOT NULL,
-      provider_key TEXT NOT NULL,
-      hash TEXT NOT NULL,
-      embedding TEXT NOT NULL,
-      dims INTEGER,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (provider, model, provider_key, hash)
+  if (params.cacheEnabled) {
+    params.db.exec(`
+      CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, model, provider_key, hash)
+      );
+    `);
+    params.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
     );
-  `);
-  params.db.exec(
-    `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
-  );
+  }
 
   let ftsAvailable = false;
   let ftsError: string | undefined;

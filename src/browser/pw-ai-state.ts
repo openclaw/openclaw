@@ -1,9 +1,1 @@
-let pwAiLoaded = false;
-
-export function markPwAiLoaded(): void {
-  pwAiLoaded = true;
-}
-
-export function isPwAiLoaded(): boolean {
-  return pwAiLoaded;
-}
+export * from "../../extensions/browser/src/browser/pw-ai-state.js";

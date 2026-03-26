@@ -1,27 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserStateCommands } from "./browser-cli-state.js";
-import { createBrowserProgram as createBrowserProgramShared } from "./browser-cli-test-helpers.js";
+import { registerBrowserStateCommands } from "../../extensions/browser/src/cli/browser-cli-state.js";
+import {
+  createBrowserProgram as createBrowserProgramShared,
+  getBrowserCliRuntime,
+  getBrowserCliRuntimeCapture,
+} from "./browser-cli-test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
 }));
 
-vi.mock("./browser-cli-shared.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-shared.js", () => ({
   callBrowserRequest: mocks.callBrowserRequest,
 }));
 
-vi.mock("./browser-cli-resize.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-resize.js", () => ({
   runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: mocks.runtime,
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule()),
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliUtilsMockModule()),
 }));
 
 describe("browser state option collisions", () => {
@@ -53,9 +54,8 @@ describe("browser state option collisions", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
     mocks.runBrowserResizeWithOutput.mockClear();
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.exit.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
 
   it("forwards parent-captured --target-id on `browser cookies set`", async () => {
@@ -135,37 +135,39 @@ describe("browser state option collisions", () => {
     await runBrowserCommand(["set", "offline", "maybe"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining("Expected on|off"));
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
+      expect.stringContaining("Expected on|off"),
+    );
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Expected dark|light|none"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is missing", async () => {
     await runBrowserCommand(["set", "headers"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Missing headers JSON"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
   it("errors when headers JSON is not an object", async () => {
     await runBrowserCommand(["set", "headers", "--json", "[]"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
+    expect(getBrowserCliRuntime().error).toHaveBeenCalledWith(
       expect.stringContaining("Headers JSON must be a JSON object"),
     );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 });

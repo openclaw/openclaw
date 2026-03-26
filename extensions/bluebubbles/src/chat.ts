@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
+
+function blueBubblesPolicy(allowPrivateNetwork: boolean): SsrFPolicy {
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+}
 
 export type BlueBubblesChatOpts = {
   serverUrl?: string;
@@ -41,7 +46,7 @@ async function sendBlueBubblesChatEndpointRequest(params: {
   if (!trimmed) {
     return;
   }
-  const { baseUrl, password, accountId } = resolveAccount(params.opts);
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts);
   if (getCachedBlueBubblesPrivateApiStatus(accountId) === false) {
     return;
   }
@@ -54,6 +59,7 @@ async function sendBlueBubblesChatEndpointRequest(params: {
     url,
     { method: params.method },
     params.opts.timeoutMs,
+    blueBubblesPolicy(allowPrivateNetwork),
   );
   await assertMultipartActionOk(res, params.action);
 }
@@ -66,7 +72,7 @@ async function sendPrivateApiJsonRequest(params: {
   method: "POST" | "PUT" | "DELETE";
   payload?: unknown;
 }): Promise<void> {
-  const { baseUrl, password, accountId } = resolveAccount(params.opts);
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(params.opts);
   assertPrivateApiEnabled(accountId, params.feature);
   const url = buildBlueBubblesApiUrl({
     baseUrl,
@@ -80,7 +86,12 @@ async function sendPrivateApiJsonRequest(params: {
     request.body = JSON.stringify(params.payload);
   }
 
-  const res = await blueBubblesFetchWithTimeout(url, request, params.opts.timeoutMs);
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    request,
+    params.opts.timeoutMs,
+    blueBubblesPolicy(allowPrivateNetwork),
+  );
   await assertMultipartActionOk(res, params.action);
 }
 
@@ -282,7 +293,7 @@ export async function setGroupIconBlueBubbles(
     throw new Error("BlueBubbles setGroupIcon requires image buffer");
   }
 
-  const { baseUrl, password, accountId } = resolveAccount(opts);
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
   assertPrivateApiEnabled(accountId, "setGroupIcon");
   const url = buildBlueBubblesApiUrl({
     baseUrl,
@@ -317,6 +328,7 @@ export async function setGroupIconBlueBubbles(
     boundary,
     parts,
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+    ssrfPolicy: blueBubblesPolicy(allowPrivateNetwork),
   });
 
   await assertMultipartActionOk(res, "setGroupIcon");

@@ -42,7 +42,7 @@ const exportedNames = exportMatch[1]
 
 const exportSet = new Set(exportedNames);
 
-const requiredRuntimeShimEntries = ["root-alias.cjs"];
+const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any of these are missing, plugins will fail at runtime with:
@@ -65,6 +65,7 @@ const requiredExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",

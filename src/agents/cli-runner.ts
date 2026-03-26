@@ -2,9 +2,11 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CliSessionBinding } from "../config/sessions.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -26,6 +28,7 @@ import {
   buildCliArgs,
   buildSystemPrompt,
   enqueueCliRun,
+  loadPromptRefImages,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
@@ -35,6 +38,7 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "./cli-session.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
@@ -48,7 +52,9 @@ import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
-const log = createSubsystemLogger("agent/claude-cli");
+const log = createSubsystemLogger("agent/cli-backend");
+const CLI_BACKEND_LOG_OUTPUT_ENV = "OPENCLAW_CLI_BACKEND_LOG_OUTPUT";
+const LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV = "OPENCLAW_CLAUDE_CLI_LOG_OUTPUT";
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -67,6 +73,8 @@ export async function runCliAgent(params: {
   streamParams?: import("./command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
+  cliSessionBinding?: CliSessionBinding;
+  authProfileId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
@@ -95,13 +103,27 @@ export async function runCliAgent(params: {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    backendId: backendResolved.id,
+    enabled: backendResolved.bundleMcp,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
     warn: (message) => log.warn(message),
   });
   const backend = preparedBackend.backend;
+  const extraSystemPromptHash = hashCliSessionText(params.extraSystemPrompt);
+  const reusableCliSession = resolveCliSessionReuse({
+    binding:
+      params.cliSessionBinding ??
+      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
+    authProfileId: params.authProfileId,
+    extraSystemPromptHash,
+    mcpConfigHash: preparedBackend.mcpConfigHash,
+  });
+  if (reusableCliSession.invalidatedReason) {
+    log.info(
+      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+    );
+  }
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
@@ -221,8 +243,12 @@ export async function runCliAgent(params: {
     let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
       preserveExactPrompt: heartbeatPrompt,
     });
-    if (params.images && params.images.length > 0) {
-      const imagePayload = await writeCliImages(params.images);
+    const resolvedImages =
+      params.images && params.images.length > 0
+        ? params.images
+        : await loadPromptRefImages({ prompt, workspaceDir });
+    if (resolvedImages.length > 0) {
+      const imagePayload = await writeCliImages(resolvedImages);
       imagePaths = imagePayload.paths;
       cleanupImages = imagePayload.cleanup;
       if (!backend.imageArg) {
@@ -258,7 +284,9 @@ export async function runCliAgent(params: {
         log.info(
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
-        const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
+        const logOutputText =
+          isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
+          isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         if (logOutputText) {
           const logArgs: string[] = [];
           for (let i = 0; i < args.length; i += 1) {
@@ -296,7 +324,11 @@ export async function runCliAgent(params: {
         }
 
         const env = (() => {
-          const next = { ...process.env, ...backend.env };
+          const next = sanitizeHostExecEnv({
+            baseEnv: process.env,
+            overrides: backend.env,
+            blockPathOverrides: true,
+          });
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
           }
@@ -414,32 +446,52 @@ export async function runCliAgent(params: {
     }
   };
 
+  const buildCliRunResult = (resultParams: {
+    output: Awaited<ReturnType<typeof executeCliWithSession>>;
+    effectiveCliSessionId?: string;
+  }): EmbeddedPiRunResult => {
+    const text = resultParams.output.text?.trim();
+    const payloads = text ? [{ text }] : undefined;
+
+    return {
+      payloads,
+      meta: {
+        durationMs: Date.now() - started,
+        systemPromptReport,
+        agentMeta: {
+          sessionId: resultParams.effectiveCliSessionId ?? params.sessionId ?? "",
+          provider: params.provider,
+          model: modelId,
+          usage: resultParams.output.usage,
+          ...(resultParams.effectiveCliSessionId
+            ? {
+                cliSessionBinding: {
+                  sessionId: resultParams.effectiveCliSessionId,
+                  ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                  ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
+                  ...(preparedBackend.mcpConfigHash
+                    ? { mcpConfigHash: preparedBackend.mcpConfigHash }
+                    : {}),
+                },
+              }
+            : {}),
+        },
+      },
+    };
+  };
+
   // Try with the provided CLI session ID first
   try {
     try {
-      const output = await executeCliWithSession(params.cliSessionId);
-      const text = output.text?.trim();
-      const payloads = text ? [{ text }] : undefined;
-
-      return {
-        payloads,
-        meta: {
-          durationMs: Date.now() - started,
-          systemPromptReport,
-          agentMeta: {
-            sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
-            provider: params.provider,
-            model: modelId,
-            usage: output.usage,
-          },
-        },
-      };
+      const output = await executeCliWithSession(reusableCliSession.sessionId);
+      const effectiveCliSessionId = output.sessionId ?? reusableCliSession.sessionId;
+      return buildCliRunResult({ output, effectiveCliSessionId });
     } catch (err) {
       if (err instanceof FailoverError) {
         // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
+        if (err.reason === "session_expired" && reusableCliSession.sessionId && params.sessionKey) {
           log.warn(
-            `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
+            `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(reusableCliSession.sessionId)}`,
           );
 
           // Clear the expired session ID from the session entry
@@ -448,22 +500,8 @@ export async function runCliAgent(params: {
 
           // For now, retry without the session ID to create a new session
           const output = await executeCliWithSession(undefined);
-          const text = output.text?.trim();
-          const payloads = text ? [{ text }] : undefined;
-
-          return {
-            payloads,
-            meta: {
-              durationMs: Date.now() - started,
-              systemPromptReport,
-              agentMeta: {
-                sessionId: output.sessionId ?? params.sessionId ?? "",
-                provider: params.provider,
-                model: modelId,
-                usage: output.usage,
-              },
-            },
-          };
+          const effectiveCliSessionId = output.sessionId;
+          return buildCliRunResult({ output, effectiveCliSessionId });
         }
         throw err;
       }

@@ -1,19 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
-import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
+import { formatTimestamp } from "./timestamps.js";
 
 type ProcessWithBuiltinModule = NodeJS.Process & {
   getBuiltinModule?: (id: string) => unknown;
@@ -35,8 +34,14 @@ function resolveDefaultLogDir(): string {
   return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
 }
 
+function resolveDefaultLogFile(defaultLogDir: string): string {
+  return canUseNodeFs()
+    ? path.join(defaultLogDir, "openclaw.log")
+    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+}
+
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
@@ -65,11 +70,6 @@ export type LogTransportRecord = Record<string, unknown>;
 export type LogTransport = (logObj: LogTransportRecord) => void;
 
 const externalTransports = new Set<LogTransport>();
-
-function shouldSkipLoadConfigFallback(argv: string[] = process.argv): boolean {
-  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
-  return primary === "config" && secondary === "validate";
-}
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
@@ -115,7 +115,7 @@ function resolveSettings(): ResolvedSettings {
 
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg && !shouldSkipLoadConfigFallback()) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
         | {
@@ -179,7 +179,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = formatLocalIsoWithOffset(logObj.date ?? new Date());
+      const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -188,7 +188,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         if (!warnedAboutSizeCap) {
           warnedAboutSizeCap = true;
           const warningLine = JSON.stringify({
-            time: formatLocalIsoWithOffset(new Date()),
+            time: formatTimestamp(new Date(), { style: "long" }),
             level: "warn",
             subsystem: "logging",
             message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
@@ -327,7 +327,7 @@ export function registerLogTransport(transport: LogTransport): () => void {
 }
 
 export const __test__ = {
-  shouldSkipLoadConfigFallback,
+  shouldSkipMutatingLoggingConfigRead,
 };
 
 function formatLocalDate(date: Date): string {

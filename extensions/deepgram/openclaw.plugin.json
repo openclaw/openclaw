@@ -1,0 +1,9 @@
+{
+  "id": "deepgram",
+  "mediaUnderstandingProviders": ["deepgram"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

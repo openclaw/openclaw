@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "./http-registry.js";
-import { createEmptyPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
 
@@ -45,7 +46,7 @@ function expectRouteRegistrationDenied(params: {
 describe("registerPluginHttpRoute", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   it("registers route and unregisters it", () => {

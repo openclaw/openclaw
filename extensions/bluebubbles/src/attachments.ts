@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/bluebubbles";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { assertMultipartActionOk, postMultipartFormData } from "./multipart.js";
 import {
@@ -8,15 +7,21 @@ import {
   isBlueBubblesPrivateApiStatusEnabled,
 } from "./probe.js";
 import { resolveRequestUrl } from "./request-url.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime, warnBlueBubbles } from "./runtime.js";
 import { extractBlueBubblesMessageId, resolveBlueBubblesSendTarget } from "./send-helpers.js";
-import { resolveChatGuidForTarget } from "./send.js";
+import { resolveChatGuidForTarget, createChatForHandle } from "./send.js";
 import {
   blueBubblesFetchWithTimeout,
   buildBlueBubblesApiUrl,
   type BlueBubblesAttachment,
   type BlueBubblesSendTarget,
+  type SsrFPolicy,
 } from "./types.js";
+
+function blueBubblesPolicy(allowPrivateNetwork: boolean | undefined): SsrFPolicy {
+  return allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
+}
 
 export type BlueBubblesAttachmentOpts = {
   serverUrl?: string;
@@ -155,7 +160,7 @@ export async function sendBlueBubblesAttachment(params: {
   const fallbackName = wantsVoice ? "Audio Message" : "attachment";
   filename = sanitizeFilename(filename, fallbackName);
   contentType = contentType?.trim() || undefined;
-  const { baseUrl, password, accountId } = resolveAccount(opts);
+  const { baseUrl, password, accountId, allowPrivateNetwork } = resolveAccount(opts);
   const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(accountId);
   const privateApiEnabled = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
 
@@ -180,16 +185,40 @@ export async function sendBlueBubblesAttachment(params: {
   }
 
   const target = resolveBlueBubblesSendTarget(to);
-  const chatGuid = await resolveChatGuidForTarget({
+  let chatGuid = await resolveChatGuidForTarget({
     baseUrl,
     password,
     timeoutMs: opts.timeoutMs,
     target,
+    allowPrivateNetwork,
   });
   if (!chatGuid) {
-    throw new Error(
-      "BlueBubbles attachment send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
-    );
+    // For handle targets (phone numbers/emails), auto-create a new DM chat
+    if (target.kind === "handle") {
+      const created = await createChatForHandle({
+        baseUrl,
+        password,
+        address: target.address,
+        timeoutMs: opts.timeoutMs,
+        allowPrivateNetwork,
+      });
+      chatGuid = created.chatGuid;
+      // If we still don't have a chatGuid, try resolving again (chat was created server-side)
+      if (!chatGuid) {
+        chatGuid = await resolveChatGuidForTarget({
+          baseUrl,
+          password,
+          timeoutMs: opts.timeoutMs,
+          target,
+          allowPrivateNetwork,
+        });
+      }
+    }
+    if (!chatGuid) {
+      throw new Error(
+        "BlueBubbles attachment send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
+      );
+    }
   }
 
   const url = buildBlueBubblesApiUrl({
@@ -260,6 +289,7 @@ export async function sendBlueBubblesAttachment(params: {
     boundary,
     parts,
     timeoutMs: opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+    ssrfPolicy: blueBubblesPolicy(allowPrivateNetwork),
   });
 
   await assertMultipartActionOk(res, "attachment send");

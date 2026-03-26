@@ -4,7 +4,7 @@ import {
   definePluginEntry,
   type OpenClawPluginApi,
   type OpenClawPluginService,
-} from "openclaw/plugin-sdk/phone-control";
+} from "./runtime-api.js";
 
 type ArmGroup = "camera" | "screen" | "writes" | "all";
 
@@ -358,6 +358,11 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
+          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+            return {
+              text: "⚠️ /phone disarm requires operator.admin for internal gateway callers.",
+            };
+          }
           const res = await disarmNow({
             api,
             stateDir,
@@ -375,6 +380,11 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
+          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+            return {
+              text: "⚠️ /phone arm requires operator.admin for internal gateway callers.",
+            };
+          }
           const group = parseGroup(tokens[1]);
           if (!group) {
             return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
