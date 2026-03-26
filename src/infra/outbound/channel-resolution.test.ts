@@ -284,11 +284,13 @@ describe("outbound channel resolution", () => {
 
     const channelResolution = await importChannelResolution("pinned-skip-bootstrap");
 
-    channelResolution.resolveOutboundChannelPlugin({
+    const result = channelResolution.resolveOutboundChannelPlugin({
       channel: "telegram",
       cfg: { channels: {} } as never,
     });
     // Should NOT bootstrap since pinned registry has the channel
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    // Plugin should still be resolved via the pinned registry
+    expect(result).toBe(plugin);
   });
 });
