@@ -251,6 +251,9 @@ vi.mock("../../pi-tools.js", () => ({
 
 vi.mock("../../pi-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
+  createEmbeddedBundleMcpRuntime: async () => undefined,
+  getPersistentMcpManager: () => null,
+  setPersistentMcpManager: () => {},
 }));
 
 vi.mock("../../pi-bundle-lsp-runtime.js", () => ({

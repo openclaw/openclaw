@@ -1,12 +1,21 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
-const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-const SDK_SERVER_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
-const SDK_CLIENT_INDEX_PATH = require.resolve("@modelcontextprotocol/sdk/client/index.js");
-const SDK_CLIENT_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/client/stdio.js");
+const SDK_SERVER_MCP_PATH = pathToFileURL(
+  require.resolve("@modelcontextprotocol/sdk/server/mcp.js"),
+).href;
+const SDK_SERVER_STDIO_PATH = pathToFileURL(
+  require.resolve("@modelcontextprotocol/sdk/server/stdio.js"),
+).href;
+const SDK_CLIENT_INDEX_PATH = pathToFileURL(
+  require.resolve("@modelcontextprotocol/sdk/client/index.js"),
+).href;
+const SDK_CLIENT_STDIO_PATH = pathToFileURL(
+  require.resolve("@modelcontextprotocol/sdk/client/stdio.js"),
+).href;
 
 export async function writeExecutable(filePath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });

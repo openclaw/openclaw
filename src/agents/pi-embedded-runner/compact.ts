@@ -58,7 +58,7 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createConfiguredOllamaStreamFn } from "../ollama-stream.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+import { createEmbeddedBundleMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
   ensureSessionHeader,
   validateAnthropicTurns,
@@ -785,7 +785,7 @@ export async function compactEmbeddedPiSessionDirect(
       provider,
     });
     const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+      ? await createEmbeddedBundleMcpRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: tools.map((tool) => tool.name),
