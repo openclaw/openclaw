@@ -135,6 +135,67 @@ describe("monitorDiscordProvider", () => {
 
   beforeEach(() => {
     resetDiscordProviderMonitorMocks();
+    providerTesting.setFetchDiscordApplicationId(async () => "app-1");
+    providerTesting.setCreateDiscordNativeCommand(
+      ((...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
+        | ((...inner: infer P) => unknown)
+        | undefined
+        ? P
+        : never) =>
+        createDiscordNativeCommandMock(
+          ...(args as Parameters<typeof createDiscordNativeCommandMock>),
+        )) as NonNullable<Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0]>,
+    );
+    providerTesting.setRunDiscordGatewayLifecycle((...args) =>
+      monitorLifecycleMock(...(args as Parameters<typeof monitorLifecycleMock>)),
+    );
+    providerTesting.setLoadDiscordVoiceRuntime(async () => {
+      voiceRuntimeModuleLoadedMock();
+      return {
+        DiscordVoiceManager: class DiscordVoiceManager {},
+        DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+      } as never;
+    });
+    providerTesting.setLoadDiscordProviderSessionRuntime(
+      (async () =>
+        ({
+          getAcpSessionManager: () => ({
+            getSessionStatus: getAcpSessionStatusMock,
+          }),
+          isAcpRuntimeError: (error: unknown): error is { code: string } =>
+            error instanceof Error && "code" in error,
+          resolveThreadBindingIdleTimeoutMs: () => 24 * 60 * 60 * 1000,
+          resolveThreadBindingMaxAgeMs: () => 7 * 24 * 60 * 60 * 1000,
+          resolveThreadBindingsEnabled: () => true,
+          createDiscordMessageHandler: createDiscordMessageHandlerMock,
+          createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
+          createThreadBindingManager: createThreadBindingManagerMock,
+          reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
+        }) as never) as NonNullable<
+        Parameters<typeof providerTesting.setLoadDiscordProviderSessionRuntime>[0]
+      >,
+    );
+    providerTesting.setCreateClient((options, handlers) => {
+      clientConstructorOptionsMock(options);
+      return {
+        options,
+        listeners: handlers.listeners ?? [],
+        rest: { put: vi.fn(async () => undefined) },
+        handleDeployRequest: async () => await clientHandleDeployRequestMock(),
+        fetchUser: async (target: string) => await clientFetchUserMock(target),
+        getPlugin: (name: string) => clientGetPluginMock(name),
+      } as never;
+    });
+    providerTesting.setGetPluginCommandSpecs((provider?: string) => getPluginCommandSpecsMock(provider));
+    providerTesting.setResolveDiscordAccount((...args) => resolveDiscordAccountMock(...args) as never);
+    providerTesting.setResolveNativeCommandsEnabled((...args) => resolveNativeCommandsEnabledMock(...args));
+    providerTesting.setResolveNativeSkillsEnabled((...args) => resolveNativeSkillsEnabledMock(...args));
+    providerTesting.setListNativeCommandSpecsForConfig((...args) =>
+      listNativeCommandSpecsForConfigMock(...args),
+    );
+    providerTesting.setListSkillCommandsForAgents((...args) => listSkillCommandsForAgentsMock(...args) as never);
+    providerTesting.setIsVerbose(() => isVerboseMock());
+    providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -549,7 +610,7 @@ describe("monitorDiscordProvider", () => {
     expect(clientFetchUserMock).toHaveBeenCalledWith("@me");
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("native command deploy skipped"),
+      expect.stringContaining("native commands using Carbon reconcile path"),
     );
   });
 
