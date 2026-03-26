@@ -30,6 +30,7 @@ function isVisibleMentionLabel(params: {
   text: string;
   userId: string;
   mentionRegexes: RegExp[];
+  displayName?: string | null;
 }): boolean {
   const cleaned = extractVisibleMentionText(params.text);
   if (!cleaned) {
@@ -43,6 +44,7 @@ function isVisibleMentionLabel(params: {
     params.userId.trim().toLowerCase(),
     localpart,
     localpart ? `@${localpart}` : null,
+    params.displayName ? extractVisibleMentionText(params.displayName) : null,
   ]
     .filter((value): value is string => Boolean(value))
     .map((value) => value.toLowerCase());
@@ -64,6 +66,7 @@ function hasVisibleRoomMention(value?: string): boolean {
 function checkFormattedBodyMention(params: {
   formattedBody?: string;
   userId: string;
+  displayName?: string | null;
   mentionRegexes: RegExp[];
 }): boolean {
   if (!params.formattedBody || !params.userId) {
@@ -87,6 +90,7 @@ function checkFormattedBodyMention(params: {
           text: visibleLabel,
           userId: params.userId,
           mentionRegexes: params.mentionRegexes,
+          displayName: params.displayName,
         })
       ) {
         return true;
@@ -101,6 +105,7 @@ function checkFormattedBodyMention(params: {
 export function resolveMentions(params: {
   content: RoomMessageEventContent;
   userId?: string | null;
+  displayName?: string | null;
   text?: string;
   mentionRegexes: RegExp[];
 }) {
@@ -120,6 +125,7 @@ export function resolveMentions(params: {
     ? checkFormattedBodyMention({
         formattedBody: params.content.formatted_body,
         userId: params.userId,
+        displayName: params.displayName,
         mentionRegexes: params.mentionRegexes,
       })
     : false;
