@@ -166,6 +166,67 @@ describe("buildAssistantMessage", () => {
     expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
   });
 
+  it("parses inline JSON tool calls when native tool_calls are absent", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          '{"name":"write","arguments":{"file":"hello_you.txt","content":"Hello, you! This is Qwen from Alibaba Cloud."}}',
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("toolCall");
+    const toolCall = result.content[0] as {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+    expect(toolCall.name).toBe("write");
+    expect(toolCall.arguments).toEqual({
+      file: "hello_you.txt",
+      content: "Hello, you! This is Qwen from Alibaba Cloud.",
+    });
+    expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
+  });
+
+  it("parses inline function-style tool calls when native tool_calls are absent", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          'validate_config(config_path="/home/gnulnx/BLR/perception_layer_models/zero_512net_h35w4d1m25.cfg")',
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0].type).toBe("toolCall");
+    const toolCall = result.content[0] as {
+      type: "toolCall";
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    };
+    expect(toolCall.name).toBe("validate_config");
+    expect(toolCall.arguments).toEqual({
+      config_path: "/home/gnulnx/BLR/perception_layer_models/zero_512net_h35w4d1m25.cfg",
+    });
+    expect(toolCall.id).toMatch(/^ollama_call_[0-9a-f-]{36}$/);
+  });
+
   it("sets all costs to zero for local models", () => {
     const response = {
       model: "qwen3:32b",
