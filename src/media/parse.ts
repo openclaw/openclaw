@@ -18,15 +18,41 @@ const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT = /\.\w{1,10}$/;
 
-// Recognize local file path patterns. Security validation is deferred to the
-// load layer (loadWebMedia / resolveSandboxedMediaSource) which has the context
-// needed to enforce sandbox roots and allowed directories.
-function isLikelyLocalPath(candidate: string): boolean {
+// Matches ".." as a standalone path segment (start, middle, or end).
+const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
+
+function hasTraversalOrHomeDirPrefix(candidate: string): boolean {
+  return (
+    candidate.startsWith("../") ||
+    candidate === ".." ||
+    candidate.startsWith("~") ||
+    TRAVERSAL_SEGMENT_RE.test(candidate)
+  );
+}
+
+// Broad structural check: does this look like a local file path? Used only for
+// stripping MEDIA: lines from output text — never for media approval.
+function looksLikeLocalFilePath(candidate: string): boolean {
   return (
     candidate.startsWith("/") ||
     candidate.startsWith("./") ||
     candidate.startsWith("../") ||
     candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
+// Recognize safe local file path patterns for media approval, rejecting
+// traversal and home-dir paths so they never reach downstream load/send logic.
+function isLikelyLocalPath(candidate: string): boolean {
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
+  }
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
@@ -52,6 +78,12 @@ function isValidMedia(
 
   if (isLikelyLocalPath(candidate)) {
     return true;
+  }
+
+  // Hard reject traversal/home-dir patterns before the bare-filename fallback
+  // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
+  if (hasTraversalOrHomeDirPrefix(candidate)) {
+    return false;
   }
 
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.
@@ -169,7 +201,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
+        looksLikeLocalFilePath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&

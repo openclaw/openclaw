@@ -1,4 +1,5 @@
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendLocalMediaParentRoots,
@@ -43,11 +44,16 @@ describe("local media roots", () => {
   });
 
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
+    const picturesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
+    const moviesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
+
     const roots = appendLocalMediaParentRoots(
       ["/tmp/base"],
       [
-        "/Users/peter/Pictures/photo.png",
-        "file:///Users/peter/Movies/clip.mp4",
+        path.join(picturesDir, "photo.png"),
+        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
         "https://example.com/remote.png",
         "/top-level-file.png",
       ],
@@ -56,8 +62,8 @@ describe("local media roots", () => {
     expect(roots.map(normalizeHostPath)).toEqual(
       expect.arrayContaining([
         normalizeHostPath("/tmp/base"),
-        normalizeHostPath("/Users/peter/Pictures"),
-        normalizeHostPath("/Users/peter/Movies"),
+        normalizeHostPath(picturesDir),
+        normalizeHostPath(moviesDir),
       ]),
     );
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
