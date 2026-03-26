@@ -27,7 +27,6 @@ import {
 } from "./failover-policy.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { getModelHealthTracker } from "./model-health.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -405,8 +404,7 @@ function resolveFallbackCandidates(params: {
 }
 
 const lastProbeAttempt = new Map<string, number>();
-const MIN_PROBE_INTERVAL_MS = 60_000; // 60 seconds initial probe interval
-const MAX_PROBE_INTERVAL_MS = 10 * 60_000; // 10 minutes max probe interval
+const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
 const PROBE_SCOPE_DELIMITER = "::";
 const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -415,16 +413,6 @@ const MAX_PROBE_KEYS = 256;
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
   const scope = String(agentDir ?? "").trim();
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
-}
-
-/**
- * Calculate the probe interval with exponential backoff based on consecutive failures.
- * Starts at MIN_PROBE_INTERVAL_MS (60s) and caps at MAX_PROBE_INTERVAL_MS (10min).
- */
-function calculateProbeInterval(consecutiveFailures: number): number {
-  // Each level of consecutive failures doubles the interval (60s, 120s, 240s, 480s, 600s, 600s...)
-  const interval = MIN_PROBE_INTERVAL_MS * Math.pow(2, Math.min(consecutiveFailures, 3));
-  return Math.min(interval, MAX_PROBE_INTERVAL_MS);
 }
 
 function pruneProbeState(now: number): void {
@@ -452,10 +440,10 @@ function enforceProbeStateCap(): void {
   }
 }
 
-function isProbeThrottleOpen(now: number, throttleKey: string, consecutiveFailures = 0): boolean {
+function isProbeThrottleOpen(now: number, throttleKey: string): boolean {
   pruneProbeState(now);
   const lastProbe = lastProbeAttempt.get(throttleKey) ?? 0;
-  return now - lastProbe >= calculateProbeInterval(consecutiveFailures);
+  return now - lastProbe >= MIN_PROBE_INTERVAL_MS;
 }
 
 function markProbeAttempt(now: number, throttleKey: string): void {
@@ -471,13 +459,13 @@ function shouldProbePrimaryDuringCooldown(params: {
   throttleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
-  consecutiveFailures?: number; // circuit breaker consecutive failures
+  model: string;
 }): boolean {
   if (!params.isPrimary || !params.hasFallbackCandidates) {
     return false;
   }
 
-  if (!isProbeThrottleOpen(params.now, params.throttleKey, params.consecutiveFailures)) {
+  if (!isProbeThrottleOpen(params.now, params.throttleKey)) {
     return false;
   }
 
@@ -527,7 +515,6 @@ function resolveCooldownDecision(params: {
   probeThrottleKey: string;
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   profileIds: string[];
-  consecutiveFailures?: number; // circuit breaker consecutive failures
 }): CooldownDecision {
   const shouldProbe = shouldProbePrimaryDuringCooldown({
     isPrimary: params.isPrimary,
@@ -536,7 +523,7 @@ function resolveCooldownDecision(params: {
     throttleKey: params.probeThrottleKey,
     authStore: params.authStore,
     profileIds: params.profileIds,
-    consecutiveFailures: params.consecutiveFailures,
+    model: params.candidate.model,
   });
 
   const inferredReason =
@@ -622,7 +609,6 @@ export async function runWithModelFallback<T>(params: {
   const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
-  const healthTracker = getModelHealthTracker();
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
@@ -632,18 +618,6 @@ export async function runWithModelFallback<T>(params: {
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-
-    // Check circuit breaker: skip if model is in open state
-    const health = healthTracker.getHealth(candidate.provider, candidate.model);
-    if (health && !healthTracker.canAttempt(candidate.provider, candidate.model)) {
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: `Circuit breaker open (${(health.failureRate * 100).toFixed(1)}% failure rate)`,
-        reason: "circuit_open",
-      });
-      continue;
-    }
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -667,7 +641,6 @@ export async function runWithModelFallback<T>(params: {
           probeThrottleKey,
           authStore,
           profileIds,
-          consecutiveFailures: health?.circuitTrips,
         });
 
         if (decision.type === "skip") {
@@ -762,9 +735,6 @@ export async function runWithModelFallback<T>(params: {
       options: runOptions,
     });
     if ("success" in attemptRun) {
-      // Record success in circuit breaker
-      healthTracker.record(candidate.provider, candidate.model, true);
-
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         logModelFallbackDecision({
           decision: "candidate_succeeded",
@@ -810,9 +780,6 @@ export async function runWithModelFallback<T>(params: {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
-
-      // Record failure in circuit breaker
-      healthTracker.record(candidate.provider, candidate.model, false);
 
       // Even unrecognized errors should not abort the fallback loop when
       // there are remaining candidates.  Only abort/context-overflow errors
