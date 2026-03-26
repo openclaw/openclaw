@@ -286,7 +286,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     unitHeavyWorkers: Math.min(cpuCount, bandBudget.unitHeavy),
     extensionWorkers: Math.min(cpuCount, bandBudget.extensions),
     gatewayWorkers: Math.min(cpuCount, bandBudget.gateway),
-    topLevelParallelEnabled: runtime.nodeMajor < 25,
+    topLevelParallelEnabled: !runtime.isWindows,
     topLevelParallelLimit: Math.min(cpuCount, bandBudget.topLevelIsolated),
     topLevelParallelLimitNoIsolate: Math.min(cpuCount, bandBudget.topLevelNoIsolate),
     topLevelParallelLimitIsolated: Math.min(cpuCount, bandBudget.topLevelIsolated),
