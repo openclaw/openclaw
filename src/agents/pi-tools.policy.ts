@@ -351,8 +351,10 @@ function resolveDirectToolPolicyFromConfig(params: {
     accountEntry !== undefined && Object.prototype.hasOwnProperty.call(accountEntry, "dms");
   const scopePriority = hasAccountScopedDms ? 1 : 0;
   // Account-derived candidates should not leak into top-level DM rules when the scoped
-  // account cannot be resolved.
-  const canFallbackToTopLevelDms = !params.requiresResolvedAccount || !params.accountId;
+  // account cannot be resolved. Resolved accounts without their own dms block still inherit
+  // the top-level DM policy.
+  const canFallbackToTopLevelDms =
+    !params.requiresResolvedAccount || !params.accountId || accountEntry !== undefined;
   const entries = hasAccountScopedDms
     ? accountEntry?.dms
     : canFallbackToTopLevelDms

@@ -582,6 +582,32 @@ describe("resolveGroupToolPolicy", () => {
     ).toBeUndefined();
   });
 
+  it("lets resolved account-scoped direct sessions inherit top-level dms when the account omits dms", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            ops: {
+              groups: {},
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
+  });
+
   it("prefers account-scoped dm candidates when account ids are ambiguous with scope kinds", () => {
     const cfg = {
       channels: {
@@ -671,6 +697,32 @@ describe("resolveGroupToolPolicy", () => {
         sessionKey: "agent:main:feishu:direct:direct:ou-owner",
       }),
     ).toBeUndefined();
+  });
+
+  it("lets ambiguous account-scoped direct sessions inherit top-level dms when the account exists", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "direct:ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            direct: {
+              groups: {},
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:direct:ou-owner",
+      }),
+    ).toEqual({ allow: ["read", "exec"] });
   });
 
   it("uses messageProvider or spawnedBy channel hints for per-peer direct session keys", () => {
