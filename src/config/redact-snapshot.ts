@@ -5,7 +5,7 @@ import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
+import { isSecretRefShape, redactSecretRefId, restoreSecretRefId } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -659,7 +659,23 @@ function restoreRedactedValuesWithLookup(
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
-          result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+          const objectValue = value as Record<string, unknown>;
+          const origValue = orig[key];
+          if (
+            isSecretRefShape(objectValue) &&
+            objectValue.id === REDACTED_SENTINEL &&
+            origValue &&
+            typeof origValue === "object" &&
+            isSecretRefShape(origValue as Record<string, unknown>)
+          ) {
+            result[key] = restoreSecretRefId({
+              value: objectValue,
+              original: origValue as Record<string, unknown> & { source: string; id: string },
+              redactedSentinel: REDACTED_SENTINEL,
+            });
+          } else {
+            result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+          }
         }
         break;
       }
@@ -673,7 +689,23 @@ function restoreRedactedValuesWithLookup(
       ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
-        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        const objectValue = value as Record<string, unknown>;
+        const origValue = orig[key];
+        if (
+          isSecretRefShape(objectValue) &&
+          objectValue.id === REDACTED_SENTINEL &&
+          origValue &&
+          typeof origValue === "object" &&
+          isSecretRefShape(origValue as Record<string, unknown>)
+        ) {
+          result[key] = restoreSecretRefId({
+            value: objectValue,
+            original: origValue as Record<string, unknown> & { source: string; id: string },
+            redactedSentinel: REDACTED_SENTINEL,
+          });
+        } else {
+          result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+        }
       }
     }
   }
@@ -715,7 +747,23 @@ function restoreRedactedValuesGuessing(
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {
-      result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      const objectValue = value as Record<string, unknown>;
+      const origValue = orig[key];
+      if (
+        isSecretRefShape(objectValue) &&
+        objectValue.id === REDACTED_SENTINEL &&
+        origValue &&
+        typeof origValue === "object" &&
+        isSecretRefShape(origValue as Record<string, unknown>)
+      ) {
+        result[key] = restoreSecretRefId({
+          value: objectValue,
+          original: origValue as Record<string, unknown> & { source: string; id: string },
+          redactedSentinel: REDACTED_SENTINEL,
+        });
+      } else {
+        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
+      }
     } else {
       result[key] = value;
     }
