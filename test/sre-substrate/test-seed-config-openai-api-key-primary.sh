@@ -18,4 +18,12 @@ jq -e '
   .agents.defaults.model.fallbacks | index("anthropic/claude-opus-4-6")
 ' "$CONFIG" >/dev/null
 
+jq -e '
+  all(.agents.defaults.models[]; ((keys_unsorted - ["alias", "params", "streaming"]) | length) == 0)
+' "$CONFIG" >/dev/null
+
+jq -e '
+  .agents.defaults.models["openai-codex/gpt-5.4"].params.thinking == "xhigh"
+' "$CONFIG" >/dev/null
+
 rg -F 'RCA_PROVIDER_MODEL="${RCA_PROVIDER_MODEL:-openai-codex/gpt-5.4}"' "$RCA_CODEX" >/dev/null

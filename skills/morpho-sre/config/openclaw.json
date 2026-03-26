@@ -18,7 +18,6 @@
       },
       "models": {
         "openai-codex/gpt-5.4": {
-          "contextWindow": 1000000,
           "params": {
             "thinking": "xhigh"
           }
