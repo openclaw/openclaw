@@ -27,6 +27,14 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
+vi.mock("./manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({ plugins: [] }),
+}));
+
+vi.mock("./bundled-compat.js", () => ({
+  withBundledPluginAllowlistCompat: (params: { config: unknown }) => params.config,
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => undefined,
   resolveDefaultAgentId: () => "default",
