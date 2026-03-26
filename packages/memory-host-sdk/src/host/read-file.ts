@@ -95,7 +95,9 @@ export async function readAgentMemoryFile(params: {
     const store = new EpisodicStore(dbPath);
     try {
       const episode = store.getById(episodeId);
-      if (!episode) {
+      // Reject if the episode doesn't exist or belongs to a different agent —
+      // prevents cross-agent memory leaks when agents share an episodes.db.
+      if (!episode || episode.agent_id !== params.agentId) {
         return { text: "", path: params.relPath };
       }
       const lines: string[] = [
