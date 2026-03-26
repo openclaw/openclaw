@@ -858,11 +858,7 @@ export const OpenClawSchema = z
             browser: z
               .object({
                 mode: z
-                  .union([
-                    z.literal("auto"),
-                    z.literal("manual"),
-                    z.literal("off"),
-                  ])
+                  .union([z.literal("auto"), z.literal("manual"), z.literal("off")])
                   .optional(),
                 node: z.string().optional(),
               })
@@ -908,12 +904,7 @@ export const OpenClawSchema = z
           .object({
             preferBrew: z.boolean().optional(),
             nodeManager: z
-              .union([
-                z.literal("npm"),
-                z.literal("pnpm"),
-                z.literal("yarn"),
-                z.literal("bun"),
-              ])
+              .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
           })
           .strict()
