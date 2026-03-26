@@ -261,6 +261,38 @@ If the `claude` binary is not on the gateway host PATH:
 - Normal OpenClaw message/session routing
 - Claude CLI session continuity across turns
 
+### Migrate from Anthropic auth to Claude CLI
+
+If you currently use `anthropic/...` with a setup-token or API key and want to
+switch the same gateway host to Claude CLI:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+Or in onboarding:
+
+```bash
+openclaw onboard --auth-choice anthropic-cli
+```
+
+What this does:
+
+- verifies Claude CLI is already signed in on the gateway host
+- switches the default model to `claude-cli/...`
+- rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
+  to `claude-cli/claude-opus-4-6`
+- adds matching `claude-cli/...` entries to `agents.defaults.models`
+
+What it does **not** do:
+
+- delete your existing Anthropic auth profiles
+- remove every old `anthropic/...` config reference outside the main default
+  model/allowlist path
+
+That makes rollback simple: change the default model back to `anthropic/...` if
+you need to.
+
 ### Important limits
 
 - This is **not** the Anthropic API provider. It is the local CLI runtime.
