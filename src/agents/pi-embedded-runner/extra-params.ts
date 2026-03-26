@@ -124,6 +124,10 @@ export function resolvePreparedExtraParams(params: {
   thinkingLevel?: ThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
+  /** Active session key — forwarded to provider hooks for spend attribution. */
+  sessionKey?: string;
+  /** Ephemeral session UUID — forwarded to provider hooks for per-conversation isolation. */
+  sessionId?: string;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -155,6 +159,8 @@ export function resolvePreparedExtraParams(params: {
         modelId: params.modelId,
         extraParams: merged,
         thinkingLevel: params.thinkingLevel,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
       },
     }) ?? merged
   );
@@ -298,6 +304,8 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
   workspaceDir?: string,
+  sessionKey?: string,
+  sessionId?: string,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -319,6 +327,8 @@ export function applyExtraParamsToAgent(
     thinkingLevel,
     agentId,
     resolvedExtraParams,
+    sessionKey,
+    sessionId,
   });
 
   if (provider === "openai" || provider === "openai-codex") {
