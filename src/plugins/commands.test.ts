@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   __testing,
@@ -51,6 +51,17 @@ describe("registerPluginCommand", () => {
     expect(invalidDescription).toEqual({
       ok: false,
       error: "Command description must be a string",
+    });
+
+    const invalidRequiredGatewayScopes = registerPluginCommand("demo-plugin", {
+      name: "secure",
+      description: "Secure command",
+      requiredGatewayScopes: ["operator.nope" as never],
+      handler: async () => ({ text: "ok" }),
+    });
+    expect(invalidRequiredGatewayScopes).toEqual({
+      ok: false,
+      error: 'Command requiredGatewayScopes contains unknown scope "operator.nope"',
     });
   });
 
@@ -329,5 +340,173 @@ describe("registerPluginCommand", () => {
         detached: { removed: false },
       }),
     );
+  });
+});
+
+describe("executePluginCommand", () => {
+  it("enforces owner requirements before running the handler", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    const result = await executePluginCommand({
+      command: {
+        name: "owneronly",
+        description: "Owner-only command",
+        requireOwner: true,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/owneronly",
+      config: {} as never,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "⚠️ This command requires owner authorization." });
+  });
+
+  it("blocks internal callers missing required gateway scopes", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    const result = await executePluginCommand({
+      command: {
+        name: "pairing",
+        description: "Pairing command",
+        requiredGatewayScopes: ["operator.pairing"],
+        handler,
+        pluginId: "demo-plugin",
+      },
+      surface: "webchat",
+      channel: "webchat",
+      senderId: "writer-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      commandBody: "/pairing",
+      config: {} as never,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+
+  it("allows admin-scoped internal callers to bypass narrower scope requirements", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    const result = await executePluginCommand({
+      command: {
+        name: "pairing",
+        description: "Pairing command",
+        requiredGatewayScopes: ["operator.pairing"],
+        handler,
+        pluginId: "demo-plugin",
+      },
+      surface: "webchat",
+      channel: "webchat",
+      senderId: "admin-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.admin"],
+      commandBody: "/pairing",
+      config: {} as never,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ text: "ok" });
+  });
+
+  it("allows external callers to bypass gateway scope requirements", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    const result = await executePluginCommand({
+      command: {
+        name: "pairing",
+        description: "Pairing command",
+        requiredGatewayScopes: ["operator.pairing"],
+        handler,
+        pluginId: "demo-plugin",
+      },
+      surface: "telegram",
+      channel: "telegram",
+      senderId: "123",
+      isAuthorizedSender: true,
+      commandBody: "/pairing",
+      config: {} as never,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ text: "ok" });
+  });
+
+  it("supports context-sensitive gateway scope requirements", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    const command: Parameters<typeof executePluginCommand>[0]["command"] = {
+      name: "pair",
+      description: "Pair command",
+      resolveRequiredGatewayScopes: (ctx) => {
+        const action = ctx.args?.trim().split(/\s+/, 1)[0]?.toLowerCase();
+        return action === "approve" ? ["operator.pairing"] : undefined;
+      },
+      handler,
+      pluginId: "demo-plugin",
+    };
+
+    const denied = await executePluginCommand({
+      command,
+      surface: "webchat",
+      channel: "webchat",
+      senderId: "writer-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "approve latest",
+      commandBody: "/pair approve latest",
+      config: {} as never,
+    });
+
+    const allowed = await executePluginCommand({
+      command,
+      surface: "webchat",
+      channel: "webchat",
+      senderId: "writer-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "qr",
+      commandBody: "/pair qr",
+      config: {} as never,
+    });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(denied).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+    expect(allowed).toEqual({ text: "ok" });
+  });
+
+  it("returns a safe error reply when dynamic scope resolution throws", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    const result = await executePluginCommand({
+      command: {
+        name: "pair",
+        description: "Pair command",
+        resolveRequiredGatewayScopes: () => {
+          throw new Error("resolver exploded");
+        },
+        handler,
+        pluginId: "demo-plugin",
+      },
+      surface: "webchat",
+      channel: "webchat",
+      senderId: "writer-1",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      commandBody: "/pair",
+      config: {} as never,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "⚠️ Command failed. Please try again later." });
   });
 });

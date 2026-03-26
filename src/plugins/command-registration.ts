@@ -1,3 +1,10 @@
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+} from "../gateway/method-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   clearPluginCommands,
@@ -87,6 +94,13 @@ export function validateCommandName(name: string): string | null {
 export function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
 ): string | null {
+  const knownOperatorScopes = new Set([
+    ADMIN_SCOPE,
+    APPROVALS_SCOPE,
+    PAIRING_SCOPE,
+    READ_SCOPE,
+    WRITE_SCOPE,
+  ]);
   if (typeof command.handler !== "function") {
     return "Command handler must be a function";
   }
@@ -110,6 +124,23 @@ export function validatePluginCommandDefinition(
     const aliasError = validateCommandName(alias.trim());
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
+    }
+  }
+  if (
+    command.requiredGatewayScopes !== undefined &&
+    !Array.isArray(command.requiredGatewayScopes)
+  ) {
+    return "Command requiredGatewayScopes must be an array";
+  }
+  if (
+    command.resolveRequiredGatewayScopes !== undefined &&
+    typeof command.resolveRequiredGatewayScopes !== "function"
+  ) {
+    return "Command resolveRequiredGatewayScopes must be a function";
+  }
+  for (const scope of command.requiredGatewayScopes ?? []) {
+    if (!knownOperatorScopes.has(scope)) {
+      return `Command requiredGatewayScopes contains unknown scope "${scope}"`;
     }
   }
   return null;

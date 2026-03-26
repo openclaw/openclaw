@@ -40,8 +40,10 @@ function createApi(params: {
 
 function createCommandContext(args: string): PluginCommandContext {
   return {
+    surface: "test",
     channel: "test",
     isAuthorizedSender: true,
+    senderIsOwner: false,
     commandBody: `/phone ${args}`,
     args,
     config: {},

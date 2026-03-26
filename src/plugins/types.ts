@@ -984,14 +984,18 @@ export type OpenClawPluginGatewayMethod = {
 export type PluginCommandContext = {
   /** The sender's identifier (e.g., Telegram user ID) */
   senderId?: string;
+  /** The inbound command surface (e.g., "webchat", "telegram") */
+  surface: string;
   /** The channel/surface (e.g., "telegram", "discord") */
   channel: string;
   /** Provider channel id (e.g., "telegram") */
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Whether the sender is treated as an owner-level caller */
+  senderIsOwner: boolean;
   /** Gateway client scopes for internal control-plane callers */
-  gatewayClientScopes?: string[];
+  gatewayClientScopes?: OperatorScope[];
   /** Raw command arguments after the command name */
   args?: string;
   /** The full normalized command body */
@@ -1068,6 +1072,24 @@ export type PluginConversationBindingResolvedEvent = {
   };
 };
 
+export type PluginCommandAuthorizationContext = Pick<
+  PluginCommandContext,
+  | "senderId"
+  | "surface"
+  | "channel"
+  | "channelId"
+  | "isAuthorizedSender"
+  | "senderIsOwner"
+  | "gatewayClientScopes"
+  | "args"
+  | "commandBody"
+  | "config"
+  | "from"
+  | "to"
+  | "accountId"
+  | "messageThreadId"
+>;
+
 /**
  * Result returned by a plugin command handler.
  */
@@ -1098,6 +1120,14 @@ export type OpenClawPluginCommandDefinition = {
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
+  /** Whether only owner-level callers can use this command (default: false) */
+  requireOwner?: boolean;
+  /** Gateway scopes required for internal control-plane callers */
+  requiredGatewayScopes?: readonly OperatorScope[];
+  /** Context-sensitive gateway scopes required for internal control-plane callers */
+  resolveRequiredGatewayScopes?: (
+    ctx: PluginCommandAuthorizationContext,
+  ) => readonly OperatorScope[] | undefined;
   /** The handler function */
   handler: PluginCommandHandler;
 };

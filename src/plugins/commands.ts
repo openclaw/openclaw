@@ -7,7 +7,9 @@
 
 import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { ADMIN_SCOPE, isOperatorScope, type OperatorScope } from "../gateway/method-scopes.js";
 import { logVerbose } from "../globals.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -28,6 +30,7 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import type {
+  PluginCommandAuthorizationContext,
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
   PluginCommandResult,
@@ -35,6 +38,25 @@ import type {
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
+
+function formatRequiredGatewayScopes(scopes: readonly string[]): string {
+  if (scopes.length === 0) {
+    return "gateway authorization";
+  }
+  if (scopes.length === 1) {
+    return scopes[0];
+  }
+  if (scopes.length === 2) {
+    return `${scopes[0]} and ${scopes[1]}`;
+  }
+  return `${scopes.slice(0, -1).join(", ")}, and ${scopes[scopes.length - 1]}`;
+}
+
+function buildMissingGatewayScopeReply(scopes: readonly string[]): PluginCommandResult {
+  return {
+    text: `⚠️ This command requires ${formatRequiredGatewayScopes(scopes)} for internal gateway callers.`,
+  };
+}
 
 export {
   clearPluginCommands,
@@ -181,9 +203,11 @@ export async function executePluginCommand(params: {
   command: RegisteredPluginCommand;
   args?: string;
   senderId?: string;
+  surface?: PluginCommandContext["surface"];
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
+  senderIsOwner?: PluginCommandContext["senderIsOwner"];
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   commandBody: string;
   config: OpenClawConfig;
@@ -192,7 +216,17 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
 }): Promise<PluginCommandResult> {
-  const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
+  const {
+    command,
+    args,
+    senderId,
+    channel,
+    isAuthorizedSender,
+    commandBody,
+    config,
+    senderIsOwner = false,
+  } = params;
+  const surface = params.surface ?? channel;
 
   // Check authorization
   const requireAuth = command.requireAuth !== false; // Default to true
@@ -202,9 +236,67 @@ export async function executePluginCommand(params: {
     );
     return { text: "⚠️ This command requires authorization." };
   }
-
-  // Sanitize args before passing to handler
+  if (command.requireOwner && !senderIsOwner) {
+    logVerbose(
+      `Plugin command /${command.name} blocked: non-owner sender ${senderId || "<unknown>"}`,
+    );
+    return { text: "⚠️ This command requires owner authorization." };
+  }
   const sanitizedArgs = sanitizeArgs(args);
+  const authContext: PluginCommandAuthorizationContext = {
+    senderId,
+    surface,
+    channel,
+    channelId: params.channelId,
+    isAuthorizedSender,
+    senderIsOwner,
+    gatewayClientScopes: params.gatewayClientScopes,
+    args: sanitizedArgs,
+    commandBody,
+    config,
+    from: params.from,
+    to: params.to,
+    accountId: params.accountId,
+    messageThreadId: params.messageThreadId,
+  };
+  let dynamicRequiredGatewayScopes: OperatorScope[] = [];
+  if (command.resolveRequiredGatewayScopes) {
+    try {
+      const resolvedScopes = command.resolveRequiredGatewayScopes(authContext) as
+        | readonly string[]
+        | undefined;
+      dynamicRequiredGatewayScopes = (resolvedScopes ?? []).filter(
+        (scope): scope is OperatorScope => {
+          if (isOperatorScope(scope)) {
+            return true;
+          }
+          logVerbose(`Plugin command /${command.name} ignored unknown dynamic scope "${scope}"`);
+          return false;
+        },
+      );
+    } catch (err) {
+      const error = err as Error;
+      logVerbose(`Plugin command /${command.name} scope resolver error: ${error.message}`);
+      return { text: "⚠️ Command failed. Please try again later." };
+    }
+  }
+  const requiredGatewayScopes = Array.from(
+    new Set([...(command.requiredGatewayScopes ?? []), ...dynamicRequiredGatewayScopes]),
+  );
+  if (
+    requiredGatewayScopes.length > 0 &&
+    isInternalMessageChannel(surface) &&
+    !requiredGatewayScopes.every(
+      (scope) =>
+        params.gatewayClientScopes?.includes(scope) ||
+        params.gatewayClientScopes?.includes(ADMIN_SCOPE),
+    )
+  ) {
+    logVerbose(
+      `Plugin command /${command.name} blocked: gateway caller missing scope ${requiredGatewayScopes.join(", ")}`,
+    );
+    return buildMissingGatewayScopeReply(requiredGatewayScopes);
+  }
   const bindingConversation = resolveBindingConversationFromCommand({
     channel,
     from: params.from,
@@ -215,9 +307,11 @@ export async function executePluginCommand(params: {
 
   const ctx: PluginCommandContext = {
     senderId,
+    surface,
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
+    senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
     args: sanitizedArgs,
     commandBody,

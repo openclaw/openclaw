@@ -6,6 +6,14 @@ export const WRITE_SCOPE = "operator.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const PAIRING_SCOPE = "operator.pairing" as const;
 
+const ALL_OPERATOR_SCOPES = [
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+] as const;
+
 export type OperatorScope =
   | typeof ADMIN_SCOPE
   | typeof READ_SCOPE
@@ -13,13 +21,14 @@ export type OperatorScope =
   | typeof APPROVALS_SCOPE
   | typeof PAIRING_SCOPE;
 
-export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  WRITE_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-];
+const OPERATOR_SCOPE_SET = new Set<string>(ALL_OPERATOR_SCOPES);
+
+export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [...ALL_OPERATOR_SCOPES];
+
+/** Narrow an arbitrary scope string to a known operator scope. */
+export function isOperatorScope(scope: string): scope is OperatorScope {
+  return OPERATOR_SCOPE_SET.has(scope);
+}
 
 const NODE_ROLE_METHODS = new Set([
   "node.invoke.result",

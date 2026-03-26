@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OperatorScope } from "../../src/gateway/method-scopes.js";
 import type { OpenClawPluginCommandDefinition } from "../../test/helpers/extensions/plugin-command.js";
 import { createPluginRuntimeMock } from "../../test/helpers/extensions/plugin-runtime-mock.js";
 import register from "./index.js";
@@ -30,13 +31,15 @@ function createHarness(config: Record<string, unknown>) {
 function createCommandContext(
   args: string,
   channel: string = "discord",
-  gatewayClientScopes?: string[],
+  gatewayClientScopes?: OperatorScope[],
 ) {
   return {
     args,
+    surface: channel,
     channel,
     channelId: channel,
     isAuthorizedSender: true,
+    senderIsOwner: false,
     gatewayClientScopes,
     commandBody: args ? `/voice ${args}` : "/voice",
     config: {},
@@ -47,7 +50,7 @@ function createCommandContext(
 }
 
 describe("talk-voice plugin", () => {
-  function createElevenlabsVoiceSetHarness(channel = "webchat", scopes?: string[]) {
+  function createElevenlabsVoiceSetHarness(channel = "webchat", scopes?: OperatorScope[]) {
     const { command, runtime } = createHarness({
       talk: {
         provider: "elevenlabs",

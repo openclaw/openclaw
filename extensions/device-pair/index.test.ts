@@ -6,6 +6,7 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executePluginCommand } from "../../src/plugins/commands.js";
 import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
 import type { OpenClawPluginApi } from "./api.js";
 import type { PendingPairingRequest } from "./notify.ts";
@@ -120,9 +121,12 @@ function createChannelRuntime(
 }
 
 function createCommandContext(params?: Partial<PluginCommandContext>): PluginCommandContext {
+  const surface = params?.surface ?? params?.channel ?? "webchat";
   return {
-    channel: "webchat",
+    surface,
+    channel: surface,
     isAuthorizedSender: true,
+    senderIsOwner: false,
     commandBody: "/pair qr",
     args: "qr",
     config: {},
@@ -446,14 +450,20 @@ describe("device-pair /pair approve", () => {
     });
 
     const command = registerPairCommand();
-    const result = await command.handler(
-      createCommandContext({
-        channel: "webchat",
-        args: "approve latest",
-        commandBody: "/pair approve latest",
-        gatewayClientScopes: ["operator.write"],
-      }),
-    );
+    const result = await executePluginCommand({
+      command: {
+        ...command,
+        pluginId: "device-pair",
+      },
+      senderId: "writer-1",
+      surface: "webchat",
+      channel: "webchat",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write"],
+      args: "approve latest",
+      commandBody: "/pair approve latest",
+      config: {} as never,
+    });
 
     expect(vi.mocked(approveDevicePairing)).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -501,14 +511,20 @@ describe("device-pair /pair approve", () => {
     });
 
     const command = registerPairCommand();
-    const result = await command.handler(
-      createCommandContext({
-        channel: "webchat",
-        args: "approve latest",
-        commandBody: "/pair approve latest",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
-      }),
-    );
+    const result = await executePluginCommand({
+      command: {
+        ...command,
+        pluginId: "device-pair",
+      },
+      senderId: "pairing-1",
+      surface: "webchat",
+      channel: "webchat",
+      isAuthorizedSender: true,
+      gatewayClientScopes: ["operator.write", "operator.pairing"],
+      args: "approve latest",
+      commandBody: "/pair approve latest",
+      config: {} as never,
+    });
 
     expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
