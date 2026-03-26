@@ -1018,6 +1018,16 @@ export async function runEmbeddedAttempt(
         return innerStreamFn(model, context, options);
       };
 
+      const fallbackProviderConfig = params.config?.models?.providers?.[providerIdForNumCtx];
+      activeSession.agent.streamFn = wrapStreamFnWithReActFallback(activeSession.agent.streamFn, {
+        modelId: params.modelId,
+        providerId: providerIdForNumCtx,
+        providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
+        toolFallback: fallbackProviderConfig?.toolFallback,
+        reactProfile: fallbackProviderConfig?.reactProfile,
+        configDir: resolveStateDir(),
+      });
+
       // Some models emit tool names with surrounding whitespace (e.g. " read ").
       // pi-agent-core dispatches tool calls with exact string matching, so normalize
       // names on the live response stream before tool execution.
@@ -1051,16 +1061,6 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
-
-      const fallbackProviderConfig = params.config?.models?.providers?.[providerIdForNumCtx];
-      activeSession.agent.streamFn = wrapStreamFnWithReActFallback(activeSession.agent.streamFn, {
-        modelId: params.modelId,
-        providerId: providerIdForNumCtx,
-        providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
-        toolFallback: fallbackProviderConfig?.toolFallback,
-        reactProfile: fallbackProviderConfig?.reactProfile,
-        configDir: resolveStateDir(),
-      });
 
       try {
         const prior = await sanitizeSessionHistory({
