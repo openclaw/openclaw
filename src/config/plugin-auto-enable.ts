@@ -459,6 +459,7 @@ export function applyPluginAutoEnable(params: {
     const allow = next.plugins?.allow;
     const allowMissing =
       builtInChannelId == null && Array.isArray(allow) && !allow.includes(entry.pluginId);
+    if (!allowMissing && builtInChannelId == null) continue;
     const alreadyEnabled =
       builtInChannelId != null
         ? (() => {
