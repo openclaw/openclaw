@@ -33,6 +33,13 @@ type ChannelSurfaceMetadata = {
   configUiHints?: ConfigSchemaResponse["uiHints"];
 };
 
+function compareChannelSurfaceMetadata(
+  left: ChannelSurfaceMetadata,
+  right: ChannelSurfaceMetadata,
+): number {
+  return left.id.localeCompare(right.id);
+}
+
 export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
 export type ConfigDocBaselineEntry = {
@@ -372,9 +379,9 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     }).map((entry) => [entry.id, entry.meta] as const),
   );
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
-  const bundledChannelPlugins = manifestRegistry.plugins.filter(
-    (plugin) => plugin.origin === "bundled" && plugin.channels.length > 0,
-  );
+  const bundledChannelPlugins = manifestRegistry.plugins
+    .filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0)
+    .toSorted((left, right) => left.id.localeCompare(right.id));
   const channelPlugins =
     process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1"
       ? await bundledChannelPlugins.reduce<Promise<ChannelSurfaceMetadata[]>>(
@@ -432,6 +439,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     cache: false,
     plugins: manifestRegistry.plugins
       .filter((plugin) => plugin.origin === "bundled")
+      .toSorted((left, right) => left.id.localeCompare(right.id))
       .map((plugin) => ({
         id: plugin.id,
         name: plugin.name,
@@ -439,7 +447,7 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
         configUiHints: plugin.configUiHints,
         configSchema: plugin.configSchema,
       })),
-    channels: channelPlugins.map((entry) => ({
+    channels: channelPlugins.toSorted(compareChannelSurfaceMetadata).map((entry) => ({
       id: entry.id,
       label: entry.label,
       description: entry.description,
