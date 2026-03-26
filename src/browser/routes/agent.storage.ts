@@ -1,1 +1,1 @@
-export * from "../../compat/browser/routes/agent.storage.js";
+export * from "../../../extensions/browser/src/browser/routes/agent.storage.js";

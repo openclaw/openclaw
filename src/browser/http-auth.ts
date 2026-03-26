@@ -1,1 +1,1 @@
-export * from "../compat/browser/http-auth.js";
+export * from "../../extensions/browser/src/browser/http-auth.js";

@@ -1,1 +1,1 @@
-export * from "../compat/browser/server-lifecycle.js";
+export * from "../../extensions/browser/src/browser/server-lifecycle.js";

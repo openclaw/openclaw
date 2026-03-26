@@ -1,1 +1,1 @@
-export * from "../compat/browser/chrome-mcp.js";
+export * from "../../extensions/browser/src/browser/chrome-mcp.js";

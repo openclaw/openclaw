@@ -1,1 +1,1 @@
-export * from "../compat/browser/server-context.chrome-test-harness.js";
+export * from "../../extensions/browser/src/browser/server-context.chrome-test-harness.js";

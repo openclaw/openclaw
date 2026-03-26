@@ -1,1 +1,1 @@
-export * from "../compat/browser/cdp.js";
+export * from "../../extensions/browser/src/browser/cdp.js";

@@ -1,1 +1,1 @@
-export * from "../compat/browser/pw-tools-core.trace.js";
+export * from "../../extensions/browser/src/browser/pw-tools-core.trace.js";

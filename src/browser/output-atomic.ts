@@ -1,1 +1,1 @@
-export * from "../compat/browser/output-atomic.js";
+export * from "../../extensions/browser/src/browser/output-atomic.js";

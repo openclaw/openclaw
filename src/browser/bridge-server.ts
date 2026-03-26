@@ -1,1 +1,1 @@
-export * from "../compat/browser/bridge-server.js";
+export * from "../../extensions/browser/src/browser/bridge-server.js";

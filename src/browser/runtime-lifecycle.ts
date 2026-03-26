@@ -1,1 +1,1 @@
-export * from "../compat/browser/runtime-lifecycle.js";
+export * from "../../extensions/browser/src/browser/runtime-lifecycle.js";

@@ -1,1 +1,1 @@
-export * from "../compat/browser/cli/browser-cli-state.cookies-storage.js";
+export * from "../../extensions/browser/src/cli/browser-cli-state.cookies-storage.js";

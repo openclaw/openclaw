@@ -1,1 +1,1 @@
-export * from "../compat/browser/safe-filename.js";
+export * from "../../extensions/browser/src/browser/safe-filename.js";

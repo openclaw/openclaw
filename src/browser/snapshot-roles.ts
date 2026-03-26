@@ -1,1 +1,1 @@
-export * from "../compat/browser/snapshot-roles.js";
+export * from "../../extensions/browser/src/browser/snapshot-roles.js";

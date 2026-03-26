@@ -1,1 +1,1 @@
-export * from "../compat/browser/cli/browser-cli-inspect.js";
+export * from "../../extensions/browser/src/cli/browser-cli-inspect.js";

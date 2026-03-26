@@ -1,1 +1,1 @@
-export * from "../compat/browser/node-host/invoke-browser.js";
+export * from "../../extensions/browser/src/node-host/invoke-browser.js";

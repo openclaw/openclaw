@@ -1,1 +1,1 @@
-export * from "../compat/browser/resolved-config-refresh.js";
+export * from "../../extensions/browser/src/browser/resolved-config-refresh.js";

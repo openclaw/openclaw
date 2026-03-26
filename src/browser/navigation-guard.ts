@@ -1,1 +1,1 @@
-export * from "../compat/browser/navigation-guard.js";
+export * from "../../extensions/browser/src/browser/navigation-guard.js";
