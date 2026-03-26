@@ -95,6 +95,12 @@ function shouldForceResponsesStore(model: {
   if (!OPENAI_RESPONSES_PROVIDERS.has(model.provider)) {
     return false;
   }
+  // Allow explicit opt-in for proxy setups (e.g. security proxies like Aegis
+  // that forward to OpenAI). When compat.supportsStore is explicitly true,
+  // force store=true even for non-direct URLs.
+  if (model.compat?.supportsStore === true) {
+    return true;
+  }
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
