@@ -146,6 +146,30 @@ When validation fails:
 
   </Accordion>
 
+  <Accordion title="Enable owner-only tools and commands">
+    Some built-in tools are hidden unless the sender is recognized as an owner.
+    This affects `gateway`, `cron`, and `nodes`, plus owner-level command
+    surfaces.
+
+    Set `commands.ownerAllowFrom` to the sender IDs that should count as owners:
+
+    ```bash
+    openclaw config set commands.ownerAllowFrom '["YOUR_SENDER_ID"]' --strict-json
+    ```
+
+    Use the same **channel-native sender IDs** that your channel exposes
+    elsewhere in config, such as:
+
+    - WhatsApp phone numbers like `+15551234567`
+    - Discord user IDs like `123456789012345678`
+    - Provider-prefixed IDs like `whatsapp:+15551234567`
+
+    `["*"]` does not grant owner access here; use explicit sender IDs only.
+    See the [full reference](/gateway/configuration-reference#commands-chat-command-handling)
+    for the complete `commands` block.
+
+  </Accordion>
+
   <Accordion title="Set up group chat mention gating">
     Group messages default to **require mention**. Configure patterns per agent:
 

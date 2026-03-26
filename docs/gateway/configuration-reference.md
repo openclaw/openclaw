@@ -733,6 +733,7 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
       "*": ["user1"],
       discord: ["user:123"],
     },
+    ownerAllowFrom: ["discord:123456789012345678"],
     useAccessGroups: true,
   },
 }
@@ -749,6 +750,8 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
+- `ownerAllowFrom` explicitly marks senders as owners for owner-only tools and commands. Use channel-native IDs (optionally provider-prefixed like `whatsapp:+15551234567`); `["*"]` is ignored.
+- Owner-only built-in tools currently include `gateway`, `cron`, and `nodes`. If the current sender is not recognized as an owner, these tools are omitted from the agent's tool list.
 - `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
 
 </Accordion>

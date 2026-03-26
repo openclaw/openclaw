@@ -68,6 +68,30 @@ These tools ship with OpenClaw and are available without installing any plugins:
 
 For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
+## Owner-only tools
+
+Some built-in tools are only exposed when the current sender is recognized as an
+owner. If ownership is not configured, these tools are hidden from the agent
+entirely.
+
+The current owner-only tools are:
+
+- `gateway`
+- `cron`
+- `nodes`
+
+To enable them, set `commands.ownerAllowFrom` to the sender IDs that should be
+treated as owners. Use **channel-native IDs** such as a phone number, Discord
+user ID, or provider-prefixed value like `whatsapp:+15551234567`.
+
+```bash
+openclaw config set commands.ownerAllowFrom '["YOUR_SENDER_ID"]' --strict-json
+```
+
+See [Configuration](/gateway/configuration#enable-owner-only-tools-and-commands)
+for setup guidance and [Configuration Reference](/gateway/configuration-reference#commands-chat-command-handling)
+for the full `commands` schema.
+
 ### Plugin-provided tools
 
 Plugins can register additional tools. Some examples:
