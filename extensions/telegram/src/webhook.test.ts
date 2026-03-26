@@ -99,7 +99,6 @@ vi.mock("./bot.js", () => ({
 }));
 
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
-let clearTelegramWebhookRateLimitStateForTest: typeof import("./webhook.js").clearTelegramWebhookRateLimitStateForTest;
 
 function resetTelegramWebhookMocks(): void {
   handlerSpy.mockReset();
@@ -123,13 +122,11 @@ function resetTelegramWebhookMocks(): void {
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ startTelegramWebhook, clearTelegramWebhookRateLimitStateForTest } =
-    await import("./webhook.js"));
+  ({ startTelegramWebhook } = await import("./webhook.js"));
 });
 
 beforeEach(() => {
   resetTelegramWebhookMocks();
-  clearTelegramWebhookRateLimitStateForTest();
 });
 
 async function fetchWithTimeout(
@@ -602,6 +599,107 @@ describe("startTelegramWebhook", () => {
         expect(handlerSpy).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it("uses the forwarded client ip when trusted proxies are configured", async () => {
+    handlerSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        config: {
+          gateway: {
+            trustedProxies: ["127.0.0.1"],
+          },
+        },
+      },
+      async ({ port }) => {
+        for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
+          const response = await fetchWithTimeout(
+            webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-forwarded-for": "198.51.100.10",
+                "x-telegram-bot-api-secret-token": `wrong-secret-${String(i).padStart(3, "0")}`,
+              },
+              body: JSON.stringify({ update_id: i, message: { text: `guess ${i}` } }),
+            },
+            5_000,
+          );
+          if (response.status === 429) {
+            break;
+          }
+          expect(response.status).toBe(401);
+        }
+
+        const isolatedClient = await fetchWithTimeout(
+          webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-forwarded-for": "203.0.113.20",
+              "x-telegram-bot-api-secret-token": TELEGRAM_SECRET,
+            },
+            body: JSON.stringify({ update_id: 201, message: { text: "hello" } }),
+          },
+          5_000,
+        );
+
+        expect(isolatedClient.status).toBe(200);
+        expect(handlerSpy).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  it("keeps rate-limit state isolated per webhook listener", async () => {
+    handlerSpy.mockClear();
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const first = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      abortSignal: firstAbort.signal,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+    });
+    const second = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      port: 0,
+      abortSignal: secondAbort.signal,
+      secret: TELEGRAM_SECRET,
+      path: TELEGRAM_WEBHOOK_PATH,
+    });
+
+    try {
+      const firstPort = getServerPort(first.server);
+      const secondPort = getServerPort(second.server);
+
+      for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
+        const response = await postWebhookJson({
+          url: webhookUrl(firstPort, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify({ update_id: i, message: { text: `guess ${i}` } }),
+          secret: `wrong-secret-${String(i).padStart(3, "0")}`,
+        });
+        if (response.status === 429) {
+          break;
+        }
+      }
+
+      const secondResponse = await postWebhookJson({
+        url: webhookUrl(secondPort, TELEGRAM_WEBHOOK_PATH),
+        payload: JSON.stringify({ update_id: 301, message: { text: "hello" } }),
+        secret: TELEGRAM_SECRET,
+      });
+
+      expect(secondResponse.status).toBe(200);
+      expect(handlerSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      firstAbort.abort();
+      secondAbort.abort();
+    }
   });
 
   it("rejects startup when webhook secret is missing", async () => {

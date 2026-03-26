@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
+import net from "node:net";
 import * as grammy from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/infra-runtime";
@@ -27,21 +28,12 @@ import { createTelegramBot } from "./bot.js";
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const TELEGRAM_WEBHOOK_CALLBACK_TIMEOUT_MS = 10_000;
-const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
-  windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
-  maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
-  maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
-});
 const InputFileCtor: typeof grammy.InputFile =
   typeof grammy.InputFile === "function"
     ? grammy.InputFile
     : (class InputFileFallback {
         constructor(public readonly path: string) {}
       } as unknown as typeof grammy.InputFile);
-
-export function clearTelegramWebhookRateLimitStateForTest(): void {
-  telegramWebhookRateLimiter.clear();
-}
 
 async function listenHttpServer(params: {
   server: ReturnType<typeof createServer>;
@@ -118,8 +110,130 @@ function hasValidTelegramWebhookSecret(
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function resolveTelegramWebhookRateLimitKey(req: IncomingMessage, path: string): string {
-  return `${path}:${req.socket.remoteAddress ?? "unknown"}`;
+function parseIpLiteral(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end !== -1) {
+      const candidate = trimmed.slice(1, end);
+      return net.isIP(candidate) === 0 ? undefined : candidate;
+    }
+  }
+  if (net.isIP(trimmed) !== 0) {
+    return trimmed;
+  }
+  const lastColon = trimmed.lastIndexOf(":");
+  if (lastColon > -1 && trimmed.includes(".") && trimmed.indexOf(":") === lastColon) {
+    const candidate = trimmed.slice(0, lastColon);
+    return net.isIP(candidate) === 4 ? candidate : undefined;
+  }
+  return undefined;
+}
+
+function isTrustedProxyAddress(
+  ip: string | undefined,
+  trustedProxies?: readonly string[],
+): boolean {
+  const candidate = parseIpLiteral(ip);
+  if (!candidate || !trustedProxies?.length) {
+    return false;
+  }
+  const blockList = new net.BlockList();
+  for (const proxy of trustedProxies) {
+    const trimmed = proxy.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.includes("/")) {
+      const [address, prefix] = trimmed.split("/", 2);
+      const parsedPrefix = Number.parseInt(prefix ?? "", 10);
+      const family = net.isIP(address);
+      if (
+        family === 4 &&
+        Number.isInteger(parsedPrefix) &&
+        parsedPrefix >= 0 &&
+        parsedPrefix <= 32
+      ) {
+        blockList.addSubnet(address, parsedPrefix, "ipv4");
+      }
+      if (
+        family === 6 &&
+        Number.isInteger(parsedPrefix) &&
+        parsedPrefix >= 0 &&
+        parsedPrefix <= 128
+      ) {
+        blockList.addSubnet(address, parsedPrefix, "ipv6");
+      }
+      continue;
+    }
+    if (net.isIP(trimmed) === 4) {
+      blockList.addAddress(trimmed, "ipv4");
+      continue;
+    }
+    if (net.isIP(trimmed) === 6) {
+      blockList.addAddress(trimmed, "ipv6");
+    }
+  }
+  return blockList.check(candidate, net.isIP(candidate) === 6 ? "ipv6" : "ipv4");
+}
+
+function resolveForwardedClientIp(
+  forwardedFor: string | undefined,
+  trustedProxies?: readonly string[],
+): string | undefined {
+  if (!trustedProxies?.length) {
+    return undefined;
+  }
+  const forwardedChain = forwardedFor
+    ?.split(",")
+    .map((entry) => parseIpLiteral(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  if (!forwardedChain?.length) {
+    return undefined;
+  }
+  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
+    const hop = forwardedChain[index];
+    if (!isTrustedProxyAddress(hop, trustedProxies)) {
+      return hop;
+    }
+  }
+  return undefined;
+}
+
+function resolveTelegramWebhookClientIp(req: IncomingMessage, config?: OpenClawConfig): string {
+  const remoteAddress = parseIpLiteral(req.socket.remoteAddress);
+  const trustedProxies = config?.gateway?.trustedProxies;
+  if (!remoteAddress) {
+    return "unknown";
+  }
+  if (!isTrustedProxyAddress(remoteAddress, trustedProxies)) {
+    return remoteAddress;
+  }
+  const forwardedFor = Array.isArray(req.headers["x-forwarded-for"])
+    ? req.headers["x-forwarded-for"][0]
+    : req.headers["x-forwarded-for"];
+  const forwardedClientIp = resolveForwardedClientIp(forwardedFor, trustedProxies);
+  if (forwardedClientIp) {
+    return forwardedClientIp;
+  }
+  if (config?.gateway?.allowRealIpFallback === true) {
+    const realIp = Array.isArray(req.headers["x-real-ip"])
+      ? req.headers["x-real-ip"][0]
+      : req.headers["x-real-ip"];
+    return parseIpLiteral(realIp) ?? "unknown";
+  }
+  return "unknown";
+}
+
+function resolveTelegramWebhookRateLimitKey(
+  req: IncomingMessage,
+  path: string,
+  config?: OpenClawConfig,
+): string {
+  return `${path}:${resolveTelegramWebhookClientIp(req, config)}`;
 }
 
 export async function startTelegramWebhook(opts: {
@@ -162,6 +276,11 @@ export async function startTelegramWebhook(opts: {
     runtime,
     abortSignal: opts.abortSignal,
   });
+  const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
+    windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
+    maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
+    maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
+  });
   const handler = grammy.webhookCallback(bot, "callback", {
     secretToken: secret,
     onTimeout: "return",
@@ -198,7 +317,7 @@ export async function startTelegramWebhook(opts: {
         req,
         res,
         rateLimiter: telegramWebhookRateLimiter,
-        rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path),
+        rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path, opts.config),
       })
     ) {
       return;
