@@ -85,11 +85,16 @@ export function parseReActResponse(
   let textOutput = "";
 
   while (true) {
-    const actionIndex = cleanedText.indexOf(actionMarker, lastIndex);
-    if (actionIndex === -1) {
+    const markerRegex = /(?:^|[\r\n])Action:/g;
+    markerRegex.lastIndex = lastIndex;
+    const match = markerRegex.exec(cleanedText);
+
+    if (!match) {
       textOutput += cleanedText.substring(lastIndex);
       break;
     }
+
+    const actionIndex = match.index + (match[0].length - actionMarker.length);
 
     // Append text leading up to the Action: marker
     textOutput += cleanedText.substring(lastIndex, actionIndex);

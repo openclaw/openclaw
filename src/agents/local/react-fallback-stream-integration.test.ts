@@ -298,4 +298,46 @@ describe("ReAct Fallback Stream E2E Integration", () => {
     // We expect the tool call to be swallowed because it was inside an unterminated <think> block!
     expect(toolCall).toBeUndefined();
   });
+
+  it("should ignore 'Action:' markers that are not at the start of a line", async () => {
+    const mixedText = `
+Here is an example of what NOT to do: You should not just write Action: {"tool": "fake", "args": {}}. 
+Instead, you should always start a new line like this:
+Action: {"tool": "real_tool", "args": {"param": 123}}
+    `;
+    const nativeStreamFn = createMockNativeStreamFn(mixedText);
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId: "llama3",
+      providerId: "llama3",
+      providerType: "ollama",
+      toolFallback: "react",
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line no-explicit-any
+      { id: "llama3", api: "test", provider: "ollama" } as unknown as any,
+      // eslint-disable-next-line no-explicit-any
+      { tools: [{ name: "real_tool", description: "testing" }] } as unknown as any,
+      {},
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const chunk of stream) {
+      events.push(chunk as Record<string, unknown>);
+    }
+
+    const doneEvent = events[0];
+    const message = doneEvent.message as Record<string, unknown>;
+    const content = message.content as Array<Record<string, unknown>>;
+
+    const toolCalls = content.filter((p) => p.type === "toolCall");
+    // Should ONLY find the real_tool, NOT the fake one
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].name).toBe("real_tool");
+
+    const textPart = (content.find((p) => p.type === "text") as { type: string; text: string })
+      .text;
+    expect(textPart).toContain('You should not just write Action: {"tool": "fake", "args": {}}');
+    expect(textPart).not.toContain('Action: {"tool": "real_tool"');
+  });
 });
