@@ -635,6 +635,52 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-4.1");
   });
+
+  it("derives imageModelDefaultProvider from fallbacks when primary is providerless", async () => {
+    // Tests P2 review feedback: when imageModel.primary is providerless like "gpt-4o"
+    // with fallbacks ["openai/gpt-4.1"], the provider "openai" should be derived from
+    // fallbacks so that storedProvider !== imageModelDefaultProvider is correctly false
+    // (instead of always true due to empty imageModelDefaultProvider).
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-4o": {},
+            "openai/gpt-4.1": {},
+          },
+          imageModel: { primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"] },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1", // Stored override matches fallback with explicit provider
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      hasAppliedImageModelOverride: true,
+    });
+
+    // The stored override openai/gpt-4.1 should be kept because:
+    // 1. imageModelDefaultProvider is derived as "openai" from fallback
+    // 2. storedProvider === imageModelDefaultProvider, so no catalog vision check is forced
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4.1");
+  });
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
