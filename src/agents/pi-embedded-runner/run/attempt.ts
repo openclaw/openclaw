@@ -899,18 +899,6 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = wrapOllamaCompatNumCtx(activeSession.agent.streamFn, numCtx);
       }
 
-      const fallbackProviderConfig = params.config?.models?.providers?.[providerIdForNumCtx];
-      activeSession.agent.streamFn = wrapStreamFnWithReActFallback(
-        activeSession.agent.streamFn,
-        {
-          modelId: params.modelId,
-          providerId: providerIdForNumCtx,
-          providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
-          toolFallback: fallbackProviderConfig?.toolFallback,
-          reactProfile: fallbackProviderConfig?.reactProfile,
-          configDir: resolveStateDir(),
-        }
-      );
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
@@ -1063,6 +1051,16 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      const fallbackProviderConfig = params.config?.models?.providers?.[providerIdForNumCtx];
+      activeSession.agent.streamFn = wrapStreamFnWithReActFallback(activeSession.agent.streamFn, {
+        modelId: params.modelId,
+        providerId: providerIdForNumCtx,
+        providerType: fallbackProviderConfig?.api ?? providerIdForNumCtx,
+        toolFallback: fallbackProviderConfig?.toolFallback,
+        reactProfile: fallbackProviderConfig?.reactProfile,
+        configDir: resolveStateDir(),
+      });
 
       try {
         const prior = await sanitizeSessionHistory({
