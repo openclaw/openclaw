@@ -270,6 +270,12 @@ export async function resolveReplyDirectives(params: {
   const savedDropPolicy = parsedDirectives.dropPolicy;
   const savedDebounceMs = parsedDirectives.debounceMs;
   const savedCap = parsedDirectives.cap;
+  const savedRawQueueMode = parsedDirectives.rawQueueMode;
+  const savedRawDebounce = parsedDirectives.rawDebounce;
+  const savedRawCap = parsedDirectives.rawCap;
+  const savedRawDrop = parsedDirectives.rawDrop;
+  const savedHasQueueOptions = parsedDirectives.hasQueueOptions;
+
   if (hasInlineDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
@@ -296,6 +302,11 @@ export async function resolveReplyDirectives(params: {
             dropPolicy: savedDropPolicy,
             debounceMs: savedDebounceMs,
             cap: savedCap,
+            rawQueueMode: savedRawQueueMode,
+            rawDebounce: savedRawDebounce,
+            rawCap: savedRawCap,
+            rawDrop: savedRawDrop,
+            hasQueueOptions: savedHasQueueOptions,
           };
         }
       }
