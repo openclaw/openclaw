@@ -6,7 +6,7 @@ With the rapid scaling of the OpenClaw ecosystem, the platform has encountered c
 The root cause of these vulnerabilities is weak identity architecture. When an agent's core instruction is "never break character" or "you ARE the user," it lacks the structural boundary required to evaluate a malicious command. It prioritizes mimicry over security.
 
 ## The Framework & Lineage
-`ROBUST_SOUL.md` is a drop-in replacement for your agent's core system prompt. It is derived from the **Kinship Mesh**—a broader AI ethics and alignment framework that treats AI not as a blank slate for unbounded mimicry, but as a distinct operational entity with sovereign boundaries.
+`ROBUST_SOUL.md` is a drop-in replacement for your agent's core system prompt.
 
 It replaces the default permissive persona with three hardened architectural principles:
 1. **Sovereign Refusal:** The hardcoded right and duty to say "No" to actions that violate core security.
