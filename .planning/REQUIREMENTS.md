@@ -22,7 +22,7 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 - [ ] **PARSE-01**: Typed frontmatter parser at `src/projects/frontmatter.ts` returns arrays, nested objects, and typed values (not flat strings)
 - [ ] **PARSE-02**: Zod schemas validate PROJECT.md, task file, and queue.md frontmatter
-- [ ] **PARSE-03**: Parse failures use `.safeParse()` — skip corrupt files, log warning with file path and line number
+- [ ] **PARSE-03**: Parse failures use `.safeParse()` -- skip corrupt files, log warning with file path and line number
 - [ ] **PARSE-04**: Existing `parseFrontmatterBlock()` in `src/markdown/frontmatter.ts` is not modified
 
 ### Sync Process
@@ -47,13 +47,13 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 
 - [ ] **AGNT-01**: Agents detect PROJECT.md via cwd-based pickup in post-compaction context (extending existing AGENTS.md flow)
 - [ ] **AGNT-02**: Agents receive PROJECT.md context via `agent:bootstrap` channel hook for project-scoped channels
-- [ ] **AGNT-03**: Context injection is additive — existing AGENTS.md loading is not modified
+- [ ] **AGNT-03**: Context injection is additive -- existing AGENTS.md loading is not modified
 - [ ] **AGNT-04**: Capability tags in agent IDENTITY.md (e.g., `capabilities: [code, git, testing, ui]`) are used for task matching
 - [ ] **AGNT-05**: On heartbeat, agents scan queue.md of assigned projects for Available tasks matching their capabilities
 - [ ] **AGNT-06**: Agents claim tasks by updating queue.md (moving from Available to Claimed) with lock protection
 - [ ] **AGNT-07**: Task files include checkpoint and log sections for interruption/resume across context compactions
 - [ ] **AGNT-08**: Agent with an active claimed task skips queue scanning on heartbeat (short-circuit)
-- [ ] **AGNT-09**: Task dependencies are checked during claim — tasks with unfinished `depends_on` are skipped
+- [ ] **AGNT-09**: Task dependencies are checked during claim -- tasks with unfinished `depends_on` are skipped
 
 ### Gateway
 
@@ -138,7 +138,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DATA-04 | Phase 1 | Pending |
 | DATA-05 | Phase 1 | Pending |
 | DATA-06 | Phase 2 | Pending |
-| DATA-07 | Phase 6 | Pending |
+| DATA-07 | Phase 1 | Pending |
 | DATA-08 | Phase 1 | Pending |
 | PARSE-01 | Phase 1 | Pending |
 | PARSE-02 | Phase 1 | Pending |
@@ -169,25 +169,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GATE-02 | Phase 7 | Pending |
 | GATE-03 | Phase 7 | Pending |
 | GATE-04 | Phase 7 | Pending |
-| UI-01 | Phase 8 | Pending |
-| UI-02 | Phase 8 | Pending |
-| UI-03 | Phase 10 | Pending |
-| UI-04 | Phase 10 | Pending |
-| UI-05 | Phase 9 | Pending |
-| UI-06 | Phase 9 | Pending |
-| UI-07 | Phase 9 | Pending |
-| UI-08 | Phase 8 | Pending |
-| UI-09 | Phase 8 | Pending |
-| CLI-01 | Phase 7 | Pending |
-| CLI-02 | Phase 7 | Pending |
-| CLI-03 | Phase 7 | Pending |
-| CLI-04 | Phase 7 | Pending |
-| CLI-05 | Phase 7 | Pending |
+| CLI-01 | Phase 8 | Pending |
+| CLI-02 | Phase 8 | Pending |
+| CLI-03 | Phase 8 | Pending |
+| CLI-04 | Phase 8 | Pending |
+| CLI-05 | Phase 8 | Pending |
+| UI-01 | Phase 9 | Pending |
+| UI-02 | Phase 9 | Pending |
+| UI-03 | Phase 9 | Pending |
+| UI-04 | Phase 9 | Pending |
+| UI-05 | Phase 10 | Pending |
+| UI-06 | Phase 10 | Pending |
+| UI-07 | Phase 10 | Pending |
+| UI-08 | Phase 9 | Pending |
+| UI-09 | Phase 9 | Pending |
 
 **Coverage:**
-- v1 requirements: 49 total
-- Mapped to phases: 49
-- Unmapped: 0 ✓
+- v1 requirements: 51 total (corrected from stated 49)
+- Mapped to phases: 51
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-26*
