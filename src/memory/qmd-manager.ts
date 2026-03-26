@@ -180,6 +180,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedFailureCount = 0;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
+  // Serialize QMD subprocess calls to prevent SQLITE_BUSY errors.
+  // QMD (Bun SQLite) doesn't set busy_timeout, so concurrent writes fail.
+  private qmdMutex: Promise<void> = Promise.resolve();
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -805,6 +808,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
+  private async withQmdMutex<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.qmdMutex;
+    let resolve: () => void;
+    this.qmdMutex = new Promise<void>((r) => { resolve = r; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      resolve!();
+    }
+  }
+
   async search(
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
@@ -1001,6 +1016,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         qmd: {
           collections: this.qmd.collections.length + this.nativeCollectionNames.length,
           lastUpdateAt: this.lastUpdateAt,
+          totalVectors: counts.totalVectors,
+          embeddedDocs: counts.embeddedDocs,
+          lastEmbeddedAt: counts.lastEmbeddedAt,
+          searchMode: this.qmd.searchMode,
           collectionDetails: [
             ...this.qmd.collections.map((c) => ({
               name: c.name,
@@ -1262,7 +1281,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     args: string[],
     opts?: { timeoutMs?: number; discardOutput?: boolean },
   ): Promise<{ stdout: string; stderr: string }> {
-    return await runCliCommand({
+    return await this.withQmdMutex(() => runCliCommand({
       commandSummary: `qmd ${args.join(" ")}`,
       spawnInvocation: resolveCliSpawnInvocation({
         command: this.qmd.command,
@@ -1276,7 +1295,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       maxOutputChars: this.maxQmdOutputChars,
       // Large `qmd update` runs can easily exceed the output cap; keep only stderr.
       discardStdout: opts?.discardOutput,
-    });
+    }));
   }
 
   private async readPartialText(
@@ -1610,6 +1629,9 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private readCounts(): {
     totalDocuments: number;
+    totalVectors: number;
+    embeddedDocs: number;
+    lastEmbeddedAt: number | null;
     sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
   } {
     try {
@@ -1633,8 +1655,30 @@ export class QmdMemoryManager implements MemorySearchManager {
         bySource.set(source, entry);
         total += row.c ?? 0;
       }
+
+      // Vector embedding counts
+      let totalVectors = 0;
+      let embeddedDocs = 0;
+      let lastEmbeddedAt: number | null = null;
+      try {
+        const vecRow = db.prepare("SELECT COUNT(*) as c FROM content_vectors").get() as { c: number } | undefined;
+        totalVectors = vecRow?.c ?? 0;
+        // Count active documents that have embeddings (join on content hash)
+        const docsRow = db.prepare(
+          "SELECT COUNT(DISTINCT d.hash) as c FROM documents d INNER JOIN content_vectors v ON d.hash = v.hash WHERE d.active = 1",
+        ).get() as { c: number } | undefined;
+        embeddedDocs = docsRow?.c ?? 0;
+        const tsRow = db.prepare("SELECT MAX(embedded_at) as ts FROM content_vectors").get() as { ts: string | null } | undefined;
+        lastEmbeddedAt = tsRow?.ts ? new Date(tsRow.ts).getTime() : null;
+      } catch {
+        // content_vectors table may not exist in older QMD versions
+      }
+
       return {
         totalDocuments: total,
+        totalVectors,
+        embeddedDocs,
+        lastEmbeddedAt,
         sourceCounts: Array.from(bySource.entries()).map(([source, value]) => ({
           source,
           files: value.files,
@@ -1645,6 +1689,9 @@ export class QmdMemoryManager implements MemorySearchManager {
       log.warn(`failed to read qmd index stats: ${String(err)}`);
       return {
         totalDocuments: 0,
+        totalVectors: 0,
+        embeddedDocs: 0,
+        lastEmbeddedAt: null,
         sourceCounts: Array.from(this.sources).map((source) => ({ source, files: 0, chunks: 0 })),
       };
     }
