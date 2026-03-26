@@ -77,7 +77,8 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   return undefined;
 }
 
-function shouldForceResponsesStore(model: {
+/** @internal Exported for testing. */
+export function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
