@@ -184,9 +184,10 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
+      let forwarded = false;
       if (opts?.forwarder) {
         try {
-          await opts.forwarder.handleRequested({
+          forwarded = await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
@@ -197,9 +198,15 @@ export function createExecApprovalHandlers(
         }
       }
 
-      // Keep approvals pending even when no messaging forwarder targets and no operator WS clients
-      // are connected yet, so Control UI / webchat can connect with operator.approvals scope and
-      // resolve via exec.approval.resolve before the timeout (see hasExecApprovalClients in server.impl).
+      // Single-phase callers (e.g. CLI) should fail fast when nobody can approve. Two-phase
+      // callers (agent tools) keep the request pending so Control UI / webchat can connect with
+      // operator.approvals scope and resolve before the timeout (see hasExecApprovalClients in
+      // server.impl). If hasExecApprovalClients is omitted from context, do not fail-fast.
+      const hasExecApprovalClients =
+        context.hasExecApprovalClients !== undefined ? context.hasExecApprovalClients() : true;
+      if (!twoPhase && !hasExecApprovalClients && !forwarded) {
+        manager.expire(record.id);
+      }
 
       // Only send immediate "accepted" response when twoPhase is requested.
       // This preserves single-response semantics for existing callers.

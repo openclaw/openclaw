@@ -964,7 +964,7 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("keeps approvals pending when no approver clients and no forwarding targets until timeout", async () => {
+  it("keeps two-phase approvals pending when no approver clients and no forwarding targets until timeout", async () => {
     vi.useFakeTimers();
     try {
       const { manager, handlers, forwarder, respond, context } =
@@ -975,7 +975,12 @@ describe("exec approval handlers", () => {
         handlers,
         respond,
         context,
-        params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
+        params: {
+          timeoutMs: 60_000,
+          id: "approval-no-approver",
+          host: "gateway",
+          twoPhase: true,
+        },
       });
       await drainApprovalRequestTicks();
 
@@ -991,6 +996,37 @@ describe("exec approval handlers", () => {
         expect.objectContaining({ id: "approval-no-approver", decision: null }),
         undefined,
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails fast for single-phase approval when no approver clients and no forwarding targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { timeoutMs: 60_000, id: "approval-no-approver-sp", host: "gateway" },
+      });
+      await drainApprovalRequestTicks();
+      await requestPromise;
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).toHaveBeenCalledWith("approval-no-approver-sp");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ id: "approval-no-approver-sp", decision: null }),
+        undefined,
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(expireSpy).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
