@@ -75,7 +75,7 @@ export function normalizeReplyPayload(
     text &&
     (isSilentReplyText(text, ANNOUNCE_SKIP_TOKEN) || isSilentReplyText(text, REPLY_SKIP_TOKEN))
   ) {
-    if (!hasMedia && !hasChannelData) {
+    if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;
     }
