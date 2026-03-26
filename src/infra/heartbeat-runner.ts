@@ -945,16 +945,17 @@ export async function runHeartbeatOnce(opts: {
     // we treat everything as event-driven UNLESS it's a known periodic reason.
     // This is safer — new event sources get drain by default.
     //
-    // For periodic runs: hasCronEvents (from tagged contextKey) can still be
-    // true since cronEvents is computed from raw pendingEventEntries regardless
-    // of shouldInspectPendingEvents.  hasExecCompletion is always false for
-    // periodic runs because it's derived from the filtered pendingEvents array
-    // (empty when shouldInspectPendingEvents is false) — but that's fine:
-    // exec completions trigger their own event-driven heartbeat wake (reason
-    // "exec:<id>:exit" → reasonKind "other" → !isPeriodicHeartbeat → drain).
+    // Safety net: even periodic runs check whether events are queued.  Normally
+    // each event type triggers its own event-driven wake (e.g. exec completions
+    // fire reason "exec:<id>:exit" → reasonKind "other" → drain).  But if a
+    // wake was missed (e.g. heartbeats were temporarily disabled when the event
+    // arrived), the next interval run is the only chance to pick them up.
+    // Without this fallback, those events would stay stuck until a user message
+    // or another event-driven wake happens to drain the queue.
     const reasonKind = resolveHeartbeatReasonKind(opts.reason);
     const isPeriodicHeartbeat = reasonKind === "interval" || reasonKind === "retry";
-    const isEventDriven = !isPeriodicHeartbeat || hasCronEvents;
+    const hasQueuedEvents = preflight.pendingEventEntries.length > 0;
+    const isEventDriven = !isPeriodicHeartbeat || hasCronEvents || hasQueuedEvents;
     const replyOpts = heartbeatModelOverride
       ? {
           isHeartbeat: true,
@@ -969,6 +970,8 @@ export async function runHeartbeatOnce(opts: {
           suppressToolErrorWarnings,
           bootstrapContextMode,
         };
+    const getReplyFromConfig =
+      opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
