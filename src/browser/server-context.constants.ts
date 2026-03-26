@@ -1,1 +1,1 @@
-export * from "../compat/browser/server-context.constants.js";
+export * from "../../extensions/browser/src/browser/server-context.constants.js";

@@ -1,1 +1,1 @@
-export * from "../../compat/browser/routes/output-paths.js";
+export * from "../../../extensions/browser/src/browser/routes/output-paths.js";
