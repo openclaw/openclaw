@@ -10,7 +10,7 @@ services:
       TZ: {{ openclaw_timezone }}
       OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN}"
 {% if openclaw_mode == 'gateway' %}
-      ANTHROPIC_OAUTH_TOKEN: "${ANTHROPIC_OAUTH_TOKEN:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
 {% if openclaw_telegram_enabled %}
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
 {% endif %}

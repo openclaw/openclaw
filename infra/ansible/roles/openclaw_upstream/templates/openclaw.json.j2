@@ -7,13 +7,13 @@
     theme: "{{ openclaw_identity_theme }}",
   },
 
-  // LLM providers — OAuth credentials managed via SOPS, stored in auth-profiles.json
+  // LLM providers — credentials managed via SOPS, injected as env vars
   auth: {
     profiles: {
-      "anthropic:default": { provider: "anthropic", mode: "{{ openclaw_anthropic_auth_mode | default('oauth') }}" },
+      "{{ openclaw_llm_provider | default('openai') }}:default": { provider: "{{ openclaw_llm_provider | default('openai') }}", mode: "{{ openclaw_llm_auth_mode | default('api_key') }}" },
     },
     order: {
-      anthropic: ["anthropic:default"],
+      "{{ openclaw_llm_provider | default('openai') }}": ["{{ openclaw_llm_provider | default('openai') }}:default"],
     },
   },
 
