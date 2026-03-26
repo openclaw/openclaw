@@ -595,6 +595,11 @@ async function agentCommandInternal(
     }
 
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const cachedSnapshotVersion = sessionEntry?.skillsSnapshot?.version ?? 0;
+    const needsSkillsSnapshot =
+      isNewSession ||
+      !sessionEntry?.skillsSnapshot ||
+      (skillsSnapshotVersion > 0 && cachedSnapshotVersion < skillsSnapshotVersion);
     const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
     const shouldRefreshSkillsSnapshot =
