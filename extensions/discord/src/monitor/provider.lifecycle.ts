@@ -41,6 +41,25 @@ export async function runDiscordGatewayLifecycle(params: {
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
     params.statusSink?.(patch);
   };
+
+  // Transition the supervisor to teardown phase *before* the reconnect
+  // controller's own onAbort handler calls gateway.disconnect().  This
+  // listener is registered before createDiscordGatewayReconnectController so
+  // it fires first (DOM-style listener ordering), ensuring the synchronous
+  // "Max reconnect attempts (0)" error emitted by @buape/carbon during
+  // disconnect is suppressed by the supervisor's teardown logic instead of
+  // being routed to the lifecycle handler and crashing the process.
+  // Fixes #54931 and #54894.
+  let earlyDetachOnAbort: (() => void) | undefined;
+  if (params.abortSignal && !params.abortSignal.aborted) {
+    earlyDetachOnAbort = () => {
+      params.gatewaySupervisor.detachLifecycle();
+    };
+    params.abortSignal.addEventListener("abort", earlyDetachOnAbort, { once: true });
+  } else if (params.abortSignal?.aborted) {
+    params.gatewaySupervisor.detachLifecycle();
+  }
+
   const reconnectController = createDiscordGatewayReconnectController({
     accountId: params.accountId,
     gateway,
@@ -126,6 +145,12 @@ export async function runDiscordGatewayLifecycle(params: {
     }
   } finally {
     lifecycleStopping = true;
+    // Remove the early-detach abort listener if the lifecycle completed
+    // without being aborted, preventing a stale listener from leaking
+    // references or firing after teardown (CWE-772).
+    if (earlyDetachOnAbort && params.abortSignal && !params.abortSignal.aborted) {
+      params.abortSignal.removeEventListener("abort", earlyDetachOnAbort);
+    }
     params.gatewaySupervisor.detachLifecycle();
     unregisterGateway(params.accountId);
     stopGatewayLogging();

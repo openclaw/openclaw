@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
-import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
+import type { DiscordGatewayEvent, DiscordGatewaySupervisor } from "./gateway-supervisor.js";
 
 type LifecycleParams = Parameters<
   typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle
@@ -61,6 +61,16 @@ vi.mock("./gateway-registry.js", () => ({
 }));
 
 describe("runDiscordGatewayLifecycle", () => {
+  type LifecycleHarnessGatewaySupervisor = {
+    attachLifecycle: (handler: (event: DiscordGatewayEvent) => void) => void;
+    detachLifecycle: ReturnType<typeof vi.fn>;
+    drainPending: (
+      handler: (event: DiscordGatewayEvent) => "continue" | "stop",
+    ) => "continue" | "stop";
+    dispose: () => void;
+    emitter?: EventEmitter;
+  };
+
   beforeEach(() => {
     vi.resetModules();
     attachDiscordGatewayLoggingMock.mockClear();
@@ -77,6 +87,7 @@ describe("runDiscordGatewayLifecycle", () => {
     stop?: () => Promise<void>;
     isDisallowedIntentsError?: (err: unknown) => boolean;
     pendingGatewayEvents?: DiscordGatewayEvent[];
+    gatewaySupervisor?: LifecycleHarnessGatewaySupervisor;
     gateway?: MockGateway;
   }) => {
     const gateway =
@@ -93,7 +104,7 @@ describe("runDiscordGatewayLifecycle", () => {
     const runtimeError = vi.fn();
     const runtimeExit = vi.fn();
     const pendingGatewayEvents = params?.pendingGatewayEvents ?? [];
-    const gatewaySupervisor = {
+    const gatewaySupervisor: LifecycleHarnessGatewaySupervisor = params?.gatewaySupervisor ?? {
       attachLifecycle: vi.fn(),
       detachLifecycle: vi.fn(),
       drainPending: vi.fn((handler: (event: DiscordGatewayEvent) => "continue" | "stop") => {
@@ -135,7 +146,7 @@ describe("runDiscordGatewayLifecycle", () => {
         voiceManagerRef: { current: null },
         execApprovalsHandler: { start, stop },
         threadBindings: { stop: threadStop },
-        gatewaySupervisor,
+        gatewaySupervisor: gatewaySupervisor as unknown as DiscordGatewaySupervisor,
         statusSink,
         abortSignal: undefined as AbortSignal | undefined,
       } satisfies LifecycleParams,
@@ -155,7 +166,9 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
     expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
     expect(params.threadStop).toHaveBeenCalledTimes(1);
-    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(1);
+    // detachLifecycle is idempotent and may be called more than once
+    // (e.g. once from the abort listener and once from the finally block).
+    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalled();
   }
 
   function createGatewayHarness(params?: {
@@ -891,5 +904,88 @@ describe("runDiscordGatewayLifecycle", () => {
     // guarded by !lifecycleStopping to avoid contradicting the abort.
     const connectedTrue = statusUpdates.find((s) => s.connected === true);
     expect(connectedTrue).toBeUndefined();
+  });
+
+  it("detaches the supervisor before disconnecting on abort so synchronous reconnect exhaustion is suppressed", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const { emitter, gateway } = createGatewayHarness();
+    gateway.isConnected = true;
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
+    const gatewaySupervisor: LifecycleHarnessGatewaySupervisor = {
+      emitter,
+      attachLifecycle: vi.fn((handler) => {
+        lifecycleHandler = handler;
+      }),
+      detachLifecycle: vi.fn(() => {
+        lifecycleHandler = undefined;
+      }),
+      drainPending: vi.fn((): "continue" => "continue"),
+      dispose: vi.fn(),
+    };
+
+    gateway.disconnect.mockImplementation(() => {
+      expect(gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(1);
+      lifecycleHandler?.(
+        createGatewayEvent(
+          "reconnect-exhausted",
+          "Max reconnect attempts (0) reached after code 1005",
+        ),
+      );
+    });
+
+    waitForDiscordGatewayStopMock.mockImplementationOnce(
+      (params: WaitForDiscordGatewayStopParams) =>
+        new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const finishResolve = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            resolve();
+          };
+          const finishReject = (err: unknown) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            reject(err);
+          };
+
+          params.gatewaySupervisor?.attachLifecycle((event) => {
+            const shouldStop = (params.onGatewayEvent?.(event) ?? "stop") === "stop";
+            if (shouldStop) {
+              finishReject(event.err);
+            }
+          });
+          params.abortSignal?.addEventListener("abort", finishResolve, { once: true });
+        }),
+    );
+
+    const abortController = new AbortController();
+    const { lifecycleParams, runtimeError, start, stop, threadStop } = createLifecycleHarness({
+      gateway,
+      gatewaySupervisor,
+    });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    await vi.waitFor(() => expect(waitForDiscordGatewayStopMock).toHaveBeenCalledOnce());
+    abortController.abort();
+
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+
+    expect(gateway.options.reconnect).toEqual({ maxAttempts: 0 });
+    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+    expect(gatewaySupervisor.attachLifecycle).toHaveBeenCalledTimes(1);
+    expect(gatewaySupervisor.detachLifecycle).toHaveBeenCalled();
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts (0) reached after code 1005"),
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(threadStop).toHaveBeenCalledTimes(1);
   });
 });
