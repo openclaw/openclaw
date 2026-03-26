@@ -245,6 +245,18 @@
       "types": "./dist/plugin-sdk/bluebubbles.d.ts",
       "default": "./dist/plugin-sdk/bluebubbles.js"
     },
+    "./plugin-sdk/browser": {
+      "types": "./dist/plugin-sdk/browser.d.ts",
+      "default": "./dist/plugin-sdk/browser.js"
+    },
+    "./plugin-sdk/browser-runtime": {
+      "types": "./dist/plugin-sdk/browser-runtime.d.ts",
+      "default": "./dist/plugin-sdk/browser-runtime.js"
+    },
+    "./plugin-sdk/browser-support": {
+      "types": "./dist/plugin-sdk/browser-support.d.ts",
+      "default": "./dist/plugin-sdk/browser-support.js"
+    },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
