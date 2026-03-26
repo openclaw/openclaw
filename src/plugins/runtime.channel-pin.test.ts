@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
+  activePluginRegistryAllowsGatewaySubagentBinding,
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
   getActivePluginChannelRegistry,
@@ -117,5 +118,15 @@ describe("channel registry pinning", () => {
     const fresh = createEmptyPluginRegistry();
     setActivePluginRegistry(fresh);
     expect(getActivePluginChannelRegistry()).toBe(fresh);
+  });
+
+  it("treats only gateway-bindable mode as gateway-compatible", () => {
+    const explicitRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(explicitRegistry, "explicit-registry", "explicit");
+    expect(activePluginRegistryAllowsGatewaySubagentBinding()).toBe(false);
+
+    const gatewayBindableRegistry = createEmptyPluginRegistry();
+    setActivePluginRegistry(gatewayBindableRegistry, "gateway-registry", "gateway-bindable");
+    expect(activePluginRegistryAllowsGatewaySubagentBinding()).toBe(true);
   });
 });

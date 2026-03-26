@@ -190,7 +190,7 @@ export function getActivePluginRegistryRuntimeSubagentMode(): ActivePluginRegist
 }
 
 export function activePluginRegistryAllowsGatewaySubagentBinding(): boolean {
-  return state.runtimeSubagentMode !== "default";
+  return state.runtimeSubagentMode === "gateway-bindable";
 }
 
 export function getActivePluginRegistryVersion(): number {

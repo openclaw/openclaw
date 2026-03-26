@@ -227,4 +227,35 @@ describe("resolvePluginTools optional tools", () => {
     );
     expect(tools.map((tool) => tool.name)).toEqual(["optional_tool"]);
   });
+
+  it("reloads when the active registry uses an explicit subagent runtime", () => {
+    const activeRegistry = {
+      tools: [
+        {
+          pluginId: "optional-demo",
+          optional: true,
+          source: "/tmp/active-explicit.js",
+          factory: () => makeTool("stale_optional_tool"),
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(activeRegistry as never, "active-explicit", "explicit");
+    setOptionalDemoRegistry();
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
+    expect(tools.map((tool) => tool.name)).toEqual(["optional_tool"]);
+  });
 });
