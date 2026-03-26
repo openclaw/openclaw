@@ -549,10 +549,15 @@ export async function getReplyFromConfig(
     });
     if (overrideRef) {
       const overrideKey = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
-      if (finalModelKey !== overrideKey && !fallbackAppliedForImageModel) {
-        // Final model differs from image model override and no fallback was applied,
-        // reset the flags. When a fallback WAS applied, the run is still an image-model
-        // override and we should keep the flags to preserve the fallback chain.
+      // Check if final model is in the fallback chain
+      const isInFallbacks = (opts?.modelOverrideFallbacks ?? []).some((fb) => {
+        const fbRef = resolveModelRefFromString({ raw: fb.trim(), defaultProvider, aliasIndex });
+        return fbRef && modelKey(fbRef.ref.provider, fbRef.ref.model) === finalModelKey;
+      });
+      if (finalModelKey !== overrideKey && !isInFallbacks) {
+        // Final model differs from image model override and is not in fallback chain,
+        // reset the flags. This handles cases where a later directive (e.g., /model)
+        // changed the model away from the image override chain entirely.
         finalHasAppliedImageModelOverride = false;
         finalModelOverrideFallbacks = undefined;
       }
