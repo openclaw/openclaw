@@ -71,7 +71,7 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     const u = new URL(url);
     const tableId = u.searchParams.get("table") ?? undefined;
 
-    // Wiki format: /wiki/XXXXX?table=YYY
+// Wiki format: /wiki/XXXXX?table=YYY
     const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
     if (wikiMatch) {
       return { token: wikiMatch[1], tableId, isWiki: true };
