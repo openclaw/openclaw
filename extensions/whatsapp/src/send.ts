@@ -8,11 +8,7 @@ import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
-import {
-  resolveDefaultWhatsAppAccountId,
-  resolveWhatsAppAccount,
-  resolveWhatsAppMediaMaxBytes,
-} from "./accounts.js";
+import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 
@@ -43,7 +39,11 @@ export async function sendMessageWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  const requestedAccountId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  // Read defaultAccount without normalizing so it matches the exact listener key
+  // (setActiveWebListener uses resolveWebAccountId which only trims, not lowercases).
+  const rawDefaultAccount = (cfg.channels?.whatsapp as { defaultAccount?: string } | undefined)
+    ?.defaultAccount;
+  const requestedAccountId = options.accountId?.trim() || rawDefaultAccount?.trim() || undefined;
   const { listener: active, accountId: resolvedAccountId } =
     requireActiveWebListener(requestedAccountId);
   const account = resolveWhatsAppAccount({
@@ -176,7 +176,11 @@ export async function sendPollWhatsApp(
   const correlationId = generateSecureUuid();
   const startedAt = Date.now();
   const cfg = options.cfg ?? loadConfig();
-  const requestedAccountId = options.accountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  // Read defaultAccount without normalizing so it matches the exact listener key
+  // (setActiveWebListener uses resolveWebAccountId which only trims, not lowercases).
+  const rawDefaultAccount = (cfg.channels?.whatsapp as { defaultAccount?: string } | undefined)
+    ?.defaultAccount;
+  const requestedAccountId = options.accountId?.trim() || rawDefaultAccount?.trim() || undefined;
   const { listener: active } = requireActiveWebListener(requestedAccountId);
   const redactedTo = redactIdentifier(to);
   const logger = getChildLogger({
