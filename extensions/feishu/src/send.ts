@@ -665,6 +665,11 @@ export async function sendStructuredCardFeishu(params: {
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
+  // TODO(#27717): When replyToMessageId is set, interactive cards cause older Feishu
+  // clients to show "请升级至最新版本客户端". This should fall back to post format via
+  // sendMessageFeishu (passing original `text` and `mentions`, not `cardText`) similar
+  // to sendMarkdownCardFeishu. Structured header/note would be lost in that path, so
+  // a proper solution needs to flatten the card content to markdown first.
   const card = buildStructuredCard(cardText, { header, note });
   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
@@ -701,9 +706,10 @@ export async function sendMarkdownCardFeishu(params: {
     return sendMessageFeishu({
       cfg,
       to,
-      text: cardText,
+      text,
       replyToMessageId,
       replyInThread,
+      mentions,
       accountId,
     });
   }
