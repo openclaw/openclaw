@@ -285,6 +285,7 @@ function makeResponseObject(
   outputText?: string,
   toolCallName?: string,
   phase?: "commentary" | "final_answer",
+  usage?: ResponseObject["usage"],
 ): ResponseObject {
   const output: ResponseObject["output"] = [];
   if (outputText) {
@@ -312,7 +313,7 @@ function makeResponseObject(
     status: "completed",
     model: "gpt-5.2",
     output,
-    usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+    usage: usage ?? { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
   };
 }
 
@@ -648,6 +649,18 @@ describe("buildAssistantMessageFromResponse", () => {
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.usage.input).toBe(100);
     expect(msg.usage.output).toBe(50);
+    expect(msg.usage.totalTokens).toBe(150);
+  });
+
+  it("normalizes OpenAI-compatible prompt_tokens/completion_tokens usage", () => {
+    const response = makeResponseObject("resp_5b", "Hello", undefined, undefined, {
+      prompt_tokens: 120,
+      completion_tokens: 30,
+      total_tokens: 150,
+    });
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(120);
+    expect(msg.usage.output).toBe(30);
     expect(msg.usage.totalTokens).toBe(150);
   });
 
