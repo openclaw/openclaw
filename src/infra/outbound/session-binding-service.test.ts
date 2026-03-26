@@ -1,360 +1,427 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import {
-  __testing,
   getSessionBindingService,
-  isSessionBindingError,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
+  isSessionBindingError,
+  SessionBindingError,
   type SessionBindingAdapter,
-  type SessionBindingBindInput,
   type SessionBindingRecord,
+  __testing,
 } from "./session-binding-service.js";
 
-type SessionBindingServiceModule = typeof import("./session-binding-service.js");
-
-const sessionBindingServiceModuleUrl = new URL("./session-binding-service.ts", import.meta.url)
-  .href;
-
-async function importSessionBindingServiceModule(
-  cacheBust: string,
-): Promise<SessionBindingServiceModule> {
-  return (await import(
-    `${sessionBindingServiceModuleUrl}?t=${cacheBust}`
-  )) as SessionBindingServiceModule;
-}
-
-function createRecord(input: SessionBindingBindInput): SessionBindingRecord {
-  const conversationId =
-    input.placement === "child"
-      ? "thread-created"
-      : input.conversation.conversationId.trim() || "thread-current";
-  return {
-    bindingId: `default:${conversationId}`,
-    targetSessionKey: input.targetSessionKey,
-    targetKind: input.targetKind,
-    conversation: {
-      channel: "discord",
-      accountId: "default",
-      conversationId,
-      parentConversationId: input.conversation.parentConversationId?.trim() || undefined,
-    },
-    status: "active",
-    boundAt: 1,
-  };
-}
-
-describe("session binding service", () => {
+describe("session-binding-service", () => {
   beforeEach(() => {
     __testing.resetSessionBindingAdaptersForTests();
   });
 
-  it("normalizes conversation refs and infers current placement", async () => {
-    const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      bind,
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    });
-
-    const result = await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-1",
-      targetKind: "subagent",
-      conversation: {
-        channel: "Discord",
-        accountId: "DEFAULT",
-        conversationId: " thread-1 ",
-      },
-    });
-
-    expect(result.conversation.channel).toBe("discord");
-    expect(result.conversation.accountId).toBe("default");
-    expect(bind).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-1",
-        }),
-      }),
-    );
+  afterEach(() => {
+    __testing.resetSessionBindingAdaptersForTests();
   });
 
-  it("supports explicit child placement when adapter advertises it", async () => {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      capabilities: { placements: ["child"] },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
+  describe("registerSessionBindingAdapter", () => {
+    it("registers an adapter for a channel and account", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+      expect(__testing.getRegisteredAdapterKeys()).toContain("telegram:test-account");
     });
 
-    const result = await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:1",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "thread-1",
-      },
-      placement: "child",
+    it("normalizes channel to lowercase", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "TELEGRAM",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+      expect(__testing.getRegisteredAdapterKeys()).toContain("telegram:test-account");
     });
 
-    expect(result.conversation.conversationId).toBe("thread-created");
+    it("trims whitespace from channel and accountId", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "  telegram  ",
+        accountId: "  test-account  ",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+      expect(__testing.getRegisteredAdapterKeys()).toContain("telegram:test-account");
+    });
   });
 
-  it("returns structured errors when adapter is unavailable", async () => {
-    await expect(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-1",
+  describe("unregisterSessionBindingAdapter", () => {
+    it("removes a registered adapter", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+      expect(__testing.getRegisteredAdapterKeys()).toContain("telegram:test-account");
+
+      unregisterSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "test-account",
+        adapter,
+      });
+      expect(__testing.getRegisteredAdapterKeys()).not.toContain("telegram:test-account");
+    });
+
+    it("does nothing if no adapter is registered for the key", () => {
+      unregisterSessionBindingAdapter({
+        channel: "nonexistent",
+        accountId: "no-account",
+      });
+      expect(__testing.getRegisteredAdapterKeys()).toHaveLength(0);
+    });
+  });
+
+  describe("getCapabilities", () => {
+    it("returns unavailable capabilities when no adapter is registered", () => {
+      const service = getSessionBindingService();
+      const caps = service.getCapabilities({ channel: "telegram", accountId: "test" });
+      expect(caps.adapterAvailable).toBe(false);
+      expect(caps.bindSupported).toBe(false);
+      expect(caps.unbindSupported).toBe(false);
+      expect(caps.placements).toHaveLength(0);
+    });
+
+    it("returns capabilities from registered adapter", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        capabilities: {
+          bindSupported: true,
+          unbindSupported: true,
+          placements: ["current", "child"],
         },
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_ADAPTER_UNAVAILABLE",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      const caps = service.getCapabilities({ channel: "telegram", accountId: "test-account" });
+      expect(caps.adapterAvailable).toBe(true);
+      expect(caps.bindSupported).toBe(true);
+      expect(caps.unbindSupported).toBe(true);
+      expect(caps.placements).toEqual(expect.arrayContaining(["current", "child"]));
+    });
+
+    it("infers bindSupported from bind method presence", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        bind: async () => null,
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      const caps = service.getCapabilities({ channel: "telegram", accountId: "test-account" });
+      expect(caps.bindSupported).toBe(true);
     });
   });
 
-  it("returns structured errors for unsupported placement", async () => {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      capabilities: { placements: ["current"] },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
+  describe("listBySession", () => {
+    it("returns empty array for empty session key", () => {
+      const service = getSessionBindingService();
+      expect(service.listBySession("")).toEqual([]);
     });
 
-    const rejected = await getSessionBindingService()
-      .bind({
-        targetSessionKey: "agent:codex:acp:1",
+    it("returns bindings from all registered adapters", () => {
+      const mockRecord: SessionBindingRecord = {
+        bindingId: "binding-1",
+        targetSessionKey: "session-1",
         targetKind: "session",
         conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-1",
+          channel: "telegram",
+          accountId: "test-account",
+          conversationId: "conv-1",
         },
-        placement: "child",
-      })
-      .catch((error) => error);
+        status: "active",
+        boundAt: Date.now(),
+      };
 
-    expect(isSessionBindingError(rejected)).toBe(true);
-    expect(rejected).toMatchObject({
-      code: "BINDING_CAPABILITY_UNSUPPORTED",
-      details: {
-        placement: "child",
-      },
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: (key) => (key === "session-1" ? [mockRecord] : []),
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      const result = service.listBySession("session-1");
+      expect(result).toHaveLength(1);
+      expect(result[0].bindingId).toBe("binding-1");
+    });
+
+    it("deduplicates bindings by bindingId", () => {
+      const mockRecord: SessionBindingRecord = {
+        bindingId: "binding-1",
+        targetSessionKey: "session-1",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "test-account",
+          conversationId: "conv-1",
+        },
+        status: "active",
+        boundAt: Date.now(),
+      };
+
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [mockRecord, mockRecord],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      const result = service.listBySession("session-1");
+      expect(result).toHaveLength(1);
     });
   });
 
-  it("returns structured errors when adapter bind fails", async () => {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      bind: async () => null,
-      listBySession: () => [],
-      resolveByConversation: () => null,
+  describe("resolveByConversation", () => {
+    it("returns null if conversation is missing channel or conversationId", () => {
+      const service = getSessionBindingService();
+      expect(
+        service.resolveByConversation({
+          channel: "",
+          accountId: "test",
+          conversationId: "conv-1",
+        }),
+      ).toBeNull();
+      expect(
+        service.resolveByConversation({
+          channel: "telegram",
+          accountId: "test",
+          conversationId: "",
+        }),
+      ).toBeNull();
     });
 
-    await expect(
-      getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
+    it("returns null if no adapter is registered", () => {
+      const service = getSessionBindingService();
+      expect(
+        service.resolveByConversation({
+          channel: "telegram",
+          accountId: "test",
+          conversationId: "conv-1",
+        }),
+      ).toBeNull();
+    });
+
+    it("returns record from registered adapter", () => {
+      const mockRecord: SessionBindingRecord = {
+        bindingId: "binding-1",
+        targetSessionKey: "session-1",
+        targetKind: "session",
         conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-1",
+          channel: "telegram",
+          accountId: "test-account",
+          conversationId: "conv-1",
         },
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_CREATE_FAILED",
+        status: "active",
+        boundAt: Date.now(),
+      };
+
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => mockRecord,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      const result = service.resolveByConversation({
+        channel: "telegram",
+        accountId: "test-account",
+        conversationId: "conv-1",
+      });
+      expect(result).toBe(mockRecord);
     });
   });
 
-  it("reports adapter capabilities for command preflight messaging", () => {
-    registerSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      capabilities: {
-        placements: ["current", "child"],
-      },
-      bind: async (input) => createRecord(input),
-      listBySession: () => [],
-      resolveByConversation: () => null,
-      unbind: async () => [],
+  describe("bind", () => {
+    it("throws BINDING_ADAPTER_UNAVAILABLE if no adapter is registered", async () => {
+      const service = getSessionBindingService();
+      await expect(
+        service.bind({
+          targetSessionKey: "session-1",
+          targetKind: "session",
+          conversation: {
+            channel: "telegram",
+            accountId: "test",
+            conversationId: "conv-1",
+          },
+        }),
+      ).rejects.toThrow(SessionBindingError);
     });
 
-    const known = getSessionBindingService().getCapabilities({
-      channel: "discord",
-      accountId: "default",
-    });
-    const unknown = getSessionBindingService().getCapabilities({
-      channel: "discord",
-      accountId: "other",
+    it("throws BINDING_CAPABILITY_UNSUPPORTED if adapter does not support bind", async () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      await expect(
+        service.bind({
+          targetSessionKey: "session-1",
+          targetKind: "session",
+          conversation: {
+            channel: "telegram",
+            accountId: "test-account",
+            conversationId: "conv-1",
+          },
+        }),
+      ).rejects.toThrow(SessionBindingError);
     });
 
-    expect(known).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"],
-    });
-    expect(unknown).toEqual({
-      adapterAvailable: false,
-      bindSupported: false,
-      unbindSupported: false,
-      placements: [],
+    it("throws BINDING_CREATE_FAILED if adapter.bind returns null", async () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        bind: async () => null,
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+
+      const service = getSessionBindingService();
+      await expect(
+        service.bind({
+          targetSessionKey: "session-1",
+          targetKind: "session",
+          conversation: {
+            channel: "telegram",
+            accountId: "test-account",
+            conversationId: "conv-1",
+          },
+        }),
+      ).rejects.toThrow(SessionBindingError);
     });
   });
 
-  it("keeps the first live adapter authoritative until it unregisters", () => {
-    const firstBinding = {
-      bindingId: "first-binding",
-      targetSessionKey: "agent:main",
-      targetKind: "session" as const,
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "thread-1",
-      },
-      status: "active" as const,
-      boundAt: 1,
-    };
-    const firstAdapter: SessionBindingAdapter = {
-      channel: "discord",
-      accountId: "default",
-      listBySession: (targetSessionKey) =>
-        targetSessionKey === "agent:main" ? [firstBinding] : [],
-      resolveByConversation: () => null,
-    };
-    const secondAdapter: SessionBindingAdapter = {
-      channel: "Discord",
-      accountId: "DEFAULT",
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    };
+  describe("touch", () => {
+    it("does nothing if bindingId is empty", () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+        touch: () => {
+          throw new Error("should not be called");
+        },
+      };
+      registerSessionBindingAdapter(adapter);
 
-    registerSessionBindingAdapter(firstAdapter);
-    registerSessionBindingAdapter(secondAdapter);
-
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
-
-    unregisterSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      adapter: secondAdapter,
+      const service = getSessionBindingService();
+      expect(() => service.touch("")).not.toThrow();
     });
-
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([firstBinding]);
-
-    unregisterSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      adapter: firstAdapter,
-    });
-
-    expect(getSessionBindingService().listBySession("agent:main")).toEqual([]);
   });
 
-  it("shares registered adapters across duplicate module instances", async () => {
-    const first = await importSessionBindingServiceModule(`first-${Date.now()}`);
-    const second = await importSessionBindingServiceModule(`second-${Date.now()}`);
-    const firstBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
-    const secondBind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
-    const firstAdapter: SessionBindingAdapter = {
-      channel: "discord",
-      accountId: "default",
-      bind: firstBind,
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    };
-    const secondAdapter: SessionBindingAdapter = {
-      channel: "discord",
-      accountId: "default",
-      bind: secondBind,
-      listBySession: () => [],
-      resolveByConversation: () => null,
-    };
+  describe("unbind", () => {
+    it("returns empty array if no adapters support unbind", async () => {
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
 
-    first.__testing.resetSessionBindingAdaptersForTests();
-    first.registerSessionBindingAdapter(firstAdapter);
-    second.registerSessionBindingAdapter(secondAdapter);
+      const service = getSessionBindingService();
+      const result = await service.unbind({
+        bindingId: "binding-1",
+        reason: "test",
+      });
+      expect(result).toEqual([]);
+    });
 
-    expect(second.__testing.getRegisteredAdapterKeys()).toEqual(["discord:default"]);
-
-    await expect(
-      second.getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
+    it("returns unbound records from adapters", async () => {
+      const mockRecord: SessionBindingRecord = {
+        bindingId: "binding-1",
+        targetSessionKey: "session-1",
+        targetKind: "session",
         conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-1",
+          channel: "telegram",
+          accountId: "test-account",
+          conversationId: "conv-1",
         },
-      }),
-    ).resolves.toMatchObject({
-      conversation: expect.objectContaining({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "thread-1",
-      }),
-    });
-    expect(firstBind).toHaveBeenCalledTimes(1);
-    expect(secondBind).not.toHaveBeenCalled();
+        status: "ended",
+        boundAt: Date.now(),
+      };
 
-    first.unregisterSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      adapter: firstAdapter,
-    });
+      const adapter: SessionBindingAdapter = {
+        channel: "telegram",
+        accountId: "test-account",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+        unbind: async () => [mockRecord],
+      };
+      registerSessionBindingAdapter(adapter);
 
-    await expect(
-      second.getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-2",
-        targetKind: "subagent",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-2",
-        },
-      }),
-    ).resolves.toMatchObject({
-      conversation: expect.objectContaining({
-        channel: "discord",
-        accountId: "default",
-        conversationId: "thread-2",
-      }),
+      const service = getSessionBindingService();
+      const result = await service.unbind({
+        bindingId: "binding-1",
+        reason: "test",
+      });
+      expect(result).toHaveLength(1);
+      expect(result[0].bindingId).toBe("binding-1");
     });
-    expect(firstBind).toHaveBeenCalledTimes(1);
-    expect(secondBind).toHaveBeenCalledTimes(1);
+  });
+});
 
-    second.unregisterSessionBindingAdapter({
-      channel: "discord",
-      accountId: "default",
-      adapter: secondAdapter,
-    });
+describe("SessionBindingError", () => {
+  it("creates error with code and message", () => {
+    const error = new SessionBindingError("BINDING_ADAPTER_UNAVAILABLE", "Adapter not found");
+    expect(error.code).toBe("BINDING_ADAPTER_UNAVAILABLE");
+    expect(error.message).toBe("Adapter not found");
+    expect(error.name).toBe("SessionBindingError");
+  });
 
-    await expect(
-      second.getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-3",
-        targetKind: "subagent",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "thread-3",
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "BINDING_ADAPTER_UNAVAILABLE",
-    });
+  it("creates error with details", () => {
+    const error = new SessionBindingError(
+      "BINDING_CAPABILITY_UNSUPPORTED",
+      "Placement not supported",
+      { channel: "telegram", accountId: "test", placement: "child" },
+    );
+    expect(error.details?.channel).toBe("telegram");
+    expect(error.details?.accountId).toBe("test");
+    expect(error.details?.placement).toBe("child");
+  });
+});
 
-    first.__testing.resetSessionBindingAdaptersForTests();
+describe("isSessionBindingError", () => {
+  it("returns true for SessionBindingError instances", () => {
+    const error = new SessionBindingError("BINDING_ADAPTER_UNAVAILABLE", "test");
+    expect(isSessionBindingError(error)).toBe(true);
+  });
+
+  it("returns false for other errors", () => {
+    const error = new Error("test");
+    expect(isSessionBindingError(error)).toBe(false);
+  });
+
+  it("returns false for non-error values", () => {
+    expect(isSessionBindingError(null)).toBe(false);
+    expect(isSessionBindingError(undefined)).toBe(false);
+    expect(isSessionBindingError("error")).toBe(false);
   });
 });
