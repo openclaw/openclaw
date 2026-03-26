@@ -33,10 +33,12 @@ describe("delivery-queue recovery", () => {
     deliver,
     log = createRecoveryLog(),
     maxRecoveryMs,
+    maxEntryAgeMs,
   }: {
     deliver: ReturnType<typeof vi.fn>;
     log?: ReturnType<typeof createRecoveryLog>;
     maxRecoveryMs?: number;
+    maxEntryAgeMs?: number;
   }) => {
     const result = await recoverPendingDeliveries({
       deliver: asDeliverFn(deliver),
@@ -44,6 +46,7 @@ describe("delivery-queue recovery", () => {
       cfg: baseCfg,
       stateDir: tmpDir(),
       ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
+      ...(maxEntryAgeMs === undefined ? {} : { maxEntryAgeMs }),
     });
     return { result, log };
   };
@@ -58,6 +61,7 @@ describe("delivery-queue recovery", () => {
       recovered: 2,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 0,
     });
 
@@ -205,6 +209,7 @@ describe("delivery-queue recovery", () => {
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 0,
     });
 
@@ -232,6 +237,7 @@ describe("delivery-queue recovery", () => {
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 1,
     });
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
@@ -263,6 +269,7 @@ describe("delivery-queue recovery", () => {
       recovered: 1,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 1,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -292,6 +299,7 @@ describe("delivery-queue recovery", () => {
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 1,
     });
     expect(firstDeliver).not.toHaveBeenCalled();
@@ -303,12 +311,76 @@ describe("delivery-queue recovery", () => {
       recovered: 1,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 0,
     });
     expect(secondDeliver).toHaveBeenCalledTimes(1);
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
 
     vi.useRealTimers();
+  });
+
+  it("skips first-attempt entries older than maxEntryAgeMs and moves them to failed/", async () => {
+    const staleId = await enqueueDelivery(
+      { channel: "telegram", to: "123", payloads: [{ text: "stale" }] },
+      tmpDir(),
+    );
+    // Backdate the entry to simulate it being enqueued 11 minutes ago
+    setQueuedEntryState(tmpDir(), staleId, {
+      retryCount: 0,
+      enqueuedAt: Date.now() - 11 * 60 * 1_000,
+    });
+
+    const freshId = await enqueueDelivery(
+      { channel: "telegram", to: "123", payloads: [{ text: "fresh" }] },
+      tmpDir(),
+    );
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result, log } = await runRecovery({
+      deliver,
+      maxEntryAgeMs: 10 * 60 * 1_000,
+    });
+
+    expect(result).toEqual({
+      recovered: 1,
+      failed: 0,
+      skippedMaxRetries: 0,
+      skippedStale: 1,
+      deferredBackoff: 0,
+    });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("is stale"));
+
+    // Stale entry should be in failed/, fresh entry should be acked
+    const remaining = await loadPendingDeliveries(tmpDir());
+    expect(remaining).toHaveLength(0);
+    expect(remaining.find((e) => e.id === staleId)).toBeUndefined();
+    expect(remaining.find((e) => e.id === freshId)).toBeUndefined();
+  });
+
+  it("does not skip retried entries even if old (retryCount > 0 bypasses staleness check)", async () => {
+    const id = await enqueueDelivery(
+      { channel: "telegram", to: "123", payloads: [{ text: "retry" }] },
+      tmpDir(),
+    );
+    // Mark as already attempted once, backdate to simulate age
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 1,
+      lastAttemptAt: Date.now() - 20 * 60 * 1_000,
+      enqueuedAt: Date.now() - 20 * 60 * 1_000,
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({
+      deliver,
+      maxEntryAgeMs: 10 * 60 * 1_000,
+    });
+
+    // Should recover (not skip as stale) because retryCount > 0
+    expect(result.skippedStale).toBe(0);
+    expect(result.recovered).toBe(1);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("returns zeros when queue is empty", async () => {
@@ -319,6 +391,7 @@ describe("delivery-queue recovery", () => {
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
+      skippedStale: 0,
       deferredBackoff: 0,
     });
     expect(deliver).not.toHaveBeenCalled();
