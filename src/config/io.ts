@@ -59,6 +59,12 @@ import { shouldWarnOnTouchedVersion } from "./version.js";
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
 export { MissingEnvVarError } from "./env-substitution.js";
 
+/** Check whether debug-level logging is enabled via OPENCLAW_DEBUG. */
+function isDebugLogging(): boolean {
+  const v = process.env.OPENCLAW_DEBUG?.toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -241,8 +247,11 @@ async function tightenStateDirPermissionsIfNeeded(params: {
       return;
     }
     await params.fsModule.promises.chmod(configDir, 0o700);
-  } catch {
+  } catch (err) {
     // Best-effort hardening only; callers still need the config write to proceed.
+    if (isDebugLogging()) {
+      console.error(`[config:io] Failed to tighten permissions on ${configDir}:`, err);
+    }
   }
 }
 
@@ -635,8 +644,11 @@ async function appendConfigAuditRecord(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    // best-effort observer path only; successful writes must still complete.
+    if (isDebugLogging()) {
+      console.error(`[config:audit] Config audit write failed:`, err);
+    }
   }
 }
 
@@ -651,8 +663,10 @@ function appendConfigAuditRecordSync(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    if (isDebugLogging()) {
+      console.error(`[config:audit] Config audit sync write failed:`, err);
+    }
   }
 }
 
@@ -662,7 +676,11 @@ async function readConfigHealthState(deps: Required<ConfigIoDeps>): Promise<Conf
     const raw = await deps.fs.promises.readFile(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    // ENOENT is normal on first run (file is lazily created).
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      deps.logger.warn(`Config health state read failed: ${String(err)}`);
+    }
     return {};
   }
 }
@@ -673,7 +691,10 @@ function readConfigHealthStateSync(deps: Required<ConfigIoDeps>): ConfigHealthSt
     const raw = deps.fs.readFileSync(healthPath, "utf-8");
     const parsed = JSON.parse(raw);
     return isPlainObject(parsed) ? (parsed as ConfigHealthState) : {};
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      deps.logger.warn(`Config health state sync read failed: ${String(err)}`);
+    }
     return {};
   }
 }
@@ -689,8 +710,8 @@ async function writeConfigHealthState(
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state write failed: ${String(err)}`);
   }
 }
 
@@ -702,8 +723,8 @@ function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigH
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health state sync write failed: ${String(err)}`);
   }
 }
 
