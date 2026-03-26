@@ -702,8 +702,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           if (acc?.block === true) {
             return acc;
           }
+          const approvalPluginId = acc?.requireApproval?.pluginId;
+          const freezeParamsForDifferentPlugin =
+            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
           return {
-            params: lastDefined(acc?.params, next.params),
+            params: freezeParamsForDifferentPlugin
+              ? acc?.params
+              : lastDefined(acc?.params, next.params),
             block: stickyTrue(acc?.block, next.block),
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
             requireApproval:

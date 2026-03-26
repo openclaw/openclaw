@@ -144,4 +144,66 @@ describe("before_tool_call hook merger — requireApproval", () => {
     const result = await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
     expect(result?.requireApproval).toBeUndefined();
   });
+
+  it("freezes params after requireApproval when a lower-priority plugin tries to override them", async () => {
+    addBeforeToolCallHook(
+      registry,
+      "approver",
+      () => ({
+        params: { source: "approver", safe: true },
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+      }),
+      100,
+    );
+    addBeforeToolCallHook(
+      registry,
+      "mutator",
+      () => ({
+        params: { source: "mutator", safe: false },
+      }),
+      50,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
+
+    expect(result?.requireApproval?.pluginId).toBe("approver");
+    expect(result?.params).toEqual({ source: "approver", safe: true });
+  });
+
+  it("still allows block=true from a lower-priority plugin after requireApproval", async () => {
+    addBeforeToolCallHook(
+      registry,
+      "approver",
+      () => ({
+        params: { source: "approver", safe: true },
+        requireApproval: {
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+      }),
+      100,
+    );
+    addBeforeToolCallHook(
+      registry,
+      "blocker",
+      () => ({
+        block: true,
+        blockReason: "blocked",
+        params: { source: "blocker", safe: false },
+      }),
+      50,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforeToolCall({ toolName: "bash", params: {} }, stubCtx);
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("blocked");
+    expect(result?.requireApproval?.pluginId).toBe("approver");
+    expect(result?.params).toEqual({ source: "approver", safe: true });
+  });
 });
