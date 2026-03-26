@@ -1,7 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { loggingState } from "../logging/state.js";
 import { defaultRuntime } from "../runtime.js";
-import { VERSION } from "../version.js";
+import { DISPLAY_VERSION } from "../version.js";
 import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv.js";
 import { emitCliBanner } from "./banner.js";
 import { findRoutedCommand } from "./program/routes.js";
@@ -12,7 +12,7 @@ async function prepareRoutedCommand(params: {
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
-  emitCliBanner(VERSION, { argv: params.argv });
+  emitCliBanner(DISPLAY_VERSION, { argv: params.argv });
   const { ensureConfigReady } = await import("./program/config-guard.js");
   await ensureConfigReady({
     runtime: defaultRuntime,

@@ -19,6 +19,7 @@ import {
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
+import { buildRunArtifactFilename, ensureBuildRunRoot, normalizeBuildRunId } from "./build-runs.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
@@ -33,7 +34,13 @@ import {
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
-import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
+import {
+  normalizeSubagentRolePreset,
+  resolveSubagentCapabilities,
+  resolveSubagentRolePresetDefaults,
+  resolveSubagentRolePresetRuntimeDefaults,
+  type SubagentRolePreset,
+} from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { readStringParam } from "./tools/common.js";
@@ -53,6 +60,8 @@ export { decodeStrictBase64 };
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
+  rolePreset?: SubagentRolePreset;
+  buildRunId?: string;
   agentId?: string;
   model?: string;
   thinking?: string;
@@ -83,6 +92,10 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
+  /** Shared build-run id inherited by child spawns. */
+  buildRunId?: string | null;
+  /** Stable build-run artifact root inherited by child spawns. */
+  buildRunDir?: string | null;
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -228,6 +241,40 @@ function summarizeError(err: unknown): string {
     return err;
   }
   return "error";
+}
+
+function formatRolePresetArtifactLines(params: {
+  rolePreset?: SubagentRolePreset;
+  canSpawn?: boolean;
+  buildRunId?: string;
+  buildRunDir?: string;
+}): string | undefined {
+  const runtimeDefaults = resolveSubagentRolePresetRuntimeDefaults({
+    preset: params.rolePreset,
+    canSpawn: params.canSpawn,
+  });
+  const semanticDefaults = resolveSubagentRolePresetDefaults(params.rolePreset);
+  if (!params.rolePreset || !runtimeDefaults || !semanticDefaults) {
+    return undefined;
+  }
+  const lines = [
+    `[Role Preset] Operate as ${params.rolePreset}.`,
+    `[Role Preset] Tool bias: ${semanticDefaults.toolBias}. Verification posture: ${semanticDefaults.verificationPosture}.`,
+    `[Role Preset] Default prompt mode: ${runtimeDefaults.systemPromptMode}. Artifact write scope: ${semanticDefaults.artifactWriteScope}.`,
+    params.buildRunId ? `[Build Run] Shared run id: ${params.buildRunId}.` : undefined,
+    params.buildRunDir ? `[Build Run] Artifact root: ${params.buildRunDir}.` : undefined,
+    runtimeDefaults.artifactReadRefs.length > 0
+      ? `[Build Run] Read when present: ${runtimeDefaults.artifactReadRefs
+          .map((name) => buildRunArtifactFilename(name))
+          .join(", ")}.`
+      : undefined,
+    runtimeDefaults.artifactWriteRefs.length > 0
+      ? `[Build Run] Write when needed: ${runtimeDefaults.artifactWriteRefs
+          .map((name) => buildRunArtifactFilename(name))
+          .join(", ")}.`
+      : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
@@ -443,6 +490,24 @@ export async function spawnSubagentDirect(
     agentId: targetAgentId,
     modelOverride,
   });
+  const rolePreset = normalizeSubagentRolePreset(params.rolePreset);
+  let buildRunId: string | undefined;
+  const buildRunIdRaw =
+    typeof params.buildRunId === "string" && params.buildRunId.trim()
+      ? params.buildRunId
+      : typeof ctx.buildRunId === "string" && ctx.buildRunId.trim()
+        ? ctx.buildRunId
+        : undefined;
+  if (buildRunIdRaw) {
+    try {
+      buildRunId = normalizeBuildRunId(buildRunIdRaw);
+    } catch (err) {
+      return {
+        status: "error",
+        error: summarizeError(err),
+      };
+    }
+  }
 
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -479,6 +544,7 @@ export async function spawnSubagentDirect(
     spawnDepth: childDepth,
     subagentRole: childCapabilities.role === "main" ? null : childCapabilities.role,
     subagentControlScope: childCapabilities.controlScope,
+    subagentRolePreset: rolePreset ?? null,
   };
   if (resolvedModel) {
     initialChildSessionPatch.model = resolvedModel;
@@ -615,8 +681,10 @@ export async function spawnSubagentDirect(
     agentGroupChannel: ctx.agentGroupChannel,
     agentGroupSpace: ctx.agentGroupSpace,
     workspaceDir: ctx.workspaceDir,
+    buildRunId: ctx.buildRunId,
+    buildRunDir: ctx.buildRunDir,
   });
-  const spawnedMetadata = normalizeSpawnedRunMetadata({
+  const initialSpawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: spawnedByKey,
     ...toolSpawnMetadata,
     workspaceDir: resolveSpawnedWorkspaceInheritance({
@@ -628,9 +696,47 @@ export async function spawnSubagentDirect(
         targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
     }),
   });
+  let buildRunDir = initialSpawnedMetadata.buildRunDir;
+  if (buildRunId && initialSpawnedMetadata.workspaceDir) {
+    try {
+      const resolvedBuildRunRoot = await ensureBuildRunRoot({
+        workspaceDir: initialSpawnedMetadata.workspaceDir,
+        runId: buildRunId,
+      });
+      buildRunDir = resolvedBuildRunRoot.runDir;
+    } catch (err) {
+      await cleanupFailedSpawnBeforeAgentStart({
+        childSessionKey,
+        attachmentAbsDir,
+        emitLifecycleHooks: threadBindingReady,
+        deleteTranscript: true,
+      });
+      return {
+        status: "error",
+        error: summarizeError(err),
+        childSessionKey,
+      };
+    }
+  }
+  const spawnedMetadata = normalizeSpawnedRunMetadata({
+    ...initialSpawnedMetadata,
+    ...(buildRunId ? { buildRunId } : {}),
+    ...(buildRunDir ? { buildRunDir } : {}),
+  });
+  const rolePresetNotes = formatRolePresetArtifactLines({
+    rolePreset,
+    canSpawn: childCapabilities.canSpawn,
+    buildRunId,
+    buildRunDir,
+  });
+  if (rolePresetNotes) {
+    childSystemPrompt = `${childSystemPrompt}\n\n${rolePresetNotes}`;
+  }
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
     ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
+    ...(buildRunId ? { spawnedBuildRunId: buildRunId } : {}),
+    ...(buildRunDir ? { spawnedBuildRunDir: buildRunDir } : {}),
   });
   if (spawnLineagePatchError) {
     await cleanupFailedSpawnBeforeAgentStart({
@@ -750,8 +856,11 @@ export async function spawnSubagentDirect(
       task,
       cleanup,
       label: label || undefined,
+      rolePreset,
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
+      buildRunId,
+      buildRunDir,
       runTimeoutSeconds,
       expectsCompletionMessage,
       spawnMode,

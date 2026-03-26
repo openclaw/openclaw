@@ -7,6 +7,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { isReservedBuildRunWorkspacePath } from "./build-runs.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -23,6 +24,8 @@ export function resolveDefaultAgentWorkspaceDir(
 
 export const DEFAULT_AGENT_WORKSPACE_DIR = resolveDefaultAgentWorkspaceDir();
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
+export const DEFAULT_CLAUDE_FILENAME = "CLAUDE.md";
+export const DEFAULT_OPENCLAW_FILENAME = "OPENCLAW.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
@@ -131,6 +134,8 @@ async function loadTemplate(name: string): Promise<string> {
 
 export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
+  | typeof DEFAULT_CLAUDE_FILENAME
+  | typeof DEFAULT_OPENCLAW_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
   | typeof DEFAULT_TOOLS_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
@@ -145,6 +150,30 @@ export type WorkspaceBootstrapFile = {
   path: string;
   content?: string;
   missing: boolean;
+};
+
+export type WorkspacePolicyDiscoveryEntry = {
+  name: string;
+  path: string;
+  kind: "bootstrap" | "candidate";
+  autoInjected: boolean;
+  matchedBy: "bootstrap-name" | "policy-filename" | "policy-directory";
+  policyRole:
+    | "global-guidance"
+    | "repo-focus"
+    | "tool-guidance"
+    | "persona"
+    | "identity"
+    | "user-facts"
+    | "heartbeat"
+    | "bootstrap"
+    | "memory"
+    | "candidate";
+  mergePriority: number;
+  mergeTier: "primary" | "supporting" | "specialized" | "candidate";
+  source: "workspace-root" | "extra-bootstrap" | "policy-scan";
+  conflictSummary?: string;
+  conflictWith?: string[];
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -168,6 +197,8 @@ type WorkspaceSetupState = {
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
+  DEFAULT_CLAUDE_FILENAME,
+  DEFAULT_OPENCLAW_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -177,6 +208,162 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
 ]);
+
+const POLICY_DISCOVERY_DIRECTORY_NAMES = new Set([
+  ".github",
+  ".openclaw",
+  "docs",
+  "policy",
+  "policies",
+  "rules",
+  "runbooks",
+]);
+
+const POLICY_DISCOVERY_FILE_PATTERNS: RegExp[] = [
+  /(?:^|[-_.])policy(?:[-_.]|$)/i,
+  /(?:^|[-_.])policies(?:[-_.]|$)/i,
+  /(?:^|[-_.])rule(?:[-_.]|$)/i,
+  /(?:^|[-_.])rules(?:[-_.]|$)/i,
+  /(?:^|[-_.])guardrail(?:[-_.]|$)/i,
+  /(?:^|[-_.])guardrails(?:[-_.]|$)/i,
+  /(?:^|[-_.])standing-order(?:[-_.]|$)/i,
+  /(?:^|[-_.])standing-orders(?:[-_.]|$)/i,
+  /(?:^|[-_.])playbook(?:[-_.]|$)/i,
+  /(?:^|[-_.])workflow(?:[-_.]|$)/i,
+  /(?:^|[-_.])runbook(?:[-_.]|$)/i,
+  /(?:^|[-_.])instruction(?:[-_.]|$)/i,
+  /(?:^|[-_.])instructions(?:[-_.]|$)/i,
+];
+
+const POLICY_DISCOVERY_MAX_DEPTH = 2;
+const POLICY_DISCOVERY_MAX_FILES = 64;
+
+function resolveWorkspacePolicyRole(
+  name: string,
+): Pick<WorkspacePolicyDiscoveryEntry, "policyRole" | "mergePriority" | "mergeTier"> {
+  switch (name) {
+    case DEFAULT_AGENTS_FILENAME:
+      return { policyRole: "global-guidance", mergePriority: 100, mergeTier: "primary" };
+    case DEFAULT_CLAUDE_FILENAME:
+      return { policyRole: "global-guidance", mergePriority: 95, mergeTier: "primary" };
+    case DEFAULT_OPENCLAW_FILENAME:
+      return { policyRole: "repo-focus", mergePriority: 90, mergeTier: "primary" };
+    case DEFAULT_TOOLS_FILENAME:
+      return { policyRole: "tool-guidance", mergePriority: 70, mergeTier: "supporting" };
+    case DEFAULT_SOUL_FILENAME:
+      return { policyRole: "persona", mergePriority: 60, mergeTier: "supporting" };
+    case DEFAULT_IDENTITY_FILENAME:
+      return { policyRole: "identity", mergePriority: 55, mergeTier: "supporting" };
+    case DEFAULT_USER_FILENAME:
+      return { policyRole: "user-facts", mergePriority: 50, mergeTier: "supporting" };
+    case DEFAULT_MEMORY_FILENAME:
+    case DEFAULT_MEMORY_ALT_FILENAME:
+      return { policyRole: "memory", mergePriority: 45, mergeTier: "specialized" };
+    case DEFAULT_HEARTBEAT_FILENAME:
+      return { policyRole: "heartbeat", mergePriority: 40, mergeTier: "specialized" };
+    case DEFAULT_BOOTSTRAP_FILENAME:
+      return { policyRole: "bootstrap", mergePriority: 10, mergeTier: "specialized" };
+    default:
+      return { policyRole: "candidate", mergePriority: 0, mergeTier: "candidate" };
+  }
+}
+
+function resolveWorkspacePolicySource(params: {
+  rootDir: string;
+  absolutePath: string;
+  kind: WorkspacePolicyDiscoveryEntry["kind"];
+}): WorkspacePolicyDiscoveryEntry["source"] {
+  if (params.kind === "candidate") {
+    return "policy-scan";
+  }
+  const expectedRootPath = path.join(params.rootDir, path.basename(params.absolutePath));
+  return path.resolve(expectedRootPath) === path.resolve(params.absolutePath)
+    ? "workspace-root"
+    : "extra-bootstrap";
+}
+
+function annotateWorkspacePolicyEntries(params: {
+  rootDir: string;
+  entries: Array<
+    Omit<
+      WorkspacePolicyDiscoveryEntry,
+      "policyRole" | "mergePriority" | "mergeTier" | "source" | "conflictSummary" | "conflictWith"
+    >
+  >;
+}): WorkspacePolicyDiscoveryEntry[] {
+  const annotated = params.entries.map((entry) => ({
+    ...entry,
+    ...resolveWorkspacePolicyRole(entry.name),
+    source: resolveWorkspacePolicySource({
+      rootDir: params.rootDir,
+      absolutePath: entry.path,
+      kind: entry.kind,
+    }),
+  }));
+
+  const injectedByRole = new Map<string, WorkspacePolicyDiscoveryEntry[]>();
+  const injectedByName = new Map<string, WorkspacePolicyDiscoveryEntry[]>();
+  for (const entry of annotated) {
+    if (!entry.autoInjected) {
+      continue;
+    }
+    const roleEntries = injectedByRole.get(entry.policyRole) ?? [];
+    roleEntries.push(entry);
+    injectedByRole.set(entry.policyRole, roleEntries);
+
+    const nameEntries = injectedByName.get(entry.name) ?? [];
+    nameEntries.push(entry);
+    injectedByName.set(entry.name, nameEntries);
+  }
+
+  return annotated
+    .map((entry) => {
+      const overlaps: string[] = [];
+      const overlapSummaries: string[] = [];
+      const rolePeers = injectedByRole.get(entry.policyRole) ?? [];
+      const namePeers = injectedByName.get(entry.name) ?? [];
+
+      if (entry.autoInjected && rolePeers.length > 1) {
+        const peerNames = rolePeers.map((peer) => peer.name).filter((name) => name !== entry.name);
+        if (peerNames.length > 0) {
+          overlaps.push(...peerNames);
+          overlapSummaries.push(`shares ${entry.policyRole} role with ${peerNames.join(", ")}`);
+        }
+      }
+
+      if (entry.autoInjected && namePeers.length > 1) {
+        const peerPaths = namePeers
+          .map((peer) => peer.path)
+          .filter((peerPath) => peerPath !== entry.path)
+          .map((peerPath) => path.relative(params.rootDir, peerPath) || path.basename(peerPath));
+        if (peerPaths.length > 0) {
+          overlaps.push(...peerPaths);
+          overlapSummaries.push(
+            `duplicate bootstrap basename also loaded from ${peerPaths.join(", ")}`,
+          );
+        }
+      }
+
+      return {
+        ...entry,
+        ...(overlaps.length
+          ? {
+              conflictWith: Array.from(new Set(overlaps)),
+              conflictSummary: overlapSummaries.join("; "),
+            }
+          : {}),
+      };
+    })
+    .toSorted((left, right) => {
+      if (left.autoInjected !== right.autoInjected) {
+        return left.autoInjected ? -1 : 1;
+      }
+      if (left.mergePriority !== right.mergePriority) {
+        return right.mergePriority - left.mergePriority;
+      }
+      return left.path.localeCompare(right.path);
+    });
+}
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -496,6 +683,14 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
       filePath: path.join(resolvedDir, DEFAULT_AGENTS_FILENAME),
     },
     {
+      name: DEFAULT_CLAUDE_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_CLAUDE_FILENAME),
+    },
+    {
+      name: DEFAULT_OPENCLAW_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_OPENCLAW_FILENAME),
+    },
+    {
       name: DEFAULT_SOUL_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_SOUL_FILENAME),
     },
@@ -546,8 +741,141 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
+function isWithinWorkspace(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function matchesDiscoveredPolicyFilename(name: string): boolean {
+  const lowered = name.toLowerCase();
+  if (!lowered.endsWith(".md")) {
+    return false;
+  }
+  return POLICY_DISCOVERY_FILE_PATTERNS.some((pattern) => pattern.test(lowered));
+}
+
+function discoverPolicyCandidatesInDirectory(params: {
+  rootDir: string;
+  currentDir: string;
+  depth: number;
+  entries: Array<
+    Omit<
+      WorkspacePolicyDiscoveryEntry,
+      "policyRole" | "mergePriority" | "mergeTier" | "source" | "conflictSummary" | "conflictWith"
+    >
+  >;
+  seenPaths: Set<string>;
+}): void {
+  if (
+    params.depth > POLICY_DISCOVERY_MAX_DEPTH ||
+    params.entries.length >= POLICY_DISCOVERY_MAX_FILES
+  ) {
+    return;
+  }
+  let dirEntries: syncFs.Dirent[];
+  try {
+    dirEntries = syncFs.readdirSync(params.currentDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const dirent of dirEntries) {
+    if (params.entries.length >= POLICY_DISCOVERY_MAX_FILES) {
+      return;
+    }
+    const absolutePath = path.join(params.currentDir, dirent.name);
+    const resolvedPath = path.resolve(absolutePath);
+    if (!isWithinWorkspace(params.rootDir, resolvedPath)) {
+      continue;
+    }
+
+    if (dirent.isDirectory()) {
+      if (isReservedBuildRunWorkspacePath(params.rootDir, resolvedPath)) {
+        continue;
+      }
+      if (dirent.name.startsWith(".") && !POLICY_DISCOVERY_DIRECTORY_NAMES.has(dirent.name)) {
+        continue;
+      }
+      discoverPolicyCandidatesInDirectory({
+        ...params,
+        currentDir: resolvedPath,
+        depth: params.depth + 1,
+      });
+      continue;
+    }
+
+    if (!dirent.isFile() || !matchesDiscoveredPolicyFilename(dirent.name)) {
+      continue;
+    }
+    if (params.seenPaths.has(resolvedPath)) {
+      continue;
+    }
+    params.seenPaths.add(resolvedPath);
+    params.entries.push({
+      name: dirent.name,
+      path: resolvedPath,
+      kind: "candidate",
+      autoInjected: false,
+      matchedBy: POLICY_DISCOVERY_DIRECTORY_NAMES.has(path.basename(params.currentDir))
+        ? "policy-directory"
+        : "policy-filename",
+    });
+  }
+}
+
+export function discoverWorkspacePolicyFiles(params: {
+  dir?: string;
+  bootstrapFiles?: WorkspaceBootstrapFile[];
+}): WorkspacePolicyDiscoveryEntry[] {
+  const dir = params.dir?.trim();
+  if (!dir) {
+    return [];
+  }
+  const resolvedDir = resolveUserPath(dir);
+  const seenPaths = new Set<string>();
+  const entries: Array<
+    Omit<
+      WorkspacePolicyDiscoveryEntry,
+      "policyRole" | "mergePriority" | "mergeTier" | "source" | "conflictSummary" | "conflictWith"
+    >
+  > = [];
+
+  for (const file of params.bootstrapFiles ?? []) {
+    if (file.missing) {
+      continue;
+    }
+    const resolvedPath = path.resolve(file.path);
+    if (!isWithinWorkspace(resolvedDir, resolvedPath) || seenPaths.has(resolvedPath)) {
+      continue;
+    }
+    seenPaths.add(resolvedPath);
+    entries.push({
+      name: file.name,
+      path: resolvedPath,
+      kind: "bootstrap",
+      autoInjected: true,
+      matchedBy: "bootstrap-name",
+    });
+  }
+
+  discoverPolicyCandidatesInDirectory({
+    rootDir: resolvedDir,
+    currentDir: resolvedDir,
+    depth: 0,
+    entries,
+    seenPaths,
+  });
+
+  return annotateWorkspacePolicyEntries({
+    rootDir: resolvedDir,
+    entries,
+  });
+}
+
 const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
+  DEFAULT_CLAUDE_FILENAME,
+  DEFAULT_OPENCLAW_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,

@@ -83,6 +83,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
+  if (result.meta.verifyReport) {
+    next.verifyReport = result.meta.verifyReport;
+  }
+  if (result.meta.failureReport) {
+    next.failureReport = result.meta.failureReport;
+  }
+  if (result.meta.retryReport) {
+    next.retryReport = result.meta.retryReport;
+  }
   if (hasNonzeroUsage(usage)) {
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;

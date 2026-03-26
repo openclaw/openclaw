@@ -3,6 +3,9 @@ read_when:
   - 你需要解释智能体工作区或其文件布局
   - 你想备份或迁移智能体工作区
 summary: 智能体工作区：位置、布局和备份策略
+owner: OpenClaw harness
+freshness: monthly
+last_reviewed: "2026-03-25"
 title: 智能体工作区
 x-i18n:
   generated_at: "2026-03-16T06:21:45Z"
@@ -64,6 +67,16 @@ x-i18n:
   - 每次会话开始时加载。
   - 很适合放置规则、优先级和“如何表现”之类的细节。
 
+- `OPENCLAW.md`（可选）
+  - 额外的工作区级执行焦点。
+  - 存在于工作区根目录时会被加载。
+  - 适合放置仓库局部规则，而不把 `AGENTS.md` 写得过厚。
+
+- `CLAUDE.md`（可选）
+  - 额外的兼容型工作区 policy 文件。
+  - 位于工作区根目录时会被加载，也可以通过 `bootstrap-extra-files` 发现。
+  - 当仓库已经携带 Claude/Codex 风格规则时，适合让 OpenClaw 一并继承。
+
 - `SOUL.md`
   - 人设、语气和边界。
   - 每次会话都会加载。
@@ -112,6 +125,8 @@ x-i18n:
 
 如果任何引导文件缺失，OpenClaw 会在会话中注入一个“缺失文件”标记并继续执行。注入时，大型引导文件会被截断；可使用 `agents.defaults.bootstrapMaxChars`（默认：20000）和 `agents.defaults.bootstrapTotalMaxChars`（默认：150000）调整限制。
 `openclaw setup` 可以重新创建缺失的默认文件，而不会覆盖现有文件。
+
+OpenClaw 还会在 `/context` 中记录工作区 policy 的发现与合并信息，包括每个 policy 文件的来源、合并层级、相对优先级以及重叠/冲突提示。这样就能直接看到 `AGENTS.md`、`OPENCLAW.md` 和 `CLAUDE.md` 在真实运行中是如何组合的。
 
 ## 不在工作区中的内容
 

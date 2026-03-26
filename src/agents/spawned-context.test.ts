@@ -15,12 +15,16 @@ describe("normalizeSpawnedRunMetadata", () => {
         groupChannel: "  slack ",
         groupSpace: " ",
         workspaceDir: " /tmp/ws ",
+        buildRunId: " run-42 ",
+        buildRunDir: " /tmp/ws/.openclaw/build-runs/run-42 ",
       }),
     ).toEqual({
       spawnedBy: "agent:main:subagent:1",
       groupId: "group-1",
       groupChannel: "slack",
       workspaceDir: "/tmp/ws",
+      buildRunId: "run-42",
+      buildRunDir: "/tmp/ws/.openclaw/build-runs/run-42",
     });
   });
 });
@@ -33,12 +37,16 @@ describe("mapToolContextToSpawnedRunMetadata", () => {
         agentGroupChannel: "telegram",
         agentGroupSpace: "topic:123",
         workspaceDir: "/tmp/ws",
+        buildRunId: "run-42",
+        buildRunDir: "/tmp/ws/.openclaw/build-runs/run-42",
       }),
     ).toEqual({
       groupId: "g-1",
       groupChannel: "telegram",
       groupSpace: "topic:123",
       workspaceDir: "/tmp/ws",
+      buildRunId: "run-42",
+      buildRunDir: "/tmp/ws/.openclaw/build-runs/run-42",
     });
   });
 });

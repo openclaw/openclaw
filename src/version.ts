@@ -16,6 +16,11 @@ const BUILD_INFO_CANDIDATES = [
   "./build-info.json",
 ] as const;
 
+type BuildInfoJson = {
+  version?: string;
+  displayVersionMarker?: string;
+};
+
 function readVersionFromJsonCandidates(
   moduleUrl: string,
   candidates: readonly string[],
@@ -64,11 +69,42 @@ export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string 
   return readVersionFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES);
 }
 
+export function readDisplayVersionMarkerFromBuildInfoForModuleUrl(
+  moduleUrl: string,
+): string | null {
+  try {
+    const require = createRequire(moduleUrl);
+    for (const candidate of BUILD_INFO_CANDIDATES) {
+      try {
+        const parsed = require(candidate) as BuildInfoJson;
+        const marker = parsed.displayVersionMarker?.trim();
+        if (marker) {
+          return marker;
+        }
+      } catch {
+        // ignore missing or unreadable candidate
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   return (
     readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
     readVersionFromBuildInfoForModuleUrl(moduleUrl)
   );
+}
+
+export function formatDisplayVersion(version: string, marker?: string | null): string {
+  const trimmedVersion = version.trim();
+  const trimmedMarker = marker?.trim();
+  if (!trimmedMarker) {
+    return trimmedVersion;
+  }
+  return `${trimmedVersion} [${trimmedMarker}]`;
 }
 
 export function resolveBinaryVersion(params: {
@@ -126,3 +162,9 @@ export const VERSION = resolveBinaryVersion({
   injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });
+
+export const DISPLAY_VERSION = formatDisplayVersion(
+  VERSION,
+  process.env.OPENCLAW_DISPLAY_VERSION_MARKER ??
+    readDisplayVersionMarkerFromBuildInfoForModuleUrl(import.meta.url),
+);

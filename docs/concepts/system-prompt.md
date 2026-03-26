@@ -3,6 +3,9 @@ summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
+owner: "OpenClaw harness"
+freshness: "monthly"
+last_reviewed: "2026-03-25"
 title: "System Prompt"
 ---
 
@@ -53,6 +56,8 @@ Context** instead of **Group Chat Context**.
 Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
 
 - `AGENTS.md`
+- `OPENCLAW.md` when present
+- `CLAUDE.md` when present
 - `SOUL.md`
 - `TOOLS.md`
 - `IDENTITY.md`
@@ -78,13 +83,16 @@ occurs, OpenClaw can inject a warning block in Project Context; control this wit
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
 default: `once`).
 
-Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
-are filtered out to keep the sub-agent context small).
+Sub-agent sessions only inject `AGENTS.md`, `OPENCLAW.md` (when present),
+`CLAUDE.md` (when present), `TOOLS.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md`
+(other bootstrap files are filtered out to keep the sub-agent context small).
 
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
-To inspect how much each injected file contributes (raw vs injected, truncation, plus tool schema overhead), use `/context list` or `/context detail`. See [Context](/concepts/context).
+To inspect how much each injected file contributes (raw vs injected, truncation,
+policy slicing, merge order/conflicts, plus tool schema overhead), use
+`/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## Time handling
 

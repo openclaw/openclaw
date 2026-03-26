@@ -25,6 +25,7 @@ import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 import { consumeAdjustedParamsForToolCall } from "./pi-tools.before-tool-call.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { buildVerifyEntryFromToolResult } from "./verify-report.js";
 
 type ToolStartRecord = {
   startTime: number;
@@ -547,6 +548,17 @@ export async function handleToolExecutionEnd(
   // Track committed reminders only when cron.add completed successfully.
   if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
     ctx.state.successfulCronAdds += 1;
+  }
+
+  const verifyEntry = buildVerifyEntryFromToolResult({
+    toolName,
+    meta,
+    args: afterToolCallArgs,
+    result,
+    isToolError,
+  });
+  if (verifyEntry) {
+    ctx.state.verifyEntries.push(verifyEntry);
   }
 
   emitAgentEvent({

@@ -38,6 +38,28 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files[0]?.content).toBe("tools");
   });
 
+  it("loads OPENCLAW.md from explicit paths", async () => {
+    const workspaceDir = await createWorkspaceDir("openclaw-md");
+    await fs.writeFile(path.join(workspaceDir, "OPENCLAW.md"), "focus", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["OPENCLAW.md"]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("OPENCLAW.md");
+    expect(files[0]?.content).toBe("focus");
+  });
+
+  it("loads CLAUDE.md from explicit paths", async () => {
+    const workspaceDir = await createWorkspaceDir("claude-md");
+    await fs.writeFile(path.join(workspaceDir, "CLAUDE.md"), "claude", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["CLAUDE.md"]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("CLAUDE.md");
+    expect(files[0]?.content).toBe("claude");
+  });
+
   it("keeps path-traversal attempts outside workspace excluded", async () => {
     const rootDir = await createWorkspaceDir("root");
     const workspaceDir = path.join(rootDir, "workspace");

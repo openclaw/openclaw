@@ -36,6 +36,7 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      verifyEntries: [],
       toolSummaryById: new Set<string>(),
       pendingMessagingTargets: new Map<string, MessagingToolSend>(),
       pendingMessagingTexts: new Map<string, string>(),
@@ -181,7 +182,6 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
 describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
-
     await handleToolExecutionStart(
       ctx as never,
       {
@@ -235,6 +235,90 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     );
 
     expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
+
+describe("handleToolExecutionEnd verify tracking", () => {
+  it("records a passed verify check for successful test commands", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-verify-pass",
+        args: { command: "pnpm test --runInBand" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-verify-pass",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            durationMs: 1200,
+            aggregated: "ok",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.verifyEntries).toEqual([
+      expect.objectContaining({
+        kind: "test",
+        status: "passed",
+        exitCode: 0,
+        command: "pnpm test --runInBand",
+        source: "tool-result",
+      }),
+    ]);
+  });
+
+  it("records a failed verify check for failed build commands", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "bash",
+        toolCallId: "tool-verify-fail",
+        args: { command: "npm run build" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "bash",
+        toolCallId: "tool-verify-fail",
+        isError: true,
+        result: {
+          details: {
+            status: "failed",
+            exitCode: 1,
+            durationMs: 2200,
+            aggregated: "failed",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.verifyEntries).toEqual([
+      expect.objectContaining({
+        kind: "build",
+        status: "failed",
+        exitCode: 1,
+        command: "npm run build",
+        source: "tool-result",
+      }),
+    ]);
   });
 });
 

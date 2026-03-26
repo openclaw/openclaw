@@ -45,6 +45,10 @@ export type RunEmbeddedPiAgentParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Shared build-run id inherited across planner / builder / evaluator spawns. */
+  buildRunId?: string | null;
+  /** Stable build-run artifact root inherited across planner / builder / evaluator spawns. */
+  buildRunDir?: string | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

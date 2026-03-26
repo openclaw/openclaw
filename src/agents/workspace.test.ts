@@ -6,9 +6,11 @@ import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_CLAUDE_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
+  DEFAULT_OPENCLAW_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
@@ -62,6 +64,8 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
   expect(names).toContain("AGENTS.md");
+  expect(names).toContain("CLAUDE.md");
+  expect(names).toContain("OPENCLAW.md");
   expect(names).toContain("TOOLS.md");
   expect(names).toContain("SOUL.md");
   expect(names).toContain("IDENTITY.md");
@@ -198,6 +202,34 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "memory");
   });
 
+  it("includes OPENCLAW.md when present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_OPENCLAW_FILENAME, content: "focus" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const openclawFile = files.find((file) => file.name === DEFAULT_OPENCLAW_FILENAME);
+    expect(openclawFile).toEqual({
+      name: DEFAULT_OPENCLAW_FILENAME,
+      path: path.join(tempDir, DEFAULT_OPENCLAW_FILENAME),
+      content: "focus",
+      missing: false,
+    });
+  });
+
+  it("includes CLAUDE.md when present", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_CLAUDE_FILENAME, content: "claude" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const claudeFile = files.find((file) => file.name === DEFAULT_CLAUDE_FILENAME);
+    expect(claudeFile).toEqual({
+      name: DEFAULT_CLAUDE_FILENAME,
+      path: path.join(tempDir, DEFAULT_CLAUDE_FILENAME),
+      content: "claude",
+      missing: false,
+    });
+  });
+
   it("includes memory.md when MEMORY.md is absent", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
@@ -248,6 +280,8 @@ describe("loadWorkspaceBootstrapFiles", () => {
 describe("filterBootstrapFilesForSession", () => {
   const mockFiles: WorkspaceBootstrapFile[] = [
     { name: "AGENTS.md", path: "/w/AGENTS.md", content: "", missing: false },
+    { name: "CLAUDE.md", path: "/w/CLAUDE.md", content: "", missing: false },
+    { name: "OPENCLAW.md", path: "/w/OPENCLAW.md", content: "", missing: false },
     { name: "SOUL.md", path: "/w/SOUL.md", content: "", missing: false },
     { name: "TOOLS.md", path: "/w/TOOLS.md", content: "", missing: false },
     { name: "IDENTITY.md", path: "/w/IDENTITY.md", content: "", missing: false },

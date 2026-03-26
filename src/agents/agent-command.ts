@@ -367,6 +367,8 @@ function runAgentAttempt(params: {
   opts: AgentCommandOpts & { senderIsOwner: boolean };
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
+  buildRunId: string | undefined;
+  buildRunDir: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
@@ -500,6 +502,8 @@ function runAgentAttempt(params: {
     groupChannel: params.runContext.groupChannel,
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
+    buildRunId: params.buildRunId,
+    buildRunDir: params.buildRunDir,
     currentChannelId: params.runContext.currentChannelId,
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
@@ -570,6 +574,8 @@ async function prepareAgentCommandExecution(
     groupChannel: opts.groupChannel,
     groupSpace: opts.groupSpace,
     workspaceDir: opts.workspaceDir,
+    buildRunId: opts.buildRunId,
+    buildRunDir: opts.buildRunDir,
   });
   for (const entry of diagnostics) {
     runtime.log(`[secrets] ${entry}`);
@@ -1159,6 +1165,8 @@ async function agentCommandInternal(
         opts.replyChannel ?? opts.channel,
       );
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
+      const buildRunId = normalizedSpawned.buildRunId ?? sessionEntry?.spawnedBuildRunId;
+      const buildRunDir = normalizedSpawned.buildRunDir ?? sessionEntry?.spawnedBuildRunDir;
       // Keep fallback candidate resolution centralized so session model overrides,
       // per-agent overrides, and default fallbacks stay consistent across callers.
       const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
@@ -1198,6 +1206,8 @@ async function agentCommandInternal(
             opts,
             runContext,
             spawnedBy,
+            buildRunId,
+            buildRunDir,
             messageChannel,
             skillsSnapshot,
             resolvedVerboseLevel,

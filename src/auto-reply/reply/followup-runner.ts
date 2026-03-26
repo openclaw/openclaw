@@ -292,6 +292,9 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          verifyReport: runResult.meta?.verifyReport,
+          failureReport: runResult.meta?.failureReport,
+          retryReport: runResult.meta?.retryReport,
           logLabel: "followup",
         });
       }

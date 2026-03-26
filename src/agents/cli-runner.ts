@@ -176,6 +176,7 @@ export async function runCliAgent(params: {
     provider: params.provider,
     model: modelId,
     workspaceDir,
+    config: params.config,
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
     bootstrapTruncation: buildBootstrapTruncationReportMeta({

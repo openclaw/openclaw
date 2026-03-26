@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { VERSION } from "../../version.js";
+import { DISPLAY_VERSION } from "../../version.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
@@ -7,7 +7,7 @@ import { getSubCliEntries } from "./subcli-descriptors.js";
 function buildRootHelpProgram(): Command {
   const program = new Command();
   configureProgramHelp(program, {
-    programVersion: VERSION,
+    programVersion: DISPLAY_VERSION,
     channelOptions: [],
     messageChannelOptions: "",
     agentChannelOptions: "",

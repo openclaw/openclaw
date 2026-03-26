@@ -3,6 +3,7 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import { SUBAGENT_ROLE_PRESETS } from "../subagent-capabilities.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
@@ -24,6 +25,8 @@ const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
+  rolePreset: optionalStringEnum(SUBAGENT_ROLE_PRESETS),
+  buildRunId: Type.Optional(Type.String()),
   agentId: Type.Optional(Type.String()),
   resumeSessionId: Type.Optional(
     Type.String({
@@ -96,6 +99,11 @@ export function createSessionsSpawnTool(
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
+      const rolePresetRaw = readStringParam(params, "rolePreset");
+      const rolePreset = rolePresetRaw
+        ? SUBAGENT_ROLE_PRESETS.find((entry) => entry === rolePresetRaw)
+        : undefined;
+      const buildRunId = readStringParam(params, "buildRunId");
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
@@ -177,6 +185,8 @@ export function createSessionsSpawnTool(
         {
           task,
           label: label || undefined,
+          rolePreset,
+          buildRunId,
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
@@ -203,6 +213,8 @@ export function createSessionsSpawnTool(
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          buildRunId: opts?.buildRunId,
+          buildRunDir: opts?.buildRunDir,
         },
       );
 

@@ -113,6 +113,7 @@ export async function resolveBootstrapContextForRun(params: {
     maxChars: resolveBootstrapMaxChars(params.config),
     totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
+    runKind: params.runKind,
   });
   return { bootstrapFiles, contextFiles };
 }

@@ -4,6 +4,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  DISPLAY_VERSION,
+  formatDisplayVersion,
+  readDisplayVersionMarkerFromBuildInfoForModuleUrl,
   VERSION,
   readVersionFromBuildInfoForModuleUrl,
   readVersionFromPackageJsonForModuleUrl,
@@ -72,6 +75,17 @@ describe("version resolution", () => {
       expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
       expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBe("4.5.6");
       expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("4.5.6");
+    });
+  });
+
+  it("reads display version marker from build-info when present", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "build-info.json", {
+        version: "4.5.6",
+        displayVersionMarker: "frank-local",
+      });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(readDisplayVersionMarkerFromBuildInfoForModuleUrl(moduleUrl)).toBe("frank-local");
     });
   });
 
@@ -153,6 +167,12 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
   });
 
+  it("formats display version only when a marker is present", () => {
+    expect(formatDisplayVersion("2026.3.24", undefined)).toBe("2026.3.24");
+    expect(formatDisplayVersion("2026.3.24", " ")).toBe("2026.3.24");
+    expect(formatDisplayVersion("2026.3.24", "frank-local")).toBe("2026.3.24 [frank-local]");
+  });
+
   it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
@@ -180,5 +200,9 @@ describe("version resolution", () => {
         "fallback",
       ),
     ).toBe(VERSION);
+  });
+
+  it("exports a display version that starts with the runtime version", () => {
+    expect(DISPLAY_VERSION.startsWith(VERSION)).toBe(true);
   });
 });

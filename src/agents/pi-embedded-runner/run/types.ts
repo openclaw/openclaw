@@ -2,7 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type {
+  SessionSystemPromptReport,
+  SessionVerifyReport,
+} from "../../../config/sessions/types.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
@@ -59,6 +62,7 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
   successfulCronAdds?: number;
+  verifyReport?: SessionVerifyReport;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;
   compactionCount?: number;

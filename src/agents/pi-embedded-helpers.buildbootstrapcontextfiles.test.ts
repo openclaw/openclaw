@@ -39,6 +39,32 @@ describe("buildBootstrapContextFiles", () => {
     const files = [makeFile({ content: "   \n  " })];
     expect(buildBootstrapContextFiles(files)).toEqual([]);
   });
+  it("slices HEARTBEAT.md outside heartbeat runs", () => {
+    const files = [makeFile({ name: "HEARTBEAT.md", path: "/tmp/HEARTBEAT.md", content: "ping" })];
+    expect(buildBootstrapContextFiles(files)).toEqual([
+      {
+        path: "/tmp/HEARTBEAT.md",
+        content: "",
+        policySlicing: {
+          applied: true,
+          mode: "file",
+          originalChars: 4,
+          slicedChars: 4,
+          retainedChars: 0,
+          reasons: ["heartbeat-only file excluded outside heartbeat runs"],
+        },
+      },
+    ]);
+  });
+  it("keeps HEARTBEAT.md during heartbeat runs", () => {
+    const files = [makeFile({ name: "HEARTBEAT.md", path: "/tmp/HEARTBEAT.md", content: "ping" })];
+    expect(buildBootstrapContextFiles(files, { runKind: "heartbeat" })).toEqual([
+      {
+        path: "/tmp/HEARTBEAT.md",
+        content: "ping",
+      },
+    ]);
+  });
   it("truncates large bootstrap content", () => {
     const head = `HEAD-${"a".repeat(600)}`;
     const tail = `${"b".repeat(300)}-TAIL`;

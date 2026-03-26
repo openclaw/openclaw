@@ -9,6 +9,9 @@ import {
 } from "../../scripts/write-build-info.js";
 
 const tempDirs: string[] = [];
+type ExecSyncLike = NonNullable<
+  NonNullable<Parameters<typeof resolveDisplayVersionMarker>[0]>["execSyncImpl"]
+>;
 
 async function makeTempRepo() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-write-build-info-"));
@@ -27,7 +30,7 @@ afterEach(async () => {
 
 describe("write-build-info", () => {
   it("prefers an explicit display version marker over inferred dirty state", () => {
-    const execSyncImpl = vi.fn(() => Buffer.from(" M src/entry.ts\n"));
+    const execSyncImpl = vi.fn(() => Buffer.from(" M src/entry.ts\n")) as unknown as ExecSyncLike;
 
     expect(
       resolveDisplayVersionMarker({
@@ -44,7 +47,9 @@ describe("write-build-info", () => {
       resolveDisplayVersionMarker({
         rootDir: "/tmp/openclaw",
         env: {},
-        execSyncImpl: vi.fn(() => Buffer.from("?? src/agents/task-profile.ts\n")),
+        execSyncImpl: vi.fn(() =>
+          Buffer.from("?? src/agents/task-profile.ts\n"),
+        ) as unknown as ExecSyncLike,
       }),
     ).toBe("dirty");
   });
@@ -60,7 +65,7 @@ describe("write-build-info", () => {
         return Buffer.from(" M src/entry.ts\n");
       }
       throw new Error(`Unexpected command: ${command}`);
-    });
+    }) as unknown as ExecSyncLike;
 
     const buildInfo = writeBuildInfo({
       rootDir,
@@ -95,7 +100,7 @@ describe("write-build-info", () => {
           return Buffer.from("");
         }
         throw new Error(`Unexpected command: ${command}`);
-      }),
+      }) as unknown as ExecSyncLike,
     });
 
     expect(buildInfo.displayVersionMarker).toBeNull();

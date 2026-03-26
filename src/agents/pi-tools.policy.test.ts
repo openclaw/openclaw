@@ -204,6 +204,157 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
+  it("applies planner role preset as a read-heavy tool surface", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-planner-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:planner": {
+            sessionId: "planner-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            subagentRolePreset: "planner",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:planner");
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("web_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("edit", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("write", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+  });
+
+  it("lets explicit allowlists override planner role defaults", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-planner-allow-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:planner": {
+            sessionId: "planner-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            subagentRolePreset: "planner",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:planner", {
+      explicitAllow: ["edit", "exec"],
+    });
+    expect(isToolAllowedByPolicyName("edit", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+  });
+
+  it("applies builder role preset as an edit-and-exec surface", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-builder-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:builder": {
+            sessionId: "builder-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            subagentRolePreset: "builder",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:builder");
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("edit", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("write", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("process", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(false);
+  });
+
+  it("applies evaluator role preset as an inspect-and-verify surface", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-evaluator-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:evaluator": {
+            sessionId: "evaluator-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            subagentRolePreset: "evaluator",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:evaluator");
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("process", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("edit", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("write", policy)).toBe(false);
+  });
+
   it("defaults to leaf behavior when no depth is provided", () => {
     const policy = resolveSubagentToolPolicy(baseCfg);
     // Default depth=1, maxSpawnDepth=2 → orchestrator

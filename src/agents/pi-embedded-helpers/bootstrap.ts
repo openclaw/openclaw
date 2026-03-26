@@ -88,6 +88,7 @@ export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
 const BOOTSTRAP_TAIL_RATIO = 0.2;
+const HEARTBEAT_BOOTSTRAP_FILENAME = "HEARTBEAT.md";
 
 type TrimBootstrapResult = {
   content: string;
@@ -197,13 +198,19 @@ export async function ensureSessionHeader(params: {
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+    runKind?: "default" | "heartbeat" | "cron";
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
     1,
     Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
   );
+  const runKind = opts?.runKind ?? "default";
   let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
@@ -230,6 +237,22 @@ export function buildBootstrapContextFiles(
       });
       continue;
     }
+    const rawContent = (file.content ?? "").trimEnd();
+    if (file.name === HEARTBEAT_BOOTSTRAP_FILENAME && runKind !== "heartbeat") {
+      result.push({
+        path: pathValue,
+        content: "",
+        policySlicing: {
+          applied: true,
+          mode: "file",
+          originalChars: rawContent.length,
+          slicedChars: rawContent.length,
+          retainedChars: 0,
+          reasons: ["heartbeat-only file excluded outside heartbeat runs"],
+        },
+      });
+      continue;
+    }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
       opts?.warn?.(
         `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
@@ -237,7 +260,7 @@ export function buildBootstrapContextFiles(
       break;
     }
     const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const trimmed = trimBootstrapContent(rawContent, file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {
       continue;

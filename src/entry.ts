@@ -107,9 +107,11 @@ if (
       return false;
     }
     Promise.all([import("./version.js"), import("./infra/git-commit.js")])
-      .then(([{ VERSION }, { resolveCommitHash }]) => {
+      .then(([{ DISPLAY_VERSION }, { resolveCommitHash }]) => {
         const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+        console.log(
+          commit ? `OpenClaw ${DISPLAY_VERSION} (${commit})` : `OpenClaw ${DISPLAY_VERSION}`,
+        );
         process.exit(0);
       })
       .catch((error) => {
