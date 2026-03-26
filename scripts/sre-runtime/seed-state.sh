@@ -165,8 +165,8 @@ normalize_slack_incident_channels_json() {
 
 apply_model_env_override() {
   # Allow deploy-time model selection via environment variables:
-  #   OPENCLAW_SRE_MODEL_PRIMARY   – primary model (e.g. "openai/gpt-5.4")
-  #   OPENCLAW_SRE_MODEL_FALLBACKS – comma-separated fallback list (e.g. "anthropic/claude-opus-4-6")
+  #   OPENCLAW_SRE_MODEL_PRIMARY   – primary model (e.g. "anthropic/claude-opus-4-6")
+  #   OPENCLAW_SRE_MODEL_FALLBACKS – comma-separated fallback list (e.g. "openai-codex/gpt-5.4")
   local primary="${OPENCLAW_SRE_MODEL_PRIMARY:-}"
   local fallbacks_raw="${OPENCLAW_SRE_MODEL_FALLBACKS:-}"
 

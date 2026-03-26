@@ -3682,8 +3682,8 @@ if [[ "$incident" -eq 1 && "$HAS_LIB_RCA_LLM" -eq 1 ]] && declare -F run_step_11
 
   if [[ "$rca_skip" -eq 0 ]]; then
     if [[ "$rca_mode_effective" == "dual" && "${RCA_CHAIN_ENABLED:-0}" != "1" ]]; then
-      rca_dual_a="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" "codex" 2>/dev/null || true)"
-      rca_dual_b="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" "claude" 2>/dev/null || true)"
+      rca_dual_a="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" "claude" 2>/dev/null || true)"
+      rca_dual_b="$(run_step_11 "$evidence_bundle" "single" "incident" "$linear_memory_output" "" "codex" 2>/dev/null || true)"
       llm_result_json="$rca_dual_a"
       if [[ -n "$rca_dual_a" && -n "$rca_dual_b" && "$HAS_LIB_RCA_CROSSREVIEW" -eq 1 ]] && declare -F run_cross_review >/dev/null 2>&1; then
         cross_a="$rca_dual_a"

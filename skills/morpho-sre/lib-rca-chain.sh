@@ -826,16 +826,16 @@ _run_rca_chain_single_provider() {
 
 _chain_dual_compare_and_merge() {
   local evidence="$1"
-  local codex_rca="$2"
-  local claude_rca="$3"
+  local claude_rca="$2"
+  local codex_rca="$3"
   local max_rounds="$4"
-  local codex_available="$5"
-  local claude_available="$6"
+  local claude_available="$5"
+  local codex_available="$6"
   local round=0
   local cross_a cross_b merged next_a next_b
 
-  cross_a="$codex_rca"
-  cross_b="$claude_rca"
+  cross_a="$claude_rca"
+  cross_b="$codex_rca"
 
   if ! [[ "$max_rounds" =~ ^[0-9]+$ ]]; then
     max_rounds=6
@@ -881,8 +881,8 @@ _chain_dual_compare_and_merge() {
       return 0
     fi
 
-    next_a="$(_chain_dual_review_refine "codex" "$evidence" "$cross_b" "$cross_a" "$round" 2>/dev/null || true)"
-    next_b="$(_chain_dual_review_refine "claude" "$evidence" "$cross_a" "$cross_b" "$round" 2>/dev/null || true)"
+    next_a="$(_chain_dual_review_refine "claude" "$evidence" "$cross_b" "$cross_a" "$round" 2>/dev/null || true)"
+    next_b="$(_chain_dual_review_refine "codex" "$evidence" "$cross_a" "$cross_b" "$round" 2>/dev/null || true)"
     if _chain_is_json "$next_a"; then
       cross_a="$next_a"
     fi
@@ -899,48 +899,48 @@ _run_rca_chain_dual_provider() {
   local service_ctx="$3"
   local incident_memory="$4"
   local max_rounds="${RCA_CHAIN_DUAL_MAX_REVIEW_ROUNDS:-6}"
-  local tmp_dir codex_rca claude_rca
-  local codex_available=0
+  local tmp_dir claude_rca codex_rca
   local claude_available=0
-  local pid_codex pid_claude
+  local codex_available=0
+  local pid_claude pid_codex
 
   tmp_dir="$(mktemp -d)"
-  (
-    _CHAIN_ACTIVE_PROVIDER="codex"
-    _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
-  ) >"${tmp_dir}/codex.json" 2>"${tmp_dir}/codex.err" &
-  pid_codex=$!
   (
     _CHAIN_ACTIVE_PROVIDER="claude"
     _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
   ) >"${tmp_dir}/claude.json" 2>"${tmp_dir}/claude.err" &
   pid_claude=$!
+  (
+    _CHAIN_ACTIVE_PROVIDER="codex"
+    _run_rca_chain_single_provider "$evidence" "$severity" "$service_ctx" "$incident_memory"
+  ) >"${tmp_dir}/codex.json" 2>"${tmp_dir}/codex.err" &
+  pid_codex=$!
 
-  wait "$pid_codex" >/dev/null 2>&1 || true
   wait "$pid_claude" >/dev/null 2>&1 || true
+  wait "$pid_codex" >/dev/null 2>&1 || true
 
-  codex_rca="$(cat "${tmp_dir}/codex.json" 2>/dev/null || true)"
   claude_rca="$(cat "${tmp_dir}/claude.json" 2>/dev/null || true)"
+  codex_rca="$(cat "${tmp_dir}/codex.json" 2>/dev/null || true)"
   rm -rf "$tmp_dir"
 
-  if ! _chain_is_json "$codex_rca"; then
-    codex_rca=""
-  else
-    codex_available=1
-  fi
   if ! _chain_is_json "$claude_rca"; then
     claude_rca=""
   else
     claude_available=1
   fi
+  if ! _chain_is_json "$codex_rca"; then
+    codex_rca=""
+  else
+    codex_available=1
+  fi
 
   _chain_dual_compare_and_merge \
     "$evidence" \
-    "$codex_rca" \
     "$claude_rca" \
+    "$codex_rca" \
     "$max_rounds" \
-    "$codex_available" \
-    "$claude_available"
+    "$claude_available" \
+    "$codex_available"
 }
 
 run_rca_chain() {
