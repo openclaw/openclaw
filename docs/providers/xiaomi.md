@@ -2,7 +2,7 @@
 summary: "Use Xiaomi MiMo models with OpenClaw"
 read_when:
   - You want Xiaomi MiMo models in OpenClaw
-  - You need XIAOMI_API_KEY setup
+  - You need MIMO_API_KEY or XIAOMI_API_KEY setup
 title: "Xiaomi MiMo"
 ---
 
@@ -20,21 +20,22 @@ bundled `xiaomi` provider with that key.
 - **mimo-v2-omni**: reasoning multimodal model with text and image input, 262144-token context window
 - Base URL: `https://api.xiaomimimo.com/v1`
 - API: `openai-completions`
-- Authorization: `Bearer $XIAOMI_API_KEY`
+- Authorization: `Bearer $MIMO_API_KEY` or `Bearer $XIAOMI_API_KEY` (either env var is accepted)
 
 ## CLI setup
 
 ```bash
 openclaw onboard --auth-choice xiaomi-api-key
 # or non-interactive
-openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
+openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$MIMO_API_KEY"
+# or: export XIAOMI_API_KEY=... (also detected)
 ```
 
 ## Config snippet
 
 ```json5
 {
-  env: { XIAOMI_API_KEY: "your-key" },
+  env: { MIMO_API_KEY: "your-key" },
   agents: { defaults: { model: { primary: "xiaomi/mimo-v2-flash" } } },
   models: {
     mode: "merge",
@@ -42,7 +43,7 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
       xiaomi: {
         baseUrl: "https://api.xiaomimimo.com/v1",
         api: "openai-completions",
-        apiKey: "XIAOMI_API_KEY",
+        apiKey: "${MIMO_API_KEY}",
         models: [
           {
             id: "mimo-v2-flash",
@@ -82,5 +83,6 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 
 - Default model ref: `xiaomi/mimo-v2-flash`.
 - Additional built-in models: `xiaomi/mimo-v2-pro`, `xiaomi/mimo-v2-omni`.
-- The provider is injected automatically when `XIAOMI_API_KEY` is set (or an auth profile exists).
+- The provider is injected automatically when `MIMO_API_KEY` or `XIAOMI_API_KEY` is set (or an auth profile exists).
+- You can use `env: { XIAOMI_API_KEY: "..." }` and `apiKey: "${XIAOMI_API_KEY}"` instead; both env names are equivalent for auth resolution.
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.

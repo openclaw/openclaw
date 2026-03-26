@@ -19,7 +19,7 @@ export default defineSingleProviderPluginEntry({
         hint: "API key",
         optionKey: "xiaomiApiKey",
         flagName: "--xiaomi-api-key",
-        envVar: "XIAOMI_API_KEY",
+        envVar: "MIMO_API_KEY",
         promptMessage: "Enter Xiaomi API key",
         defaultModel: XIAOMI_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyXiaomiConfig(cfg),
@@ -30,7 +30,7 @@ export default defineSingleProviderPluginEntry({
     },
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.XIAOMI_API_KEY],
+        envDirect: [ctx.env.MIMO_API_KEY, ctx.env.XIAOMI_API_KEY],
       });
       return apiKey ? { token: apiKey } : null;
     },
