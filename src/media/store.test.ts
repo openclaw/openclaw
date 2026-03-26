@@ -1,4 +1,6 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
@@ -450,6 +452,104 @@ describe("media store", () => {
         // Should be UUID-only pattern (legacy behavior)
         expect(saved.id).toMatch(/^[a-f0-9-]{36}\.txt$/);
         expect(saved.id).not.toContain("---");
+      });
+    });
+  });
+
+  describe("downloadToFile resource cleanup", () => {
+    const fakePinnedHostname = {
+      hostname: "example.com",
+      addresses: ["127.0.0.1"],
+      lookup: (() => {}) as never,
+    };
+
+    /** Build a fake HTTP request function that emits a controllable response. */
+    function makeFakeRequest(
+      respondWith: (
+        res: EventEmitter & { statusCode: number; headers: Record<string, string> },
+      ) => void,
+    ) {
+      return (_url: unknown, _opts: unknown, cb: (res: unknown) => void): http.ClientRequest => {
+        const req = new EventEmitter() as EventEmitter & {
+          end: () => void;
+          destroy: (err?: Error) => void;
+        };
+        req.end = () => {
+          const res = Object.assign(new EventEmitter(), {
+            statusCode: 200,
+            headers: { "content-type": "text/plain" } as Record<string, string>,
+            resume: () => {},
+          });
+          cb(res);
+          respondWith(res as never);
+        };
+        req.destroy = (err?: Error) => {
+          req.emit("error", err ?? new Error("destroyed"));
+        };
+        return req as unknown as http.ClientRequest;
+      };
+    }
+
+    afterEach(() => {
+      store.setMediaStoreNetworkDepsForTest();
+    });
+
+    it("cleans up temp file when download exceeds size limit", async () => {
+      await withTempStore(async (store) => {
+        const mediaDir = await store.ensureMediaDir();
+
+        store.setMediaStoreNetworkDepsForTest({
+          httpsRequest: makeFakeRequest((res) => {
+            // Emit a chunk larger than MEDIA_MAX_BYTES to trigger the limit.
+            const huge = Buffer.alloc(store.MEDIA_MAX_BYTES + 1);
+            res.emit("data", huge);
+            res.emit("error", new Error("Media exceeds 5MB limit"));
+            res.emit("end");
+          }) as never,
+          resolvePinnedHostname: async () => fakePinnedHostname,
+        });
+
+        await expect(store.saveMediaSource("https://example.com/big.bin")).rejects.toThrow();
+
+        // Verify no .tmp files remain in the media directory.
+        const entries = await fs.readdir(mediaDir);
+        const tmpFiles = entries.filter((e) => e.endsWith(".tmp"));
+        expect(tmpFiles).toHaveLength(0);
+      });
+    });
+
+    it("cleans up temp file on HTTP error status", async () => {
+      await withTempStore(async (store) => {
+        const mediaDir = await store.ensureMediaDir();
+
+        store.setMediaStoreNetworkDepsForTest({
+          httpsRequest: ((_url: unknown, _opts: unknown, cb: (res: unknown) => void) => {
+            const req = new EventEmitter() as EventEmitter & {
+              end: () => void;
+              destroy: () => void;
+            };
+            req.end = () => {
+              const res = Object.assign(new EventEmitter(), {
+                statusCode: 500,
+                headers: {} as Record<string, string>,
+                resume: () => {},
+              });
+              cb(res);
+            };
+            req.destroy = () => {};
+            return req as unknown as http.ClientRequest;
+          }) as never,
+          resolvePinnedHostname: async () => fakePinnedHostname,
+        });
+
+        await expect(store.saveMediaSource("https://example.com/fail.bin")).rejects.toThrow(
+          "HTTP 500",
+        );
+
+        // Verify no .tmp files remain.
+        const entries = await fs.readdir(mediaDir);
+        const tmpFiles = entries.filter((e) => e.endsWith(".tmp"));
+        expect(tmpFiles).toHaveLength(0);
       });
     });
   });

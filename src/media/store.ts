@@ -196,22 +196,33 @@ async function downloadToFile(
       return;
     }
     const requestImpl = parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
+    let settled = false;
+    const settle = <T>(fn: (v: T) => void, v: T) => {
+      if (!settled) {
+        settled = true;
+        fn(v);
+      }
+    };
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
           // Follow redirects
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+            // Consume the redirect response body to free the socket.
+            res.resume();
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+              settle(reject, new Error(`Redirect loop or missing Location header`));
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            settle(resolve, downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+            // Consume the error response body to free the socket.
+            res.resume();
+            settle(reject, new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
             return;
           }
           let total = 0;
@@ -225,26 +236,38 @@ async function downloadToFile(
               sniffLen += chunk.length;
             }
             if (total > MAX_BYTES) {
+              // Destroy the write stream before aborting the request so file
+              // descriptors are released promptly.
+              out.destroy();
               req.destroy(new Error("Media exceeds 5MB limit"));
             }
+          });
+          // Catch response-level errors (e.g. premature close, decompression
+          // failures) that may fire before pipeline wires up its own handler.
+          res.on("error", (err) => {
+            out.destroy();
+            settle(reject, err);
           });
           pipeline(res, out)
             .then(() => {
               const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
               const rawHeader = res.headers["content-type"];
               const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
+              settle(resolve, {
                 headerMime,
                 sniffBuffer,
                 size: total,
               });
             })
-            .catch(reject);
+            .catch((err) => {
+              out.destroy();
+              settle(reject, err);
+            });
         });
-        req.on("error", reject);
+        req.on("error", (err) => settle(reject, err));
         req.end();
       })
-      .catch(reject);
+      .catch((err) => settle(reject, err));
   });
 }
 
@@ -354,9 +377,17 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
-      downloadToFile(source, tempDest, headers),
-    );
+    let downloadResult: { headerMime?: string; sniffBuffer: Buffer; size: number };
+    try {
+      downloadResult = await retryAfterRecreatingDir(dir, () =>
+        downloadToFile(source, tempDest, headers),
+      );
+    } catch (err) {
+      // Clean up the partial temp file on download failure.
+      await fs.rm(tempDest, { force: true }).catch(() => {});
+      throw err;
+    }
+    const { headerMime, sniffBuffer, size } = downloadResult;
     const mime = await detectMime({
       buffer: sniffBuffer,
       headerMime,
