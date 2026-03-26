@@ -1,46 +1,7 @@
-import amazonBedrockPlugin from "../../../extensions/amazon-bedrock/index.js";
-import anthropicPlugin from "../../../extensions/anthropic/index.js";
-import byteplusPlugin from "../../../extensions/byteplus/index.js";
-import chutesPlugin from "../../../extensions/chutes/index.js";
-import cloudflareAiGatewayPlugin from "../../../extensions/cloudflare-ai-gateway/index.js";
-import copilotProxyPlugin from "../../../extensions/copilot-proxy/index.js";
-import deepgramPlugin from "../../../extensions/deepgram/index.js";
-import deepseekPlugin from "../../../extensions/deepseek/index.js";
-import elevenLabsPlugin from "../../../extensions/elevenlabs/index.js";
-import falPlugin from "../../../extensions/fal/index.js";
-import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
-import googlePlugin from "../../../extensions/google/index.js";
-import groqPlugin from "../../../extensions/groq/index.js";
-import huggingFacePlugin from "../../../extensions/huggingface/index.js";
-import kilocodePlugin from "../../../extensions/kilocode/index.js";
-import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
-import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
-import microsoftPlugin from "../../../extensions/microsoft/index.js";
-import minimaxPlugin from "../../../extensions/minimax/index.js";
-import mistralPlugin from "../../../extensions/mistral/index.js";
-import modelStudioPlugin from "../../../extensions/modelstudio/index.js";
-import moonshotPlugin from "../../../extensions/moonshot/index.js";
-import nvidiaPlugin from "../../../extensions/nvidia/index.js";
-import ollamaPlugin from "../../../extensions/ollama/index.js";
-import openAIPlugin from "../../../extensions/openai/index.js";
-import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
-import opencodePlugin from "../../../extensions/opencode/index.js";
-import openrouterPlugin from "../../../extensions/openrouter/index.js";
-import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import sglangPlugin from "../../../extensions/sglang/index.js";
-import syntheticPlugin from "../../../extensions/synthetic/index.js";
-import togetherPlugin from "../../../extensions/together/index.js";
-import venicePlugin from "../../../extensions/venice/index.js";
-import vercelAiGatewayPlugin from "../../../extensions/vercel-ai-gateway/index.js";
-import vllmPlugin from "../../../extensions/vllm/index.js";
-import volcenginePlugin from "../../../extensions/volcengine/index.js";
-import xaiPlugin from "../../../extensions/xai/index.js";
-import xiaomiPlugin from "../../../extensions/xiaomi/index.js";
-import zaiPlugin from "../../../extensions/zai/index.js";
 import { bundledWebSearchPluginRegistrations } from "../../bundled-web-search-registry.js";
+import { BUNDLED_PLUGIN_ENTRIES } from "../bundled-plugin-entries.js";
 import { createCapturedPluginRegistration } from "../captured-registration.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { resolvePluginProviders } from "../provider-auth-choice.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -118,28 +79,6 @@ function dedupePlugins<T extends RegistrablePlugin>(
 
 export let providerContractLoadError: Error | undefined;
 
-function loadBundledProviderRegistry(): ProviderContractEntry[] {
-  try {
-    providerContractLoadError = undefined;
-    return resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
-      cache: false,
-      activate: false,
-    })
-      .filter((provider: ProviderPlugin): provider is ProviderPlugin & { pluginId: string } =>
-        Boolean(provider.pluginId),
-      )
-      .map((provider: ProviderPlugin & { pluginId: string }) => ({
-        pluginId: provider.pluginId,
-        provider,
-      }));
-  } catch (error) {
-    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    return [];
-  }
-}
-
 function createLazyArrayView<T>(load: () => T[]): T[] {
   return new Proxy([] as T[], {
     get(_target, prop) {
@@ -181,23 +120,21 @@ let mediaUnderstandingProviderContractRegistryCache:
 let imageGenerationProviderContractRegistryCache: ImageGenerationProviderContractEntry[] | null =
   null;
 let pluginRegistrationContractRegistryCache: PluginRegistrationContractEntry[] | null = null;
-let providerRegistrationEntriesLoaded = false;
 
 function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
-    providerContractRegistryCache = buildCapabilityContractRegistry({
-      plugins: bundledProviderPlugins,
-      select: (captured) => captured.providers,
-    }).map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-    }));
-  }
-  if (!providerRegistrationEntriesLoaded) {
-    const registrationEntries = loadPluginRegistrationContractRegistry();
-    if (!providerRegistrationEntriesLoaded) {
-      mergeProviderContractRegistrations(registrationEntries, providerContractRegistryCache);
-      providerRegistrationEntriesLoaded = true;
+    try {
+      providerContractLoadError = undefined;
+      providerContractRegistryCache = buildCapabilityContractRegistry({
+        plugins: bundledProviderPlugins,
+        select: (captured) => captured.providers,
+      }).map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      }));
+    } catch (error) {
+      providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+      providerContractRegistryCache = [];
     }
   }
   return providerContractRegistryCache;
@@ -243,7 +180,7 @@ export function requireProviderContractProvider(providerId: string): ProviderPlu
   const provider = uniqueProviderContractProviders.find((entry) => entry.id === providerId);
   if (!provider) {
     if (!providerContractLoadError) {
-      loadBundledProviderRegistry();
+      loadProviderContractRegistry();
     }
     if (providerContractLoadError) {
       throw new Error(
@@ -338,91 +275,51 @@ export const mediaUnderstandingProviderContractRegistry: MediaUnderstandingProvi
 export const imageGenerationProviderContractRegistry: ImageGenerationProviderContractEntry[] =
   createLazyArrayView(loadImageGenerationProviderContractRegistry);
 
-const bundledProviderPlugins = dedupePlugins([
-  amazonBedrockPlugin,
-  anthropicPlugin,
-  byteplusPlugin,
-  chutesPlugin,
-  cloudflareAiGatewayPlugin,
-  copilotProxyPlugin,
-  deepseekPlugin,
-  githubCopilotPlugin,
-  falPlugin,
-  googlePlugin,
-  huggingFacePlugin,
-  kilocodePlugin,
-  kimiCodingPlugin,
-  microsoftFoundryPlugin,
-  minimaxPlugin,
-  mistralPlugin,
-  modelStudioPlugin,
-  moonshotPlugin,
-  nvidiaPlugin,
-  ollamaPlugin,
-  openAIPlugin,
-  opencodePlugin,
-  opencodeGoPlugin,
-  openrouterPlugin,
-  qianfanPlugin,
-  sglangPlugin,
-  syntheticPlugin,
-  togetherPlugin,
-  venicePlugin,
-  vercelAiGatewayPlugin,
-  vllmPlugin,
-  volcenginePlugin,
-  xaiPlugin,
-  xiaomiPlugin,
-  zaiPlugin,
-]);
-
 const bundledRegistrablePluginsById = new Map(
-  dedupePlugins([
-    ...bundledProviderPlugins,
-    elevenLabsPlugin,
-    microsoftPlugin,
-    deepgramPlugin,
-    groqPlugin,
-    ...bundledWebSearchPlugins,
-  ]).map((plugin) => [plugin.id, plugin]),
+  dedupePlugins([...BUNDLED_PLUGIN_ENTRIES, ...bundledWebSearchPlugins]).map((plugin) => [
+    plugin.id,
+    plugin,
+  ]),
 );
 
-function resolveBundledCapabilityPluginIds(
-  capability: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders",
+function resolveBundledManifestPluginIds(
+  predicate: (plugin: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]) => boolean,
 ): string[] {
   return loadPluginManifestRegistry({})
-    .plugins.filter(
-      (plugin) => plugin.origin === "bundled" && (plugin[capability]?.length ?? 0) > 0,
-    )
+    .plugins.filter((plugin) => plugin.origin === "bundled" && predicate(plugin))
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveBundledCapabilityPlugins(
-  capability: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders",
+function resolveBundledRegistrablePlugins(
+  predicate: (plugin: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number]) => boolean,
 ): RegistrablePlugin[] {
-  return resolveBundledCapabilityPluginIds(capability).flatMap((pluginId) => {
+  return resolveBundledManifestPluginIds(predicate).flatMap((pluginId) => {
     const plugin = bundledRegistrablePluginsById.get(pluginId);
     return plugin ? [plugin] : [];
   });
 }
 
-const bundledSpeechPlugins = resolveBundledCapabilityPlugins("speechProviders");
-const bundledMediaUnderstandingPlugins = resolveBundledCapabilityPlugins(
-  "mediaUnderstandingProviders",
+const bundledProviderPlugins = resolveBundledRegistrablePlugins(
+  (plugin) => plugin.providers.length > 0,
 );
-const bundledImageGenerationPlugins = resolveBundledCapabilityPlugins("imageGenerationProviders");
+const bundledSpeechPlugins = resolveBundledRegistrablePlugins(
+  (plugin) => (plugin.speechProviders?.length ?? 0) > 0,
+);
+const bundledMediaUnderstandingPlugins = resolveBundledRegistrablePlugins(
+  (plugin) => (plugin.mediaUnderstandingProviders?.length ?? 0) > 0,
+);
+const bundledImageGenerationPlugins = resolveBundledRegistrablePlugins(
+  (plugin) => (plugin.imageGenerationProviders?.length ?? 0) > 0,
+);
 
 const bundledPluginRegistrationList = dedupePlugins([
+  ...bundledProviderPlugins,
   ...bundledSpeechPlugins,
   ...bundledMediaUnderstandingPlugins,
   ...bundledImageGenerationPlugins,
   ...bundledWebSearchPlugins,
 ]);
-
-function mergeIds(existing: string[], next: string[]): string[] {
-  return next.length > 0 ? next : existing;
-}
 
 function upsertPluginRegistrationContractEntry(
   entries: PluginRegistrationContractEntry[],
@@ -433,46 +330,27 @@ function upsertPluginRegistrationContractEntry(
     entries.push(next);
     return;
   }
-  existing.cliBackendIds = mergeIds(existing.cliBackendIds, next.cliBackendIds);
-  existing.providerIds = mergeIds(existing.providerIds, next.providerIds);
-  existing.speechProviderIds = mergeIds(existing.speechProviderIds, next.speechProviderIds);
-  existing.mediaUnderstandingProviderIds = mergeIds(
-    existing.mediaUnderstandingProviderIds,
-    next.mediaUnderstandingProviderIds,
+  existing.cliBackendIds = [
+    ...new Set([...existing.cliBackendIds, ...next.cliBackendIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  existing.providerIds = [...new Set([...existing.providerIds, ...next.providerIds])].toSorted(
+    (left, right) => left.localeCompare(right),
   );
-  existing.imageGenerationProviderIds = mergeIds(
-    existing.imageGenerationProviderIds,
-    next.imageGenerationProviderIds,
+  existing.speechProviderIds = [
+    ...new Set([...existing.speechProviderIds, ...next.speechProviderIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  existing.mediaUnderstandingProviderIds = [
+    ...new Set([...existing.mediaUnderstandingProviderIds, ...next.mediaUnderstandingProviderIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  existing.imageGenerationProviderIds = [
+    ...new Set([...existing.imageGenerationProviderIds, ...next.imageGenerationProviderIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  existing.webSearchProviderIds = [
+    ...new Set([...existing.webSearchProviderIds, ...next.webSearchProviderIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
+  existing.toolNames = [...new Set([...existing.toolNames, ...next.toolNames])].toSorted(
+    (left, right) => left.localeCompare(right),
   );
-  existing.webSearchProviderIds = mergeIds(
-    existing.webSearchProviderIds,
-    next.webSearchProviderIds,
-  );
-  existing.toolNames = mergeIds(existing.toolNames, next.toolNames);
-}
-
-function mergeProviderContractRegistrations(
-  registrationEntries: PluginRegistrationContractEntry[],
-  providerEntries: ProviderContractEntry[],
-): void {
-  const byPluginId = new Map<string, string[]>();
-  for (const entry of providerEntries) {
-    const providerIds = byPluginId.get(entry.pluginId) ?? [];
-    providerIds.push(entry.provider.id);
-    byPluginId.set(entry.pluginId, providerIds);
-  }
-  for (const [pluginId, providerIds] of byPluginId) {
-    upsertPluginRegistrationContractEntry(registrationEntries, {
-      pluginId,
-      cliBackendIds: [],
-      providerIds: providerIds.toSorted((left, right) => left.localeCompare(right)),
-      speechProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      imageGenerationProviderIds: [],
-      webSearchProviderIds: [],
-      toolNames: [],
-    });
-  }
 }
 
 function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEntry[] {
@@ -496,13 +374,6 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
       });
     }
     pluginRegistrationContractRegistryCache = entries;
-  }
-  if (providerContractRegistryCache && !providerRegistrationEntriesLoaded) {
-    mergeProviderContractRegistrations(
-      pluginRegistrationContractRegistryCache,
-      providerContractRegistryCache,
-    );
-    providerRegistrationEntriesLoaded = true;
   }
   return pluginRegistrationContractRegistryCache;
 }
