@@ -420,11 +420,11 @@ function resolveAgentResponseUsage(result: unknown): {
   if (!usage) {
     return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   }
-  const input = usage.input ?? 0;
-  const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const total = usage.total ?? input + output + cacheRead + cacheWrite;
+  const input = Math.max(0, usage.input ?? 0);
+  const output = Math.max(0, usage.output ?? 0);
+  const cacheRead = Math.max(0, usage.cacheRead ?? 0);
+  const cacheWrite = Math.max(0, usage.cacheWrite ?? 0);
+  const total = Math.max(0, usage.total ?? input + output + cacheRead + cacheWrite);
   return {
     prompt_tokens: input + cacheRead,
     completion_tokens: output,
