@@ -248,6 +248,7 @@ export type CompactionStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
+  message?: string;
 };
 
 export type FallbackStatus = {
@@ -287,16 +288,28 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       completedAt: null,
     };
   } else if (phase === "end") {
-    host.compactionStatus = {
-      active: false,
-      startedAt: host.compactionStatus?.startedAt ?? null,
-      completedAt: Date.now(),
-    };
-    // Auto-clear the toast after duration
-    host.compactionClearTimer = window.setTimeout(() => {
-      host.compactionStatus = null;
-      host.compactionClearTimer = null;
-    }, COMPACTION_TOAST_DURATION_MS);
+    const willRetry = data.willRetry === true;
+    if (willRetry) {
+      // Retry will happen: stay active and show retry message
+      host.compactionStatus = {
+        active: true,
+        startedAt: host.compactionStatus?.startedAt ?? null,
+        completedAt: null,
+        message: "Retrying compaction...",
+      };
+    } else {
+      // Final completion
+      host.compactionStatus = {
+        active: false,
+        startedAt: host.compactionStatus?.startedAt ?? null,
+        completedAt: Date.now(),
+      };
+      // Auto-clear the toast after duration
+      host.compactionClearTimer = window.setTimeout(() => {
+        host.compactionStatus = null;
+        host.compactionClearTimer = null;
+      }, COMPACTION_TOAST_DURATION_MS);
+    }
   }
 }
 

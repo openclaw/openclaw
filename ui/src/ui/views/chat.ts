@@ -39,6 +39,7 @@ export type CompactionIndicatorStatus = {
   active: boolean;
   startedAt: number | null;
   completedAt: number | null;
+  message?: string;
 };
 
 export type FallbackIndicatorStatus = {
@@ -194,9 +195,10 @@ function renderCompactionIndicator(status: CompactionIndicatorStatus | null | un
     return nothing;
   }
   if (status.active) {
+    const message = status.message ?? "Compacting context...";
     return html`
       <div class="compaction-indicator compaction-indicator--active" role="status" aria-live="polite">
-        ${icons.loader} Compacting context...
+        ${icons.loader} ${message}
       </div>
     `;
   }
