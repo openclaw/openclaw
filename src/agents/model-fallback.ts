@@ -660,7 +660,6 @@ export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
-  now?: number;
   runId?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -681,6 +680,7 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const retryConfig = params.cfg?.agents?.retries;
+  const now = Date.now();
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -704,7 +704,6 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
-        const now = params.now ?? Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
         const decision = resolveCooldownDecision({
           candidate,
@@ -918,7 +917,7 @@ export async function runWithModelFallback<T>(params: {
       agentDir: params.agentDir,
       cfg: params.cfg,
       candidates,
-      now: params.now ?? Date.now(),
+      now,
     }),
   });
 }
