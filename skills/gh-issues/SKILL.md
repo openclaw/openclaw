@@ -239,14 +239,81 @@ Run these checks sequentially via exec:
    ```
 
    (Where PUSH_REPO_OWNER is the owner portion of `PUSH_REPO`)
-   If the response array is non-empty, remove that issue from the processing list and report:
 
-   > "Skipping #{N} — PR already exists: {html_url}"
+   If the response array is non-empty, an existing PR was found. Extract the PR details: `number`, `html_url`, `created_at`, `updated_at`, `head.sha`.
 
-   If all issues are skipped, report and stop (or loop back if in watch mode).
+   **Check CI status:**
+   Fetch the combined status for the PR's head commit:
+
+   ```
+   curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+     "https://api.github.com/repos/{SOURCE_REPO}/commits/{head_sha}/status"
+   ```
+
+   Extract the `state` field from the response. Possible values: `success`, `failure`, `pending`, `error`.
+
+   **Also check for GitHub Actions check runs:**
+
+   ```
+   curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+     "https://api.github.com/repos/{SOURCE_REPO}/commits/{head_sha}/check-runs"
+   ```
+
+   Extract the `conclusion` field from each check run. Possible values: `success`, `failure`, `neutral`, `skipped`, `cancelled`, `timed_out`, `action_required`, `stale`, `null` (still running).
+
+   **Determine overall CI status:**
+
+   First, check if the repo uses commit statuses (external CI like CircleCI) or only GitHub Actions:
+   - If the `/commits/{sha}/status` response has `total_count` > 0, commit statuses are present
+   - If `total_count` is 0, the repo uses only GitHub Actions check runs
+
+   **For repos with commit statuses:**
+   - If commit status `state` is `success` AND all check runs have `conclusion` of `success` or `neutral` or `skipped` or `cancelled` or `stale` → CI is passing
+   - If commit status `state` is `failure` or `error` → CI is failing
+   - If commit status `state` is `pending` → CI is in progress
+
+   **For repos with only GitHub Actions (no commit statuses):**
+   - If ALL check runs have `conclusion` of `success` or `neutral` or `skipped` or `cancelled` or `stale` → CI is passing
+   - If any check run has `conclusion` of `failure`, `timed_out`, or `action_required` → CI is failing
+   - If any check run has `conclusion` of `null` (still running) → CI is in progress
+
+   **Common rules (apply to both):**
+   - If any check run has `conclusion` of `failure`, `timed_out`, or `action_required` → CI is failing (overrides passing commit status)
+
+   **Decision logic:**
+   - If CI is passing → skip this issue entirely:
+     > "Skipping #{N} — PR already exists with passing CI: {html_url}"
+     > Log: `skipping_dispatch_pr_exists` (as required by acceptance criteria)
+   - If CI is failing or in progress → check PR age:
+     Calculate age since last update: `current_time - updated_at` in minutes.
+     (Using `updated_at` instead of `created_at` ensures we respect recent commits pushed by sub-agents.)
+
+     If age < 60 minutes → skip (agent might still be fixing it):
+
+     > "Skipping #{N} — PR exists ({age}m old), CI {status}, likely still being fixed: {html_url}"
+     > Log: `skipping_dispatch_pr_exists`
+
+     If age >= 60 minutes AND CI is failing → allow dispatch (PR is stale, needs new attempt):
+
+     > "Found stale PR #{N} ({age}m old, CI failing) — will dispatch new fix attempt: {html_url}"
+     > Do NOT skip this issue — it will proceed to spawning.
+     > **Track this issue in the STALE_PR_RETRIES set** to exempt it from step 6 branch check.
+
+     If age >= 60 minutes AND CI is in progress (still running) → allow dispatch (CI likely stuck):
+
+     > "Found stale PR #{N} ({age}m old, CI still running after 60m) — will dispatch new fix attempt: {html_url}"
+     > Do NOT skip this issue — it will proceed to spawning.
+     > **Track this issue in the STALE_PR_RETRIES set** to exempt it from step 6 branch check.
+
+   If all issues are skipped after this check, report and stop (or loop back if in watch mode).
 
 6. **Check for in-progress branches (no PR yet = sub-agent still working):**
-   For each remaining issue number N (not already skipped by the PR check above), check if a `fix/issue-{N}` branch exists on the **push repo** (which may be a fork, not origin):
+   For each remaining issue number N (not already skipped by the PR check above):
+
+   **First, check if this issue is in the STALE_PR_RETRIES set:**
+   If the issue is in STALE_PR_RETRIES, skip this step entirely — we already decided in step 5 to allow a retry despite the existing branch.
+
+   **Otherwise,** check if a `fix/issue-{N}` branch exists on the **push repo** (which may be a fork, not origin):
 
    ```
    curl -s -o /dev/null -w "%{http_code}" \
