@@ -63,7 +63,7 @@ export async function runPreHook(
           if (mbStatus === undefined) {
             resolve({
               outcome: "error",
-              exitCode: undefined,
+              exitCode: -1,
               stdout: String(stdout),
               stderr: String(stderr),
               message: "preHook output exceeded maxBuffer (64 KB); exit status unknown",
