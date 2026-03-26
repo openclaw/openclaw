@@ -12,6 +12,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { resolvePathArg } from "./tool-display-common.js";
 import {
   extractToolResultMediaArtifact,
   extractMessagingToolSend,
@@ -346,14 +347,7 @@ export async function handleToolExecutionStart(
   toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
 
   if (toolName === "read") {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const filePathValue =
-      typeof record.path === "string"
-        ? record.path
-        : typeof record.file_path === "string"
-          ? record.file_path
-          : "";
-    const filePath = filePathValue.trim();
+    const filePath = resolvePathArg(args) ?? "";
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(

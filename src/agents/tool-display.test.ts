@@ -56,19 +56,19 @@ describe("tool display details", () => {
     const readDetail = formatToolDetail(
       resolveToolDisplay({
         name: "read",
-        args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 },
+        args: { file: "/tmp/a.txt", offset: 2, limit: 2 },
       }),
     );
     const writeDetail = formatToolDetail(
       resolveToolDisplay({
         name: "write",
-        args: { file_path: "/tmp/a.txt", content: "abc" },
+        args: { filePath: "/tmp/a.txt", content: "abc" },
       }),
     );
     const editDetail = formatToolDetail(
       resolveToolDisplay({
         name: "edit",
-        args: { path: "/tmp/a.txt", newText: "abcd" },
+        args: { file_path: "/tmp/a.txt", newText: "abcd" },
       }),
     );
 
