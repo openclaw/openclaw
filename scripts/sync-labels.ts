@@ -18,7 +18,14 @@ const COLOR_BY_PREFIX = new Map<string, string>([
 ]);
 
 const configPath = resolve(".github/labeler.yml");
-const EXTRA_LABELS = ["size: XS", "size: S", "size: M", "size: L", "size: XL"] as const;
+const EXTRA_LABELS = [
+  "size: XS",
+  "size: S",
+  "size: M",
+  "size: L",
+  "size: XL",
+  "beta-blocker",
+] as const;
 const labelNames = [
   ...new Set([...extractLabelNames(readFileSync(configPath, "utf8")), ...EXTRA_LABELS]),
 ];
@@ -67,6 +74,9 @@ function extractLabelNames(contents: string): string[] {
 }
 
 function pickColor(label: string): string {
+  if (label === "beta-blocker") {
+    return "D93F0B";
+  }
   const prefix = label.includes(":") ? label.split(":", 1)[0].trim() : label.trim();
   return COLOR_BY_PREFIX.get(prefix) ?? "ededed";
 }
