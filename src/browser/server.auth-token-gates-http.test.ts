@@ -1,7 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { isAuthorizedBrowserRequest } from "./http-auth.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
+import { isAuthorizedBrowserRequest } from "../../extensions/browser/src/browser/http-auth.js";
+import {
+  getBrowserTestFetch,
+  type BrowserTestFetch,
+} from "../../extensions/browser/src/browser/test-fetch.js";
 
 let server: ReturnType<typeof createServer> | null = null;
 let port = 0;

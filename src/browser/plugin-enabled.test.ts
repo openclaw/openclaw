@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { isDefaultBrowserPluginEnabled } from "../../extensions/browser/src/browser/plugin-enabled.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
 describe("isDefaultBrowserPluginEnabled", () => {
   it("defaults to enabled", () => {

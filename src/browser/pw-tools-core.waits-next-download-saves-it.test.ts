@@ -7,7 +7,7 @@ import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
-} from "./pw-tools-core.test-harness.js";
+} from "../../extensions/browser/src/browser/pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
@@ -15,12 +15,12 @@ const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => tmpDirMocks);
-let mod: typeof import("./pw-tools-core.js");
+let mod: typeof import("../../extensions/browser/src/browser/pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.resetModules();
-    mod = await import("./pw-tools-core.js");
+    mod = await import("../../extensions/browser/src/browser/pw-tools-core.js");
   });
 
   beforeEach(() => {

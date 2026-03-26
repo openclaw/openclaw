@@ -27,7 +27,7 @@ const browserClientMocks = vi.hoisted(() => ({
   browserStop: vi.fn(async (..._args: unknown[]) => ({})),
   browserTabs: vi.fn(async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => []),
 }));
-vi.mock("../../browser/client.js", () => browserClientMocks);
+vi.mock("../../../extensions/browser/src/browser/client.js", () => browserClientMocks);
 
 const browserActionsMocks = vi.hoisted(() => ({
   browserAct: vi.fn(async () => ({ ok: true })),
@@ -48,7 +48,7 @@ const browserActionsMocks = vi.hoisted(() => ({
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
 }));
-vi.mock("../../browser/client-actions.js", () => browserActionsMocks);
+vi.mock("../../../extensions/browser/src/browser/client-actions.js", () => browserActionsMocks);
 
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
@@ -89,7 +89,7 @@ const browserConfigMocks = vi.hoisted(() => ({
     };
   }),
 }));
-vi.mock("../../browser/config.js", () => browserConfigMocks);
+vi.mock("../../../extensions/browser/src/browser/config.js", () => browserConfigMocks);
 
 const nodesUtilsMocks = vi.hoisted(() => ({
   listNodes: vi.fn(async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => []),
@@ -119,7 +119,10 @@ const sessionTabRegistryMocks = vi.hoisted(() => ({
   trackSessionBrowserTab: vi.fn(),
   untrackSessionBrowserTab: vi.fn(),
 }));
-vi.mock("../../browser/session-tab-registry.js", () => sessionTabRegistryMocks);
+vi.mock(
+  "../../../extensions/browser/src/browser/session-tab-registry.js",
+  () => sessionTabRegistryMocks,
+);
 
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
@@ -132,9 +135,12 @@ vi.mock("./common.js", async () => {
   };
 });
 
-import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
-import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
-import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
+import { __testing as browserToolActionsTesting } from "../../../extensions/browser/src/browser-tool.actions.js";
+import {
+  __testing as browserToolTesting,
+  createBrowserTool,
+} from "../../../extensions/browser/src/browser-tool.js";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../../extensions/browser/src/browser/constants.js";
 
 function mockSingleBrowserProxyNode() {
   nodesUtilsMocks.listNodes.mockResolvedValue([

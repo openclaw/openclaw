@@ -15,11 +15,11 @@ import {
   isChromeReachable,
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
-} from "./chrome.js";
+} from "../../extensions/browser/src/browser/chrome.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-} from "./constants.js";
+} from "../../extensions/browser/src/browser/constants.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
 

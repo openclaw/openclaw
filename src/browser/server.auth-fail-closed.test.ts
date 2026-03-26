@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getFreePort } from "./test-port.js";
+import { getFreePort } from "../../extensions/browser/src/browser/test-port.js";
 
 const mocks = vi.hoisted(() => ({
   controlPort: 0,
@@ -23,8 +23,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config.js")>();
+vi.mock("../../extensions/browser/src/browser/config.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../extensions/browser/src/browser/config.js")>();
   return {
     ...actual,
     resolveBrowserConfig: vi.fn(() => ({
@@ -34,30 +35,30 @@ vi.mock("./config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./control-auth.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
 }));
 
-vi.mock("./routes/index.js", () => ({
+vi.mock("../../extensions/browser/src/browser/routes/index.js", () => ({
   registerBrowserRoutes: vi.fn(() => {}),
 }));
 
-vi.mock("./server-context.js", () => ({
+vi.mock("../../extensions/browser/src/browser/server-context.js", () => ({
   createBrowserRouteContext: vi.fn(() => ({})),
 }));
 
-vi.mock("./server-lifecycle.js", () => ({
+vi.mock("../../extensions/browser/src/browser/server-lifecycle.js", () => ({
   ensureExtensionRelayForProfiles: mocks.ensureExtensionRelayForProfiles,
   stopKnownBrowserProfiles: vi.fn(async () => {}),
 }));
 
-vi.mock("./pw-ai-state.js", () => ({
+vi.mock("../../extensions/browser/src/browser/pw-ai-state.js", () => ({
   isPwAiLoaded: vi.fn(() => false),
 }));
 
-let startBrowserControlServerFromConfig: typeof import("./server.js").startBrowserControlServerFromConfig;
-let stopBrowserControlServer: typeof import("./server.js").stopBrowserControlServer;
+let startBrowserControlServerFromConfig: typeof import("../../extensions/browser/src/browser/server.js").startBrowserControlServerFromConfig;
+let stopBrowserControlServer: typeof import("../../extensions/browser/src/browser/server.js").stopBrowserControlServer;
 
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {
@@ -67,7 +68,7 @@ describe("browser control auth bootstrap failures", () => {
     mocks.ensureExtensionRelayForProfiles.mockClear();
     vi.resetModules();
     ({ startBrowserControlServerFromConfig, stopBrowserControlServer } =
-      await import("./server.js"));
+      await import("../../extensions/browser/src/browser/server.js"));
   });
 
   afterEach(async () => {

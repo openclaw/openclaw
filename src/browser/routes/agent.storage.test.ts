@@ -3,7 +3,7 @@ import {
   parseRequiredStorageMutationRequest,
   parseStorageKind,
   parseStorageMutationRequest,
-} from "./agent.storage.js";
+} from "../../../extensions/browser/src/browser/routes/agent.storage.js";
 
 describe("browser storage route parsing", () => {
   describe("parseStorageKind", () => {

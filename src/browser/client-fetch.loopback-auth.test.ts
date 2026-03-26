@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
+import type { BrowserDispatchResponse } from "../../extensions/browser/src/browser/routes/dispatcher.js";
 
 function okDispatchResponse(): BrowserDispatchResponse {
   return { status: 200, body: { ok: true } };
@@ -50,7 +50,7 @@ vi.mock("../../extensions/browser/src/browser/routes/dispatcher.js", () => ({
   })),
 }));
 
-let fetchBrowserJson: typeof import("./client-fetch.js").fetchBrowserJson;
+let fetchBrowserJson: typeof import("../../extensions/browser/src/browser/client-fetch.js").fetchBrowserJson;
 
 function stubJsonFetchOk() {
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
@@ -88,7 +88,7 @@ async function expectThrownBrowserFetchError(
 describe("fetchBrowserJson loopback auth", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ fetchBrowserJson } = await import("./client-fetch.js"));
+    ({ fetchBrowserJson } = await import("../../extensions/browser/src/browser/client-fetch.js"));
   });
 
   beforeEach(() => {

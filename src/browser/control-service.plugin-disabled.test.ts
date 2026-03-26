@@ -24,7 +24,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./config.js", () => ({
+vi.mock("../../extensions/browser/src/browser/config.js", () => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
     controlPort: 18791,
@@ -32,23 +32,24 @@ vi.mock("./config.js", () => ({
   })),
 }));
 
-vi.mock("./control-auth.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
 }));
 
-vi.mock("./runtime-lifecycle.js", () => ({
+vi.mock("../../extensions/browser/src/browser/runtime-lifecycle.js", () => ({
   createBrowserRuntimeState: mocks.createBrowserRuntimeState,
   stopBrowserRuntime: vi.fn(async () => {}),
 }));
 
-let startBrowserControlServiceFromConfig: typeof import("./control-service.js").startBrowserControlServiceFromConfig;
+let startBrowserControlServiceFromConfig: typeof import("../../extensions/browser/src/browser/control-service.js").startBrowserControlServiceFromConfig;
 
 describe("startBrowserControlServiceFromConfig", () => {
   beforeEach(async () => {
     mocks.ensureBrowserControlAuth.mockClear();
     mocks.createBrowserRuntimeState.mockClear();
     vi.resetModules();
-    ({ startBrowserControlServiceFromConfig } = await import("./control-service.js"));
+    ({ startBrowserControlServiceFromConfig } =
+      await import("../../extensions/browser/src/browser/control-service.js"));
   });
 
   it("does not start the default service when the browser plugin is disabled", async () => {
