@@ -651,11 +651,24 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         if (mode == ConnectionMode.Unconfigured) return null;
 
         string? rawUri = mode == ConnectionMode.Remote && settings.RemoteTransport == RemoteTransport.Ssh
-            ? "ws://localhost:18789"
+            ? ResolveSshLocalUri(settings)
             : mode == ConnectionMode.Remote && !string.IsNullOrWhiteSpace(settings.RemoteUrl)
                 ? settings.RemoteUrl
                 : settings.GatewayEndpointUri;
 
         return GatewayUriNormalizer.Normalize(rawUri);
+    }
+
+    // Preserve the scheme from settings.RemoteUrl so wss:// remotes receive a TLS
+    // ClientHello end-to-end through the SSH tunnel instead of plaintext WS.
+    private static string ResolveSshLocalUri(AppSettings settings)
+    {
+        var raw = settings.RemoteUrl?.Trim();
+        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
+        {
+            var scheme = url.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
+            return $"{scheme}://localhost:18789";
+        }
+        return "ws://localhost:18789";
     }
 }

@@ -29,7 +29,13 @@ public sealed record GatewayConnectDeepLink(
         var tls = scheme == "wss";
         if (!tls && !IsLoopbackHost(parsed.Host)) return null;
 
-        var port     = parsed.IsDefaultPort ? (tls ? 443 : 18789) : parsed.Port;
+        // Use GetComponents instead of IsDefaultPort: in .NET, ws:// maps to scheme "ws"
+        // which has no registered default, so Uri maps it to port 80 and IsDefaultPort
+        // returns true for an explicit :80, incorrectly classifying it as "no port given".
+        var portStr  = parsed.GetComponents(UriComponents.Port, UriFormat.Unescaped);
+        var port     = !string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out var explicitPort)
+            ? explicitPort
+            : (tls ? 443 : 18789);
         var token    = json.TryGetValue("token",    out var t) ? t?.ToString() : null;
         var password = json.TryGetValue("password", out var p) ? p?.ToString() : null;
         return new GatewayConnectDeepLink(parsed.Host, port, tls, token, password);
