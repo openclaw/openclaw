@@ -491,6 +491,38 @@ function cloneIfObject<T>(value: T): T {
   return value;
 }
 
+function moveSingleAccountKeysIntoAccount(params: {
+  cfg: OpenClawConfig;
+  channelKey: string;
+  channel: ChannelSectionRecord;
+  accounts: Record<string, Record<string, unknown>>;
+  keysToMove: string[];
+  targetAccountId: string;
+  baseAccount?: Record<string, unknown>;
+}): OpenClawConfig {
+  const nextAccount: Record<string, unknown> = { ...params.baseAccount };
+  for (const key of params.keysToMove) {
+    nextAccount[key] = cloneIfObject(params.channel[key]);
+  }
+  const nextChannel: ChannelSectionRecord = { ...params.channel };
+  for (const key of params.keysToMove) {
+    delete nextChannel[key];
+  }
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channelKey]: {
+        ...nextChannel,
+        accounts: {
+          ...params.accounts,
+          [params.targetAccountId]: nextAccount,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 // When promoting a single-account channel config to multi-account,
 // move top-level account settings into accounts.default so the original
 // account keeps working without duplicate account values at channel root.
@@ -523,56 +555,26 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
       channelKey: params.channelKey,
       channel: base,
     });
-    const defaultAccount: Record<string, unknown> = {
-      ...accounts[targetAccountId],
-    };
-    for (const key of keysToMove) {
-      const value = base[key];
-      defaultAccount[key] = cloneIfObject(value);
-    }
-    const nextChannel: ChannelSectionRecord = { ...base };
-    for (const key of keysToMove) {
-      delete nextChannel[key];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        [params.channelKey]: {
-          ...nextChannel,
-          accounts: {
-            ...accounts,
-            [targetAccountId]: defaultAccount,
-          },
-        },
-      },
-    } as OpenClawConfig;
+    return moveSingleAccountKeysIntoAccount({
+      cfg: params.cfg,
+      channelKey: params.channelKey,
+      channel: base,
+      accounts,
+      keysToMove,
+      targetAccountId,
+      baseAccount: accounts[targetAccountId],
+    });
   }
   const keysToMove = resolveSingleAccountKeysToMove({
     channelKey: params.channelKey,
     channel: base,
   });
-  const defaultAccount: Record<string, unknown> = {};
-  for (const key of keysToMove) {
-    const value = base[key];
-    defaultAccount[key] = cloneIfObject(value);
-  }
-  const nextChannel: ChannelSectionRecord = { ...base };
-  for (const key of keysToMove) {
-    delete nextChannel[key];
-  }
-
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      [params.channelKey]: {
-        ...nextChannel,
-        accounts: {
-          ...accounts,
-          [DEFAULT_ACCOUNT_ID]: defaultAccount,
-        },
-      },
-    },
-  } as OpenClawConfig;
+  return moveSingleAccountKeysIntoAccount({
+    cfg: params.cfg,
+    channelKey: params.channelKey,
+    channel: base,
+    accounts,
+    keysToMove,
+    targetAccountId: DEFAULT_ACCOUNT_ID,
+  });
 }

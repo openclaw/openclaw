@@ -32,6 +32,33 @@ async function createSessionStoreFile(): Promise<string> {
   return storePath;
 }
 
+async function withOperatorSessionSubscriber<T>(
+  harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>,
+  run: (ws: Awaited<ReturnType<typeof harness.openWs>>) => Promise<T>,
+) {
+  const ws = await harness.openWs();
+  try {
+    await connectOk(ws, { scopes: ["operator.read"] });
+    await rpcReq(ws, "sessions.subscribe");
+    return await run(ws);
+  } finally {
+    ws.close();
+  }
+}
+
+function waitForSessionMessageEvent(
+  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
+  sessionKey: string,
+) {
+  return onceMessage(
+    ws,
+    (message) =>
+      message.type === "event" &&
+      message.event === "session.message" &&
+      (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+  );
+}
+
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
   watch: () => Promise<unknown>;
@@ -220,19 +247,8 @@ describe("session.message websocket events", () => {
 
     const harness = await createGatewaySuiteHarness();
     try {
-      const ws = await harness.openWs();
-      try {
-        await connectOk(ws, { scopes: ["operator.read"] });
-        await rpcReq(ws, "sessions.subscribe");
-
-        const messageEventPromise = onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "session.message" &&
-            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-              "agent:main:main",
-        );
+      await withOperatorSessionSubscriber(harness, async (ws) => {
+        const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
         const changedEventPromise = onceMessage(
           ws,
           (message) =>
@@ -278,9 +294,7 @@ describe("session.message websocket events", () => {
           modelProvider: "openai",
           model: "gpt-5.4",
         });
-      } finally {
-        ws.close();
-      }
+      });
     } finally {
       await harness.close();
     }
@@ -314,14 +328,7 @@ describe("session.message websocket events", () => {
         expect(subscribeRes.payload?.subscribed).toBe(true);
         expect(subscribeRes.payload?.key).toBe("agent:main:main");
 
-        const mainEvent = onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "session.message" &&
-            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-              "agent:main:main",
-        );
+        const mainEvent = waitForSessionMessageEvent(ws, "agent:main:main");
         const [mainAppend] = await Promise.all([
           appendAssistantMessageToSessionTranscript({
             sessionKey: "agent:main:main",
@@ -423,19 +430,8 @@ describe("session.message websocket events", () => {
 
     const harness = await createGatewaySuiteHarness();
     try {
-      const ws = await harness.openWs();
-      try {
-        await connectOk(ws, { scopes: ["operator.read"] });
-        await rpcReq(ws, "sessions.subscribe");
-
-        const messageEventPromise = onceMessage(
-          ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "session.message" &&
-            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-              "agent:main:newer",
-        );
+      await withOperatorSessionSubscriber(harness, async (ws) => {
+        const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
         emitSessionTranscriptUpdate({
           sessionFile: transcriptPath,
@@ -453,9 +449,7 @@ describe("session.message websocket events", () => {
           messageId: "msg-shared",
           messageSeq: 1,
         });
-      } finally {
-        ws.close();
-      }
+      });
     } finally {
       await harness.close();
     }
