@@ -230,4 +230,71 @@ describe("googlechat inbound access policy", () => {
 
     expect(logVerbose).toHaveBeenCalledWith("googlechat: drop control command from users/alice");
   });
+
+  it("does not match group policy by mutable space displayName when the stable id differs", async () => {
+    primeCommonDefaults();
+    evaluateGroupRouteAccessForPolicy.mockImplementation(({ routeMatched }) =>
+      routeMatched ? { allowed: true } : { allowed: false, reason: "route_not_allowlisted" },
+    );
+    createChannelPairingController.mockReturnValue({
+      readAllowFromStore: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveDmGroupAccessWithLists.mockReturnValue({
+      decision: "allow",
+      effectiveAllowFrom: [],
+      effectiveGroupAllowFrom: ["users/alice"],
+    });
+    resolveMentionGatingWithBypass.mockReturnValue({
+      shouldSkip: false,
+      effectiveWasMentioned: true,
+    });
+    const logVerbose = vi.fn();
+
+    const { applyGoogleChatInboundAccessPolicy } = await import("./monitor-access.js");
+
+    await expect(
+      applyGoogleChatInboundAccessPolicy({
+        account: {
+          accountId: "default",
+          config: {
+            groups: {
+              "Finance Ops": {
+                users: ["users/alice"],
+                requireMention: true,
+                systemPrompt: "finance-only prompt",
+              },
+            },
+          },
+        } as never,
+        config: {
+          channels: { googlechat: {} },
+          commands: { useAccessGroups: true },
+        } as never,
+        core: createCore() as never,
+        space: { name: "spaces/BBB", displayName: "Finance Ops" } as never,
+        message: {
+          annotations: [
+            {
+              type: "USER_MENTION",
+              userMention: { user: { name: "users/app" } },
+            },
+          ],
+        } as never,
+        isGroup: true,
+        senderId: "users/alice",
+        senderName: "Alice",
+        senderEmail: "alice@example.com",
+        rawBody: "show quarter close status",
+        logVerbose,
+      }),
+    ).resolves.toEqual({ ok: false });
+
+    expect(logVerbose).toHaveBeenCalledWith(
+      "Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: Finance Ops",
+    );
+    expect(logVerbose).toHaveBeenCalledWith(
+      "drop group message (not allowlisted, space=spaces/BBB)",
+    );
+  });
 });
