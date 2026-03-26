@@ -5,7 +5,11 @@ import {
   createExecutionArtifacts,
   resolvePnpmCommandInvocation,
 } from "../../scripts/test-planner/executor.mjs";
-import { buildExecutionPlan, explainExecutionTarget } from "../../scripts/test-planner/planner.mjs";
+import {
+  buildCIExecutionManifest,
+  buildExecutionPlan,
+  explainExecutionTarget,
+} from "../../scripts/test-planner/planner.mjs";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -255,6 +259,92 @@ describe("test planner", () => {
     expect(fs.existsSync(artifactDir)).toBe(true);
     artifacts.cleanupTempArtifacts();
     expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
+  it("builds a CI manifest with planner-owned shard counts and matrices", () => {
+    const manifest = buildCIExecutionManifest(
+      {
+        eventName: "pull_request",
+        docsOnly: false,
+        docsChanged: false,
+        runNode: true,
+        runMacos: true,
+        runAndroid: true,
+        runWindows: true,
+        runSkillsPython: false,
+        hasChangedExtensions: true,
+        changedExtensionsMatrix: { include: [{ extension: "discord" }] },
+      },
+      {
+        env: {},
+      },
+    );
+
+    expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
+    expect(manifest.shardCounts.unit).toBe(4);
+    expect(manifest.shardCounts.channels).toBe(3);
+    expect(manifest.shardCounts.windows).toBe(9);
+    expect(manifest.shardCounts.macosNode).toBe(9);
+    expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
+    expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.macosSwift.enabled).toBe(true);
+    expect(manifest.requiredCheckNames).toContain("macos-swift");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-lint");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-build");
+    expect(manifest.requiredCheckNames).not.toContain("macos-swift-test");
+    expect(manifest.jobs.extensionFast.matrix.include).toEqual([
+      { check_name: "extension-fast-discord", extension: "discord" },
+    ]);
+  });
+
+  it("suppresses heavy CI jobs in docs-only manifests", () => {
+    const manifest = buildCIExecutionManifest(
+      {
+        eventName: "pull_request",
+        docsOnly: true,
+        docsChanged: true,
+        runNode: false,
+        runMacos: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        hasChangedExtensions: false,
+      },
+      {
+        env: {},
+      },
+    );
+
+    expect(manifest.jobs.buildArtifacts.enabled).toBe(false);
+    expect(manifest.jobs.checks.enabled).toBe(false);
+    expect(manifest.jobs.checksWindows.enabled).toBe(false);
+    expect(manifest.jobs.macosNode.enabled).toBe(false);
+    expect(manifest.jobs.checkDocs.enabled).toBe(true);
+  });
+
+  it("adds push-only compat and release lanes to push manifests", () => {
+    const manifest = buildCIExecutionManifest(
+      {
+        eventName: "push",
+        docsOnly: false,
+        docsChanged: false,
+        runNode: true,
+        runMacos: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        hasChangedExtensions: false,
+      },
+      {
+        env: {},
+      },
+    );
+
+    expect(manifest.jobs.releaseCheck.enabled).toBe(true);
+    expect(
+      manifest.jobs.checks.matrix.include.some((entry) => entry.task === "compat-node22"),
+    ).toBe(true);
   });
 });
 

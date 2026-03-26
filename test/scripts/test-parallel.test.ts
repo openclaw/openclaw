@@ -216,6 +216,106 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("pool=forks");
   });
 
+  it("prints the planner-backed CI manifest as JSON", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--ci-manifest"], {
+      cwd: repoRoot,
+      env: {
+        ...clearPlannerShardEnv(process.env),
+        GITHUB_EVENT_NAME: "pull_request",
+        OPENCLAW_CI_DOCS_ONLY: "false",
+        OPENCLAW_CI_DOCS_CHANGED: "false",
+        OPENCLAW_CI_RUN_NODE: "true",
+        OPENCLAW_CI_RUN_MACOS: "true",
+        OPENCLAW_CI_RUN_ANDROID: "false",
+        OPENCLAW_CI_RUN_WINDOWS: "true",
+        OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
+        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
+        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
+      },
+      encoding: "utf8",
+    });
+
+    const manifest = JSON.parse(output);
+    expect(manifest.jobs.checks.enabled).toBe(true);
+    expect(manifest.jobs.macosNode.enabled).toBe(true);
+    expect(manifest.jobs.checksWindows.enabled).toBe(true);
+  });
+
+  it("writes CI workflow outputs in ci mode", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const outputPath = path.join(os.tmpdir(), `openclaw-ci-output-${Date.now()}.txt`);
+
+    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "ci"], {
+      cwd: repoRoot,
+      env: {
+        ...clearPlannerShardEnv(process.env),
+        GITHUB_OUTPUT: outputPath,
+        GITHUB_EVENT_NAME: "pull_request",
+        OPENCLAW_CI_DOCS_ONLY: "false",
+        OPENCLAW_CI_DOCS_CHANGED: "false",
+        OPENCLAW_CI_RUN_NODE: "true",
+        OPENCLAW_CI_RUN_MACOS: "true",
+        OPENCLAW_CI_RUN_ANDROID: "true",
+        OPENCLAW_CI_RUN_WINDOWS: "true",
+        OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
+        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
+        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
+      },
+      encoding: "utf8",
+    });
+
+    const outputs = fs.readFileSync(outputPath, "utf8");
+    expect(outputs).toContain("run_build_artifacts=true");
+    expect(outputs).toContain("run_checks_windows=true");
+    expect(outputs).toContain("run_macos_node=true");
+    expect(outputs).toContain("android_matrix=");
+    fs.rmSync(outputPath, { force: true });
+  });
+
+  it("writes install-smoke outputs in install-smoke mode", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const outputPath = path.join(os.tmpdir(), `openclaw-install-output-${Date.now()}.txt`);
+
+    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "install-smoke"], {
+      cwd: repoRoot,
+      env: {
+        ...clearPlannerShardEnv(process.env),
+        GITHUB_OUTPUT: outputPath,
+        OPENCLAW_CI_DOCS_ONLY: "false",
+        OPENCLAW_CI_RUN_CHANGED_SMOKE: "true",
+      },
+      encoding: "utf8",
+    });
+
+    const outputs = fs.readFileSync(outputPath, "utf8");
+    expect(outputs).toContain("run_install_smoke=true");
+    expect(outputs).not.toContain("run_checks=");
+    fs.rmSync(outputPath, { force: true });
+  });
+
+  it("writes bun outputs in ci-bun mode", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const outputPath = path.join(os.tmpdir(), `openclaw-bun-output-${Date.now()}.txt`);
+
+    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "ci-bun"], {
+      cwd: repoRoot,
+      env: {
+        ...clearPlannerShardEnv(process.env),
+        GITHUB_OUTPUT: outputPath,
+        OPENCLAW_CI_DOCS_ONLY: "false",
+        OPENCLAW_CI_RUN_NODE: "true",
+      },
+      encoding: "utf8",
+    });
+
+    const outputs = fs.readFileSync(outputPath, "utf8");
+    expect(outputs).toContain("run_bun_checks=true");
+    expect(outputs).toContain("bun_checks_matrix=");
+    expect(outputs).not.toContain("run_install_smoke=");
+    fs.rmSync(outputPath, { force: true });
+  });
+
   it("passes through vitest --mode values that are not wrapper runtime overrides", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
     const output = execFileSync(
