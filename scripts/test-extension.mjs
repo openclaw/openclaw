@@ -291,7 +291,7 @@ async function runVitestBatch(params) {
 }
 
 function printUsage() {
-  console.error(
+  console.log(
     [
       "Usage: pnpm test:extension <extension-name|path> [vitest args...]",
       "       node scripts/test-extension.mjs [extension-name|path] [vitest args...]",
