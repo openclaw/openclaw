@@ -305,6 +305,9 @@ OpenClaw can also attach to a running Chromium-based browser profile through the
 official Chrome DevTools MCP server. This reuses the tabs and login state
 already open in that browser profile.
 
+Migrating older extension-relay docs or configs? See
+[Chrome extension (legacy relay)](/tools/chrome-extension).
+
 Official background and setup references:
 
 - [Chrome for Developers: Use Chrome DevTools MCP with your browser session](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
