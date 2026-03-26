@@ -1061,6 +1061,19 @@ export function attachGatewayUpgradeHandler(opts: {
         }
       }
       const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      if (wss.listenerCount("connection") === 0) {
+        const responseBody = "Gateway websocket handlers unavailable";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
       if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
         const responseBody = "Too many unauthenticated sockets";
         socket.write(
