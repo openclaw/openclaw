@@ -1,0 +1,13 @@
+{
+  "gateway": {
+    "mode": "local"
+  },
+  "agent": {
+    "model": "ollama/qwen2.5:7b"
+  },
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://host.docker.internal:11434"
+    }
+  }
+}
