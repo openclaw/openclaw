@@ -750,6 +750,34 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     from?: number;
     lines?: number;
   }): Promise<{ text: string; path: string }> {
+    // Episodic hits are emitted with path "episodes/<uuid>".  Route them
+    // directly to EpisodicStore.getById() instead of readMemoryFile(), which
+    // only accepts .md files inside the agent workspace directory.
+    const episodicMatch = /^episodes\/([^/]+)$/.exec(params.relPath.trim());
+    if (episodicMatch) {
+      const episodeId = episodicMatch[1];
+      const agentBaseDir = resolveAgentDir(this.cfg, this.agentId);
+      const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
+      const store = new EpisodicStore(dbPath);
+      try {
+        const episode = store.getById(episodeId);
+        if (!episode) {
+          return { text: "", path: params.relPath };
+        }
+        const lines: string[] = [
+          `# Episode: ${episode.summary}`,
+          `Date: ${episode.created_at}`,
+          `Importance: ${episode.importance.toFixed(2)}`,
+          ...(episode.topic_tags?.length ? [`Tags: ${episode.topic_tags.join(", ")}`] : []),
+          "",
+          ...(episode.details ? [episode.details] : []),
+        ];
+        return { text: lines.join("\n"), path: params.relPath };
+      } finally {
+        store.close();
+      }
+    }
+
     return await readMemoryFile({
       workspaceDir: this.workspaceDir,
       extraPaths: this.settings.extraPaths,

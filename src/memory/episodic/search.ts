@@ -58,14 +58,18 @@ export class EpisodicSearch {
       limit = 10,
     } = options;
 
+    // Get all episodes first — if the store is empty we can return early
+    // without paying for an embedding API round-trip.
+    let episodes = this.store.getAll();
+    if (episodes.length === 0) {
+      return [];
+    }
+
     // Get query embedding
     let queryEmbedding = options.queryEmbedding;
     if (!queryEmbedding) {
       queryEmbedding = await this.encoder.generateEmbedding(query);
     }
-
-    // Get all episodes
-    let episodes = this.store.getAll();
 
     // Apply filters
     if (timeRange?.after) {
