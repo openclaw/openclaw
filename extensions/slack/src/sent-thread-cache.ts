@@ -167,7 +167,14 @@ export function _flushPersist(): void {
 
 /** @internal Reset all state for tests, optionally setting a custom persist path. */
 export function _resetForTests(persistPath?: string): void {
-  clearSlackThreadParticipationCache();
-  persistState.hydrated = false;
+  // Set override BEFORE clearing so clearSlackThreadParticipationCache
+  // doesn't delete the file at the new path we're about to hydrate from.
   _persistPathOverride = persistPath;
+  threadParticipation.clear();
+  persistState.entries.clear();
+  if (persistState.persistTimer) {
+    clearTimeout(persistState.persistTimer);
+    persistState.persistTimer = null;
+  }
+  persistState.hydrated = false;
 }
