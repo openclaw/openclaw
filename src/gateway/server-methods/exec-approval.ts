@@ -121,7 +121,8 @@ export function createExecApprovalHandlers(
               env: p.env,
             })
           : null;
-      if (explicitId && manager.getSnapshot(explicitId)) {
+      const existingSnapshot = explicitId ? manager.getSnapshot(explicitId) : null;
+      if (existingSnapshot && existingSnapshot.resolvedAtMs === undefined) {
         respond(
           false,
           undefined,
