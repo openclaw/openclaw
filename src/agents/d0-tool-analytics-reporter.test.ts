@@ -25,6 +25,7 @@ describe("reportD0ToolLifecycle", () => {
         toolName: "read",
         runId: "run-tool-1",
         toolCallId: "tool-call-1",
+        toolDetail: "show /tmp/file.txt",
         durationMs: 250,
         status: "success",
       },
@@ -55,6 +56,7 @@ describe("reportD0ToolLifecycle", () => {
         toolCallId: "tool-call-1",
         sessionKey: "agent:main:telegram:direct:12345",
         sessionId: "ephemeral-session-1",
+        toolDetail: "show /tmp/file.txt",
         durationMs: 250,
       }),
     );

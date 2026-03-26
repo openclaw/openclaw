@@ -2,6 +2,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type D0ToolLifecyclePayload = {
   toolName: string;
+  toolDetail?: string;
   status: "success" | "error";
   runId: string;
   toolCallId?: string;
@@ -49,6 +50,7 @@ export async function reportD0ToolLifecycle(
       },
       body: JSON.stringify({
         toolName: payload.toolName,
+        toolDetail: payload.toolDetail,
         status: payload.status,
         runId: payload.runId,
         toolCallId: payload.toolCallId,

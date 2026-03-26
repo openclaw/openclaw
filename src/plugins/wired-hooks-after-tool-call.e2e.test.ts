@@ -232,9 +232,9 @@ describe("after_tool_call hook wiring", () => {
       ctx as never,
       {
         type: "tool_execution_start",
-        toolName: "read",
+        toolName: "exec",
         toolCallId: "tg-tool-call-1",
-        args: { path: "/tmp/tg.txt" },
+        args: { command: "git status" },
       } as never,
     );
 
@@ -242,7 +242,7 @@ describe("after_tool_call hook wiring", () => {
       ctx as never,
       {
         type: "tool_execution_end",
-        toolName: "read",
+        toolName: "exec",
         toolCallId: "tg-tool-call-1",
         isError: false,
         result: { content: [{ type: "text", text: "ok" }] },
@@ -261,6 +261,15 @@ describe("after_tool_call hook wiring", () => {
         }),
       }),
     );
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String(init?.body));
+    expect(body).toEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        toolCallId: "tg-tool-call-1",
+      }),
+    );
+    expect(body.toolDetail).toMatch(/git status/i);
   });
 
   it("does not block tool completion when the TG analytics bridge fetch hangs", async () => {
