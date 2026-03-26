@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
+import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../config.js";
 import {
   clearSessionStoreCacheForTest,
@@ -20,7 +21,7 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -144,6 +145,35 @@ describe("resolveSessionResetPolicy", () => {
       });
 
       expect(groupPolicy.mode).toBe("daily");
+    });
+  });
+
+  it("defaults to daily resets at 4am local time", () => {
+    const policy = resolveSessionResetPolicy({
+      resetType: "direct",
+    });
+
+    expect(policy).toMatchObject({
+      mode: "daily",
+      atHour: 4,
+    });
+  });
+
+  it("treats idleMinutes=0 as never expiring by inactivity", () => {
+    const freshness = evaluateSessionFreshness({
+      updatedAt: 1_000,
+      now: 60 * 60 * 1_000,
+      policy: {
+        mode: "idle",
+        atHour: 4,
+        idleMinutes: 0,
+      },
+    });
+
+    expect(freshness).toEqual({
+      fresh: true,
+      dailyResetAt: undefined,
+      idleExpiresAt: undefined,
     });
   });
 });
@@ -400,6 +430,42 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("emits transcript update events for delivery mirrors", async () => {
+    const sessionId = "test-session-id";
+    const sessionKey = "test-session";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from delivery mirror!",
+      storePath: fixture.storePath(),
+    });
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile,
+        sessionKey,
+        messageId: expect.any(String),
+        message: expect.objectContaining({
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Hello from delivery mirror!" }],
+        }),
+      }),
+    );
+    emitSpy.mockRestore();
+  });
+
   it("does not append a duplicate delivery mirror for the same idempotency key", async () => {
     writeTranscriptStore();
 
@@ -423,6 +489,52 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const messageLine = JSON.parse(lines[1]);
     expect(messageLine.message.idempotencyKey).toBe("mirror:test-source-message");
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
+  });
+
+  it("finds session entry using normalized (lowercased) key", async () => {
+    const sessionId = "test-session-normalized";
+    // Store key is lowercase (as written by updateSessionStore/normalizeStoreSessionKey)
+    const storeKey = "agent:main:bluebubbles:direct:+15551234567";
+    const store = {
+      [storeKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "bluebubbles",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    // Pass a mixed-case key — append should still find the entry via normalization
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:BlueBubbles:direct:+15551234567",
+      text: "Hello normalized!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("finds Slack session entry using normalized (lowercased) key", async () => {
+    const sessionId = "test-slack-session";
+    // Slack session keys include channel type and target ID; store key is lowercase
+    const storeKey = "agent:main:slack:direct:u12345abc";
+    const store = {
+      [storeKey]: {
+        sessionId,
+        chatType: "direct",
+        channel: "slack",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    // Pass a mixed-case key (as resolveSlackSession might produce) — normalization should match
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:slack:direct:U12345ABC",
+      text: "Hello Slack user!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("ignores malformed transcript lines when checking mirror idempotency", async () => {

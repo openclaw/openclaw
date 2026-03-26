@@ -14,8 +14,6 @@ import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 class LocationCaptureManager(private val context: Context) {
@@ -102,17 +100,13 @@ class LocationCaptureManager(private val context: Context) {
     val resolved =
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
-    return withTimeout(timeoutMs.coerceAtLeast(1)) {
+    val location = withTimeout(timeoutMs.coerceAtLeast(1)) {
       suspendCancellableCoroutine { cont ->
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
           val signal = CancellationSignal()
           cont.invokeOnCancellation { signal.cancel() }
           manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
-            if (location != null) {
-              cont.resume(location)
-            } else {
-              cont.resumeWithException(IllegalStateException("LOCATION_UNAVAILABLE: no fix"))
-            }
+            cont.resume(location)
           }
         } else {
           val listener = object : LocationListener {
@@ -124,11 +118,10 @@ class LocationCaptureManager(private val context: Context) {
             }
           }
           manager.requestSingleUpdate(resolved, listener, context.mainLooper)
-          cont.invokeOnCancellation {
-            manager.removeUpdates(listener)
-          }
+          cont.invokeOnCancellation { manager.removeUpdates(listener) }
         }
       }
     }
+    return location ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no fix")
   }
 }

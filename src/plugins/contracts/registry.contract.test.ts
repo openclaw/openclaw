@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { resolvePluginWebSearchProviders } from "../web-search-providers.js";
 import {
   imageGenerationProviderContractRegistry,
   mediaUnderstandingProviderContractRegistry,
   pluginRegistrationContractRegistry,
+  providerContractLoadError,
   providerContractPluginIds,
   providerContractRegistry,
   speechProviderContractRegistry,
@@ -85,6 +86,11 @@ function findRegistrationForPlugin(pluginId: string) {
 }
 
 describe("plugin contract registry", () => {
+  it("loads bundled non-provider capability registries without import-time failure", () => {
+    expect(providerContractLoadError).toBeUndefined();
+    expect(pluginRegistrationContractRegistry.length).toBeGreaterThan(0);
+  });
+
   it("does not duplicate bundled provider ids", () => {
     const ids = providerContractRegistry.map((entry) => entry.provider.id);
     expect(ids).toEqual([...new Set(ids)]);
@@ -115,15 +121,31 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
-    const bundledWebSearchPluginIds = resolvePluginWebSearchProviders({})
-      .map((provider) => provider.pluginId)
-      .toSorted((left, right) => left.localeCompare(right));
+    const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});
 
     expect(
       [...new Set(webSearchProviderContractRegistry.map((entry) => entry.pluginId))].toSorted(
         (left, right) => left.localeCompare(right),
       ),
     ).toEqual(bundledWebSearchPluginIds);
+  });
+
+  it("keeps Kimi Coding onboarding grouped under Moonshot", () => {
+    const kimi = loadPluginManifestRegistry({}).plugins.find(
+      (plugin) => plugin.origin === "bundled" && plugin.id === "kimi",
+    );
+
+    expect(kimi?.providerAuthChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          choiceId: "kimi-code-api-key",
+          choiceLabel: "Kimi Code API key (subscription)",
+          groupId: "moonshot",
+          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupHint: "Kimi K2.5",
+        }),
+      ]),
+    );
   });
 
   it("does not duplicate bundled image-generation provider ids", () => {
@@ -138,10 +160,12 @@ describe("plugin contract registry", () => {
 
   it("keeps bundled web search ownership explicit", () => {
     expect(findWebSearchIdsForPlugin("brave")).toEqual(["brave"]);
+    expect(findWebSearchIdsForPlugin("exa")).toEqual(["exa"]);
     expect(findWebSearchIdsForPlugin("firecrawl")).toEqual(["firecrawl"]);
     expect(findWebSearchIdsForPlugin("google")).toEqual(["gemini"]);
     expect(findWebSearchIdsForPlugin("moonshot")).toEqual(["kimi"]);
     expect(findWebSearchIdsForPlugin("perplexity")).toEqual(["perplexity"]);
+    expect(findWebSearchIdsForPlugin("tavily")).toEqual(["tavily"]);
     expect(findWebSearchIdsForPlugin("xai")).toEqual(["grok"]);
   });
 
@@ -160,16 +184,28 @@ describe("plugin contract registry", () => {
     ]);
     expect(findMediaUnderstandingProviderIdsForPlugin("mistral")).toEqual(["mistral"]);
     expect(findMediaUnderstandingProviderIdsForPlugin("moonshot")).toEqual(["moonshot"]);
-    expect(findMediaUnderstandingProviderIdsForPlugin("openai")).toEqual(["openai"]);
+    expect(findMediaUnderstandingProviderIdsForPlugin("openai")).toEqual([
+      "openai",
+      "openai-codex",
+    ]);
     expect(findMediaUnderstandingProviderIdsForPlugin("zai")).toEqual(["zai"]);
   });
 
   it("keeps bundled image-generation ownership explicit", () => {
+    expect(findImageGenerationProviderIdsForPlugin("fal")).toEqual(["fal"]);
     expect(findImageGenerationProviderIdsForPlugin("google")).toEqual(["google"]);
     expect(findImageGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
   });
 
   it("keeps bundled provider and web search tool ownership explicit", () => {
+    expect(findRegistrationForPlugin("exa")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webSearchProviderIds: ["exa"],
+      toolNames: [],
+    });
     expect(findRegistrationForPlugin("firecrawl")).toMatchObject({
       providerIds: [],
       speechProviderIds: [],
@@ -178,9 +214,24 @@ describe("plugin contract registry", () => {
       webSearchProviderIds: ["firecrawl"],
       toolNames: ["firecrawl_search", "firecrawl_scrape"],
     });
+    expect(findRegistrationForPlugin("tavily")).toMatchObject({
+      providerIds: [],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: [],
+      webSearchProviderIds: ["tavily"],
+      toolNames: ["tavily_search", "tavily_extract"],
+    });
   });
 
   it("tracks speech registrations on bundled provider plugins", () => {
+    expect(findRegistrationForPlugin("fal")).toMatchObject({
+      providerIds: ["fal"],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: ["fal"],
+      webSearchProviderIds: [],
+    });
     expect(findRegistrationForPlugin("google")).toMatchObject({
       providerIds: ["google", "google-gemini-cli"],
       speechProviderIds: [],
@@ -191,7 +242,7 @@ describe("plugin contract registry", () => {
     expect(findRegistrationForPlugin("openai")).toMatchObject({
       providerIds: ["openai", "openai-codex"],
       speechProviderIds: ["openai"],
-      mediaUnderstandingProviderIds: ["openai"],
+      mediaUnderstandingProviderIds: ["openai", "openai-codex"],
       imageGenerationProviderIds: ["openai"],
     });
     expect(findRegistrationForPlugin("elevenlabs")).toMatchObject({
@@ -208,12 +259,13 @@ describe("plugin contract registry", () => {
     });
   });
 
-  it("tracks every provider, speech, media, or web search plugin in the registration registry", () => {
+  it("tracks every provider, speech, media, image, or web search plugin in the registration registry", () => {
     const expectedPluginIds = [
       ...new Set([
         ...providerContractRegistry.map((entry) => entry.pluginId),
         ...speechProviderContractRegistry.map((entry) => entry.pluginId),
         ...mediaUnderstandingProviderContractRegistry.map((entry) => entry.pluginId),
+        ...imageGenerationProviderContractRegistry.map((entry) => entry.pluginId),
         ...webSearchProviderContractRegistry.map((entry) => entry.pluginId),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));

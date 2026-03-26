@@ -1,15 +1,7 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import {
-  createScopedAccountConfigAccessors,
-  createScopedChannelConfigBase,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import {
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "openclaw/plugin-sdk/discord-core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -17,6 +9,13 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import {
+  createScopedChannelConfigAdapter,
+  buildChannelConfigSchema,
+  DiscordConfigSchema,
+  getChatChannelMeta,
+  type ChannelPlugin,
+} from "./runtime-api.js";
 import { createDiscordSetupWizardProxy } from "./setup-core.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
@@ -25,24 +24,20 @@ async function loadDiscordChannelRuntime() {
   return await import("./channel.runtime.js");
 }
 
-export const discordSetupWizard = createDiscordSetupWizardProxy(async () => ({
-  discordSetupWizard: (await loadDiscordChannelRuntime()).discordSetupWizard,
-}));
+export const discordSetupWizard = createDiscordSetupWizardProxy(
+  async () => (await loadDiscordChannelRuntime()).discordSetupWizard,
+);
 
-export const discordConfigAccessors = createScopedAccountConfigAccessors({
-  resolveAccount: ({ cfg, accountId }) => resolveDiscordAccount({ cfg, accountId }),
+export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
+  sectionKey: DISCORD_CHANNEL,
+  listAccountIds: listDiscordAccountIds,
+  resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
+  defaultAccountId: resolveDefaultDiscordAccountId,
+  clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
   resolveDefaultTo: (account: ResolvedDiscordAccount) => account.config.defaultTo,
-});
-
-export const discordConfigBase = createScopedChannelConfigBase<ResolvedDiscordAccount>({
-  sectionKey: DISCORD_CHANNEL,
-  listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
-  defaultAccountId: resolveDefaultDiscordAccountId,
-  clearBaseFields: ["token", "name"],
 });
 
 export function createDiscordPluginBase(params: {
@@ -77,16 +72,16 @@ export function createDiscordPluginBase(params: {
     reload: { configPrefixes: ["channels.discord"] },
     configSchema: buildChannelConfigSchema(DiscordConfigSchema),
     config: {
-      ...discordConfigBase,
+      ...discordConfigAdapter,
       isConfigured: (account) => Boolean(account.token?.trim()),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.token?.trim()),
-        tokenSource: account.tokenSource,
-      }),
-      ...discordConfigAccessors,
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.token?.trim()),
+          extra: {
+            tokenSource: account.tokenSource,
+          },
+        }),
     },
     setup: params.setup,
   }) as Pick<

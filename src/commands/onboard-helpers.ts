@@ -10,23 +10,22 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
-import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { isValidIPv4 } from "../gateway/net.js";
+import { detectBinary } from "../infra/detect-binary.js";
+import {
+  inspectBestEffortPrimaryTailnetIPv4,
+  pickBestEffortPrimaryLanIPv4,
+} from "../infra/network-discovery-display.js";
 import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  CONFIG_DIR,
-  resolveUserPath,
-  shortenHomeInString,
-  shortenHomePath,
-  sleep,
-} from "../utils.js";
+import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+
+export { detectBinary };
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -341,37 +340,6 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   }
 }
 
-export async function detectBinary(name: string): Promise<boolean> {
-  if (!name?.trim()) {
-    return false;
-  }
-  if (!isSafeExecutableValue(name)) {
-    return false;
-  }
-  const resolved = name.startsWith("~") ? resolveUserPath(name) : name;
-  if (
-    path.isAbsolute(resolved) ||
-    resolved.startsWith(".") ||
-    resolved.includes("/") ||
-    resolved.includes("\\")
-  ) {
-    try {
-      await fs.access(resolved);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
-  try {
-    const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
-    return result.code === 0 && result.stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function shouldSkipBrowserOpenInTests(): boolean {
   if (process.env.VITEST) {
     return true;
@@ -465,7 +433,7 @@ export function resolveControlUiLinks(params: {
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;
@@ -474,7 +442,7 @@ export function resolveControlUiLinks(params: {
       return tailnetIPv4 ?? "127.0.0.1";
     }
     if (bind === "lan") {
-      return pickPrimaryLanIPv4() ?? "127.0.0.1";
+      return pickBestEffortPrimaryLanIPv4() ?? "127.0.0.1";
     }
     return "127.0.0.1";
   })();

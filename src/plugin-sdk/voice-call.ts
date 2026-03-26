@@ -1,7 +1,7 @@
-// Narrow plugin-sdk surface for the bundled voice-call plugin.
-// Keep this list additive and scoped to symbols used under extensions/voice-call.
+// Private helper surface for the bundled voice-call plugin.
+// Keep this surface narrow and limited to the voice-call feature contract.
 
-export { definePluginEntry } from "./core.js";
+export { definePluginEntry } from "./plugin-entry.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,

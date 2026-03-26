@@ -6,7 +6,10 @@ import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import type { PluginCompatibilityNotice } from "../../plugins/status.js";
+import {
+  formatPluginCompatibilityNotice,
+  type PluginCompatibilityNotice,
+} from "../../plugins/status.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
@@ -184,7 +187,7 @@ export async function appendStatusAllDiagnosis(params: {
   );
   for (const notice of params.pluginCompatibility.slice(0, 12)) {
     const severity = notice.severity === "warn" ? "warn" : "info";
-    lines.push(`  - ${notice.pluginId} [${severity}] ${notice.message}`);
+    lines.push(`  - [${severity}] ${formatPluginCompatibilityNotice(notice)}`);
   }
   if (params.pluginCompatibility.length > 12) {
     lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);

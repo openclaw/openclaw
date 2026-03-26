@@ -1,5 +1,5 @@
 import { ChannelType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
@@ -11,11 +11,6 @@ import {
   registerSessionBindingAdapter,
 } from "../../../../src/infra/outbound/session-binding-service.js";
 import {
-  preflightDiscordMessage,
-  resolvePreflightMentionRequirement,
-  shouldIgnoreBoundThreadWebhookMessage,
-} from "./message-handler.preflight.js";
-import {
   createDiscordMessage,
   createDiscordPreflightArgs,
   createGuildEvent,
@@ -25,10 +20,21 @@ import {
   type DiscordConfig,
   type DiscordMessageEvent,
 } from "./message-handler.preflight.test-helpers.js";
-import {
-  __testing as threadBindingTesting,
-  createThreadBindingManager,
-} from "./thread-bindings.js";
+let preflightDiscordMessage: typeof import("./message-handler.preflight.js").preflightDiscordMessage;
+let resolvePreflightMentionRequirement: typeof import("./message-handler.preflight.js").resolvePreflightMentionRequirement;
+let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.preflight.js").shouldIgnoreBoundThreadWebhookMessage;
+let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
+
+beforeAll(async () => {
+  ({
+    preflightDiscordMessage,
+    resolvePreflightMentionRequirement,
+    shouldIgnoreBoundThreadWebhookMessage,
+  } = await import("./message-handler.preflight.js"));
+  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+    await import("./thread-bindings.js"));
+});
 
 function createThreadBinding(
   overrides?: Partial<

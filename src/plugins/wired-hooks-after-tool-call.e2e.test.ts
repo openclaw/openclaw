@@ -37,6 +37,7 @@ function createToolHandlerCtx(params: {
       sessionId: params.sessionId,
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
+    hookRunner: hookMocks.runner,
     state: {
       toolMetaById: new Map<string, string | undefined>(),
       ...createBaseToolHandlerState(),

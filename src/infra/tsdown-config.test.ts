@@ -34,10 +34,19 @@ describe("tsdown config", () => {
     expect(distGraphs).toHaveLength(1);
     expect(entryKeys(distGraphs[0])).toEqual(
       expect.arrayContaining([
+        "agents/auth-profiles.runtime",
+        "agents/pi-model-discovery-runtime",
         "index",
+        "cli/memory-cli",
+        "commands/status.summary.runtime",
+        "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
+        "plugin-sdk/compat",
         "plugin-sdk/index",
         "extensions/openai/index",
+        "extensions/matrix/index",
+        "extensions/msteams/index",
+        "extensions/whatsapp/index",
         "bundled/boot-md/handler",
       ]),
     );

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
@@ -58,10 +58,14 @@ let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
+});
+
+beforeEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function resolveTelegramFetchOrThrow(
@@ -82,6 +86,7 @@ function getDispatcherFromUndiciCall(nth: number) {
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined;
@@ -127,10 +132,11 @@ function expectStickyAutoSelectDispatcher(
         options?: {
           connect?: Record<string, unknown>;
           proxyTls?: Record<string, unknown>;
+          requestTls?: Record<string, unknown>;
         };
       }
     | undefined,
-  field: "connect" | "proxyTls" = "connect",
+  field: "connect" | "proxyTls" | "requestTls" = "connect",
 ): void {
   expect(dispatcher?.options?.[field]).toEqual(
     expect.objectContaining({
@@ -190,7 +196,7 @@ function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unkn
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
-  field: "connect" | "proxyTls";
+  field: "connect" | "proxyTls" | "requestTls";
 }) {
   await expect(params.resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
     "fetch failed",
@@ -216,7 +222,6 @@ afterEach(() => {
   ProxyAgentCtor.mockClear();
   setDefaultResultOrder.mockReset();
   setDefaultAutoSelectFamily.mockReset();
-  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -350,7 +355,7 @@ describe("resolveTelegramFetch", () => {
         uri: "http://127.0.0.1:7890",
       }),
     );
-    expect(dispatcher?.options?.proxyTls).toEqual(
+    expect(dispatcher?.options?.requestTls).toEqual(
       expect.objectContaining({
         autoSelectFamily: false,
       }),
@@ -373,7 +378,7 @@ describe("resolveTelegramFetch", () => {
     await expectNoStickyRetryWithSameDispatcher({
       resolved,
       expectedAgentCtor: ProxyAgentCtor,
-      field: "proxyTls",
+      field: "requestTls",
     });
   });
 

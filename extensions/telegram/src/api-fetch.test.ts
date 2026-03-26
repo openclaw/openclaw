@@ -1,5 +1,55 @@
-import { describe, expect, it, vi } from "vitest";
+import { createRequire } from "node:module";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
+
+const require = createRequire(import.meta.url);
+const EnvHttpProxyAgent = require("undici/lib/dispatcher/env-http-proxy-agent.js") as {
+  new (opts?: Record<string, unknown>): Record<PropertyKey, unknown>;
+};
+const { kHttpsProxyAgent, kNoProxyAgent } = require("undici/lib/core/symbols.js") as {
+  kHttpsProxyAgent: symbol;
+  kNoProxyAgent: symbol;
+};
+const proxyMocks = vi.hoisted(() => {
+  const undiciFetch = vi.fn();
+  const proxyAgentSpy = vi.fn();
+  const setGlobalDispatcher = vi.fn();
+  class ProxyAgent {
+    static lastCreated: ProxyAgent | undefined;
+    proxyUrl: string;
+    constructor(proxyUrl: string) {
+      this.proxyUrl = proxyUrl;
+      ProxyAgent.lastCreated = this;
+      proxyAgentSpy(proxyUrl);
+    }
+  }
+
+  return {
+    ProxyAgent,
+    undiciFetch,
+    proxyAgentSpy,
+    setGlobalDispatcher,
+    getLastAgent: () => ProxyAgent.lastCreated,
+  };
+});
+
+let getProxyUrlFromFetch: typeof import("./proxy.js").getProxyUrlFromFetch;
+let makeProxyFetch: typeof import("./proxy.js").makeProxyFetch;
+
+function getOwnSymbolValue(
+  target: Record<PropertyKey, unknown>,
+  description: string,
+): Record<string, unknown> | undefined {
+  const symbol = Object.getOwnPropertySymbols(target).find(
+    (entry) => entry.description === description,
+  );
+  const value = symbol ? target[symbol] : undefined;
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("fetchTelegramChatId", () => {
   const cases = [
@@ -53,5 +103,98 @@ describe("fetchTelegramChatId", () => {
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
       undefined,
     );
+  });
+
+  it("uses caller-provided fetch impl when present", async () => {
+    const customFetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: { id: 12345 } }),
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("global fetch should not be called");
+      }),
+    );
+
+    await fetchTelegramChatId({
+      token: "abc",
+      chatId: "@user",
+      fetchImpl: customFetch as unknown as typeof fetch,
+    });
+
+    expect(customFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/botabc/getChat?chat_id=%40user",
+      undefined,
+    );
+  });
+});
+
+describe("undici env proxy semantics", () => {
+  it("uses proxyTls rather than connect for proxied HTTPS transport settings", () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    const connect = {
+      family: 4,
+      autoSelectFamily: false,
+    };
+
+    const withoutProxyTls = new EnvHttpProxyAgent({ connect });
+    const noProxyAgent = withoutProxyTls[kNoProxyAgent] as Record<PropertyKey, unknown>;
+    const httpsProxyAgent = withoutProxyTls[kHttpsProxyAgent] as Record<PropertyKey, unknown>;
+
+    expect(getOwnSymbolValue(noProxyAgent, "options")?.connect).toEqual(
+      expect.objectContaining(connect),
+    );
+    expect(getOwnSymbolValue(httpsProxyAgent, "proxy tls settings")).toBeUndefined();
+
+    const withProxyTls = new EnvHttpProxyAgent({
+      connect,
+      proxyTls: connect,
+    });
+    const httpsProxyAgentWithProxyTls = withProxyTls[kHttpsProxyAgent] as Record<
+      PropertyKey,
+      unknown
+    >;
+
+    expect(getOwnSymbolValue(httpsProxyAgentWithProxyTls, "proxy tls settings")).toEqual(
+      expect.objectContaining(connect),
+    );
+  });
+});
+
+describe("makeProxyFetch", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    proxyMocks.undiciFetch.mockReset();
+    proxyMocks.proxyAgentSpy.mockClear();
+    proxyMocks.setGlobalDispatcher.mockClear();
+    vi.doMock("undici", () => ({
+      ProxyAgent: proxyMocks.ProxyAgent,
+      fetch: proxyMocks.undiciFetch,
+      setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+    }));
+    ({ getProxyUrlFromFetch, makeProxyFetch } = await import("./proxy.js"));
+  });
+
+  it("uses undici fetch with ProxyAgent dispatcher", async () => {
+    const proxyUrl = "http://proxy.test:8080";
+    proxyMocks.undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch(proxyUrl);
+    await proxyFetch("https://api.telegram.org/bot123/getMe");
+
+    expect(proxyMocks.proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
+    expect(proxyMocks.undiciFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/bot123/getMe",
+      expect.objectContaining({ dispatcher: proxyMocks.getLastAgent() }),
+    );
+    expect(proxyMocks.setGlobalDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("attaches proxy metadata for resolver transport handling", () => {
+    const proxyUrl = "http://proxy.test:8080";
+    const proxyFetch = makeProxyFetch(proxyUrl);
+
+    expect(getProxyUrlFromFetch(proxyFetch)).toBe(proxyUrl);
   });
 });
