@@ -57,13 +57,16 @@ export async function runPreHook(
             return;
           }
           // On Node 22, error.status may be undefined regardless of actual exit
-          // code when maxBuffer fires. Default to "skip" (conservative) — we
-          // can't verify the hook passed, so don't run the job.
+          // code when maxBuffer fires. Treat as an error — we can't verify the
+          // hook passed, and silently downgrading to "skip" masks broken hooks
+          // that print large output (suppresses error/backoff/failure-alert).
           if (mbStatus === undefined) {
             resolve({
-              outcome: "skip",
+              outcome: "error",
+              exitCode: undefined,
               stdout: String(stdout),
               stderr: String(stderr),
+              message: "preHook output exceeded maxBuffer (64 KB); exit status unknown",
             });
             return;
           }

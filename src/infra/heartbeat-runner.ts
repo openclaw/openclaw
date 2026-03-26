@@ -575,7 +575,27 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "requests-in-flight" };
   }
 
+  // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
+  // Run this BEFORE the pre-hook so that we don't execute the shell command for runs
+  // that preflight would skip anyway (e.g. empty-heartbeat-file, quiet-hours, etc.).
+  const preflight = await resolveHeartbeatPreflight({
+    cfg,
+    agentId,
+    heartbeat,
+    forcedSessionKey: opts.sessionKey,
+    reason: opts.reason,
+  });
+  if (preflight.skipReason) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: preflight.skipReason,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: preflight.skipReason };
+  }
+
   // Pre-hook gate: run optional shell command before the heartbeat.
+  // Placed after preflight so the hook only runs for heartbeats that will actually execute.
   // Fall back to the resolved agent default preHook when the override omits it
   // (e.g. cron wake-now passes partial heartbeat: { target: "last" }).
   const resolvedHb = resolveHeartbeatConfig(cfg, agentId);
@@ -594,23 +614,6 @@ export async function runHeartbeatOnce(opts: {
       );
       return { status: "failed", reason: `pre-hook: ${hookResult.message}` };
     }
-  }
-
-  // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
-  const preflight = await resolveHeartbeatPreflight({
-    cfg,
-    agentId,
-    heartbeat,
-    forcedSessionKey: opts.sessionKey,
-    reason: opts.reason,
-  });
-  if (preflight.skipReason) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: preflight.skipReason,
-      durationMs: Date.now() - startedAt,
-    });
-    return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
 
