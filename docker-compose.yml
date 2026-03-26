@@ -10,7 +10,21 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      SUPABASE_ACCESS_TOKEN: ${SUPABASE_ACCESS_TOKEN}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      VERCEL_TOKEN: ${VERCEL_TOKEN}
+      OPENCLAW_EXEC_SHELL: ${OPENCLAW_EXEC_SHELL}
+      OPENCLAW_APPROVAL_POLICY: ${OPENCLAW_APPROVAL_POLICY}
+      OPENCLAW_AGENT_LOOP_ENABLED: ${OPENCLAW_AGENT_LOOP_ENABLED}
+      OPENCLAW_AGENT_LOOP_MAX_STEPS: ${OPENCLAW_AGENT_LOOP_MAX_STEPS}
+      OPENCLAW_AGENT_LOOP_MAX_SECONDS: ${OPENCLAW_AGENT_LOOP_MAX_SECONDS}
+      OPENCLAW_ARTIFACTS_DIR: /usr/local/share/artifacts
+      OPENCLAW_LOGS_DIR: /usr/local/share/logs
+      OPENCLAW_SCRIPTS_DIR: /usr/local/share/scripts
     volumes:
+      - ./artifacts:/usr/local/share/artifacts:rw
+      - ./logs:/usr/local/share/logs:rw
+      - ./scripts:/usr/local/share/scripts:ro
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
       ## Uncomment the lines below to enable sandbox isolation
@@ -21,6 +35,9 @@ services:
       # - /var/run/docker.sock:/var/run/docker.sock
     # group_add:
     #   - "${DOCKER_GID:-999}"
+      - /media/SAS/Van/HybridStackPPI:/mnt/HybridStackPPI:rw
+      - /media/SAS/Van/Unified_Vista:/mnt/Unified_Vista:rw
+      - /opt/openclaw/bin/guard-shell:/usr/local/bin/guard-shell:ro
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -67,12 +84,45 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      SUPABASE_ACCESS_TOKEN: ${SUPABASE_ACCESS_TOKEN}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      VERCEL_TOKEN: ${VERCEL_TOKEN}
+      OPENCLAW_EXEC_SHELL: ${OPENCLAW_EXEC_SHELL}
+      OPENCLAW_APPROVAL_POLICY: ${OPENCLAW_APPROVAL_POLICY}
+      OPENCLAW_AGENT_LOOP_ENABLED: ${OPENCLAW_AGENT_LOOP_ENABLED}
+      OPENCLAW_AGENT_LOOP_MAX_STEPS: ${OPENCLAW_AGENT_LOOP_MAX_STEPS}
+      OPENCLAW_AGENT_LOOP_MAX_SECONDS: ${OPENCLAW_AGENT_LOOP_MAX_SECONDS}
+      OPENCLAW_ARTIFACTS_DIR: /usr/local/share/artifacts
+      OPENCLAW_LOGS_DIR: /usr/local/share/logs
+      OPENCLAW_SCRIPTS_DIR: /usr/local/share/scripts
     volumes:
+      - ./artifacts:/usr/local/share/artifacts:rw
+      - ./logs:/usr/local/share/logs:rw
+      - ./scripts:/usr/local/share/scripts:ro
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - /media/SAS/Van/HybridStackPPI:/mnt/HybridStackPPI:rw
+      - /media/SAS/Van/Unified_Vista:/mnt/Unified_Vista:rw
+      - /opt/openclaw/bin/guard-shell:/usr/local/bin/guard-shell:ro
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  browser-worker:
+    image: mcr.microsoft.com/playwright:v1.44.0-jammy
+    environment:
+      TZ: ${OPENCLAW_TZ:-UTC}
+      PLAYWRIGHT_BROWSERS_PATH: /usr/local/share/browsers
+    volumes:
+      - ./artifacts:/usr/local/share/artifacts:rw
+      - ./logs:/usr/local/share/logs:rw
+      - ./scripts:/usr/local/share/scripts:ro
+      - ${OPENCLAW_WORKSPACE_DIR:-./workspace}:/home/node/.openclaw/workspace
+    working_dir: /usr/local/share/scripts
+    command: ["tail", "-f", "/dev/null"]
+    restart: unless-stopped
+    security_opt:
+      - seccomp:unconfined
