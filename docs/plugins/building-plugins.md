@@ -128,19 +128,20 @@ and provider plugins have dedicated guides linked above.
 
 A single plugin can register any number of capabilities via the `api` object:
 
-| Capability           | Registration method                           | Detailed guide                                                                  |
-| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
-| Text inference (LLM) | `api.registerProvider(...)`                   | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
-| Channel / messaging  | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
-| Speech (TTS/STT)     | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Media understanding  | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Image generation     | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Web search           | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Agent tools          | `api.registerTool(...)`                       | Below                                                                           |
-| Custom commands      | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks          | `api.registerHook(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| HTTP routes          | `api.registerHttpRoute(...)`                  | [Internals](/plugins/architecture#gateway-http-routes)                          |
-| CLI subcommands      | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Capability            | Registration method                           | Detailed guide                                                                  |
+| --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| Text inference (LLM)  | `api.registerProvider(...)`                   | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
+| CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
+| Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
+| Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Agent tools           | `api.registerTool(...)`                       | Below                                                                           |
+| Custom commands       | `api.registerCommand(...)`                    | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Event hooks           | `api.registerHook(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| HTTP routes           | `api.registerHttpRoute(...)`                  | [Internals](/plugins/architecture#gateway-http-routes)                          |
+| CLI subcommands       | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
