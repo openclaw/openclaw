@@ -369,6 +369,39 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
+  it("preserves edited non-secret SecretRef fields when id is redacted on round-trip", () => {
+    // Codex P1/P2: restoring a partially-redacted SecretRef should only substitute
+    // the secret id from the snapshot, not discard edits to source/provider.
+    const original = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(original, JSON.stringify(original, null, 2));
+    const redacted = redactConfigSnapshot(snapshot, mainSchemaHints);
+    const parsed = JSON5.parse(redacted.raw ?? "{}");
+    expect(parsed.channels.discord.token.id).toBe(REDACTED_SENTINEL);
+
+    // Simulate the user editing provider to "op" while id stays redacted.
+    const incoming = {
+      ...parsed,
+      channels: {
+        discord: {
+          token: { ...parsed.channels.discord.token, provider: "op" },
+        },
+      },
+    };
+    const restored = restoreRedactedValues(incoming, snapshot.config, mainSchemaHints);
+    // Real id must be restored from the snapshot.
+    expect(restored.channels.discord.token.id).toBe("DISCORD_BOT_TOKEN");
+    // User's provider edit must be kept.
+    expect(restored.channels.discord.token.provider).toBe("op");
+    // Source was unchanged, should pass through.
+    expect(restored.channels.discord.token.source).toBe("env");
+  });
+
   it("redacts parsed and resolved objects", () => {
     const snapshot = makeSnapshot({
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },

@@ -668,7 +668,13 @@ function restoreRedactedValuesWithLookup(
             isSecretRefShape(objValue) &&
             objValue.id === REDACTED_SENTINEL
           ) {
-            result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+            // Restore only the secret id from the snapshot; preserve any edits the
+            // user made to non-secret fields (source, provider, etc.) in this save.
+            const origRef = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+            result[key] =
+              typeof origRef === "object" && origRef !== null
+                ? { ...objValue, id: (origRef as Record<string, unknown>).id }
+                : origRef;
           } else {
             result[key] = restoreRedactedValuesWithLookup(
               value,
