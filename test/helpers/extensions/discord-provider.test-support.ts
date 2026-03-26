@@ -34,14 +34,18 @@ type ProviderMonitorTestMocks = {
       signal?: AbortSignal;
     }) => Promise<{ state: string }>
   >;
-  getPluginCommandSpecsMock: Mock<() => PluginCommandSpecMock[]>;
-  listNativeCommandSpecsForConfigMock: Mock<() => NativeCommandSpecMock[]>;
-  listSkillCommandsForAgentsMock: Mock<() => unknown[]>;
+  getPluginCommandSpecsMock: Mock<(provider?: string) => PluginCommandSpecMock[]>;
+  listNativeCommandSpecsForConfigMock: Mock<
+    (cfg?: unknown, params?: { skillCommands?: unknown[]; provider?: string }) => NativeCommandSpecMock[]
+  >;
+  listSkillCommandsForAgentsMock: Mock<(params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]>;
   monitorLifecycleMock: Mock<(params: { threadBindings: { stop: () => void } }) => Promise<void>>;
-  resolveDiscordAccountMock: Mock<() => unknown>;
+  resolveDiscordAccountMock: Mock<
+    (params?: { cfg?: unknown; accountId?: string | null; token?: string | null }) => unknown
+  >;
   resolveDiscordAllowlistConfigMock: Mock<() => Promise<unknown>>;
-  resolveNativeCommandsEnabledMock: Mock<() => boolean>;
-  resolveNativeSkillsEnabledMock: Mock<() => boolean>;
+  resolveNativeCommandsEnabledMock: Mock<(params?: unknown) => boolean>;
+  resolveNativeSkillsEnabledMock: Mock<(params?: unknown) => boolean>;
   isVerboseMock: Mock<() => boolean>;
   shouldLogVerboseMock: Mock<() => boolean>;
   voiceRuntimeModuleLoadedMock: Mock<() => void>;
@@ -105,15 +109,17 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
         state: "idle",
       }),
     ),
-    getPluginCommandSpecsMock: vi.fn<() => PluginCommandSpecMock[]>(() => []),
-    listNativeCommandSpecsForConfigMock: vi.fn<() => NativeCommandSpecMock[]>(() => [
+    getPluginCommandSpecsMock: vi.fn<(provider?: string) => PluginCommandSpecMock[]>(() => []),
+    listNativeCommandSpecsForConfigMock: vi.fn<
+      (cfg?: unknown, params?: { skillCommands?: unknown[]; provider?: string }) => NativeCommandSpecMock[]
+    >(() => [
       { name: "cmd", description: "built-in", acceptsArgs: false },
     ]),
-    listSkillCommandsForAgentsMock: vi.fn(() => []),
+    listSkillCommandsForAgentsMock: vi.fn<(params?: { cfg?: unknown; agentIds?: string[] }) => unknown[]>(() => []),
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
-    resolveDiscordAccountMock: vi.fn(() => ({
+    resolveDiscordAccountMock: vi.fn((_) => ({
       accountId: "default",
       token: "cfg-token",
       config: baseDiscordAccountConfig(),
@@ -122,8 +128,8 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
       guildEntries: undefined,
       allowFrom: undefined,
     })),
-    resolveNativeCommandsEnabledMock: vi.fn(() => true),
-    resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    resolveNativeCommandsEnabledMock: vi.fn((_params) => true),
+    resolveNativeSkillsEnabledMock: vi.fn((_params) => false),
     isVerboseMock,
     shouldLogVerboseMock,
     voiceRuntimeModuleLoadedMock: vi.fn(),
