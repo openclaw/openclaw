@@ -373,4 +373,41 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("phi_tool");
   });
+
+  it("should NOT treat 'Action:' as a tool call if tools are not provided", async () => {
+    const textWithAction = 'I will help you. Action: {"tool": "phi_tool", "args": {}}';
+    const nativeStreamFn = createMockNativeStreamFn(textWithAction);
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId: "phi-2",
+      providerId: "phi-2",
+      providerType: "ollama",
+      toolFallback: "react",
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line no-explicit-any
+      { id: "phi-2", api: "test", provider: "ollama" } as unknown as any,
+      // NO TOOLS PROVIDED
+      // eslint-disable-next-line no-explicit-any
+      { tools: [] } as unknown as any,
+      {},
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const chunk of stream) {
+      events.push(chunk as Record<string, unknown>);
+    }
+
+    const doneEvent = events[0];
+    const message = doneEvent.message as Record<string, unknown>;
+    const content = message.content as Array<Record<string, unknown>>;
+
+    const toolCalls = content.filter((p) => p.type === "toolCall");
+    // Should NOT find any tool calls because tools were empty
+    expect(toolCalls).toHaveLength(0);
+
+    const textPart = (content.find((p) => p.type === "text") as { type: string; text: string })
+      .text;
+    expect(textPart).toBe(textWithAction);
+  });
 });

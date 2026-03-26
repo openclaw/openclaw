@@ -268,7 +268,12 @@ export function wrapStreamFnWithReActFallback(
                   .filter((p) => p.type === "text")
                   .map((p) => p.text ?? "")
                   .join("");
-                if (textOutput.includes("Action:") || textOutput.includes("Thought:")) {
+                const hasTools = (context.tools?.length ?? 0) > 0;
+                if (
+                  hasTools &&
+                  (/(?:^|[\r\n])Action:/g.test(textOutput) ||
+                    /(?:^|[\r\n])Thought:/g.test(textOutput))
+                ) {
                   hasReActAction = true;
                 }
               }
