@@ -467,7 +467,7 @@ async function handleSessionSend(params: {
   });
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
-      reactivateCompletedSubagentSession({
+      await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
       });
