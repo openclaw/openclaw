@@ -59,7 +59,7 @@ internal static class ExecSystemRunCommandValidator
         if (normalizedRaw is not null && normalizedRaw != inferred && normalizedRaw != fullArgvDisplay)
             return new ValidationResult.Invalid("INVALID_REQUEST: rawCommand does not match command");
 
-        return new ValidationResult.Ok(new ResolvedCommand(inferred));
+        return new ValidationResult.Ok(new ResolvedCommand(fullArgvDisplay));
     }
 
     private static string? NormalizeRaw(string? rawCommand)
