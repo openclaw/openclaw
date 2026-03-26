@@ -16,12 +16,13 @@ export function extractToolCards(message: unknown): ToolCard[] {
     const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
     const isToolCall =
       ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
-      (typeof item.name === "string" && item.arguments != null);
+      (typeof item.name === "string" &&
+        (item.arguments != null || item.args != null || item.input != null));
     if (isToolCall) {
       cards.push({
         kind: "call",
         name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        args: coerceArgs(item.arguments ?? item.args ?? item.input),
       });
     }
   }

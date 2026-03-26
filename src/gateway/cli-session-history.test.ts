@@ -47,6 +47,41 @@ function createClaudeHistoryLines(sessionId: string) {
       },
     }),
     JSON.stringify({
+      type: "assistant",
+      uuid: "assistant-2",
+      timestamp: "2026-03-26T16:29:56.000Z",
+      message: {
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_123",
+            name: "Bash",
+            input: {
+              command: "pwd",
+            },
+          },
+        ],
+        stop_reason: "tool_use",
+      },
+    }),
+    JSON.stringify({
+      type: "user",
+      uuid: "user-2",
+      timestamp: "2026-03-26T16:29:56.400Z",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_123",
+            content: "/tmp/demo",
+          },
+        ],
+      },
+    }),
+    JSON.stringify({
       type: "last-prompt",
       sessionId,
       lastPrompt: "ignored",
@@ -90,7 +125,7 @@ describe("cli session history", () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       expect(resolveClaudeCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(filePath);
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
-      expect(messages).toHaveLength(2);
+      expect(messages).toHaveLength(3);
       expect(messages[0]).toMatchObject({
         role: "user",
         content: expect.stringContaining("[Thu 2026-03-26 16:29 GMT] hi"),
@@ -115,6 +150,25 @@ describe("cli session history", () => {
           externalId: "assistant-1",
           cliSessionId: sessionId,
         },
+      });
+      expect(messages[2]).toMatchObject({
+        role: "assistant",
+        content: [
+          {
+            type: "toolcall",
+            id: "toolu_123",
+            name: "Bash",
+            arguments: {
+              command: "pwd",
+            },
+          },
+          {
+            type: "tool_result",
+            name: "Bash",
+            content: "/tmp/demo",
+            tool_use_id: "toolu_123",
+          },
+        ],
       });
     });
   });
@@ -193,7 +247,7 @@ describe("cli session history", () => {
         localMessages: [],
         homeDir,
       });
-      expect(messages).toHaveLength(2);
+      expect(messages).toHaveLength(3);
       expect(messages[0]).toMatchObject({
         role: "user",
         __openclaw: { cliSessionId: sessionId },
@@ -215,7 +269,7 @@ describe("cli session history", () => {
         localMessages: [],
         homeDir,
       });
-      expect(messages).toHaveLength(2);
+      expect(messages).toHaveLength(3);
       expect(messages[1]).toMatchObject({
         role: "assistant",
         __openclaw: { cliSessionId: sessionId },
@@ -235,7 +289,7 @@ describe("cli session history", () => {
         localMessages: [],
         homeDir,
       });
-      expect(messages).toHaveLength(2);
+      expect(messages).toHaveLength(3);
       expect(messages[0]).toMatchObject({
         role: "user",
         __openclaw: { cliSessionId: sessionId },
