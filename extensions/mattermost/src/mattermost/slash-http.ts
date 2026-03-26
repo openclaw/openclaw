@@ -316,6 +316,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
+          cfg,
           accountId: account.accountId,
         });
       } catch {
@@ -387,6 +388,7 @@ async function handleSlashCommandAsync(params: {
     const data = await buildModelsProviderData(cfg, route.agentId);
     if (data.providers.length === 0) {
       await sendMessageMattermost(to, "No models available.", {
+        cfg,
         accountId: account.accountId,
       });
       return;
@@ -418,6 +420,7 @@ async function handleSlashCommandAsync(params: {
             });
 
     await sendMessageMattermost(to, view.text, {
+      cfg,
       accountId: account.accountId,
       buttons: view.buttons,
     });
