@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -26,6 +27,7 @@ import {
   buildCliArgs,
   buildSystemPrompt,
   enqueueCliRun,
+  loadPromptRefImages,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
@@ -221,8 +223,12 @@ export async function runCliAgent(params: {
     let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
       preserveExactPrompt: heartbeatPrompt,
     });
-    if (params.images && params.images.length > 0) {
-      const imagePayload = await writeCliImages(params.images);
+    const resolvedImages =
+      params.images && params.images.length > 0
+        ? params.images
+        : await loadPromptRefImages({ prompt, workspaceDir });
+    if (resolvedImages.length > 0) {
+      const imagePayload = await writeCliImages(resolvedImages);
       imagePaths = imagePayload.paths;
       cleanupImages = imagePayload.cleanup;
       if (!backend.imageArg) {
@@ -296,7 +302,11 @@ export async function runCliAgent(params: {
         }
 
         const env = (() => {
-          const next = { ...process.env, ...backend.env };
+          const next = sanitizeHostExecEnv({
+            baseEnv: process.env,
+            overrides: backend.env,
+            blockPathOverrides: true,
+          });
           for (const key of backend.clearEnv ?? []) {
             delete next[key];
           }

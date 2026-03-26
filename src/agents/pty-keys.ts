@@ -14,6 +14,16 @@ type Modifiers = {
   shift: boolean;
 };
 
+/** SS3 sequences for DECCKM application cursor key mode (smkx). */
+const DECCKM_SS3_KEYS: Record<string, string> = {
+  up: `${ESC}OA`,
+  down: `${ESC}OB`,
+  right: `${ESC}OC`,
+  left: `${ESC}OD`,
+  home: `${ESC}OH`,
+  end: `${ESC}OF`,
+};
+
 const namedKeyMap = new Map<string, string>([
   ["enter", CR],
   ["return", CR],
@@ -102,7 +112,26 @@ export type KeyEncodingResult = {
   warnings: string[];
 };
 
-export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResult {
+export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
+  return (
+    request.keys?.some((raw) => {
+      const token = raw.trim();
+      if (!token) {
+        return false;
+      }
+      const parsed = parseModifiers(token);
+      if (hasAnyModifier(parsed.mods)) {
+        return false;
+      }
+      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
+    }) ?? false
+  );
+}
+
+export function encodeKeySequence(
+  request: KeyEncodingRequest,
+  cursorKeyMode?: "normal" | "application",
+): KeyEncodingResult {
   const warnings: string[] = [];
   let data = "";
 
@@ -123,7 +152,7 @@ export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResul
 
   if (request.keys?.length) {
     for (const token of request.keys) {
-      data += encodeKeyToken(token, warnings);
+      data += encodeKeyToken(token, warnings, cursorKeyMode);
     }
   }
 
@@ -137,7 +166,11 @@ export function encodePaste(text: string, bracketed = true): string {
   return `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
 }
 
-function encodeKeyToken(raw: string, warnings: string[]): string {
+function encodeKeyToken(
+  raw: string,
+  warnings: string[],
+  cursorKeyMode?: "normal" | "application",
+): string {
   const token = raw.trim();
   if (!token) {
     return "";
@@ -156,6 +189,19 @@ function encodeKeyToken(raw: string, warnings: string[]): string {
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
+  }
+
+  // Handle arrow keys specially based on cursor key mode.
+  // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
+  if (
+    modifiableNamedKeys.has(baseLower) &&
+    cursorKeyMode === "application" &&
+    !hasAnyModifier(parsed.mods)
+  ) {
+    const ss3Seq = DECCKM_SS3_KEYS[baseLower];
+    if (ss3Seq) {
+      return ss3Seq;
+    }
   }
 
   const baseSeq = namedKeyMap.get(baseLower);

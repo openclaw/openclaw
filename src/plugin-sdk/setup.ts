@@ -1,4 +1,4 @@
-// Shared setup wizard/types/helpers for extension setup surfaces and adapters.
+// Shared setup wizard/types/helpers for plugin and channel setup surfaces.
 
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
@@ -6,7 +6,10 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
-export type { ChannelSetupDmPolicy } from "../channels/plugins/setup-wizard-types.js";
+export type {
+  ChannelSetupDmPolicy,
+  ChannelSetupWizardAdapter,
+} from "../channels/plugins/setup-wizard-types.js";
 export type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
@@ -37,6 +40,9 @@ export {
   createAccountScopedGroupAccessSection,
   createAllowFromSection,
   createLegacyCompatChannelDmPolicy,
+  createNestedChannelParsedAllowFromPrompt,
+  createPromptParsedAllowFromForAccount,
+  createStandardChannelSetupStatus,
   createNestedChannelAllowFromSetter,
   createNestedChannelDmPolicy,
   createNestedChannelDmPolicySetter,
@@ -44,6 +50,7 @@ export {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelDmPolicySetter,
   createTopLevelChannelGroupPolicySetter,
+  createTopLevelChannelParsedAllowFromPrompt,
   mergeAllowFromEntries,
   normalizeAllowFromEntries,
   noteChannelLookupFailure,

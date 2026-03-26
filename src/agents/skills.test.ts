@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -73,6 +78,10 @@ afterAll(async () => {
     tempHome = null;
   }
   await fixtureSuite.cleanup();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -153,6 +162,55 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+  });
+
+  it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
+      [
+        "---",
+        "name: workflows:review",
+        "description: Review code with a structured checklist",
+        "---",
+        "Review the branch carefully.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        plugins: {
+          entries: {
+            "compound-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workflows_review",
+          skillName: "workflows:review",
+          description: "Review code with a structured checklist",
+          promptTemplate: "Review the branch carefully.",
+        }),
+      ]),
+    );
+    expect(
+      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
+    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
   });
 });
 
@@ -314,6 +372,50 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("snap-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: sourceConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();

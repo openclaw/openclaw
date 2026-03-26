@@ -1,14 +1,11 @@
-import type {
-  DiscordAccountConfig,
-  DiscordActionConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/discord-core";
 import {
   createAccountActionGate,
   createAccountListHelpers,
+  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import type { DiscordAccountConfig, DiscordActionConfig, OpenClawConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -35,11 +32,13 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<DiscordAccountConfig>({
+    channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
+    accounts: cfg.channels?.discord?.accounts as
+      | Record<string, Partial<DiscordAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function createDiscordActionGate(params: {

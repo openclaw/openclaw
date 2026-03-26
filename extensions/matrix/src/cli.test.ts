@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatZonedTimestamp } from "../runtime-api.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
 const getMatrixRoomKeyBackupStatusMock = vi.fn();
@@ -20,6 +20,8 @@ const setMatrixSdkConsoleLoggingMock = vi.fn();
 const setMatrixSdkLogModeMock = vi.fn();
 const updateMatrixOwnProfileMock = vi.fn();
 const verifyMatrixRecoveryKeyMock = vi.fn();
+const consoleLogMock = vi.fn();
+const consoleErrorMock = vi.fn();
 
 vi.mock("./matrix/actions/verification.js", () => ({
   bootstrapMatrixVerification: (...args: unknown[]) => bootstrapMatrixVerificationMock(...args),
@@ -82,12 +84,43 @@ function formatExpectedLocalTimestamp(value: string): string {
   return formatZonedTimestamp(new Date(value), { displaySeconds: true }) ?? value;
 }
 
+function mockMatrixVerificationStatus(params: {
+  recoveryKeyCreatedAt: string | null;
+  verifiedAt?: string;
+}) {
+  getMatrixVerificationStatusMock.mockResolvedValue({
+    encryptionEnabled: true,
+    verified: true,
+    localVerified: true,
+    crossSigningVerified: true,
+    signedByOwner: true,
+    userId: "@bot:example.org",
+    deviceId: "DEVICE123",
+    backupVersion: "1",
+    backup: {
+      serverVersion: "1",
+      activeVersion: "1",
+      trusted: true,
+      matchesDecryptionKey: true,
+      decryptionKeyCached: true,
+    },
+    recoveryKeyStored: true,
+    recoveryKeyCreatedAt: params.recoveryKeyCreatedAt,
+    pendingVerifications: 0,
+    verifiedAt: params.verifiedAt,
+  });
+}
+
 describe("matrix CLI verification commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.exitCode = undefined;
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) =>
+      consoleErrorMock(...args),
+    );
+    consoleLogMock.mockReset();
+    consoleErrorMock.mockReset();
     matrixSetupValidateInputMock.mockReturnValue(null);
     matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
     matrixRuntimeLoadConfigMock.mockReturnValue({});
@@ -521,9 +554,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(
-      -1,
-    )?.[0];
+    const jsonOutput = consoleLogMock.mock.calls.at(-1)?.[0];
     expect(typeof jsonOutput).toBe("string");
     expect(JSON.parse(String(jsonOutput))).toEqual(
       expect.objectContaining({
@@ -638,26 +669,7 @@ describe("matrix CLI verification commands", () => {
 
   it("prints local timezone timestamps for verify status output in verbose mode", async () => {
     const recoveryCreatedAt = "2026-02-25T20:10:11.000Z";
-    getMatrixVerificationStatusMock.mockResolvedValue({
-      encryptionEnabled: true,
-      verified: true,
-      localVerified: true,
-      crossSigningVerified: true,
-      signedByOwner: true,
-      userId: "@bot:example.org",
-      deviceId: "DEVICE123",
-      backupVersion: "1",
-      backup: {
-        serverVersion: "1",
-        activeVersion: "1",
-        trusted: true,
-        matchesDecryptionKey: true,
-        decryptionKeyCached: true,
-      },
-      recoveryKeyStored: true,
-      recoveryKeyCreatedAt: recoveryCreatedAt,
-      pendingVerifications: 0,
-    });
+    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: recoveryCreatedAt });
     const program = buildProgram();
 
     await program.parseAsync(["matrix", "verify", "status", "--verbose"], { from: "user" });
@@ -746,26 +758,7 @@ describe("matrix CLI verification commands", () => {
 
   it("keeps default output concise when verbose is not provided", async () => {
     const recoveryCreatedAt = "2026-02-25T20:10:11.000Z";
-    getMatrixVerificationStatusMock.mockResolvedValue({
-      encryptionEnabled: true,
-      verified: true,
-      localVerified: true,
-      crossSigningVerified: true,
-      signedByOwner: true,
-      userId: "@bot:example.org",
-      deviceId: "DEVICE123",
-      backupVersion: "1",
-      backup: {
-        serverVersion: "1",
-        activeVersion: "1",
-        trusted: true,
-        matchesDecryptionKey: true,
-        decryptionKeyCached: true,
-      },
-      recoveryKeyStored: true,
-      recoveryKeyCreatedAt: recoveryCreatedAt,
-      pendingVerifications: 0,
-    });
+    mockMatrixVerificationStatus({ recoveryKeyCreatedAt: recoveryCreatedAt });
     const program = buildProgram();
 
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });

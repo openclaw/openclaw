@@ -1,8 +1,12 @@
 import { Type } from "@sinclair/typebox";
+import { DEFAULT_GOOGLE_API_BASE_URL } from "openclaw/plugin-sdk/provider-google";
 import {
   buildSearchCacheKey,
+  buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readNumberParam,
@@ -13,6 +17,7 @@ import {
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderPlugin,
@@ -23,7 +28,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_API_BASE = DEFAULT_GOOGLE_API_BASE_URL;
 
 type GeminiConfig = {
   apiKey?: string;
@@ -177,22 +182,9 @@ function createGeminiToolDefinition(
     parameters: createGeminiSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      for (const name of ["country", "language", "freshness", "date_after", "date_before"]) {
-        if (readStringParam(params, name)) {
-          const label =
-            name === "country"
-              ? "country filtering"
-              : name === "language"
-                ? "language filtering"
-                : name === "freshness"
-                  ? "freshness filtering"
-                  : "date_after/date_before filtering";
-          return {
-            error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
-            message: `${label} is not supported by the gemini provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
-            docs: "https://docs.openclaw.ai/tools/web",
-          };
-        }
+      const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "gemini");
+      if (unsupportedResponse) {
+        return unsupportedResponse;
       }
 
       const geminiConfig = resolveGeminiConfig(searchConfig);
@@ -254,7 +246,8 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "gemini",
     label: "Gemini (Google Search)",
-    hint: "Google Search grounding · AI-synthesized",
+    hint: "Requires Google Gemini API key · Google Search grounding",
+    credentialLabel: "Google Gemini API key",
     envVars: ["GEMINI_API_KEY"],
     placeholder: "AIza...",
     signupUrl: "https://aistudio.google.com/apikey",
@@ -262,20 +255,9 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 20,
     credentialPath: "plugins.entries.google.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const gemini = searchConfig?.gemini;
-      return gemini && typeof gemini === "object" && !Array.isArray(gemini)
-        ? (gemini as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.gemini;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.gemini = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "gemini", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
@@ -283,20 +265,11 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     },
     createTool: (ctx) =>
       createGeminiToolDefinition(
-        (() => {
-          const searchConfig = ctx.searchConfig as SearchConfigRecord | undefined;
-          const pluginConfig = resolveProviderWebSearchPluginConfig(ctx.config, "google");
-          if (!pluginConfig) {
-            return searchConfig;
-          }
-          return {
-            ...(searchConfig ?? {}),
-            gemini: {
-              ...resolveGeminiConfig(searchConfig),
-              ...pluginConfig,
-            },
-          } as SearchConfigRecord;
-        })(),
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "gemini",
+          resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+        ) as SearchConfigRecord | undefined,
       ),
   };
 }

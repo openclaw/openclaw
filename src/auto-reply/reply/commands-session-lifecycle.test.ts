@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 const hoisted = vi.hoisted(() => {
   const getThreadBindingManagerMock = vi.fn();
@@ -233,9 +230,6 @@ function createFakeThreadBindingManager(binding: FakeBinding | null) {
 
 describe("/session idle and /session max-age", () => {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-    );
     hoisted.getThreadBindingManagerMock.mockReset();
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();

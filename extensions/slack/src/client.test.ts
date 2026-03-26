@@ -12,30 +12,18 @@ vi.mock("@slack/web-api", () => {
   return { WebClient };
 });
 
-const resolveEnvHttpProxyUrlMock = vi.hoisted(() => vi.fn());
-const HttpsProxyAgentMock = vi.hoisted(() =>
-  vi.fn().mockImplementation(function MockHttpsProxyAgent(
-    this: Record<string, unknown>,
-    proxyUrl: string,
-  ) {
-    this.proxyUrl = proxyUrl;
-  }),
-);
+let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
+let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
+let WebClient: ReturnType<typeof vi.fn>;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  resolveEnvHttpProxyUrl: (...args: unknown[]) =>
-    resolveEnvHttpProxyUrlMock(...(args as [protocol: "http" | "https", env?: NodeJS.ProcessEnv])),
-}));
-
-vi.mock("https-proxy-agent", () => ({
-  HttpsProxyAgent: HttpsProxyAgentMock,
-}));
-
-const slackWebApi = await import("@slack/web-api");
-const { createSlackWebClient, resolveSlackWebClientOptions, SLACK_DEFAULT_RETRY_OPTIONS } =
-  await import("./client.js");
-
-const WebClient = slackWebApi.WebClient as unknown as ReturnType<typeof vi.fn>;
+beforeEach(async () => {
+  vi.resetModules();
+  const slackWebApi = await import("@slack/web-api");
+  ({ createSlackWebClient, resolveSlackWebClientOptions, SLACK_DEFAULT_RETRY_OPTIONS } =
+    await import("./client.js"));
+  WebClient = slackWebApi.WebClient as unknown as ReturnType<typeof vi.fn>;
+});
 
 describe("slack web client config", () => {
   beforeEach(() => {
