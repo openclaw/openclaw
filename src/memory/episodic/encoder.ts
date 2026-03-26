@@ -1,7 +1,8 @@
 import OpenAI from "openai";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { normalizeSecretInputString } from "../../config/types.secrets.js";
+import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
+import { resolveSecretRefString } from "../../secrets/resolve.js";
 import type { EncodedEpisode } from "./types.js";
 
 const ENCODER_SYSTEM_PROMPT = `You are an episodic memory encoder. Extract memorable episodes from the following conversation.
@@ -213,21 +214,51 @@ export class EpisodeEncoder {
 /**
  * Factory: create an EpisodeEncoder from OpenClaw agent config.
  * Reads API key from the openai provider config, episodic model from memorySearch.episodic.
+ *
+ * Async so it can resolve SecretRefs for the OpenAI API key when the key is
+ * not a plain string (e.g. `{ source: "env", id: "OPENAI_API_KEY" }` or a
+ * file/exec ref).  Callers that previously used the synchronous form should
+ * await this function.
  */
-export function createEpisodeEncoder(cfg: OpenClawConfig, agentId: string): EpisodeEncoder {
+export async function createEpisodeEncoder(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<EpisodeEncoder> {
   const agentCfg = resolveAgentConfig(cfg, agentId);
-  const memSearch = agentCfg?.memorySearch ?? cfg.agents?.defaults?.memorySearch;
-  const episodicCfg = (
-    memSearch as { episodic?: { encoderModel?: string; importanceThreshold?: number } } | undefined
+  // Merge agent-level episodic overrides on top of defaults so that a partial
+  // agent-level memorySearch block (e.g. overriding only query.minScore) does
+  // not silently discard the episodic settings from agents.defaults.
+  const defaultEpisodic = (
+    cfg.agents?.defaults?.memorySearch as
+      | { episodic?: { encoderModel?: string; importanceThreshold?: number } }
+      | undefined
   )?.episodic;
+  const agentEpisodic = (
+    agentCfg?.memorySearch as
+      | { episodic?: { encoderModel?: string; importanceThreshold?: number } }
+      | undefined
+  )?.episodic;
+  const episodicCfg = agentEpisodic ?? defaultEpisodic;
 
-  // Try to get OpenAI API key + baseUrl from provider config (plain string only; SecretRef requires runtime resolution)
   const openaiProvider = cfg.models?.providers?.["openai"] as
     | { apiKey?: unknown; baseUrl?: string }
     | undefined;
   const rawKey = openaiProvider?.apiKey;
-  const apiKey = normalizeSecretInputString(rawKey) ?? undefined;
   const chatBaseUrl = openaiProvider?.baseUrl;
+
+  // Resolve the API key: try plain string first, then attempt SecretRef resolution
+  // so deployments that store credentials via env/file/exec refs work correctly.
+  let apiKey: string | undefined = normalizeSecretInputString(rawKey) ?? undefined;
+  if (apiKey === undefined) {
+    const ref = coerceSecretRef(rawKey);
+    if (ref !== null) {
+      try {
+        apiKey = await resolveSecretRefString(ref, { config: cfg });
+      } catch {
+        // Best-effort: fall through to undefined so EpisodeEncoder uses env-var fallback
+      }
+    }
+  }
 
   // embeddingBaseUrl: use EMBEDDING_BASE_URL env var if set, otherwise same as chatBaseUrl
   const embeddingBaseUrl = process.env["EMBEDDING_BASE_URL"] ?? chatBaseUrl;

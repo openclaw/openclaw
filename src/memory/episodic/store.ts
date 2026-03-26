@@ -256,6 +256,21 @@ export class EpisodicStore {
     return row?.cnt ?? 0;
   }
 
+  /**
+   * Return true if at least one episode already exists for the given
+   * agent + session + content hash combination.  Used to prevent
+   * duplicate episode storage across repeated compaction passes of the
+   * same content while still allowing new episodes to be stored when
+   * the conversation has grown (different hash).
+   */
+  hasEpisodesForContentHash(agentId: string, sessionKey: string, contextHash: string): boolean {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) AS cnt FROM episodes WHERE agent_id = ? AND session_key = ? AND context_hash = ?",
+    );
+    const row = stmt.get(agentId, sessionKey, contextHash) as { cnt: number } | undefined;
+    return (row?.cnt ?? 0) > 0;
+  }
+
   close(): void {
     try {
       this.db.close();

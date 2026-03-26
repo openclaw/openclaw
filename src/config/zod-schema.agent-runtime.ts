@@ -725,6 +725,15 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
+    episodic: z
+      .object({
+        enabled: z.boolean().optional(),
+        encoderModel: z.string().optional(),
+        minConversationTurns: z.number().int().positive().optional(),
+        importanceThreshold: z.number().min(0).max(1).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

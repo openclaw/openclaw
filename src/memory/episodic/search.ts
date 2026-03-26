@@ -3,6 +3,12 @@ import type { EpisodicStore } from "./store.js";
 import type { EpisodeSearchOptions, EpisodeSearchResult } from "./types.js";
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  // Guard against embeddings from different models / dimension counts.
+  // Mismatched vectors produce NaN scores that break ranking; return 0
+  // (no similarity) so the episode falls back to keyword matching instead.
+  if (a.length !== b.length || a.length === 0) {
+    return 0;
+  }
   let dotProduct = 0;
   let normA = 0;
   let normB = 0;

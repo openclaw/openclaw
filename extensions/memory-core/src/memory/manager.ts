@@ -465,7 +465,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const dbPath = path.join(agentBaseDir, "episodic", "episodes.db");
     const store = new EpisodicStore(dbPath);
     try {
-      const encoder = createEpisodeEncoder(this.cfg, this.agentId);
+      const encoder = await createEpisodeEncoder(this.cfg, this.agentId);
       const minScore = opts?.minScore ?? this.settings.query.minScore;
       const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
 
