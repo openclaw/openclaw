@@ -1,6 +1,7 @@
 {
   "id": "openai",
   "providers": ["openai", "openai-codex"],
+  "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
   },
