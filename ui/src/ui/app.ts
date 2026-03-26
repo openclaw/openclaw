@@ -158,7 +158,9 @@ export class OpenClawApp extends LitElement {
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
   @state() chatSending = false;
-  @state() chatMessage = "";
+  // Not @state — draft changes must not trigger full re-render on every keystroke.
+  // Textarea value is managed by the browser natively; Lit syncs it on other state changes.
+  chatMessage = "";
   @state() chatMessages: unknown[] = [];
   @state() chatToolMessages: unknown[] = [];
   @state() chatStreamSegments: Array<{ text: string; ts: number }> = [];
