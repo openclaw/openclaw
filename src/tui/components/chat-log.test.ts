@@ -53,6 +53,22 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(20);
   });
 
+  it("preserves streamed tool output when settling a pending tool", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult(
+      "tool-1",
+      { content: [{ type: "text", text: "partial output" }] },
+      { partial: true },
+    );
+
+    chatLog.settlePendingTools(["tool-1"]);
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("partial output");
+    expect(rendered).not.toContain("(running)");
+  });
+
   it("renders BTW inline and removes it when dismissed", () => {
     const chatLog = new ChatLog(40);
 

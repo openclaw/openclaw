@@ -105,17 +105,13 @@ export class ToolExecutionComponent extends Container {
     this.refresh();
   }
 
-  isPending() {
-    return this.isPartial;
-  }
-
   finishPending(opts?: { isError?: boolean }) {
     if (!this.isPartial) {
       return false;
     }
-    this.setResult(undefined, {
-      isError: opts?.isError,
-    });
+    this.isPartial = false;
+    this.isError = Boolean(opts?.isError);
+    this.refresh();
     return true;
   }
 

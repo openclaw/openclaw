@@ -253,11 +253,13 @@ describe("tui session actions", () => {
 
   it("flushes the next queued prompt when abort is requested with no active run", async () => {
     const flushQueuedMessage = vi.fn().mockResolvedValue(true);
+    const addSystem = vi.fn();
     const chatLog = {
-      addSystem: vi.fn(),
+      addSystem,
     } as unknown as import("./components/chat-log.js").ChatLog;
+    const requestRender = vi.fn();
     const tui = {
-      requestRender: vi.fn(),
+      requestRender,
     } as unknown as import("@mariozechner/pi-tui").TUI;
     const state = createBaseState();
 
@@ -282,7 +284,7 @@ describe("tui session actions", () => {
     await abortActive();
 
     expect(flushQueuedMessage).toHaveBeenCalledTimes(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith("no active run");
-    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(addSystem).not.toHaveBeenCalledWith("no active run");
+    expect(requestRender).toHaveBeenCalledTimes(1);
   });
 });
