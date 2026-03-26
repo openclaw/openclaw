@@ -70,11 +70,17 @@ jobs:
           fi
 
           echo "Using apksigner: $APKSIGNER"
-          $APKSIGNER sign --ks apps/android/app/keystore.jks \
-            --ks-key-alias ${{ secrets.ANDROID_KEY_ALIAS }} \
-            --ks-pass pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
-            --key-pass pass:${{ secrets.ANDROID_KEY_PASSWORD }} \
-            apps/android/app/build/outputs/apk/*/release/*.apk
+
+          # Sign each APK individually to avoid "Unexpected parameter(s)" error
+          shopt -s nullglob
+          for apk in apps/android/app/build/outputs/apk/*/release/*.apk; do
+            echo "Signing $apk..."
+            $APKSIGNER sign --ks apps/android/app/keystore.jks \
+              --ks-key-alias ${{ secrets.ANDROID_KEY_ALIAS }} \
+              --ks-pass pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+              --key-pass pass:${{ secrets.ANDROID_KEY_PASSWORD }} \
+              "$apk"
+          done
 
       - name: Rename APK for Release
         run: |
