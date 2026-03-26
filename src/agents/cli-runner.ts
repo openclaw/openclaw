@@ -27,6 +27,7 @@ import {
   buildCliArgs,
   buildSystemPrompt,
   enqueueCliRun,
+  loadPromptRefImages,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
@@ -49,7 +50,9 @@ import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
-const log = createSubsystemLogger("agent/claude-cli");
+const log = createSubsystemLogger("agent/cli-backend");
+const CLI_BACKEND_LOG_OUTPUT_ENV = "OPENCLAW_CLI_BACKEND_LOG_OUTPUT";
+const LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV = "OPENCLAW_CLAUDE_CLI_LOG_OUTPUT";
 
 export async function runCliAgent(params: {
   sessionId: string;
@@ -96,7 +99,7 @@ export async function runCliAgent(params: {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    backendId: backendResolved.id,
+    enabled: backendResolved.bundleMcp,
     backend: backendResolved.config,
     workspaceDir,
     config: params.config,
@@ -222,8 +225,12 @@ export async function runCliAgent(params: {
     let prompt = prependBootstrapPromptWarning(params.prompt, bootstrapPromptWarning.lines, {
       preserveExactPrompt: heartbeatPrompt,
     });
-    if (params.images && params.images.length > 0) {
-      const imagePayload = await writeCliImages(params.images);
+    const resolvedImages =
+      params.images && params.images.length > 0
+        ? params.images
+        : await loadPromptRefImages({ prompt, workspaceDir });
+    if (resolvedImages.length > 0) {
+      const imagePayload = await writeCliImages(resolvedImages);
       imagePaths = imagePayload.paths;
       cleanupImages = imagePayload.cleanup;
       if (!backend.imageArg) {
@@ -259,7 +266,9 @@ export async function runCliAgent(params: {
         log.info(
           `cli exec: provider=${params.provider} model=${normalizedModel} promptChars=${params.prompt.length}`,
         );
-        const logOutputText = isTruthyEnvValue(process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT);
+        const logOutputText =
+          isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
+          isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         if (logOutputText) {
           const logArgs: string[] = [];
           for (let i = 0; i < args.length; i += 1) {

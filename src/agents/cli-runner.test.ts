@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -10,6 +11,8 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 const supervisorSpawnMock = vi.fn();
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
+const SMALL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 const hoisted = vi.hoisted(() => {
   type BootstrapContext = {
     bootstrapFiles: WorkspaceBootstrapFile[];
@@ -90,6 +93,12 @@ type MockRunExit = {
   noOutputTimedOut: boolean;
 };
 
+type TestCliBackendConfig = {
+  command: string;
+  env?: Record<string, string>;
+  clearEnv?: string[];
+};
+
 function createManagedRun(exit: MockRunExit, pid = 1234) {
   return {
     runId: "run-supervisor",
@@ -99,6 +108,47 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
   };
+}
+
+function mockSuccessfulCliRun() {
+  supervisorSpawnMock.mockResolvedValueOnce(
+    createManagedRun({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout: "ok",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+  );
+}
+
+async function runCliAgentWithBackendConfig(params: {
+  backend: TestCliBackendConfig;
+  runId: string;
+}) {
+  await runCliAgent({
+    sessionId: "s1",
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/tmp",
+    config: {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": params.backend,
+          },
+        },
+      },
+    } satisfies OpenClawConfig,
+    prompt: "hi",
+    provider: "codex-cli",
+    model: "gpt-5.2-codex",
+    timeoutMs: 1_000,
+    runId: params.runId,
+    cliSessionId: "thread-123",
+  });
 }
 
 describe("runCliAgent with process supervisor", () => {
@@ -165,47 +215,19 @@ describe("runCliAgent with process supervisor", () => {
     vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.stubEnv("HOME", "/tmp/trusted-home");
 
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                env: {
-                  NODE_OPTIONS: "--require ./malicious.js",
-                  LD_PRELOAD: "/tmp/pwn.so",
-                  PATH: "/tmp/evil",
-                  HOME: "/tmp/evil-home",
-                  SAFE_KEY: "ok",
-                },
-              },
-            },
-          },
+    mockSuccessfulCliRun();
+    await runCliAgentWithBackendConfig({
+      backend: {
+        command: "codex",
+        env: {
+          NODE_OPTIONS: "--require ./malicious.js",
+          LD_PRELOAD: "/tmp/pwn.so",
+          PATH: "/tmp/evil",
+          HOME: "/tmp/evil-home",
+          SAFE_KEY: "ok",
         },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
-      timeoutMs: 1_000,
+      },
       runId: "run-env-sanitized",
-      cliSessionId: "thread-123",
     });
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
@@ -222,44 +244,16 @@ describe("runCliAgent with process supervisor", () => {
     vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.stubEnv("SAFE_CLEAR", "from-base");
 
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                env: {
-                  SAFE_KEEP: "keep-me",
-                },
-                clearEnv: ["SAFE_CLEAR"],
-              },
-            },
-          },
+    mockSuccessfulCliRun();
+    await runCliAgentWithBackendConfig({
+      backend: {
+        command: "codex",
+        env: {
+          SAFE_KEEP: "keep-me",
         },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
-      timeoutMs: 1_000,
+        clearEnv: ["SAFE_CLEAR"],
+      },
       runId: "run-clear-env",
-      cliSessionId: "thread-123",
     });
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
@@ -323,6 +317,135 @@ describe("runCliAgent with process supervisor", () => {
     expect(promptCarrier).toContain("[Bootstrap truncation warning]");
     expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
     expect(promptCarrier).toContain("hi");
+  });
+
+  it("hydrates prompt media refs into CLI image args", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
+    );
+    const sourceImage = path.join(tempDir, "bb-image.png");
+    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-prompt-image",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const argv = input.argv ?? [];
+    const imageArgIndex = argv.indexOf("--image");
+    expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+    expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images-");
+    expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
+  });
+
+  it("appends hydrated prompt media refs to generic backend prompts", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
+    );
+    const sourceImage = path.join(tempDir, "claude-image.png");
+    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        provider: "claude-cli",
+        model: "claude-opus-4-1",
+        timeoutMs: 1_000,
+        runId: "run-prompt-image-generic",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; input?: string };
+    const argv = input.argv ?? [];
+    expect(argv).not.toContain("--image");
+    const promptCarrier = [input.input ?? "", ...argv].join("\n");
+    const appendedPath = argv.find((value) => value.includes("openclaw-cli-images-"));
+    expect(appendedPath).toBeDefined();
+    expect(appendedPath).not.toBe(sourceImage);
+    expect(promptCarrier).toContain(appendedPath ?? "");
+  });
+
+  it("prefers explicit images over prompt refs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const tempDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
+    );
+    const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
+    await fs.writeFile(sourceImage, Buffer.from(SMALL_PNG_BASE64, "base64"));
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tempDir,
+        prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        images: [{ type: "image", data: SMALL_PNG_BASE64, mimeType: "image/png" }],
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-explicit-image-precedence",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const argv = input.argv ?? [];
+    expect(argv.filter((arg) => arg === "--image")).toHaveLength(1);
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {

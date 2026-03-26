@@ -86,6 +86,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     registerProvider(provider: MockProvider) {
       providers.push(provider);
     },
+    registerCliBackend() {},
     registerWebSearchProvider() {},
     registerMediaUnderstandingProvider() {},
     registerSpeechProvider() {},
