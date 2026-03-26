@@ -325,7 +325,7 @@
     },
     "agentToAgent": {
       "enabled": true,
-      "allow": ["sre-k8s", "sre-observability", "sre-release"]
+      "allow": ["frontend-dev", "sre-k8s", "sre-observability", "sre-release"]
     }
   },
   "bindings": [
