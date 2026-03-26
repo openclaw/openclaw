@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser/routes/agent.snapshot.js";
+export * from "../../compat/browser/routes/agent.snapshot.js";

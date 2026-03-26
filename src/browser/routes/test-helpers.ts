@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser/routes/test-helpers.js";
+export * from "../../compat/browser/routes/test-helpers.js";

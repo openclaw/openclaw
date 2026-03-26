@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/cdp-timeouts.js";
+export * from "../compat/browser/cdp-timeouts.js";

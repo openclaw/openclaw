@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/control-auth.js";
+export * from "../compat/browser/control-auth.js";

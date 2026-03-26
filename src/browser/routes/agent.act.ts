@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser/routes/agent.act.js";
+export * from "../../compat/browser/routes/agent.act.js";

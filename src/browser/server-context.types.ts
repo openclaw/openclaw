@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/server-context.types.js";
+export * from "../compat/browser/server-context.types.js";

@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/constants.js";
+export * from "../compat/browser/constants.js";

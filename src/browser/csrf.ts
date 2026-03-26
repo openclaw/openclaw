@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/csrf.js";
+export * from "../compat/browser/csrf.js";

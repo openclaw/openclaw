@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/pw-session.js";
+export * from "../compat/browser/pw-session.js";

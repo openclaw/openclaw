@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser/routes/agent.debug.js";
+export * from "../../compat/browser/routes/agent.debug.js";
