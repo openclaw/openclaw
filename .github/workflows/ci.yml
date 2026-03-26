@@ -17,26 +17,43 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Scope: establish the fast global truth for this revision before the
-  # expensive platform and platform-specific lanes fan out.
-  # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
-  # Keep this job focused on routing decisions so the rest of CI can fan out sooner.
-  # Fail-safe: if detection steps are skipped, downstream outputs fall back to
-  # conservative defaults that keep heavy lanes enabled.
-  scope:
+  # Preflight: establish routing truth and planner-owned matrices once, then let
+  # real work fan out from a single source of truth.
+  preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     outputs:
-      docs_only: ${{ steps.docs_scope.outputs.docs_only }}
-      docs_changed: ${{ steps.docs_scope.outputs.docs_changed }}
-      run_node: ${{ steps.changed_scope.outputs.run_node || 'false' }}
-      run_macos: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
-      run_android: ${{ steps.changed_scope.outputs.run_android || 'false' }}
-      run_skills_python: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
-      run_windows: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
-      has_changed_extensions: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
-      changed_extensions_matrix: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+      docs_only: ${{ steps.manifest.outputs.docs_only }}
+      docs_changed: ${{ steps.manifest.outputs.docs_changed }}
+      run_node: ${{ steps.manifest.outputs.run_node }}
+      run_macos: ${{ steps.manifest.outputs.run_macos }}
+      run_android: ${{ steps.manifest.outputs.run_android }}
+      run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
+      run_windows: ${{ steps.manifest.outputs.run_windows }}
+      has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
+      run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_release_check: ${{ steps.manifest.outputs.run_release_check }}
+      run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      checks_fast_matrix: ${{ steps.manifest.outputs.checks_fast_matrix }}
+      run_checks: ${{ steps.manifest.outputs.run_checks }}
+      checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
+      run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
+      extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
+      run_check: ${{ steps.manifest.outputs.run_check }}
+      run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
+      run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
+      checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
+      run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
+      macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
+      run_macos_swift_lint: ${{ steps.manifest.outputs.run_macos_swift_lint }}
+      run_macos_swift_build: ${{ steps.manifest.outputs.run_macos_swift_build }}
+      run_macos_swift_test: ${{ steps.manifest.outputs.run_macos_swift_test }}
+      run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -56,8 +73,6 @@ jobs:
         id: docs_scope
         uses: ./.github/actions/detect-docs-changes
 
-      # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
-      # Fail-safe: if skipped, downstream lanes run.
       - name: Detect changed scopes
         id: changed_scope
         if: steps.docs_scope.outputs.docs_only != 'true'
@@ -103,6 +118,20 @@ jobs:
           appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
           appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
           EOF
+
+      - name: Build CI manifest
+        id: manifest
+        env:
+          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
 
   # Run the fast security/SCM checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
@@ -205,8 +234,8 @@ jobs:
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -252,8 +281,8 @@ jobs:
 
   # Validate npm pack contents after build (only on push to main, not PRs).
   release-check:
-    needs: [scope, build-artifacts]
-    if: github.event_name == 'push' && needs.scope.outputs.docs_only != 'true'
+    needs: [preflight, build-artifacts]
+    if: needs.preflight.outputs.run_release_check == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -279,22 +308,14 @@ jobs:
         run: pnpm release:check
 
   checks-fast:
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true'
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
-            task: contracts-protocol
-            command: |
-              pnpm test:contracts
-              pnpm protocol:check
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -312,61 +333,14 @@ jobs:
         run: ${{ matrix.command }}
 
   checks:
-    needs: [scope, build-artifacts]
-    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && needs.build-artifacts.result == 'success'
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 4
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 4
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 4
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 4
-            command: pnpm test
-          - runtime: node
-            task: channels
-            shard_index: 1
-            shard_count: 3
-            command: pnpm test:channels
-          - runtime: node
-            task: channels
-            shard_index: 2
-            shard_count: 3
-            command: pnpm test:channels
-          - runtime: node
-            task: channels
-            shard_index: 3
-            shard_count: 3
-            command: pnpm test:channels
-          - runtime: node
-            task: compat-node22
-            node_version: "22.x"
-            cache_key_suffix: "node22"
-            command: |
-              pnpm build
-              pnpm ui:build
-              node openclaw.mjs --help
-              node openclaw.mjs status --json --timeout 1
-              pnpm test:build:singleton
-              node scripts/stage-bundled-plugin-runtime-deps.mjs
-              node --import tsx scripts/release-check.ts
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
     steps:
       - name: Skip compatibility lanes on pull requests
         if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
@@ -427,13 +401,13 @@ jobs:
 
   extension-fast:
     name: "extension-fast"
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && needs.scope.outputs.has_changed_extensions == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.scope.outputs.changed_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -455,8 +429,8 @@ jobs:
   # Types, lint, and format check.
   check:
     name: "check"
-    needs: [scope]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.scope.outputs.docs_only != 'true'
+    needs: [preflight]
+    if: always() && needs.preflight.outputs.run_check == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -480,8 +454,8 @@ jobs:
 
   check-additional:
     name: "check-additional"
-    needs: [scope]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && needs.scope.outputs.docs_only != 'true'
+    needs: [preflight]
+    if: always() && needs.preflight.outputs.run_check_additional == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -579,8 +553,8 @@ jobs:
 
   build-smoke:
     name: "build-smoke"
-    needs: [scope, build-artifacts]
-    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_node == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -621,8 +595,8 @@ jobs:
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
-    needs: [scope]
-    if: needs.scope.outputs.docs_changed == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -642,8 +616,8 @@ jobs:
         run: pnpm check:docs
 
   skills-python:
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.scope.outputs.run_skills_python == 'true')
+    needs: [preflight]
+    if: needs.preflight.outputs.run_skills_python_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -670,8 +644,9 @@ jobs:
         run: python -m pytest -q skills
 
   checks-windows:
-    needs: [scope, build-artifacts]
-    if: always() && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_windows == 'true' && needs.build-artifacts.result == 'success'
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
     timeout-minutes: 20
     env:
@@ -684,53 +659,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 5
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 6
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 7
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 8
-            shard_count: 9
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 9
-            shard_count: 9
-            command: pnpm test
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -820,11 +749,15 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  macos-node-1:
-    needs: [scope, build-artifacts]
-    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
+  macos-node:
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -849,136 +782,20 @@ jobs:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
 
-      - name: Configure test shard (macOS 1/4)
+      - name: Configure test shard (macOS)
         run: |
-          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=1" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
 
-      - name: TS tests (macOS 1/4)
+      - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
+        run: ${{ matrix.command }}
 
-  macos-node-2:
-    needs: [scope, build-artifacts]
-    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
-      - name: Configure test shard (macOS 2/4)
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=2" >> "$GITHUB_ENV"
-
-      - name: TS tests (macOS 2/4)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
-
-  macos-node-3:
-    needs: [scope, build-artifacts]
-    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
-      - name: Configure test shard (macOS 3/4)
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=3" >> "$GITHUB_ENV"
-
-      - name: TS tests (macOS 3/4)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
-
-  macos-node-4:
-    needs: [scope, build-artifacts]
-    if: always() && github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true' && needs.build-artifacts.result == 'success'
-    runs-on: macos-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Download A2UI bundle artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
-
-      - name: Configure test shard (macOS 4/4)
-        run: |
-          echo "OPENCLAW_TEST_SHARDS=4" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=4" >> "$GITHUB_ENV"
-
-      - name: TS tests (macOS 4/4)
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
-
-  macos-swift:
-    needs: [scope]
-    if: github.event_name == 'pull_request' && needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_macos == 'true'
+  macos-swift-lint:
+    name: "macos-swift-lint"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_macos_swift_lint == 'true'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -1007,6 +824,27 @@ jobs:
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
+  macos-swift-build:
+    name: "macos-swift-build"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_macos_swift_build == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Select Xcode 26.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+
+      - name: Install XcodeGen / SwiftLint / SwiftFormat
+        run: brew install xcodegen swiftlint swiftformat
+
       - name: Cache SwiftPM
         uses: actions/cache@v5
         with:
@@ -1027,6 +865,35 @@ jobs:
           done
           exit 1
 
+  macos-swift-test:
+    name: "macos-swift-test"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_macos_swift_test == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Select Xcode 26.1
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.1.app
+          xcodebuild -version
+
+      - name: Install XcodeGen / SwiftLint / SwiftFormat
+        run: brew install xcodegen swiftlint swiftformat
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
+
       - name: Swift test
         run: |
           set -euo pipefail
@@ -1040,22 +907,14 @@ jobs:
           exit 1
 
   android:
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.run_android == 'true'
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - task: test-play
-            command: ./gradlew --no-daemon :app:testPlayDebugUnitTest
-          - task: test-third-party
-            command: ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
-          - task: build-play
-            command: ./gradlew --no-daemon :app:assemblePlayDebug
-          - task: build-third-party
-            command: ./gradlew --no-daemon :app:assembleThirdPartyDebug
+      matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
