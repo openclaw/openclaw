@@ -82,7 +82,14 @@ export class GeminiEmbeddingRateLimiter {
 
     // Tokens available -- pass immediately
     if (this._tokens > 0) {
-      // MEDIUM gets dropped when below threshold
+      // LOW gets dropped when at or below threshold
+      if (priority === EmbeddingPriority.LOW && this._tokens <= this.cooldownThreshold) {
+        log.warn(
+          `memory embeddings: rate limited, dropping LOW priority request (tokens=${this._tokens}/${this.capacity})`,
+        );
+        throw new EmbeddingDroppedError({ priority, dropReason: "bucket_empty" });
+      }
+      // MEDIUM gets dropped when at or below threshold
       if (priority === EmbeddingPriority.MEDIUM && this._tokens <= this.cooldownThreshold) {
         log.warn(
           `memory embeddings: rate limited, dropping MEDIUM priority request (tokens=${this._tokens}/${this.capacity})`,
@@ -134,6 +141,10 @@ export class GeminiEmbeddingRateLimiter {
           }),
         );
       }, this.queueTimeoutMs);
+      // Don't block process exit
+      if (typeof timer === "object" && "unref" in timer) {
+        timer.unref();
+      }
       this.queue.push({ resolve, reject, timer });
     });
   }

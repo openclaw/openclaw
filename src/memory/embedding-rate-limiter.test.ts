@@ -15,7 +15,11 @@ describe("GeminiEmbeddingRateLimiter", () => {
     it("allows requests when bucket has tokens", async () => {
       const { GeminiEmbeddingRateLimiter, EmbeddingPriority } =
         await import("./embedding-rate-limiter.js");
-      const limiter = new GeminiEmbeddingRateLimiter({ capacity: 10, refillRate: 10 });
+      const limiter = new GeminiEmbeddingRateLimiter({
+        capacity: 10,
+        refillRate: 10,
+        cooldownThreshold: 0,
+      });
       // Should not throw
       await limiter.acquire(EmbeddingPriority.LOW);
       expect(limiter.tokens).toBe(9);
@@ -25,7 +29,11 @@ describe("GeminiEmbeddingRateLimiter", () => {
     it("drains tokens on each acquire", async () => {
       const { GeminiEmbeddingRateLimiter, EmbeddingPriority } =
         await import("./embedding-rate-limiter.js");
-      const limiter = new GeminiEmbeddingRateLimiter({ capacity: 3, refillRate: 3 });
+      const limiter = new GeminiEmbeddingRateLimiter({
+        capacity: 3,
+        refillRate: 3,
+        cooldownThreshold: 0,
+      });
       await limiter.acquire(EmbeddingPriority.LOW);
       await limiter.acquire(EmbeddingPriority.LOW);
       await limiter.acquire(EmbeddingPriority.LOW);
@@ -59,6 +67,7 @@ describe("GeminiEmbeddingRateLimiter", () => {
         capacity: 10,
         refillRate: 600,
         refillIntervalMs: 1000,
+        cooldownThreshold: 0,
       });
       await limiter.acquire(EmbeddingPriority.LOW);
       expect(limiter.tokens).toBe(9);
