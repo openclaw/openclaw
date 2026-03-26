@@ -37,10 +37,21 @@ openclaw_fork_compose_file: "docker-compose.yml"
 openclaw_fork_service_name: "openclaw"
 
 # LLM provider config
+# CRITICAL: OpenAI OAuth is the ONLY auth method for chat/completions.
+# Jeff has OpenAI Pro ($200/mo) and Claude Max ($200/mo) subscriptions.
+# All LLM requests go through OAuth tokens — NEVER API keys.
 openclaw_llm_provider: "openai"
-openclaw_llm_auth_mode: "api_key"
+openclaw_llm_auth_mode: "oauth"
+
+# Embeddings-only API key (text-embedding-3-small via memory-lancedb plugin).
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  WARNING: This API key is for EMBEDDINGS ONLY.                   ║
+# ║  NEVER use it for chat, completions, responses, or any other     ║
+# ║  OpenAI endpoint. All LLM traffic uses OpenAI OAuth.             ║
+# ║  Violating this wastes money when OAuth is already paid for.     ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+openclaw_openai_embeddings_api_key: "{{ lookup('env', 'OPENAI_EMBEDDINGS_API_KEY') }}"
 
 # Secrets (set via vault or SOPS — never commit real values)
 openclaw_gateway_token: "{{ lookup('env', 'OPENCLAW_GATEWAY_TOKEN') }}"
-openclaw_openai_api_key: "{{ lookup('env', 'OPENAI_API_KEY') }}"
 openclaw_telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN') }}"

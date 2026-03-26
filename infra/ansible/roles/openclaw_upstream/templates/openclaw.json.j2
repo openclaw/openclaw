@@ -7,13 +7,37 @@
     theme: "{{ openclaw_identity_theme }}",
   },
 
-  // LLM providers — credentials managed via SOPS, injected as env vars
+  // LLM providers — OpenAI OAuth ONLY for chat/completions.
+  // CRITICAL: No API keys for LLM traffic. Jeff has OpenAI Pro ($200/mo).
+  // The only API key is for embeddings (memory-lancedb plugin).
   auth: {
     profiles: {
-      "{{ openclaw_llm_provider | default('openai') }}:default": { provider: "{{ openclaw_llm_provider | default('openai') }}", mode: "{{ openclaw_llm_auth_mode | default('api_key') }}" },
+      "openai:oauth": { provider: "openai", mode: "oauth" },
     },
     order: {
-      "{{ openclaw_llm_provider | default('openai') }}": ["{{ openclaw_llm_provider | default('openai') }}:default"],
+      "openai": ["openai:oauth"],
+    },
+  },
+
+  // Plugins
+  plugins: {
+    enabled: true,
+    allow: ["memory-lancedb"],
+    slots: { memory: "memory-lancedb" },
+    entries: {
+      "memory-lancedb": {
+        enabled: true,
+        config: {
+          // EMBEDDINGS ONLY — this is the sole use of an OpenAI API key.
+          // All LLM traffic uses OpenAI OAuth. Never use this key for anything else.
+          embedding: {
+            apiKey: "${OPENAI_EMBEDDINGS_API_KEY}",
+            model: "text-embedding-3-small",
+          },
+          autoCapture: true,
+          autoRecall: true,
+        },
+      },
     },
   },
 
