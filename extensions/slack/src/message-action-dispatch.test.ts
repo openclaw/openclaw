@@ -9,6 +9,117 @@ function createInvokeSpy() {
 }
 
 describe("handleSlackMessageAction", () => {
+  it("maps upload-file to the internal uploadFile action", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          to: "user:U1",
+          filePath: "/tmp/report.png",
+          initialComment: "fresh build",
+          filename: "build.png",
+          title: "Build Screenshot",
+          threadId: "111.222",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "user:U1",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh build",
+        filename: "build.png",
+        title: "Build Screenshot",
+        threadTs: "111.222",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("maps upload-file aliases to upload params", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          media: "/tmp/chart.png",
+          message: "chart attached",
+          replyTo: "333.444",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "C1",
+        filePath: "/tmp/chart.png",
+        initialComment: "chart attached",
+        threadTs: "333.444",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("maps upload-file path alias to filePath", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          path: "/tmp/report.txt",
+          initialComment: "path alias",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "channel:C1",
+        filePath: "/tmp/report.txt",
+        initialComment: "path alias",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
+  it("requires filePath, path, or media for upload-file", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "upload-file",
+          cfg: {},
+          params: {
+            to: "channel:C1",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+  });
+
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
 

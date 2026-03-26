@@ -34,6 +34,7 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "reply",
   "thread-reply",
   "broadcast",
