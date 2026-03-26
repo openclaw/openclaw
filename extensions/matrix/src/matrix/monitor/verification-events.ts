@@ -1,7 +1,6 @@
 import { inspectMatrixDirectRooms } from "../direct-management.js";
 import { isStrictDirectRoom } from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
-import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import {
@@ -310,51 +309,8 @@ async function sendVerificationNotice(params: {
   }
 }
 
-async function isVerificationNoticeAuthorized(params: {
-  senderId: string;
-  allowFrom: string[];
-  dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
-  logVerboseMessage: (message: string) => void;
-}): Promise<boolean> {
-  // Verification notices are DM-only. If DM ingress is disabled, there is no
-  // policy-compatible path for posting these notices back into the room.
-  if (!params.dmEnabled || params.dmPolicy === "disabled") {
-    params.logVerboseMessage(
-      `matrix: blocked verification sender ${params.senderId} (dmPolicy=${params.dmPolicy}, dmEnabled=${String(params.dmEnabled)})`,
-    );
-    return false;
-  }
-  if (params.dmPolicy === "open") {
-    return true;
-  }
-  const storeAllowFrom = await params.readStoreAllowFrom();
-  const accessState = resolveMatrixMonitorAccessState({
-    allowFrom: params.allowFrom,
-    storeAllowFrom,
-    // Verification flows only exist in strict DMs, so room/group allowlists do
-    // not participate in the authorization decision here.
-    groupAllowFrom: [],
-    roomUsers: [],
-    senderId: params.senderId,
-    isRoom: false,
-  });
-  if (accessState.directAllowMatch.allowed) {
-    return true;
-  }
-  params.logVerboseMessage(
-    `matrix: blocked verification sender ${params.senderId} (dmPolicy=${params.dmPolicy})`,
-  );
-  return false;
-}
-
 export function createMatrixVerificationEventRouter(params: {
   client: MatrixClient;
-  allowFrom: string[];
-  dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
   logVerboseMessage: (message: string) => void;
 }) {
   const routerStartedAtMs = Date.now();
@@ -455,18 +411,6 @@ export function createMatrixVerificationEventRouter(params: {
       );
       return;
     }
-    if (
-      !(await isVerificationNoticeAuthorized({
-        senderId: summary.otherUserId,
-        allowFrom: params.allowFrom,
-        dmEnabled: params.dmEnabled,
-        dmPolicy: params.dmPolicy,
-        readStoreAllowFrom: params.readStoreAllowFrom,
-        logVerboseMessage: params.logVerboseMessage,
-      }))
-    ) {
-      return;
-    }
     const sasNotice = formatVerificationSasNotice(summary);
     if (!sasNotice) {
       return;
@@ -513,18 +457,6 @@ export function createMatrixVerificationEventRouter(params: {
         params.logVerboseMessage(
           `matrix: ignoring verification event outside strict DM room=${roomId} sender=${senderId}`,
         );
-        return;
-      }
-      if (
-        !(await isVerificationNoticeAuthorized({
-          senderId,
-          allowFrom: params.allowFrom,
-          dmEnabled: params.dmEnabled,
-          dmPolicy: params.dmPolicy,
-          readStoreAllowFrom: params.readStoreAllowFrom,
-          logVerboseMessage: params.logVerboseMessage,
-        }))
-      ) {
         return;
       }
       rememberVerificationUserRoom(senderId, roomId);

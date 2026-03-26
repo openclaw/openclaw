@@ -34,10 +34,6 @@ export function registerMatrixMonitorEvents(params: {
   cfg: CoreConfig;
   client: MatrixClient;
   auth: MatrixAuth;
-  allowFrom: string[];
-  dmEnabled: boolean;
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  readStoreAllowFrom: () => Promise<string[]>;
   directTracker?: {
     invalidateRoom: (roomId: string) => void;
   };
@@ -52,10 +48,6 @@ export function registerMatrixMonitorEvents(params: {
     cfg,
     client,
     auth,
-    allowFrom,
-    dmEnabled,
-    dmPolicy,
-    readStoreAllowFrom,
     directTracker,
     logVerboseMessage,
     warnedEncryptedRooms,
@@ -66,10 +58,6 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,
-    allowFrom,
-    dmEnabled,
-    dmPolicy,
-    readStoreAllowFrom,
     logVerboseMessage,
   });
 
