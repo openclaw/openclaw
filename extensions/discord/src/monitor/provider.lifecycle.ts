@@ -219,7 +219,8 @@ export async function runDiscordGatewayLifecycle(params: {
       let drainTimeout: ReturnType<typeof setTimeout> | undefined;
       let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
       const ignoreSocketError = () => {};
-      const cleanup = () => {
+      const shouldStopWaiting = () => lifecycleStopping || params.abortSignal?.aborted;
+      const clearPendingTimers = () => {
         if (drainTimeout) {
           clearTimeout(drainTimeout);
           drainTimeout = undefined;
@@ -228,6 +229,9 @@ export async function runDiscordGatewayLifecycle(params: {
           clearTimeout(terminateCloseTimeout);
           terminateCloseTimeout = undefined;
         }
+      };
+      const cleanup = () => {
+        clearPendingTimers();
         socket.removeListener("close", onClose);
         socket.removeListener("error", ignoreSocketError);
       };
@@ -239,19 +243,28 @@ export async function runDiscordGatewayLifecycle(params: {
         settled = true;
         resolve();
       };
-      const rejectClose = (error: Error) => {
+      const resolveStoppedWait = () => {
         if (settled) {
           return;
         }
         settled = true;
-        if (drainTimeout) {
-          clearTimeout(drainTimeout);
-          drainTimeout = undefined;
+        clearPendingTimers();
+
+        // Keep suppressing late ws errors until the socket actually closes.
+        // The original Carbon listeners were removed above, and `terminate()`
+        // can still asynchronously emit "error" before "close".
+        resolve();
+      };
+      const rejectClose = (error: Error) => {
+        if (shouldStopWaiting()) {
+          resolveStoppedWait();
+          return;
         }
-        if (terminateCloseTimeout) {
-          clearTimeout(terminateCloseTimeout);
-          terminateCloseTimeout = undefined;
+        if (settled) {
+          return;
         }
+        settled = true;
+        clearPendingTimers();
 
         // Keep suppressing late ws errors until the socket actually closes.
         // The original Carbon listeners were removed above, and `terminate()`
@@ -261,6 +274,10 @@ export async function runDiscordGatewayLifecycle(params: {
 
       drainTimeout = setTimeout(() => {
         if (settled) {
+          return;
+        }
+        if (shouldStopWaiting()) {
+          resolveStoppedWait();
           return;
         }
         params.runtime.error?.(
@@ -296,6 +313,10 @@ export async function runDiscordGatewayLifecycle(params: {
 
         terminateCloseTimeout = setTimeout(() => {
           if (settled) {
+            return;
+          }
+          if (shouldStopWaiting()) {
+            resolveStoppedWait();
             return;
           }
           params.runtime.error?.(

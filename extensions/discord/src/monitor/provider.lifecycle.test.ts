@@ -479,6 +479,41 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("treats drain timeout as a graceful stop after lifecycle abort", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+      const abortController = new AbortController();
+      const { lifecycleParams, start, stop, threadStop, runtimeError, gatewaySupervisor } =
+        createLifecycleHarness({ gateway });
+      lifecycleParams.abortSignal = abortController.signal;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_100);
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(5_500);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expect(runtimeError).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway socket did not close within 5000ms before reconnect"),
+      );
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 0,
+        gatewaySupervisor,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails fast when startup never reaches READY after a forced reconnect", async () => {
     vi.useFakeTimers();
     try {
