@@ -5,6 +5,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import type { InstallCodeSafetyMode } from "../infra/install-code-safety-mode.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
@@ -849,6 +850,7 @@ export async function installPluginFromMarketplace(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  codeSafetyMode?: InstallCodeSafetyMode;
 }): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
@@ -887,6 +889,7 @@ export async function installPluginFromMarketplace(params: {
 
     const result = await installPluginFromPath({
       path: resolved.path,
+      codeSafetyMode: params.codeSafetyMode,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,

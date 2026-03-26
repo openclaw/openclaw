@@ -337,6 +337,56 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("forwards --code-safety to plugin installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromClawHub.mockResolvedValue({
+      ok: false,
+      error: "ClawHub /api/v1/packages/demo failed (404): Package not found",
+      code: "package_not_found",
+    });
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/openclaw-state/extensions/demo",
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo", "--code-safety", "block-critical"]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        codeSafetyMode: "block-critical",
+      }),
+    );
+  });
+
   it("does not fall back to npm when ClawHub rejects a real package", async () => {
     installPluginFromClawHub.mockResolvedValue({
       ok: false,

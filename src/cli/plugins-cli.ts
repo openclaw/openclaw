@@ -1,11 +1,12 @@
 import os from "node:os";
 import path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { INSTALL_CODE_SAFETY_MODE_VALUES } from "../infra/install-code-safety-mode.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import type { PluginRecord } from "../plugins/registry.js";
@@ -29,7 +30,10 @@ import {
   logSlotWarnings,
 } from "./plugins-command-helpers.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
+import {
+  runPluginInstallCommand,
+  type PluginInstallCliOptions,
+} from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -715,7 +719,13 @@ export function registerPluginsCli(program: Command) {
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; marketplace?: string }) => {
+    .addOption(
+      new Option(
+        "--code-safety <mode>",
+        "Handle critical code-safety scan findings during install",
+      ).choices(INSTALL_CODE_SAFETY_MODE_VALUES),
+    )
+    .action(async (raw: string, opts: PluginInstallCliOptions) => {
       await runPluginInstallCommand({ raw, opts });
     });
 

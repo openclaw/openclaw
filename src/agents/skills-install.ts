@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import {
+  resolveInstallCodeSafetyMode,
+  type InstallCodeSafetyMode,
+} from "../infra/install-code-safety-mode.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -22,6 +26,7 @@ export type SkillInstallRequest = {
   installId: string;
   timeoutMs?: number;
   config?: OpenClawConfig;
+  codeSafetyMode?: InstallCodeSafetyMode;
 };
 
 export type SkillInstallResult = {
@@ -55,7 +60,15 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
+type SkillInstallScanOutcome = {
+  warnings: string[];
+  blockError?: string;
+};
+
+async function collectSkillInstallScanWarnings(
+  entry: SkillEntry,
+  codeSafetyMode?: InstallCodeSafetyMode,
+): Promise<SkillInstallScanOutcome> {
   const warnings: string[] = [];
   const skillName = entry.skill.name;
   const skillDir = path.resolve(entry.skill.baseDir);
@@ -67,6 +80,12 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
         .filter((finding) => finding.severity === "critical")
         .map((finding) => formatScanFindingDetail(skillDir, finding))
         .join("; ");
+      if (resolveInstallCodeSafetyMode(codeSafetyMode) === "block-critical") {
+        return {
+          warnings,
+          blockError: `Skill "${skillName}" install blocked by code safety scan: ${criticalDetails}`,
+        };
+      }
       warnings.push(
         `WARNING: Skill "${skillName}" contains dangerous code patterns: ${criticalDetails}`,
       );
@@ -81,7 +100,7 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
     );
   }
 
-  return warnings;
+  return { warnings };
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -439,7 +458,8 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const warnings = await collectSkillInstallScanWarnings(entry);
+  const scanOutcome = await collectSkillInstallScanWarnings(entry, params.codeSafetyMode);
+  const warnings = [...scanOutcome.warnings];
 
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
@@ -447,6 +467,18 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   if (!trustedInstallSources.has(entry.skill.source)) {
     warnings.push(
       `WARNING: Skill "${params.skillName}" install triggered from non-bundled source "${entry.skill.source}". Verify the install recipe is trusted.`,
+    );
+  }
+  if (scanOutcome.blockError) {
+    return withWarnings(
+      {
+        ok: false,
+        message: scanOutcome.blockError,
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
     );
   }
   if (!spec) {

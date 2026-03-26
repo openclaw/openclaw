@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
@@ -10,6 +10,7 @@ import {
 import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
+import { INSTALL_CODE_SAFETY_MODE_VALUES } from "../infra/install-code-safety-mode.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -17,7 +18,10 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
-import { runPluginInstallCommand } from "./plugins-install-command.js";
+import {
+  runPluginInstallCommand,
+  type PluginInstallCliOptions,
+} from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
 export type HooksListOptions = {
@@ -515,12 +519,20 @@ export function registerHooksCli(program: Command): void {
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
-      defaultRuntime.log(
-        theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
-      );
-      await runPluginInstallCommand({ raw, opts });
-    });
+    .addOption(
+      new Option(
+        "--code-safety <mode>",
+        "Handle critical code-safety scan findings during install",
+      ).choices(INSTALL_CODE_SAFETY_MODE_VALUES),
+    )
+    .action(
+      async (raw: string, opts: Pick<PluginInstallCliOptions, "link" | "pin" | "codeSafety">) => {
+        defaultRuntime.log(
+          theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
+        );
+        await runPluginInstallCommand({ raw, opts });
+      },
+    );
 
   hooks
     .command("update")

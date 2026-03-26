@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  resolveInstallCodeSafetyMode,
+  type InstallCodeSafetyMode,
+} from "../infra/install-code-safety-mode.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 
@@ -15,7 +19,25 @@ function buildCriticalDetails(params: {
     .join("; ");
 }
 
+function resolveCriticalFindingBlockMessage(params: {
+  codeSafetyMode?: InstallCodeSafetyMode;
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  label: "Bundle" | "Plugin";
+  logger: InstallScanLogger;
+  pluginId: string;
+}): string | null {
+  const details = buildCriticalDetails({ findings: params.findings });
+  if (resolveInstallCodeSafetyMode(params.codeSafetyMode) === "block-critical") {
+    return `${params.label} "${params.pluginId}" install blocked by code safety scan: ${details}`;
+  }
+  params.logger.warn?.(
+    `WARNING: ${params.label} "${params.pluginId}" contains dangerous code patterns: ${details}`,
+  );
+  return null;
+}
+
 export async function scanBundleInstallSourceRuntime(params: {
+  codeSafetyMode?: InstallCodeSafetyMode;
   logger: InstallScanLogger;
   pluginId: string;
   sourceDir: string;
@@ -23,10 +45,13 @@ export async function scanBundleInstallSourceRuntime(params: {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.sourceDir);
     if (scanSummary.critical > 0) {
-      params.logger.warn?.(
-        `WARNING: Bundle "${params.pluginId}" contains dangerous code patterns: ${buildCriticalDetails({ findings: scanSummary.findings })}`,
-      );
-      return;
+      return resolveCriticalFindingBlockMessage({
+        codeSafetyMode: params.codeSafetyMode,
+        findings: scanSummary.findings,
+        label: "Bundle",
+        logger: params.logger,
+        pluginId: params.pluginId,
+      });
     }
     if (scanSummary.warn > 0) {
       params.logger.warn?.(
@@ -38,9 +63,12 @@ export async function scanBundleInstallSourceRuntime(params: {
       `Bundle "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
     );
   }
+
+  return null;
 }
 
 export async function scanPackageInstallSourceRuntime(params: {
+  codeSafetyMode?: InstallCodeSafetyMode;
   extensions: string[];
   logger: InstallScanLogger;
   packageDir: string;
@@ -68,10 +96,13 @@ export async function scanPackageInstallSourceRuntime(params: {
       includeFiles: forcedScanEntries,
     });
     if (scanSummary.critical > 0) {
-      params.logger.warn?.(
-        `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns: ${buildCriticalDetails({ findings: scanSummary.findings })}`,
-      );
-      return;
+      return resolveCriticalFindingBlockMessage({
+        codeSafetyMode: params.codeSafetyMode,
+        findings: scanSummary.findings,
+        label: "Plugin",
+        logger: params.logger,
+        pluginId: params.pluginId,
+      });
     }
     if (scanSummary.warn > 0) {
       params.logger.warn?.(
@@ -83,4 +114,6 @@ export async function scanPackageInstallSourceRuntime(params: {
       `Plugin "${params.pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
     );
   }
+
+  return null;
 }

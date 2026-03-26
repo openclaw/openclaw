@@ -6,6 +6,7 @@ import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+import type { InstallCodeSafetyMode } from "../infra/install-code-safety-mode.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { formatClawHubSpecifier, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
@@ -36,6 +37,13 @@ import {
   formatPluginInstallWithHookFallbackError,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
+
+export type PluginInstallCliOptions = {
+  link?: boolean;
+  pin?: boolean;
+  marketplace?: string;
+  codeSafety?: InstallCodeSafetyMode;
+};
 
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
@@ -231,7 +239,7 @@ export async function loadConfigForInstall(
 
 export async function runPluginInstallCommand(params: {
   raw: string;
-  opts: { link?: boolean; pin?: boolean; marketplace?: string };
+  opts: PluginInstallCliOptions;
 }) {
   const shorthand = !params.opts.marketplace
     ? await resolveMarketplaceInstallShortcut(params.raw)
@@ -278,6 +286,7 @@ export async function runPluginInstallCommand(params: {
     const result = await installPluginFromMarketplace({
       marketplace: opts.marketplace,
       plugin: raw,
+      codeSafetyMode: opts.codeSafety,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -307,7 +316,11 @@ export async function runPluginInstallCommand(params: {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
       const merged = Array.from(new Set([...existing, resolved]));
-      const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+      const probe = await installPluginFromPath({
+        path: resolved,
+        dryRun: true,
+        codeSafetyMode: opts.codeSafety,
+      });
       if (!probe.ok) {
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
@@ -348,6 +361,7 @@ export async function runPluginInstallCommand(params: {
 
     const result = await installPluginFromPath({
       path: resolved,
+      codeSafetyMode: opts.codeSafety,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -418,6 +432,7 @@ export async function runPluginInstallCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       spec: raw,
+      codeSafetyMode: opts.codeSafety,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
@@ -452,6 +467,7 @@ export async function runPluginInstallCommand(params: {
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
       spec: preferredClawHubSpec,
+      codeSafetyMode: opts.codeSafety,
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
@@ -485,6 +501,7 @@ export async function runPluginInstallCommand(params: {
 
   const result = await installPluginFromNpmSpec({
     spec: raw,
+    codeSafetyMode: opts.codeSafety,
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {

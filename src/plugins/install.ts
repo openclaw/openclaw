@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { InstallCodeSafetyMode } from "../infra/install-code-safety-mode.js";
 import {
   resolveSafeInstallDir,
   safeDirName,
@@ -208,6 +209,7 @@ function buildDirectoryInstallResult(params: {
 }
 
 type PackageInstallCommonParams = {
+  codeSafetyMode?: InstallCodeSafetyMode;
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
@@ -225,6 +227,7 @@ function pickPackageInstallCommonParams(
   params: PackageInstallCommonParams,
 ): PackageInstallCommonParams {
   return {
+    codeSafetyMode: params.codeSafetyMode,
     extensionsDir: params.extensionsDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
@@ -375,16 +378,21 @@ async function installBundleFromSourceDir(
     };
   }
 
-  try {
-    await runtime.scanBundleInstallSource({
+  const bundleScanBlockError = await runtime
+    .scanBundleInstallSource({
+      codeSafetyMode: params.codeSafetyMode,
       sourceDir: params.sourceDir,
       pluginId,
       logger,
+    })
+    .catch((err) => {
+      logger.warn?.(
+        `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      );
+      return null;
     });
-  } catch (err) {
-    logger.warn?.(
-      `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
-    );
+  if (bundleScanBlockError) {
+    return { ok: false, error: bundleScanBlockError };
   }
 
   return await installPluginDirectoryIntoExtensions({
@@ -545,12 +553,16 @@ async function installPluginFromPackageDir(
     };
   }
   try {
-    await runtime.scanPackageInstallSource({
+    const packageScanBlockError = await runtime.scanPackageInstallSource({
+      codeSafetyMode: params.codeSafetyMode,
       packageDir: params.packageDir,
       pluginId,
       logger,
       extensions,
     });
+    if (packageScanBlockError) {
+      return { ok: false, error: packageScanBlockError };
+    }
   } catch (err) {
     logger.warn?.(
       `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
@@ -619,6 +631,7 @@ export async function installPluginFromArchive(
           mode,
           dryRun: params.dryRun,
           expectedPluginId: params.expectedPluginId,
+          codeSafetyMode: params.codeSafetyMode,
         }),
       }),
   });
@@ -710,6 +723,7 @@ export async function installPluginFromNpmSpec(params: {
   expectedPluginId?: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  codeSafetyMode?: InstallCodeSafetyMode;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
@@ -745,6 +759,7 @@ export async function installPluginFromNpmSpec(params: {
       mode,
       dryRun,
       expectedPluginId,
+      codeSafetyMode: params.codeSafetyMode,
     },
   });
   const finalized = runtime.finalizeNpmSpecArchiveInstall(flowResult);

@@ -1,3 +1,5 @@
+import type { InstallCodeSafetyMode } from "../infra/install-code-safety-mode.js";
+
 type InstallScanLogger = {
   warn?: (message: string) => void;
 };
@@ -7,20 +9,22 @@ async function loadInstallSecurityScanRuntime() {
 }
 
 export async function scanBundleInstallSource(params: {
+  codeSafetyMode?: InstallCodeSafetyMode;
   logger: InstallScanLogger;
   pluginId: string;
   sourceDir: string;
 }) {
   const { scanBundleInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  await scanBundleInstallSourceRuntime(params);
+  return await scanBundleInstallSourceRuntime(params);
 }
 
 export async function scanPackageInstallSource(params: {
+  codeSafetyMode?: InstallCodeSafetyMode;
   extensions: string[];
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
 }) {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  await scanPackageInstallSourceRuntime(params);
+  return await scanPackageInstallSourceRuntime(params);
 }
