@@ -180,6 +180,15 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
+    expectSourceMentions("telegram-core", [
+      "ChannelMessageActionAdapter",
+      "TelegramAccountConfig",
+      "buildChannelConfigSchema",
+      "buildTokenChannelStatusSummary",
+      "resolveConfiguredFromCredentialStatuses",
+    ]);
+    expectSourceContains("telegram", 'export * from "./telegram-core.js";');
+    expectSourceContains("telegram", 'export * from "./telegram-runtime.js";');
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",

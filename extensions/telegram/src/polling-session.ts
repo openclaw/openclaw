@@ -6,6 +6,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
 const TELEGRAM_POLL_RESTART_POLICY = {
   initialMs: 2000,
@@ -60,11 +61,14 @@ export class TelegramPollingSession {
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
-  #telegramTransport: TelegramTransport | undefined;
-  #discardTransportOnRestart = false;
+  #transportState: TelegramPollingTransportState;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
-    this.#telegramTransport = opts.telegramTransport;
+    this.#transportState = new TelegramPollingTransportState({
+      log: opts.log,
+      initialTransport: opts.telegramTransport,
+      createTelegramTransport: opts.createTelegramTransport,
+    });
   }
 
   get activeRunner() {
@@ -76,7 +80,7 @@ export class TelegramPollingSession {
   }
 
   markTransportDirty() {
-    this.#discardTransportOnRestart = true;
+    this.#transportState.markDirty();
   }
 
   abortActiveFetch() {
@@ -136,15 +140,7 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
-    const shouldRebuildTransport = this.#discardTransportOnRestart || !this.#telegramTransport;
-    const telegramTransport = shouldRebuildTransport
-      ? (this.opts.createTelegramTransport?.() ?? this.#telegramTransport)
-      : this.#telegramTransport;
-    if (shouldRebuildTransport && telegramTransport) {
-      this.opts.log("[telegram][diag] rebuilding transport for next polling cycle");
-    }
-    this.#telegramTransport = telegramTransport;
-    this.#discardTransportOnRestart = false;
+    const telegramTransport = this.#transportState.acquireForNextCycle();
     try {
       return createTelegramBot({
         token: this.opts.token,
@@ -308,7 +304,7 @@ export class TelegramPollingSession {
           return;
         }
         stallDiagLoggedAt = now;
-        this.#discardTransportOnRestart = true;
+        this.#transportState.markDirty();
         stalledRestart = true;
         const elapsedLabel =
           inFlightGetUpdates > 0
@@ -362,8 +358,8 @@ export class TelegramPollingSession {
         this.#webhookCleared = false;
       }
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
-      if (isConflict || isRecoverable) {
-        this.#discardTransportOnRestart = true;
+      if (isRecoverable) {
+        this.#transportState.markDirty();
       }
       if (!isConflict && !isRecoverable) {
         throw err;

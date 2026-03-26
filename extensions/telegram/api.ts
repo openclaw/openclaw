@@ -1,5 +1,6 @@
 export * from "./src/account-inspect.js";
 export * from "./src/accounts.js";
+export * from "./src/action-threading.js";
 export * from "./src/allow-from.js";
 export * from "./src/api-fetch.js";
 export * from "./src/bot/helpers.js";
