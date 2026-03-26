@@ -183,8 +183,31 @@ export async function getReplyFromConfig(
       if (!allowAny) {
         const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
         if (!allowedKeys.has(modelKeyStr)) {
-          // Model not in allowlist, skip the override and let default model be used
-          // This prevents Dashboard images from bypassing agent model restrictions
+          // Model not in allowlist, try fallbacks before skipping
+          let fallbackApplied = false;
+          if (opts?.modelOverrideFallbacks?.length) {
+            for (const fallbackRaw of opts.modelOverrideFallbacks) {
+              const fallbackRef = resolveModelRefFromString({
+                raw: fallbackRaw.trim(),
+                defaultProvider,
+                aliasIndex,
+              });
+              if (fallbackRef) {
+                const fallbackKeyStr = modelKey(fallbackRef.ref.provider, fallbackRef.ref.model);
+                if (allowedKeys.has(fallbackKeyStr)) {
+                  provider = fallbackRef.ref.provider;
+                  model = fallbackRef.ref.model;
+                  hasAppliedImageModelOverride = true;
+                  fallbackApplied = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!fallbackApplied) {
+            // No allowlisted fallback, skip the override and let default model be used
+            // This prevents Dashboard images from bypassing agent model restrictions
+          }
         } else {
           provider = modelRef.ref.provider;
           model = modelRef.ref.model;
