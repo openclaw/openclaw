@@ -155,7 +155,7 @@ describe("light background detection", () => {
     expect(mod.lightMode).toBe(false);
   });
 
-  it("treats 256-color COLORFGBG bg=232 (near-black greyscale) as dark", async () => {
+  it("treats 256-color COLORFGBG bg=232 (near-black grayscale) as dark", async () => {
     const mod = await importThemeWithEnv({
       OPENCLAW_THEME: undefined,
       COLORFGBG: "15;232",
@@ -163,7 +163,7 @@ describe("light background detection", () => {
     expect(mod.lightMode).toBe(false);
   });
 
-  it("treats 256-color COLORFGBG bg=255 (near-white greyscale) as light", async () => {
+  it("treats 256-color COLORFGBG bg=255 (near-white grayscale) as light", async () => {
     const mod = await importThemeWithEnv({
       OPENCLAW_THEME: undefined,
       COLORFGBG: "0;255",
