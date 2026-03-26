@@ -83,7 +83,7 @@ Use `channels.defaults` for shared group-policy and heartbeat behavior across pr
 }
 ```
 
-- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
+- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset. When no explicit binding matches an inbound message, the gateway applies this default policy to select the handling agent. The session key's canonical form reflects the final destination but does not indicate whether routing matched a binding or the fallback chain.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output.
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output.
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output.
