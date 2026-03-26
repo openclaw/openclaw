@@ -53,6 +53,30 @@ export async function createDiscordThreadBindingsModuleMock(
   };
 }
 
+export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutboundHoisted) {
+  const sendModule = await import("./send.js");
+  const mockedSendModule = await createDiscordSendModuleMock(hoisted, async () => sendModule);
+  vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
+    mockedSendModule.sendMessageDiscord,
+  );
+  vi.spyOn(sendModule, "sendDiscordComponentMessage").mockImplementation(
+    mockedSendModule.sendDiscordComponentMessage,
+  );
+  vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
+  vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
+    mockedSendModule.sendWebhookMessageDiscord,
+  );
+
+  const threadBindingsModule = await import("./monitor/thread-bindings.js");
+  const mockedThreadBindingsModule = await createDiscordThreadBindingsModuleMock(
+    hoisted,
+    async () => threadBindingsModule,
+  );
+  vi.spyOn(threadBindingsModule, "getThreadBindingManager").mockImplementation(
+    mockedThreadBindingsModule.getThreadBindingManager,
+  );
+}
+
 export function resetDiscordOutboundMocks(hoisted: DiscordOutboundHoisted) {
   hoisted.sendMessageDiscordMock.mockReset().mockResolvedValue({
     messageId: "msg-1",
