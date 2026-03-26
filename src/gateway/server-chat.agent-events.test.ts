@@ -63,6 +63,7 @@ describe("agent event handler", () => {
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const activeSessionRuns = new Map<string, Set<string>>();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -71,6 +72,18 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
+      hasNewerSessionActivity: ({ sessionKey, clientRunId }) => {
+        const activeRuns = activeSessionRuns.get(sessionKey);
+        if (!activeRuns) {
+          return false;
+        }
+        for (const activeRunId of activeRuns) {
+          if (activeRunId !== clientRunId) {
+            return true;
+          }
+        }
+        return false;
+      },
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
       sessionEventSubscribers,
@@ -85,6 +98,7 @@ describe("agent event handler", () => {
       chatRunState,
       toolEventRecipients,
       sessionEventSubscribers,
+      activeSessionRuns,
       handler,
     };
   }
@@ -550,6 +564,73 @@ describe("agent event handler", () => {
     );
     expect(persistedErrorCalls).toHaveLength(0);
     expect(chatRunState.registry.peek("run-old-no-start")).toBeUndefined();
+  });
+
+  it("ignores deferred lifecycle errors while a newer session run stays active without events", async () => {
+    vi.useFakeTimers();
+    const {
+      activeSessionRuns,
+      broadcast,
+      broadcastToConnIds,
+      chatRunState,
+      handler,
+      sessionEventSubscribers,
+    } = createHarness({
+      resolveSessionKeyForRun: (runId) =>
+        runId === "run-old-quiet" || runId === "run-new-quiet" ? "session-quiet" : undefined,
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("run-old-quiet", {
+      sessionKey: "session-quiet",
+      clientRunId: "client-old-quiet",
+    });
+    activeSessionRuns.set("session-quiet", new Set(["client-old-quiet", "client-new-quiet"]));
+
+    handler({
+      runId: "run-old-quiet",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitLifecycleError(handler, "run-old-quiet", "temporary fallback", 2);
+
+    broadcastToConnIds.mockClear();
+    persistGatewaySessionLifecycleEventMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const oldRunErrorPayloads = chatBroadcastCalls(broadcast).filter(([, payload]) => {
+      const typed = payload as { state?: string; runId?: string };
+      return typed.state === "error" && typed.runId === "client-old-quiet";
+    });
+    expect(oldRunErrorPayloads).toHaveLength(0);
+
+    const sessionErrorCalls = broadcastToConnIds.mock.calls.filter(([event, payload]) => {
+      const typed = payload as { phase?: string; runId?: string };
+      return (
+        event === "sessions.changed" &&
+        typed.phase === "error" &&
+        typed.runId === "run-old-quiet"
+      );
+    });
+    expect(sessionErrorCalls).toHaveLength(0);
+
+    const persistedErrorCalls = persistGatewaySessionLifecycleEventMock.mock.calls.filter(
+      ([params]) => {
+        const typed = params as {
+          sessionKey?: string;
+          event?: { runId?: string; data?: { phase?: string } };
+        };
+        return (
+          typed.sessionKey === "session-quiet" &&
+          typed.event?.runId === "run-old-quiet" &&
+          typed.event?.data?.phase === "error"
+        );
+      },
+    );
+    expect(persistedErrorCalls).toHaveLength(0);
+    expect(chatRunState.registry.peek("run-old-quiet")).toBeUndefined();
   });
 
   it("strips inline directives from assistant chat events", () => {

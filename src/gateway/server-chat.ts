@@ -456,6 +456,10 @@ export type AgentEventHandlerOptions = {
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
+  hasNewerSessionActivity?: (params: {
+    sessionKey: string;
+    clientRunId: string;
+  }) => boolean;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
@@ -468,6 +472,7 @@ export function createAgentEventHandler({
   agentRunSeq,
   chatRunState,
   resolveSessionKeyForRun,
+  hasNewerSessionActivity,
   clearAgentRunContext,
   toolEventRecipients,
   sessionEventSubscribers,
@@ -785,8 +790,12 @@ export function createAgentEventHandler({
       pendingLifecycleErrors.delete(params.evt.runId);
       if (
         pending.sessionKey &&
-        sessionLatestRuns.get(pending.sessionKey) &&
-        sessionLatestRuns.get(pending.sessionKey) !== pending.evt.runId
+        ((sessionLatestRuns.get(pending.sessionKey) &&
+          sessionLatestRuns.get(pending.sessionKey) !== pending.evt.runId) ||
+          hasNewerSessionActivity?.({
+            sessionKey: pending.sessionKey,
+            clientRunId: pending.clientRunId,
+          }))
       ) {
         cleanupLifecycleTerminalState({
           runId: pending.evt.runId,
