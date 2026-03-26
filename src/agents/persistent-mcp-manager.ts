@@ -280,7 +280,13 @@ export class PersistentMcpManager {
     const existingLock = await readLockFile(lockPath);
     if (existingLock && existingLock.pid > 0) {
       await killStaleProcess(existingLock.pid, existingLock.starttime);
-      await deleteLockFile(lockPath);
+      // Only delete the lock once we can confirm the old process is gone.
+      // When starttime is unavailable (macOS/Windows), killStaleProcess skips
+      // the kill to avoid hitting a recycled PID — leave the lock intact so we
+      // don't spawn a duplicate alongside a potentially still-running process.
+      if (!isPidAlive(existingLock.pid)) {
+        await deleteLockFile(lockPath);
+      }
     }
 
     const transport = new StdioClientTransport({
