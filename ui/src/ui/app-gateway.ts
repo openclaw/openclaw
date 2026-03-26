@@ -220,6 +220,7 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      setupPageVisibilityListener(host);
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
@@ -432,4 +433,29 @@ export function applySnapshot(host: GatewayHost, hello: GatewayHelloOk) {
     applySessionDefaults(host, snapshot.sessionDefaults);
   }
   host.updateAvailable = snapshot?.updateAvailable ?? null;
+}
+
+// ========== OpenClaw Issue #29683 Stability Fix: Page Visibility API ==========
+let visibilityListenerInstalled = false;
+
+export function setupPageVisibilityListener(host: GatewayHost) {
+  if (visibilityListenerInstalled || typeof document === "undefined") {
+    return;
+  }
+
+  visibilityListenerInstalled = true;
+
+  let wasHidden = false;
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      wasHidden = true;
+    } else if (wasHidden) {
+      wasHidden = false;
+      // Proactively refresh chat data when switching back to the tab
+      if (host.connected && host.client) {
+        void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      }
+    }
+  });
 }
