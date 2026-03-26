@@ -14,6 +14,7 @@ export function resolveAgentTimeoutSeconds(
   if (opts?.forSubagent) {
     const raw = normalizeNumber(cfg?.agents?.defaults?.subagents?.runTimeoutSeconds);
     if (raw !== undefined) {
+      // Config value of 0 clamps to 1s (not "no timeout" - only explicit run-level 0 means no timeout)
       return Math.max(raw, 1);
     }
   }
