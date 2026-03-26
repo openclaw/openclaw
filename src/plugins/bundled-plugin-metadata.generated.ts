@@ -249,7 +249,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "brave",
-    idHint: "brave-plugin",
+    idHint: "brave",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -820,7 +820,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "duckduckgo",
-    idHint: "duckduckgo-plugin",
+    idHint: "duckduckgo",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -889,7 +889,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "exa",
-    idHint: "exa-plugin",
+    idHint: "exa",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -1021,7 +1021,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "firecrawl",
-    idHint: "firecrawl-plugin",
+    idHint: "firecrawl",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -1109,7 +1109,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "google",
-    idHint: "google-plugin",
+    idHint: "google",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -2556,7 +2556,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "openshell",
-    idHint: "openshell-sandbox",
+    idHint: "openshell",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -2670,7 +2670,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "perplexity",
-    idHint: "perplexity-plugin",
+    idHint: "perplexity",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -2966,7 +2966,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "tavily",
-    idHint: "tavily-plugin",
+    idHint: "tavily",
     source: {
       source: "./index.ts",
       built: "index.js",
@@ -4007,7 +4007,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "xai",
-    idHint: "xai-plugin",
+    idHint: "xai",
     source: {
       source: "./index.ts",
       built: "index.js",

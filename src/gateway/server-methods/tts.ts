@@ -1,15 +1,15 @@
 import { loadConfig } from "../../config/config.js";
 import {
+  canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
-  normalizeSpeechProviderId,
 } from "../../tts/provider-registry.js";
 import {
+  getResolvedSpeechProviderConfig,
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsAutoMode,
-  resolveTtsApiKey,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   resolveTtsProviderOrder,
@@ -32,6 +32,15 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
         .slice(1)
         .filter((candidate) => isTtsProviderConfigured(config, candidate, cfg));
+      const providerStates = listSpeechProviders(cfg).map((candidate) => ({
+        id: candidate.id,
+        label: candidate.label,
+        configured: candidate.isConfigured({
+          cfg,
+          providerConfig: getResolvedSpeechProviderConfig(config, candidate.id, cfg),
+          timeoutMs: config.timeoutMs,
+        }),
+      }));
       respond(true, {
         enabled: isTtsEnabled(config, prefsPath),
         auto: autoMode,
@@ -39,9 +48,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         fallbackProvider: fallbackProviders[0] ?? null,
         fallbackProviders,
         prefsPath,
-        hasOpenAIKey: Boolean(resolveTtsApiKey(config, "openai")),
-        hasElevenLabsKey: Boolean(resolveTtsApiKey(config, "elevenlabs")),
-        microsoftEnabled: isTtsProviderConfigured(config, "microsoft", cfg),
+        providerStates,
       });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
@@ -102,17 +109,18 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.setProvider": async ({ params, respond }) => {
-    const provider = normalizeSpeechProviderId(
-      typeof params.provider === "string" ? params.provider.trim() : "",
-    );
     const cfg = loadConfig();
+    const provider = canonicalizeSpeechProviderId(
+      typeof params.provider === "string" ? params.provider.trim() : "",
+      cfg,
+    );
     if (!provider || !getSpeechProvider(provider, cfg)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use a registered TTS provider id such as openai, elevenlabs, or microsoft.",
+          "Invalid provider. Use a registered TTS provider id.",
         ),
       );
       return;
@@ -135,7 +143,11 @@ export const ttsHandlers: GatewayRequestHandlers = {
         providers: listSpeechProviders(cfg).map((provider) => ({
           id: provider.id,
           name: provider.label,
-          configured: provider.isConfigured({ cfg, config }),
+          configured: provider.isConfigured({
+            cfg,
+            providerConfig: getResolvedSpeechProviderConfig(config, provider.id, cfg),
+            timeoutMs: config.timeoutMs,
+          }),
           models: [...(provider.models ?? [])],
           voices: [...(provider.voices ?? [])],
         })),
