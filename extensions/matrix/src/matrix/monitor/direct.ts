@@ -101,17 +101,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         log(`matrix: ignoring stale m.direct classification room=${roomId}`);
       }
 
-      if (
-        isStrictDirectMembership({
-          selfUserId,
-          remoteUserId: senderId,
-          joinedMembers,
-        })
-      ) {
-        log(`matrix: dm detected via exact 2-member room room=${roomId}`);
-        return true;
-      }
-
       log(
         `matrix: dm check room=${roomId} result=group members=${joinedMembers?.length ?? "unknown"}`,
       );
