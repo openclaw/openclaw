@@ -201,7 +201,32 @@ async function bootstrapLaunchAgentOrThrow(params: {
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
+
+  // If the service is already registered (e.g. re-install without prior uninstall),
+  // bootout the stale registration and retry once.
+  if (isAlreadyBootstrapped(detail)) {
+    await execLaunchctl(["bootout", params.domain, params.plistPath]);
+    const retry = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    if (retry.code === 0) {
+      return;
+    }
+    const retryDetail = (retry.stderr || retry.stdout).trim();
+    if (isUnsupportedGuiDomain(retryDetail)) {
+      // Fall through to the legacy load fallback below.
+    } else if (!isAlreadyBootstrapped(retryDetail)) {
+      throw new Error(`launchctl bootstrap failed: ${retryDetail}`);
+    }
+  }
+
+  // If the gui/ domain is unavailable (SSH, headless, or sudo), try the
+  // deprecated-but-universal `launchctl load` as a last resort before giving up.
+  if (isUnsupportedGuiDomain(detail) || isAlreadyBootstrapped(detail)) {
+    const load = await execLaunchctl(["load", "-w", params.plistPath]);
+    if (load.code === 0) {
+      return;
+    }
+    // `launchctl load` also failed — throw the original gui-domain error so the
+    // user gets the actionable hint about desktop sessions.
     throwBootstrapGuiSessionError({
       detail,
       domain: params.domain,
@@ -445,6 +470,18 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")
+  );
+}
+
+function isAlreadyBootstrapped(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  // launchctl bootstrap returns exit code 5 ("Input/output error") or the
+  // explicit "already loaded" / "already bootstrapped" messages when the
+  // service target is already registered in the domain.
+  return (
+    normalized.includes("bootstrap failed: 5") ||
+    normalized.includes("already loaded") ||
+    normalized.includes("already bootstrapped")
   );
 }
 

@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   listOutput: "",
   printOutput: "",
   bootstrapError: "",
+  bootstrapFailuresRemaining: Infinity,
+  loadError: "",
   kickstartError: "",
   kickstartFailuresRemaining: 0,
   dirs: new Set<string>(),
@@ -74,8 +76,12 @@ vi.mock("./exec-file.js", () => ({
     if (call[0] === "print") {
       return { stdout: state.printOutput, stderr: "", code: 0 };
     }
-    if (call[0] === "bootstrap" && state.bootstrapError) {
+    if (call[0] === "bootstrap" && state.bootstrapError && state.bootstrapFailuresRemaining > 0) {
+      state.bootstrapFailuresRemaining -= 1;
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
+    }
+    if (call[0] === "load" && state.loadError) {
+      return { stdout: "", stderr: state.loadError, code: 1 };
     }
     if (call[0] === "kickstart" && state.kickstartError && state.kickstartFailuresRemaining > 0) {
       state.kickstartFailuresRemaining -= 1;
@@ -152,6 +158,8 @@ beforeEach(() => {
   state.listOutput = "";
   state.printOutput = "";
   state.bootstrapError = "";
+  state.bootstrapFailuresRemaining = Infinity;
+  state.loadError = "";
   state.kickstartError = "";
   state.kickstartFailuresRemaining = 0;
   state.dirs.clear();
@@ -438,6 +446,7 @@ describe("launchd install", () => {
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
     state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    state.loadError = "Could not find domain for user gui: 1000";
     const env = createDefaultLaunchdEnv();
     let message = "";
     try {
@@ -452,6 +461,40 @@ describe("launchd install", () => {
     expect(message).toContain("logged-in macOS GUI session");
     expect(message).toContain("wrong user (including sudo)");
     expect(message).toContain("https://docs.openclaw.ai/gateway");
+    // Verify that `load -w` was attempted as a fallback before giving up.
+    expect(state.launchctlCalls.some((c) => c[0] === "load")).toBe(true);
+  });
+
+  it("falls back to launchctl load when gui domain is unavailable", async () => {
+    state.bootstrapError = "Bootstrap failed: 125: Domain does not support specified action";
+    // loadError is empty → launchctl load succeeds
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    expect(state.launchctlCalls.some((c) => c[0] === "load" && c[1] === "-w")).toBe(true);
+  });
+
+  it("retries bootstrap after bootout when service is already registered", async () => {
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapFailuresRemaining = 1; // first bootstrap fails, retry succeeds
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    // Verify bootout was called between the two bootstrap attempts.
+    const bootoutAfterBootstrap = state.launchctlCalls.findIndex(
+      (c, i) =>
+        c[0] === "bootout" &&
+        i > state.launchctlCalls.findIndex((b) => b[0] === "bootstrap"),
+    );
+    expect(bootoutAfterBootstrap).toBeGreaterThanOrEqual(0);
   });
 
   it("surfaces generic bootstrap failures without GUI-specific guidance", async () => {
