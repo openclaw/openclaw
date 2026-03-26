@@ -1143,7 +1143,7 @@ export function buildGatewaySessionRow(params: {
         })
       : null;
   const totalTokens =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
+    resolvePositiveNumber(entry?.totalTokens) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
