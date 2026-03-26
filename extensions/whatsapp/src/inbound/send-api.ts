@@ -24,7 +24,7 @@ function resolveOutboundMessageId(result: unknown): string {
 // which is incorrect for LID-based participants. The auto-reply path is unaffected.
 function mentionsSpread(text: string | undefined): { mentions: string[] } | Record<string, never> {
   if (!text) return {};
-  const mentions = extractOutboundMentions(text);
+  const { jids: mentions } = extractOutboundMentions(text);
   return mentions.length > 0 ? { mentions } : {};
 }
 

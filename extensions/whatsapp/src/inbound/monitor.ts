@@ -412,20 +412,31 @@ export async function monitorWebInbox(options: {
       }
     };
     const reply = async (text: string) => {
-      const mentions = inbound.access.isSelfChat ? [] : extractOutboundMentions(text, groupJidMap);
+      const { jids: mentions, text: updatedText } = inbound.access.isSelfChat
+        ? { jids: [], text }
+        : extractOutboundMentions(text, groupJidMap);
       await sendTrackedMessage(chatJid, {
-        text,
+        text: updatedText,
         ...(mentions.length > 0 ? { mentions } : {}),
       });
     };
     const sendMedia = async (payload: AnyMessageContent) => {
       const caption = "caption" in payload ? (payload as { caption?: string }).caption : undefined;
-      const mentions =
-        caption && !inbound.access.isSelfChat ? extractOutboundMentions(caption, groupJidMap) : [];
-      await sendTrackedMessage(
-        chatJid,
-        mentions.length > 0 ? ({ ...payload, mentions } as AnyMessageContent) : payload,
-      );
+      if (caption && !inbound.access.isSelfChat) {
+        const { jids: mentions, text: updatedCaption } = extractOutboundMentions(
+          caption,
+          groupJidMap,
+        );
+        if (mentions.length > 0) {
+          await sendTrackedMessage(chatJid, {
+            ...payload,
+            caption: updatedCaption,
+            mentions,
+          } as AnyMessageContent);
+          return;
+        }
+      }
+      await sendTrackedMessage(chatJid, payload);
     };
     const timestamp = inbound.messageTimestampMs;
     const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
