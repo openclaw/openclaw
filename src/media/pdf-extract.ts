@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
@@ -49,8 +51,9 @@ export async function extractPdfContent(params: {
 }): Promise<PdfExtractedContent> {
   const { buffer, maxPages, maxPixels, minTextChars, pageNumbers, onImageExtractionError } = params;
   const { getDocument } = await loadPdfJsModule();
-  const standardFontDataUrl = new URL("../node_modules/pdfjs-dist/standard_fonts/", import.meta.url)
-    .pathname;
+  const standardFontDataUrl = fileURLToPath(
+    new URL("../../node_modules/pdfjs-dist/standard_fonts/", import.meta.url),
+  );
   const pdf = await getDocument({
     data: new Uint8Array(buffer),
     disableWorker: true,

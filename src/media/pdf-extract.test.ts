@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getDocumentMock = vi.fn();
@@ -55,7 +56,8 @@ describe("extractPdfContent standard font wiring", () => {
     });
     expect(typeof params.standardFontDataUrl).toBe("string");
     expect(params.standardFontDataUrl).toContain("standard_fonts");
-    expect(params.standardFontDataUrl.endsWith("/standard_fonts/")).toBe(true);
+    expect(params.standardFontDataUrl.endsWith("standard_fonts/")).toBe(true);
+    expect(existsSync(params.standardFontDataUrl)).toBe(true);
     expect(createCanvasMock).toHaveBeenCalledTimes(1);
   });
 });
