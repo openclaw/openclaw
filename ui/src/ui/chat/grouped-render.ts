@@ -685,6 +685,8 @@ function renderGroupedMessage(
   }
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  // When a message has both tool cards and extracted text, render tools first. Model `content`
+  // often orders `text` before `tool_call` / `tool_result`, but the tool run should appear first.
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const toolSummaryLabel =
     toolNames.length <= 3
@@ -729,6 +731,7 @@ function renderGroupedMessage(
                     </div>`
                     : nothing
                 }
+                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
                 ${
                   jsonResult
                     ? html`<details class="chat-json-collapse">
@@ -744,7 +747,6 @@ function renderGroupedMessage(
                       </div>`
                       : nothing
                 }
-                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
               </div>
             </details>
           `
@@ -757,6 +759,7 @@ function renderGroupedMessage(
                 </div>`
                 : nothing
             }
+            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
             ${
               jsonResult
                 ? html`<details class="chat-json-collapse">
@@ -772,7 +775,6 @@ function renderGroupedMessage(
                   </div>`
                   : nothing
             }
-            ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
           `
       }
     </div>
