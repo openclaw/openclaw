@@ -1,6 +1,7 @@
 import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CommandLane } from "./lanes.js";
+
 /**
  * Dedicated error type thrown when a queued command is rejected because
  * its lane was cleared.  Callers that fire-and-forget enqueued tasks can
@@ -52,6 +53,12 @@ function isExpectedNonErrorLaneFailure(err: unknown): boolean {
 }
 
 /**
+ * Lazy concurrency resolver for lanes that need dynamic initialization.
+ * Called on first use if the lane hasn't been explicitly configured.
+ */
+type LazyConcurrencyResolver = () => Promise<number>;
+
+/**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
  */
@@ -62,6 +69,8 @@ function getQueueState() {
     gatewayDraining: false,
     lanes: new Map<string, LaneState>(),
     nextTaskId: 1,
+    /** Lazy resolvers for lanes that need dynamic concurrency initialization */
+    lazyResolvers: new Map<string, LazyConcurrencyResolver>(),
   }));
 }
 
@@ -74,8 +83,8 @@ function getLaneDepth(state: LaneState): number {
 }
 
 function getLaneState(lane: string): LaneState {
-  const queueState = getQueueState();
-  const existing = queueState.lanes.get(lane);
+  const state = getQueueState();
+  const existing = state.lanes.get(lane);
   if (existing) {
     return existing;
   }
@@ -87,8 +96,49 @@ function getLaneState(lane: string): LaneState {
     draining: false,
     generation: 0,
   };
-  queueState.lanes.set(lane, created);
+  state.lanes.set(lane, created);
   return created;
+}
+
+/**
+ * Register a lazy concurrency resolver for a lane.
+ * The resolver will be called on first use of the lane if it hasn't been
+ * explicitly configured via setCommandLaneConcurrency().
+ *
+ * This allows lanes to be initialized on-demand without adding startup cost.
+ */
+export function registerLazyLaneConcurrency(lane: string, resolver: LazyConcurrencyResolver): void {
+  getQueueState().lazyResolvers.set(lane, resolver);
+}
+
+/**
+ * Ensure a lane's concurrency is initialized.
+ * If the lane was explicitly configured (maxConcurrent != 1), this is a no-op.
+ * If a lazy resolver is registered, it will be called and the result applied.
+ */
+async function ensureLaneConcurrency(lane: string): Promise<void> {
+  const state = getLaneState(lane);
+
+  // If already configured (not default), skip
+  if (state.maxConcurrent !== 1) {
+    return;
+  }
+
+  // Check if we have a lazy resolver
+  const resolver = getQueueState().lazyResolvers.get(lane);
+  if (!resolver) {
+    return;
+  }
+
+  // Resolve and apply concurrency
+  try {
+    const maxConcurrent = await resolver();
+    state.maxConcurrent = Math.max(1, maxConcurrent);
+    diag.debug(`Lazy-initialized lane "${lane}" with maxConcurrent: ${state.maxConcurrent}`);
+  } catch (err) {
+    diag.warn(`Failed to lazy-initialize lane "${lane}": ${String(err)}`);
+    // Keep default maxConcurrent: 1 on failure
+  }
 }
 
 function completeTask(state: LaneState, taskId: number, taskGeneration: number): boolean {
@@ -161,46 +211,46 @@ function drainLane(lane: string) {
           }
         })();
       }
-    } finally {
-      state.draining = false;
+    } catch (err) {
+      diag.error(`drainLane pump error: lane=${lane} err=${String(err)}`);
     }
   };
-
   pump();
 }
 
 /**
- * Mark gateway as draining for restart so new enqueues fail fast with
- * `GatewayDrainingError` instead of being silently killed on shutdown.
+ * Enqueue a task on a specific command lane. Returns a promise that resolves when the
+ * task executes. The lane serializes execution up to its configured concurrency.
+ *
+ * @param lane - The lane name (e.g., "main", "cron", "nested")
+ * @param task - The async task to execute
+ * @param opts.warnAfterMs - Log a warning if the task waits longer than this
+ * @param opts.onWait - Callback when task is waiting (waitMs, queuedAhead)
+ * @returns Promise that resolves with the task result
  */
 export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
 }
 
-export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
-  const cleaned = normalizeLane(lane);
-  const state = getLaneState(cleaned);
-  state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
-  drainLane(cleaned);
-}
-
-export function enqueueCommandInLane<T>(
+export async function enqueueCommandInLane<T>(
   lane: string,
   task: () => Promise<T>,
-  opts?: {
-    warnAfterMs?: number;
-    onWait?: (waitMs: number, queuedAhead: number) => void;
-  },
+  opts?: { warnAfterMs?: number; onWait?: (waitMs: number, queuedAhead: number) => void },
 ): Promise<T> {
-  const queueState = getQueueState();
-  if (queueState.gatewayDraining) {
-    return Promise.reject(new GatewayDrainingError());
+  const state = getQueueState();
+  if (state.gatewayDraining) {
+    throw new GatewayDrainingError();
   }
-  const cleaned = normalizeLane(lane);
+
+  const cleaned = lane.trim() || CommandLane.Main;
+
+  // Ensure lane concurrency is initialized (supports lazy loading)
+  await ensureLaneConcurrency(cleaned);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
-  const state = getLaneState(cleaned);
+  const laneState = getLaneState(cleaned);
+
   return new Promise<T>((resolve, reject) => {
-    state.queue.push({
+    laneState.queue.push({
       task: () => task(),
       resolve: (value) => resolve(value as T),
       reject,
@@ -208,17 +258,23 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, getLaneDepth(state));
+    logLaneEnqueue(cleaned, getLaneDepth(laneState));
     drainLane(cleaned);
   });
 }
 
+/**
+ * Enqueue a task on the main command lane. Returns a promise that resolves when the
+ * task executes. The main lane serializes execution.
+ *
+ * @param task - The async task to execute
+ * @param opts.warnAfterMs - Log a warning if the task waits longer than this
+ * @param opts.onWait - Callback when task is waiting (waitMs, queuedAhead)
+ * @returns Promise that resolves with the task result
+ */
 export function enqueueCommand<T>(
   task: () => Promise<T>,
-  opts?: {
-    warnAfterMs?: number;
-    onWait?: (waitMs: number, queuedAhead: number) => void;
-  },
+  opts?: { warnAfterMs?: number; onWait?: (waitMs: number, queuedAhead: number) => void },
 ): Promise<T> {
   return enqueueCommandInLane(CommandLane.Main, task, opts);
 }
@@ -232,7 +288,41 @@ export function getQueueSize(lane: string = CommandLane.Main) {
   return getLaneDepth(state);
 }
 
-export function getTotalQueueSize() {
+/**
+ * Set the maximum concurrency for a lane. This should be called during
+ * gateway initialization for lanes that need specific concurrency limits.
+ *
+ * Note: If a lane has already been lazy-initialized, this will override
+ * the lazy value. Explicit configuration always takes precedence.
+ *
+ * @param lane - The lane name
+ * @param maxConcurrent - Maximum number of concurrent tasks (>= 1)
+ */
+export function setCommandLaneConcurrency(lane: string, maxConcurrent: number): void {
+  const state = getLaneState(lane);
+  state.maxConcurrent = Math.max(1, maxConcurrent);
+  drainLane(lane);
+}
+
+/**
+ * Clear all pending tasks from a lane and reject their promises.
+ * Active tasks are allowed to complete.
+ *
+ * @param lane - The lane to clear
+ */
+export function clearCommandLane(lane: string = CommandLane.Main): void {
+  const state = getLaneState(lane);
+  state.generation++;
+  const toReject = state.queue.splice(0, state.queue.length);
+  for (const entry of toReject) {
+    entry.reject(new CommandLaneClearedError(lane));
+  }
+}
+
+/**
+ * Get the total number of queued tasks across all lanes.
+ */
+export function getTotalQueueSize(): number {
   let total = 0;
   for (const s of getQueueState().lanes.values()) {
     total += getLaneDepth(s);
@@ -240,18 +330,11 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
-  const cleaned = normalizeLane(lane);
-  const state = getQueueState().lanes.get(cleaned);
-  if (!state) {
-    return 0;
-  }
-  const removed = state.queue.length;
-  const pending = state.queue.splice(0);
-  for (const entry of pending) {
-    entry.reject(new CommandLaneClearedError(cleaned));
-  }
-  return removed;
+/**
+ * Set the gateway draining flag. When true, new tasks will be rejected.
+ */
+export function setGatewayDraining(draining: boolean): void {
+  getQueueState().gatewayDraining = draining;
 }
 
 /**
@@ -264,6 +347,13 @@ export function resetCommandQueueStateForTest(): void {
   queueState.gatewayDraining = false;
   queueState.lanes.clear();
   queueState.nextTaskId = 1;
+}
+
+/**
+ * Check if the gateway is currently draining.
+ */
+export function isGatewayDraining(): boolean {
+  return getQueueState().gatewayDraining;
 }
 
 /**
@@ -281,15 +371,15 @@ export function resetCommandQueueStateForTest(): void {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
-  const queueState = getQueueState();
-  queueState.gatewayDraining = false;
+  const state = getQueueState();
+  state.gatewayDraining = false;
   const lanesToDrain: string[] = [];
-  for (const state of queueState.lanes.values()) {
-    state.generation += 1;
-    state.activeTaskIds.clear();
-    state.draining = false;
-    if (state.queue.length > 0) {
-      lanesToDrain.push(state.lane);
+  for (const s of state.lanes.values()) {
+    s.generation += 1;
+    s.activeTaskIds.clear();
+    s.draining = false;
+    if (s.queue.length > 0) {
+      lanesToDrain.push(s.lane);
     }
   }
   // Drain after the full reset pass so all lanes are in a clean state first.
@@ -303,9 +393,9 @@ export function resetAllLanes(): void {
  * (excludes queued-but-not-started entries).
  */
 export function getActiveTaskCount(): number {
-  const queueState = getQueueState();
+  const state = getQueueState();
   let total = 0;
-  for (const s of queueState.lanes.values()) {
+  for (const s of state.lanes.values()) {
     total += s.activeTaskIds.size;
   }
   return total;
@@ -323,10 +413,10 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   // Keep shutdown/drain checks responsive without busy looping.
   const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;
-  const queueState = getQueueState();
+  const state = getQueueState();
   const activeAtStart = new Set<number>();
-  for (const state of queueState.lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
+  for (const s of state.lanes.values()) {
+    for (const taskId of s.activeTaskIds) {
       activeAtStart.add(taskId);
     }
   }
@@ -339,8 +429,8 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
       }
 
       let hasPending = false;
-      for (const state of queueState.lanes.values()) {
-        for (const taskId of state.activeTaskIds) {
+      for (const s of state.lanes.values()) {
+        for (const taskId of s.activeTaskIds) {
           if (activeAtStart.has(taskId)) {
             hasPending = true;
             break;

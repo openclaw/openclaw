@@ -14,7 +14,11 @@ import {
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
+import {
+  setCommandLaneConcurrency,
+  getTotalQueueSize,
+  registerLazyLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -137,7 +141,12 @@ export function createGatewayReloadHandlers(params: {
     setCommandLaneConcurrency(CommandLane.Cron, nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(nextConfig));
     setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(nextConfig));
-    setCommandLaneConcurrency(CommandLane.Nested, resolveAgentMaxConcurrent(nextConfig));
+
+    // Update lazy resolver for Nested lane on hot reload
+    // This ensures new sessions_send calls use the updated concurrency
+    registerLazyLaneConcurrency(CommandLane.Nested, async () => {
+      return resolveAgentMaxConcurrent(nextConfig);
+    });
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
