@@ -1,51 +1,22 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { buildMemoryPromptSection, registerMemoryPromptSection } from "../memory/prompt-section.js";
 import { withEnv } from "../test-utils/env.js";
-
-async function importFreshPluginTestModules() {
-  vi.resetModules();
-  vi.doUnmock("node:fs");
-  vi.doUnmock("node:fs/promises");
-  vi.doUnmock("node:module");
-  vi.doUnmock("./hook-runner-global.js");
-  vi.doUnmock("./hooks.js");
-  vi.doUnmock("./loader.js");
-  vi.doUnmock("jiti");
-  const [loader, hookRunnerGlobal, hooks, runtime, registry, promptSection] = await Promise.all([
-    import("./loader.js"),
-    import("./hook-runner-global.js"),
-    import("./hooks.js"),
-    import("./runtime.js"),
-    import("./registry.js"),
-    import("../memory/prompt-section.js"),
-  ]);
-  return {
-    ...loader,
-    ...hookRunnerGlobal,
-    ...hooks,
-    ...runtime,
-    ...registry,
-    ...promptSection,
-  };
-}
-
-const {
-  __testing,
-  buildMemoryPromptSection,
-  clearPluginLoaderCache,
-  createHookRunner,
-  createEmptyPluginRegistry,
+import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-state.js";
+import { clearPluginDiscoveryCache } from "./discovery.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createHookRunner } from "./hooks.js";
+import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
+import { createEmptyPluginRegistry } from "./registry.js";
+import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
-  getGlobalHookRunner,
-  loadOpenClawPlugins,
-  registerMemoryPromptSection,
-  resetGlobalHookRunner,
   setActivePluginRegistry,
-} = await importFreshPluginTestModules();
+} from "./runtime.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
@@ -503,7 +474,6 @@ function createEnvResolvedPluginFixture(pluginId: string) {
     OPENCLAW_HOME: openclawHome,
     HOME: ignoredHome,
     OPENCLAW_STATE_DIR: stateDir,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
   };
   return { plugin, env };
@@ -553,6 +523,8 @@ function expectEscapingEntryRejected(params: {
 
 afterEach(() => {
   clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -1009,8 +981,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       };`,
     });
-    const { clearPluginCommands, getPluginCommandSpecs } = await import("./commands.js");
-
     clearPluginCommands();
 
     const scoped = loadOpenClawPlugins({
@@ -1052,6 +1022,30 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     ]);
 
     clearPluginCommands();
+  });
+
+  it("can scope bundled provider loads to deepseek without hanging", () => {
+    if (prevBundledDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+    }
+
+    const scoped = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["deepseek"],
+        },
+      },
+      onlyPluginIds: ["deepseek"],
+    });
+
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
+    expect(scoped.plugins[0]?.status).toBe("loaded");
+    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
   });
 
   it("does not replace the active memory prompt section during non-activating loads", () => {
@@ -1331,7 +1325,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: openclawHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -1343,7 +1336,6 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
                 OPENCLAW_HOME: secondHome,
                 HOME: ignoredHome,
                 OPENCLAW_STATE_DIR: stateDir,
-                CLAWDBOT_STATE_DIR: undefined,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
               },
             }),
@@ -1395,6 +1387,8 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       filename: "cache-eviction.cjs",
       body: `module.exports = { id: "cache-eviction", register() {} };`,
     });
+    const previousCacheCap = __testing.maxPluginRegistryCacheEntries;
+    __testing.setMaxPluginRegistryCacheEntriesForTest(4);
     const stateDirs = Array.from({ length: __testing.maxPluginRegistryCacheEntries + 1 }, () =>
       makeTempDir(),
     );
@@ -1416,17 +1410,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         },
       });
 
-    const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
-    const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
+    try {
+      const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
+      const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
 
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
 
-    for (const stateDir of stateDirs.slice(2)) {
-      loadWithStateDir(stateDir);
+      for (const stateDir of stateDirs.slice(2)) {
+        loadWithStateDir(stateDir);
+      }
+
+      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
+      expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
+    } finally {
+      __testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
     }
-
-    expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
-    expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {
@@ -1747,6 +1745,24 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
           ).toBe(true);
         },
       },
+      {
+        label: "requires cli backend ids",
+        pluginId: "cli-backend-missing-id",
+        body: `module.exports = { id: "cli-backend-missing-id", register(api) {
+  api.registerCliBackend({ id: "   ", config: { command: "claude" } });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends).toHaveLength(0);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === "cli-backend-missing-id" &&
+                diag.message === "cli backend registration missing id",
+            ),
+          ).toBe(true);
+        },
+      },
     ] as const;
 
     for (const scenario of scenarios) {
@@ -1864,6 +1880,21 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+        },
+      },
+      {
+        label: "plugin cli backend ids",
+        ownerA: "cli-backend-owner-a",
+        ownerB: "cli-backend-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerCliBackend({ id: "shared-cli-backend", config: { command: "backend-${ownerId}" } });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.cliBackends?.length ?? 0,
+        duplicateMessage:
+          "cli backend already registered: shared-cli-backend (cli-backend-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
       },
     ] as const;
@@ -2328,7 +2359,7 @@ module.exports = {
   api.on("before_prompt_build", () => ({ prependContext: "prepend" }));
   api.on("before_agent_start", () => ({
     prependContext: "legacy",
-    modelOverride: "gpt-4o",
+    modelOverride: "gpt-5.4",
     providerOverride: "anthropic",
   }));
   api.on("before_model_resolve", () => ({ providerOverride: "openai" }));
@@ -2357,7 +2388,7 @@ module.exports = {
     const runner = createHookRunner(registry);
     const legacyResult = await runner.runBeforeAgentStart({ prompt: "hello", messages: [] }, {});
     expect(legacyResult).toEqual({
-      modelOverride: "gpt-4o",
+      modelOverride: "gpt-5.4",
       providerOverride: "anthropic",
     });
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
@@ -2620,7 +2651,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "feishu");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2662,7 +2693,7 @@ module.exports = {
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "zalouser");
             mkdirSafe(globalDir);
             writePlugin({
@@ -2710,50 +2741,81 @@ module.exports = {
     }
   });
 
-  it("warns about open allowlists for discoverable plugins once per plugin set", () => {
+  it("warns about open allowlists only for auto-discovered plugins", () => {
     useNoBundledPlugins();
     clearPluginLoaderCache();
     const scenarios = [
       {
-        label: "single load warns",
-        pluginId: "warn-open-allow",
+        label: "explicit config path stays quiet",
+        pluginId: "warn-open-allow-config",
         loads: 1,
-        expectedWarnings: 1,
+        expectedWarnings: 0,
+        loadRegistry: (warnings: string[]) => {
+          const plugin = writePlugin({
+            id: "warn-open-allow-config",
+            body: `module.exports = { id: "warn-open-allow-config", register() {} };`,
+          });
+          return loadOpenClawPlugins({
+            cache: false,
+            logger: createWarningLogger(warnings),
+            config: {
+              plugins: {
+                load: { paths: [plugin.file] },
+              },
+            },
+          });
+        },
       },
       {
-        label: "repeated identical loads dedupe warning",
-        pluginId: "warn-open-allow-once",
+        label: "workspace discovery warns once",
+        pluginId: "warn-open-allow-workspace",
         loads: 2,
         expectedWarnings: 1,
+        loadRegistry: (() => {
+          const workspaceDir = makeTempDir();
+          const workspaceExtDir = path.join(
+            workspaceDir,
+            ".openclaw",
+            "extensions",
+            "warn-open-allow-workspace",
+          );
+          mkdirSafe(workspaceExtDir);
+          writePlugin({
+            id: "warn-open-allow-workspace",
+            body: `module.exports = { id: "warn-open-allow-workspace", register() {} };`,
+            dir: workspaceExtDir,
+            filename: "index.cjs",
+          });
+          return (warnings: string[]) =>
+            loadOpenClawPlugins({
+              cache: false,
+              workspaceDir,
+              logger: createWarningLogger(warnings),
+              config: {
+                plugins: {
+                  enabled: true,
+                },
+              },
+            });
+        })(),
       },
     ] as const;
 
     for (const scenario of scenarios) {
-      const plugin = writePlugin({
-        id: scenario.pluginId,
-        body: `module.exports = { id: "${scenario.pluginId}", register() {} };`,
-      });
       const warnings: string[] = [];
-      const options = {
-        cache: false,
-        logger: createWarningLogger(warnings),
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-          },
-        },
-      };
 
       for (let index = 0; index < scenario.loads; index += 1) {
-        loadOpenClawPlugins(options);
+        scenario.loadRegistry(warnings);
       }
 
       const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
       expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
-      expect(
-        openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
-        scenario.label,
-      ).toBe(true);
+      if (scenario.expectedWarnings > 0) {
+        expect(
+          openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
+          scenario.label,
+        ).toBe(true);
+      }
     }
   });
 
@@ -2961,7 +3023,7 @@ module.exports = {
         label: "warns when loaded non-bundled plugin has no install/load-path provenance",
         loadRegistry: () => {
           const stateDir = makeTempDir();
-          return withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+          return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
             const globalDir = path.join(stateDir, "extensions", "rogue");
             mkdirSafe(globalDir);
             writePlugin({

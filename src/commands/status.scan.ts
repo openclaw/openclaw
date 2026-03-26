@@ -19,6 +19,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
+import { buildColdStartUpdateResult, scanStatusJsonCore } from "./status.scan.json-core.js";
 import {
   buildTailscaleHttpsUrl,
   pickGatewaySelfPresence,
@@ -34,15 +35,9 @@ import { getUpdateCheckResult } from "./status.update.js";
 
 type DeferredResult<T> = { ok: true; value: T } | { ok: false; error: unknown };
 
-let pluginRegistryModulePromise: Promise<typeof import("../cli/plugin-registry.js")> | undefined;
 let statusScanDepsRuntimeModulePromise:
   | Promise<typeof import("./status.scan.deps.runtime.js")>
   | undefined;
-
-function loadPluginRegistryModule() {
-  pluginRegistryModulePromise ??= import("../cli/plugin-registry.js");
-  return pluginRegistryModulePromise;
-}
 
 const loadStatusScanRuntimeModule = createLazyRuntimeSurface(
   () => import("./status.scan.runtime.js"),
@@ -68,23 +63,8 @@ function unwrapDeferredResult<T>(result: DeferredResult<T>): T {
   return result.value;
 }
 
-function shouldCollectPluginCompatibility(cfg: OpenClawConfig): boolean {
-  if (hasPotentialConfiguredChannels(cfg)) {
-    return true;
-  }
-  return existsSync(resolveConfigPath(process.env));
-}
-
 function isMissingConfigColdStart(): boolean {
   return !existsSync(resolveConfigPath(process.env));
-}
-
-function buildColdStartUpdateResult(): Awaited<ReturnType<typeof getUpdateCheckResult>> {
-  return {
-    root: null,
-    installKind: "unknown",
-    packageManager: "unknown",
-  };
 }
 
 async function resolveChannelsStatus(params: {
@@ -153,6 +133,7 @@ async function resolveMemoryStatusSnapshot(params: {
 async function scanStatusJsonFast(opts: {
   timeoutMs?: number;
   all?: boolean;
+  runtime: RuntimeEnv;
 }): Promise<StatusScanResult> {
   const coldStart = isMissingConfigColdStart();
   const loadedRaw = await readBestEffortConfig();
@@ -163,101 +144,18 @@ async function scanStatusJsonFast(opts: {
       targetIds: getStatusCommandSecretTargetIds(),
       mode: "read_only_status",
     });
-  const hasConfiguredChannels = hasPotentialConfiguredChannels(cfg);
-  if (hasConfiguredChannels) {
-    const { ensurePluginRegistryLoaded } = await loadPluginRegistryModule();
-    ensurePluginRegistryLoaded({ scope: "configured-channels" });
-  }
-  const osSummary = resolveOsSummary();
-  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const updateTimeoutMs = opts.all ? 6500 : 2500;
-  const skipColdStartNetworkChecks = coldStart && !hasConfiguredChannels && opts.all !== true;
-  const updatePromise = skipColdStartNetworkChecks
-    ? Promise.resolve(buildColdStartUpdateResult())
-    : getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: true,
-        includeRegistry: true,
-      });
-  const agentStatusPromise = getAgentLocalStatuses(cfg);
-  const summaryPromise = getStatusSummary({ config: cfg, sourceConfig: loadedRaw });
-
-  const tailscaleDnsPromise =
-    tailscaleMode === "off"
-      ? Promise.resolve<string | null>(null)
-      : loadStatusScanDepsRuntimeModule()
-          .then(({ getTailnetHostname }) =>
-            getTailnetHostname((cmd, args) =>
-              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
-            ),
-          )
-          .catch(() => null);
-
-  const gatewayProbePromise = resolveGatewayProbeSnapshot({
-    cfg,
-    opts: {
-      ...opts,
-      ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
-    },
-  });
-
-  const [tailscaleDns, update, agentStatus, gatewaySnapshot, summary] = await Promise.all([
-    tailscaleDnsPromise,
-    updatePromise,
-    agentStatusPromise,
-    gatewayProbePromise,
-    summaryPromise,
-  ]);
-  const tailscaleHttpsUrl = buildTailscaleHttpsUrl({
-    tailscaleMode,
-    tailscaleDns,
-    controlUiBasePath: cfg.gateway?.controlUi?.basePath,
-  });
-
-  const {
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-  } = gatewaySnapshot;
-  const gatewayReachable = gatewayProbe?.ok === true;
-  const gatewaySelf = gatewayProbe?.presence
-    ? pickGatewaySelfPresence(gatewayProbe.presence)
-    : null;
-  const memoryPlugin = resolveMemoryPluginStatus(cfg);
-  const memoryPromise = resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin });
-  const memory = await memoryPromise;
-  const pluginCompatibility = shouldCollectPluginCompatibility(cfg)
-    ? buildPluginCompatibilityNotices({ config: cfg })
-    : [];
-
-  return {
+  return await scanStatusJsonCore({
+    coldStart,
     cfg,
     sourceConfig: loadedRaw,
     secretDiagnostics,
-    osSummary,
-    tailscaleMode,
-    tailscaleDns,
-    tailscaleHttpsUrl,
-    update,
-    gatewayConnection,
-    remoteUrlMissing,
-    gatewayMode,
-    gatewayProbeAuth,
-    gatewayProbeAuthWarning,
-    gatewayProbe,
-    gatewayReachable,
-    gatewaySelf,
-    channelIssues: [],
-    agentStatus,
-    channels: { rows: [], details: [] },
-    summary,
-    memory,
-    memoryPlugin,
-    pluginCompatibility,
-  };
+    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg),
+    opts,
+    resolveOsSummary,
+    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
+      await resolveMemoryStatusSnapshot({ cfg, agentStatus, memoryPlugin }),
+    runtime: opts.runtime,
+  });
 }
 
 export async function scanStatus(
@@ -269,7 +167,11 @@ export async function scanStatus(
   _runtime: RuntimeEnv,
 ): Promise<StatusScanResult> {
   if (opts.json) {
-    return await scanStatusJsonFast({ timeoutMs: opts.timeoutMs, all: opts.all });
+    return await scanStatusJsonFast({
+      timeoutMs: opts.timeoutMs,
+      all: opts.all,
+      runtime: _runtime,
+    });
   }
   return await withProgress(
     {
@@ -366,8 +268,8 @@ export async function scanStatus(
       progress.setLabel("Summarizing channels…");
       const channels = await buildChannelsTable(cfg, {
         // Show token previews in regular status; keep `status --all` redacted.
-        // Set `CLAWDBOT_SHOW_SECRETS=0` to force redaction.
-        showSecrets: process.env.CLAWDBOT_SHOW_SECRETS?.trim() !== "0",
+        // Set `OPENCLAW_SHOW_SECRETS=0` to force redaction.
+        showSecrets: process.env.OPENCLAW_SHOW_SECRETS?.trim() !== "0",
         sourceConfig: loadedRaw,
       });
       progress.tick();

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
@@ -76,9 +76,32 @@ function createBundledFirecrawlEntry(): PluginWebSearchProviderEntry {
   };
 }
 
+function createBundledDuckDuckGoEntry(): PluginWebSearchProviderEntry {
+  return {
+    id: "duckduckgo",
+    pluginId: "duckduckgo",
+    label: "DuckDuckGo Search (experimental)",
+    hint: "Free fallback",
+    requiresCredential: false,
+    envVars: [],
+    placeholder: "(no key needed)",
+    signupUrl: "https://duckduckgo.com/",
+    credentialPath: "",
+    getCredentialValue: () => "duckduckgo-no-key-needed",
+    setCredentialValue: () => {},
+    createTool: () => null,
+  };
+}
+
 describe("onboard-search provider resolution", () => {
-  afterEach(() => {
+  let mod: typeof import("./onboard-search.js");
+
+  beforeAll(async () => {
     vi.resetModules();
+    mod = await import("./onboard-search.js");
+  });
+
+  afterEach(() => {
     vi.clearAllMocks();
   });
 
@@ -88,7 +111,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -129,7 +151,6 @@ describe("onboard-search provider resolution", () => {
       params?.config ? [customEntry] : [],
     );
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       plugins: {
         installs: {
@@ -180,7 +201,6 @@ describe("onboard-search provider resolution", () => {
     mocks.listBundledWebSearchProviders.mockReturnValue([firecrawlEntry]);
     mocks.resolveBundledWebSearchPluginId.mockReturnValue("firecrawl");
 
-    const mod = await import("./onboard-search.js");
     const cfg: OpenClawConfig = {
       tools: {
         web: {
@@ -206,5 +226,34 @@ describe("onboard-search provider resolution", () => {
     expect(mod.hasExistingKey(cfg, "firecrawl")).toBe(false);
     expect(mod.resolveExistingKey(cfg, "firecrawl")).toBeUndefined();
     expect(mod.applySearchProviderSelection(cfg, "firecrawl")).toBe(cfg);
+  });
+
+  it("defaults to a keyless provider when no search credentials exist", async () => {
+    const duckduckgoEntry = createBundledDuckDuckGoEntry();
+    mocks.resolvePluginWebSearchProviders.mockImplementation((params) =>
+      params?.config ? [duckduckgoEntry] : [duckduckgoEntry],
+    );
+
+    const notes: string[] = [];
+    const prompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async (message: string) => {
+        notes.push(message);
+      }),
+      select: vi.fn(async () => "duckduckgo"),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => {
+        throw new Error("text prompt should not run for keyless providers");
+      }),
+      confirm: vi.fn(async () => true),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const result = await mod.setupSearch({} as OpenClawConfig, {} as never, prompter as never);
+
+    expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
+    expect(result.plugins?.entries?.duckduckgo?.enabled).toBe(true);
+    expect(notes.some((message) => message.includes("works without an API key"))).toBe(true);
   });
 });

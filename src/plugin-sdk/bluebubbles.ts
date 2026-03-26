@@ -63,7 +63,7 @@ export {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
 } from "../../extensions/imessage/api.js";
-export { stripMarkdown } from "../line/markdown-to-line.js";
+export { stripMarkdown } from "./text-runtime.js";
 export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -87,10 +87,13 @@ export {
 } from "./status-helpers.js";
 export { extractToolSend } from "./tool-send.js";
 export {
+  WEBHOOK_RATE_LIMIT_DEFAULTS,
+  createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readWebhookBodyOrReject,
   registerWebhookTargetWithPluginRoute,
+  resolveRequestClientIp,
   resolveWebhookTargets,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,

@@ -1,5 +1,4 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
 
 export type AbortCutoff = {
@@ -49,36 +48,6 @@ export function applyAbortCutoffToSessionEntry(
 ): void {
   entry.abortCutoffMessageSid = cutoff?.messageSid;
   entry.abortCutoffTimestamp = cutoff?.timestamp;
-}
-
-export async function clearAbortCutoffInSession(params: {
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  storePath?: string;
-}): Promise<boolean> {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
-  if (!sessionEntry || !sessionStore || !sessionKey || !hasAbortCutoff(sessionEntry)) {
-    return false;
-  }
-
-  applyAbortCutoffToSessionEntry(sessionEntry, undefined);
-  sessionEntry.updatedAt = Date.now();
-  sessionStore[sessionKey] = sessionEntry;
-
-  if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const existing = store[sessionKey] ?? sessionEntry;
-      if (!existing) {
-        return;
-      }
-      applyAbortCutoffToSessionEntry(existing, undefined);
-      existing.updatedAt = Date.now();
-      store[sessionKey] = existing;
-    });
-  }
-
-  return true;
 }
 
 function toNumericMessageSid(value: string | undefined): bigint | undefined {

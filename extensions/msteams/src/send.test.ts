@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { sendMessageMSTeams } from "./send.js";
+import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -57,6 +57,84 @@ vi.mock("./graph-upload.js", () => ({
 vi.mock("./graph-chat.js", () => ({
   buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
 }));
+
+function mockContinueConversationFailure(error: string) {
+  const mockContinueConversation = vi.fn().mockRejectedValue(new Error(error));
+  mockState.resolveMSTeamsSendContext.mockResolvedValue({
+    adapter: { continueConversation: mockContinueConversation },
+    appId: "app-id",
+    conversationId: "19:conversation@thread.tacv2",
+    ref: {
+      user: { id: "user-1" },
+      agent: { id: "agent-1" },
+      conversation: { id: "19:conversation@thread.tacv2" },
+      channelId: "msteams",
+    },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    conversationType: "personal",
+    tokenProvider: {},
+  });
+  return mockContinueConversation;
+}
+
+function createSharePointSendContext(params: {
+  conversationId: string;
+  graphChatId: string | null;
+  siteId: string;
+}) {
+  return {
+    adapter: {
+      continueConversation: vi.fn(
+        async (
+          _id: string,
+          _ref: unknown,
+          fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
+        ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
+      ),
+    },
+    appId: "app-id",
+    conversationId: params.conversationId,
+    graphChatId: params.graphChatId,
+    ref: {},
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    conversationType: "groupChat" as const,
+    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+    mediaMaxBytes: 8 * 1024 * 1024,
+    sharePointSiteId: params.siteId,
+  };
+}
+
+function mockSharePointPdfUpload(params: {
+  bufferSize: number;
+  fileName: string;
+  itemId: string;
+  uniqueId: string;
+}) {
+  mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+    buffer: Buffer.alloc(params.bufferSize, "pdf"),
+    contentType: "application/pdf",
+    fileName: params.fileName,
+    kind: "file",
+  });
+  mockState.requiresFileConsent.mockReturnValue(false);
+  mockState.uploadAndShareSharePoint.mockResolvedValue({
+    itemId: params.itemId,
+    webUrl: `https://sp.example.com/${params.fileName}`,
+    shareUrl: `https://sp.example.com/share/${params.fileName}`,
+    name: params.fileName,
+  });
+  mockState.getDriveItemProperties.mockResolvedValue({
+    eTag: `"${params.uniqueId},1"`,
+    webDavUrl: `https://sp.example.com/dav/${params.fileName}`,
+    name: params.fileName,
+  });
+  mockState.buildTeamsFileInfoCard.mockReturnValue({
+    contentType: "application/vnd.microsoft.teams.card.file.info",
+    contentUrl: `https://sp.example.com/dav/${params.fileName}`,
+    name: params.fileName,
+    content: { uniqueId: params.uniqueId, fileType: "pdf" },
+  });
+}
 
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
@@ -129,51 +207,18 @@ describe("sendMessageMSTeams", () => {
     const graphChatId = "19:graph-native-chat-id@thread.tacv2";
     const botFrameworkConversationId = "19:bot-framework-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {
-        continueConversation: vi.fn(
-          async (
-            _id: string,
-            _ref: unknown,
-            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
-          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
-        ),
-      },
-      appId: "app-id",
-      conversationId: botFrameworkConversationId,
-      graphChatId,
-      ref: {},
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "groupChat",
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024 * 1024,
-      sharePointSiteId: "site-123",
-    });
-
-    const pdfBuffer = Buffer.alloc(100, "pdf");
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: pdfBuffer,
-      contentType: "application/pdf",
+    mockState.resolveMSTeamsSendContext.mockResolvedValue(
+      createSharePointSendContext({
+        conversationId: botFrameworkConversationId,
+        graphChatId,
+        siteId: "site-123",
+      }),
+    );
+    mockSharePointPdfUpload({
+      bufferSize: 100,
       fileName: "doc.pdf",
-      kind: "file",
-    });
-    mockState.requiresFileConsent.mockReturnValue(false);
-    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-1",
-      webUrl: "https://sp.example.com/doc.pdf",
-      shareUrl: "https://sp.example.com/share/doc.pdf",
-      name: "doc.pdf",
-    });
-    mockState.getDriveItemProperties.mockResolvedValue({
-      eTag: '"{GUID-123},1"',
-      webDavUrl: "https://sp.example.com/dav/doc.pdf",
-      name: "doc.pdf",
-    });
-    mockState.buildTeamsFileInfoCard.mockReturnValue({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sp.example.com/dav/doc.pdf",
-      name: "doc.pdf",
-      content: { uniqueId: "GUID-123", fileType: "pdf" },
+      uniqueId: "{GUID-123}",
     });
 
     await sendMessageMSTeams({
@@ -195,51 +240,18 @@ describe("sendMessageMSTeams", () => {
   it("falls back to conversationId when graphChatId is not available", async () => {
     const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {
-        continueConversation: vi.fn(
-          async (
-            _id: string,
-            _ref: unknown,
-            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
-          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
-        ),
-      },
-      appId: "app-id",
-      conversationId: botFrameworkConversationId,
-      graphChatId: null, // resolution failed — must fall back
-      ref: {},
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "groupChat",
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024 * 1024,
-      sharePointSiteId: "site-456",
-    });
-
-    const pdfBuffer = Buffer.alloc(50, "pdf");
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: pdfBuffer,
-      contentType: "application/pdf",
+    mockState.resolveMSTeamsSendContext.mockResolvedValue(
+      createSharePointSendContext({
+        conversationId: botFrameworkConversationId,
+        graphChatId: null,
+        siteId: "site-456",
+      }),
+    );
+    mockSharePointPdfUpload({
+      bufferSize: 50,
       fileName: "report.pdf",
-      kind: "file",
-    });
-    mockState.requiresFileConsent.mockReturnValue(false);
-    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-2",
-      webUrl: "https://sp.example.com/report.pdf",
-      shareUrl: "https://sp.example.com/share/report.pdf",
-      name: "report.pdf",
-    });
-    mockState.getDriveItemProperties.mockResolvedValue({
-      eTag: '"{GUID-456},1"',
-      webDavUrl: "https://sp.example.com/dav/report.pdf",
-      name: "report.pdf",
-    });
-    mockState.buildTeamsFileInfoCard.mockReturnValue({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sp.example.com/dav/report.pdf",
-      name: "report.pdf",
-      content: { uniqueId: "GUID-456", fileType: "pdf" },
+      uniqueId: "{GUID-456}",
     });
 
     await sendMessageMSTeams({
@@ -256,5 +268,171 @@ describe("sendMessageMSTeams", () => {
         siteId: "site-456",
       }),
     );
+  });
+});
+
+describe("editMessageMSTeams", () => {
+  beforeEach(() => {
+    mockState.resolveMSTeamsSendContext.mockReset();
+  });
+
+  it("calls continueConversation and updateActivity with correct params", async () => {
+    const mockUpdateActivity = vi.fn();
+    const mockContinueConversation = vi.fn(
+      async (_appId: string, _ref: unknown, logic: (ctx: unknown) => Promise<void>) => {
+        await logic({
+          sendActivity: vi.fn(),
+          updateActivity: mockUpdateActivity,
+          deleteActivity: vi.fn(),
+        });
+      },
+    );
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: { continueConversation: mockContinueConversation },
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2", conversationType: "personal" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      tokenProvider: {},
+    });
+
+    const result = await editMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      activityId: "activity-123",
+      text: "Updated message text",
+    });
+
+    expect(result.conversationId).toBe("19:conversation@thread.tacv2");
+    expect(mockContinueConversation).toHaveBeenCalledTimes(1);
+    expect(mockContinueConversation).toHaveBeenCalledWith(
+      "app-id",
+      expect.objectContaining({ activityId: undefined }),
+      expect.any(Function),
+    );
+    expect(mockUpdateActivity).toHaveBeenCalledWith({
+      type: "message",
+      id: "activity-123",
+      text: "Updated message text",
+    });
+  });
+
+  it("throws a descriptive error when continueConversation fails", async () => {
+    mockContinueConversationFailure("Service unavailable");
+
+    await expect(
+      editMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-123",
+        text: "Updated text",
+      }),
+    ).rejects.toThrow("msteams edit failed");
+  });
+});
+
+describe("deleteMessageMSTeams", () => {
+  beforeEach(() => {
+    mockState.resolveMSTeamsSendContext.mockReset();
+  });
+
+  it("calls continueConversation and deleteActivity with correct activityId", async () => {
+    const mockDeleteActivity = vi.fn();
+    const mockContinueConversation = vi.fn(
+      async (_appId: string, _ref: unknown, logic: (ctx: unknown) => Promise<void>) => {
+        await logic({
+          sendActivity: vi.fn(),
+          updateActivity: vi.fn(),
+          deleteActivity: mockDeleteActivity,
+        });
+      },
+    );
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: { continueConversation: mockContinueConversation },
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2", conversationType: "groupChat" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "groupChat",
+      tokenProvider: {},
+    });
+
+    const result = await deleteMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      activityId: "activity-456",
+    });
+
+    expect(result.conversationId).toBe("19:conversation@thread.tacv2");
+    expect(mockContinueConversation).toHaveBeenCalledTimes(1);
+    expect(mockContinueConversation).toHaveBeenCalledWith(
+      "app-id",
+      expect.objectContaining({ activityId: undefined }),
+      expect.any(Function),
+    );
+    expect(mockDeleteActivity).toHaveBeenCalledWith("activity-456");
+  });
+
+  it("throws a descriptive error when continueConversation fails", async () => {
+    mockContinueConversationFailure("Not found");
+
+    await expect(
+      deleteMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:conversation@thread.tacv2",
+        activityId: "activity-456",
+      }),
+    ).rejects.toThrow("msteams delete failed");
+  });
+
+  it("passes the appId and proactive ref to continueConversation", async () => {
+    const mockContinueConversation = vi.fn(
+      async (_appId: string, _ref: unknown, logic: (ctx: unknown) => Promise<void>) => {
+        await logic({
+          sendActivity: vi.fn(),
+          updateActivity: vi.fn(),
+          deleteActivity: vi.fn(),
+        });
+      },
+    );
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      adapter: { continueConversation: mockContinueConversation },
+      appId: "my-app-id",
+      conversationId: "19:conv@thread.tacv2",
+      ref: {
+        activityId: "original-activity",
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conv@thread.tacv2" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      tokenProvider: {},
+    });
+
+    await deleteMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conv@thread.tacv2",
+      activityId: "activity-789",
+    });
+
+    // appId should be forwarded correctly
+    expect(mockContinueConversation.mock.calls[0]?.[0]).toBe("my-app-id");
+    // activityId on the proactive ref should be cleared (undefined) — proactive pattern
+    expect(mockContinueConversation.mock.calls[0]?.[1]).toMatchObject({
+      activityId: undefined,
+    });
   });
 });

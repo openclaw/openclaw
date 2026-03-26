@@ -11,12 +11,15 @@ vi.mock("../../config/config.js", () => ({
   writeConfigFile: (...args: unknown[]) => mocks.writeConfigFile(...args),
 }));
 
-import { loadValidConfigOrThrow, updateConfig } from "./shared.js";
+let loadValidConfigOrThrow: typeof import("./shared.js").loadValidConfigOrThrow;
+let updateConfig: typeof import("./shared.js").updateConfig;
 
 describe("models/shared", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mocks.readConfigFileSnapshot.mockClear();
     mocks.writeConfigFile.mockClear();
+    ({ loadValidConfigOrThrow, updateConfig } = await import("./shared.js"));
   });
 
   it("returns config when snapshot is valid", async () => {

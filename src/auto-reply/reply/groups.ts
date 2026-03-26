@@ -1,35 +1,22 @@
+import { resolveDiscordGroupRequireMention } from "../../../extensions/discord/api.js";
+import { resolveSlackGroupRequireMention } from "../../../extensions/slack/api.js";
 import {
   getChannelPlugin,
   normalizeChannelId as normalizePluginChannelId,
 } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { resolveWhatsAppGroupIntroHint } from "../../channels/plugins/whatsapp-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
+import { extractExplicitGroupId } from "./group-id.js";
 
-function extractGroupId(raw: string | undefined | null): string | undefined {
+function resolveGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = (raw ?? "").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const parts = trimmed.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts.slice(2).join(":") || undefined;
-  }
-  if (
-    parts.length >= 2 &&
-    parts[0]?.toLowerCase() === "whatsapp" &&
-    trimmed.toLowerCase().includes("@g.us")
-  ) {
-    return parts.slice(1).join(":") || undefined;
-  }
-  if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
-    return parts.slice(1).join(":") || undefined;
-  }
-  return trimmed;
+  return extractExplicitGroupId(trimmed) ?? (trimmed || undefined);
 }
 
 function resolveDockChannelId(raw?: string | null): ChannelId | null {
@@ -51,6 +38,24 @@ function resolveDockChannelId(raw?: string | null): ChannelId | null {
   }
 }
 
+function resolveBuiltInRequireMentionFromConfig(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  groupChannel?: string;
+  groupId?: string;
+  groupSpace?: string;
+  accountId?: string | null;
+}): boolean | undefined {
+  switch (params.channel) {
+    case "discord":
+      return resolveDiscordGroupRequireMention(params);
+    case "slack":
+      return resolveSlackGroupRequireMention(params);
+    default:
+      return undefined;
+  }
+}
+
 export function resolveGroupRequireMention(params: {
   cfg: OpenClawConfig;
   ctx: TemplateContext;
@@ -62,7 +67,7 @@ export function resolveGroupRequireMention(params: {
   if (!channel) {
     return true;
   }
-  const groupId = groupResolution?.id ?? extractGroupId(ctx.From);
+  const groupId = groupResolution?.id ?? resolveGroupId(ctx.From);
   const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
   let requireMention: boolean | undefined;
@@ -79,6 +84,17 @@ export function resolveGroupRequireMention(params: {
   }
   if (typeof requireMention === "boolean") {
     return requireMention;
+  }
+  const builtInRequireMention = resolveBuiltInRequireMentionFromConfig({
+    cfg,
+    channel,
+    groupChannel,
+    groupId,
+    groupSpace,
+    accountId: ctx.AccountId,
+  });
+  if (typeof builtInRequireMention === "boolean") {
+    return builtInRequireMention;
   }
   return resolveChannelGroupRequireMention({
     cfg,
@@ -152,18 +168,18 @@ export function buildGroupIntro(params: {
     activation === "always"
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
-  const groupId = params.sessionEntry?.groupId ?? extractGroupId(params.sessionCtx.From);
+  const groupId = params.sessionEntry?.groupId ?? resolveGroupId(params.sessionCtx.From);
   const groupChannel =
     params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim();
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
-    ? getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
+    ? (getChannelPlugin(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
         groupChannel,
         groupSpace,
         accountId: params.sessionCtx.AccountId,
-      })
+      }) ?? (providerId === "whatsapp" ? resolveWhatsAppGroupIntroHint() : undefined))
     : undefined;
   const silenceLine =
     activation === "always"

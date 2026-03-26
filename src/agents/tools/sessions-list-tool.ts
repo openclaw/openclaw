@@ -30,10 +30,13 @@ const SessionsListToolSchema = Type.Object({
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
+type GatewayCaller = typeof callGateway;
+
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -76,8 +79,9 @@ export function createSessionsListTool(opts?: {
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
+      const gatewayCall = opts?.callGateway ?? callGateway;
 
-      const list = await callGateway<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -189,8 +193,24 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           channel: derivedChannel,
+          spawnedBy:
+            typeof entry.spawnedBy === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.spawnedBy,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string"
+              ? resolveDisplaySessionKey({
+                  key: entry.parentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : undefined,
           deliveryContext:
             deliveryChannel || deliveryTo || deliveryAccountId
               ? {
@@ -234,7 +254,7 @@ export function createSessionsListTool(opts?: {
         };
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
-            key: displayKey,
+            key,
             alias,
             mainKey,
           });
@@ -254,7 +274,7 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = historyTargets[next];
-            const history = await callGateway<{ messages: Array<unknown> }>({
+            const history = await gatewayCall<{ messages: Array<unknown> }>({
               method: "chat.history",
               params: { sessionKey: target.resolvedKey, limit: messageLimit },
             });

@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  createResolvedEmbeddedRunnerModel,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -19,17 +23,25 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
-  runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-}));
+vi.mock("./pi-embedded-runner/run/attempt.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/attempt.js")>();
+  return {
+    ...actual,
+    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+  };
+});
 
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: (
-    policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-    attempt: number,
-  ) => computeBackoffMock(policy, attempt),
-  sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-}));
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  return {
+    ...actual,
+    computeBackoff: (
+      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
+      attempt: number,
+    ) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
+  };
+});
 
 vi.mock("./models-config.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("./models-config.js")>();
@@ -39,9 +51,38 @@ vi.mock("./models-config.js", async (importOriginal) => {
   };
 });
 
+const installRunEmbeddedMocks = () => {
+  vi.doMock("../plugins/hook-runner-global.js", () => ({
+    getGlobalHookRunner: vi.fn(() => undefined),
+  }));
+  vi.doMock("../context-engine/index.js", () => ({
+    ensureContextEnginesInitialized: vi.fn(),
+    resolveContextEngine: vi.fn(async () => ({
+      dispose: async () => undefined,
+    })),
+  }));
+  vi.doMock("./runtime-plugins.js", () => ({
+    ensureRuntimePluginsLoaded: vi.fn(),
+  }));
+  vi.doMock("./pi-embedded-runner/model.js", () => ({
+    resolveModelAsync: async (provider: string, modelId: string) =>
+      createResolvedEmbeddedRunnerModel(provider, modelId),
+  }));
+  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+    return {
+      ...actual,
+      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
+      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
+    };
+  });
+};
+
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 
 beforeAll(async () => {
+  vi.resetModules();
+  installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
 });
 
@@ -51,48 +92,8 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
-  aborted: false,
-  timedOut: false,
-  timedOutDuringCompaction: false,
-  promptError: null,
-  sessionIdUsed: "session:test",
-  systemPromptReport: undefined,
-  messagesSnapshot: [],
-  assistantTexts: [],
-  toolMetas: [],
-  lastAssistant: undefined,
-  didSendViaMessagingTool: false,
-  messagingToolSentTexts: [],
-  messagingToolSentMediaUrls: [],
-  messagingToolSentTargets: [],
-  cloudCodeAssistFormatError: false,
-  ...overrides,
-});
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -225,6 +226,7 @@ async function runEmbeddedFallback(params: {
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
+        enqueue: async (task) => await task(),
       }),
   });
 }
@@ -237,9 +239,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "openai",
           model: "mock-1",
           stopReason: "error",
@@ -248,9 +250,9 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
       });
     }
     if (attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: ["fallback ok"],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: "groq",
           model: "mock-2",
           stopReason: "stop",
@@ -281,9 +283,9 @@ function mockAllProvidersOverloaded() {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
     if (attemptParams.provider === "openai" || attemptParams.provider === "groq") {
-      return makeAttempt({
+      return makeEmbeddedRunnerAttempt({
         assistantTexts: [],
-        lastAssistant: buildAssistant({
+        lastAssistant: buildEmbeddedRunnerAssistant({
           provider: attemptParams.provider,
           model: attemptParams.provider === "openai" ? "mock-1" : "mock-2",
           stopReason: "error",

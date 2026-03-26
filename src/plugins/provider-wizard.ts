@@ -3,7 +3,12 @@ import { parseModelRef } from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolvePluginProviders } from "./providers.js";
+import {
+  buildPluginSnapshotCacheEnvKey,
+  resolvePluginSnapshotCacheTtlMs,
+  shouldUsePluginSnapshotCache,
+} from "./cache-controls.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
@@ -12,6 +17,26 @@ import type {
 } from "./types.js";
 
 export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
+type ProviderWizardCacheEntry = {
+  expiresAt: number;
+  providers: ProviderPlugin[];
+};
+const providerWizardCache = new WeakMap<
+  OpenClawConfig,
+  WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>
+>();
+
+function buildProviderWizardCacheKey(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify({
+    workspaceDir: params.workspaceDir ?? "",
+    config: params.config,
+    env: buildPluginSnapshotCacheEnvKey(params.env),
+  });
+}
 
 export type ProviderWizardOption = {
   value: string;
@@ -97,12 +122,62 @@ export function buildProviderPluginMethodChoice(providerId: string, methodId: st
   return `${PROVIDER_PLUGIN_CHOICE_PREFIX}${providerId.trim()}:${methodId.trim()}`;
 }
 
+function resolveProviderWizardProviders(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  if (!params.config) {
+    return resolvePluginProviders(params);
+  }
+  const env = params.env ?? process.env;
+  if (!shouldUsePluginSnapshotCache(env)) {
+    return resolvePluginProviders({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env,
+    });
+  }
+  const cacheKey = buildProviderWizardCacheKey({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const configCache = providerWizardCache.get(params.config);
+  const envCache = configCache?.get(env);
+  const cached = envCache?.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.providers;
+  }
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
+  let nextConfigCache = configCache;
+  if (!nextConfigCache) {
+    nextConfigCache = new WeakMap<NodeJS.ProcessEnv, Map<string, ProviderWizardCacheEntry>>();
+    providerWizardCache.set(params.config, nextConfigCache);
+  }
+  let nextEnvCache = nextConfigCache.get(env);
+  if (!nextEnvCache) {
+    nextEnvCache = new Map<string, ProviderWizardCacheEntry>();
+    nextConfigCache.set(env, nextEnvCache);
+  }
+  nextEnvCache.set(cacheKey, {
+    expiresAt: Date.now() + ttlMs,
+    providers,
+  });
+  return providers;
+}
+
 export function resolveProviderWizardOptions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderWizardOption[] {
-  const providers = resolvePluginProviders(params);
+  const providers = resolveProviderWizardProviders(params);
   const options: ProviderWizardOption[] = [];
 
   for (const provider of providers) {
@@ -171,7 +246,7 @@ export function resolveProviderModelPickerEntries(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderModelPickerEntry[] {
-  const providers = resolvePluginProviders(params);
+  const providers = resolveProviderWizardProviders(params);
   const entries: ProviderModelPickerEntry[] = [];
 
   for (const provider of providers) {
@@ -259,7 +334,7 @@ export async function runProviderModelSelectedHook(params: {
     return;
   }
 
-  const providers = resolvePluginProviders({
+  const providers = resolveProviderWizardProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

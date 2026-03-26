@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import sharp from "sharp";
-import { describe, expect, it, vi } from "vitest";
-import { monitorWebChannel } from "./auto-reply.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
   installWebAutoReplyTestHomeHooks,
@@ -13,11 +12,17 @@ import type { WebInboundMessage } from "./inbound.js";
 
 installWebAutoReplyTestHomeHooks();
 
+let monitorWebChannel: typeof import("./auto-reply.js").monitorWebChannel;
+
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
+
+  beforeAll(async () => {
+    ({ monitorWebChannel } = await import("./auto-reply.js"));
+  });
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
