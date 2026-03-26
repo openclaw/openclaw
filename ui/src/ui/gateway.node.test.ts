@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
-import { createStorageMock } from "./test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
