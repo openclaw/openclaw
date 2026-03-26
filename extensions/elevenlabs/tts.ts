@@ -1,3 +1,10 @@
+import {
+  normalizeApplyTextNormalization,
+  normalizeLanguageCode,
+  normalizeSeed,
+  requireInRange,
+} from "openclaw/plugin-sdk/speech-core";
+
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
 function isValidVoiceId(voiceId: string): boolean {
@@ -10,47 +17,6 @@ function normalizeElevenLabsBaseUrl(baseUrl?: string): string {
     return DEFAULT_ELEVENLABS_BASE_URL;
   }
   return trimmed.replace(/\/+$/, "");
-}
-
-function normalizeLanguageCode(code?: string): string | undefined {
-  const trimmed = code?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
-  }
-  return normalized;
-}
-
-function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
-  const trimmed = mode?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "auto" || normalized === "on" || normalized === "off") {
-    return normalized;
-  }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
-}
-
-function normalizeSeed(seed?: number): number | undefined {
-  if (seed == null) {
-    return undefined;
-  }
-  const next = Math.floor(seed);
-  if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
-  }
-  return next;
-}
-
-function requireInRange(value: number, min: number, max: number, label: string): void {
-  if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
-  }
 }
 
 function assertElevenLabsVoiceSettings(settings: {

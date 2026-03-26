@@ -37,13 +37,13 @@ function trimToUndefined(value?: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function requireInRange(value: number, min: number, max: number, label: string): void {
+export function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
     throw new Error(`${label} must be between ${min} and ${max}`);
   }
 }
 
-function normalizeLanguageCode(code?: string): string | undefined {
+export function normalizeLanguageCode(code?: string): string | undefined {
   const trimmed = code?.trim();
   if (!trimmed) {
     return undefined;
@@ -55,7 +55,7 @@ function normalizeLanguageCode(code?: string): string | undefined {
   return normalized;
 }
 
-function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
+export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" | undefined {
   const trimmed = mode?.trim();
   if (!trimmed) {
     return undefined;
@@ -67,7 +67,7 @@ function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | "off" |
   throw new Error("applyTextNormalization must be one of: auto, on, off");
 }
 
-function normalizeSeed(seed?: number): number | undefined {
+export function normalizeSeed(seed?: number): number | undefined {
   if (seed == null) {
     return undefined;
   }
