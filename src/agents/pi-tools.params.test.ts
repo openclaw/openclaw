@@ -22,6 +22,7 @@ describe("assertRequiredParams", () => {
     const tool = wrapToolParamNormalization(
       {
         name: "write",
+        label: "write",
         description: "write a file",
         parameters: {},
         execute: vi.fn(),
