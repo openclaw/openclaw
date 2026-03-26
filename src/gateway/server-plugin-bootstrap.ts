@@ -30,27 +30,49 @@ type GatewayPluginBootstrapParams = {
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
 
-async function installGuardrailsFromConfig(
+function installGuardrailsFromConfig(
   cfg: ReturnType<typeof loadConfig>,
   log: GatewayPluginBootstrapLog,
-) {
+): void {
   const gc = cfg.guardrails;
   if (!gc?.enabled || !gc.provider?.use) {
     return;
   }
-  try {
-    const provider = await loadGuardrailProvider(gc.provider);
-    configureGuardrails(provider, gc.failClosed !== false);
-    if (provider.healthCheck) {
-      const health = await provider.healthCheck();
-      if (!health.ok) {
-        log.warn(`[guardrails] provider health check failed: ${health.message}`);
-      }
-    }
-    log.info(`[guardrails] provider '${provider.name}' loaded (failClosed=${gc.failClosed !== false})`);
-  } catch (err) {
-    log.error(`[guardrails] failed to load provider: ${err instanceof Error ? err.message : String(err)}`);
+
+  const failClosed = gc.failClosed !== false;
+
+  if (failClosed) {
+    configureGuardrails(
+      {
+        name: "guardrails-pending",
+        async evaluate() {
+          return {
+            allow: false,
+            reasons: [{ code: "provider_loading", message: "guardrail provider is still loading" }],
+          };
+        },
+      },
+      true,
+    );
   }
+
+  loadGuardrailProvider(gc.provider)
+    .then(async (provider) => {
+      configureGuardrails(provider, failClosed);
+      if (provider.healthCheck) {
+        const health = await provider.healthCheck();
+        if (!health.ok) {
+          log.warn(`[guardrails] provider health check failed: ${health.message}`);
+        }
+      }
+      log.info(`[guardrails] provider '${provider.name}' loaded (failClosed=${failClosed})`);
+    })
+    .catch((err) => {
+      log.error(`[guardrails] failed to load provider: ${err instanceof Error ? err.message : String(err)}`);
+      if (!failClosed) {
+        configureGuardrails(undefined);
+      }
+    });
 }
 
 function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
@@ -80,9 +102,9 @@ function logGatewayPluginDiagnostics(params: {
   }
 }
 
-export async function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
+export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   installGatewayPluginRuntimeEnvironment(params.cfg);
-  await installGuardrailsFromConfig(params.cfg, params.log);
+  installGuardrailsFromConfig(params.cfg, params.log);
   const loaded = loadGatewayPlugins({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -102,13 +124,13 @@ export async function prepareGatewayPluginLoad(params: GatewayPluginBootstrapPar
   return loaded;
 }
 
-export async function loadGatewayStartupPlugins(
+export function loadGatewayStartupPlugins(
   params: Omit<GatewayPluginBootstrapParams, "beforePrimeRegistry">,
 ) {
   return prepareGatewayPluginLoad(params);
 }
 
-export async function reloadDeferredGatewayPlugins(
+export function reloadDeferredGatewayPlugins(
   params: Omit<
     GatewayPluginBootstrapParams,
     "beforePrimeRegistry" | "preferSetupRuntimeForChannelPlugins"

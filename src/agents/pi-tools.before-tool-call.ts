@@ -11,11 +11,9 @@ import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-// Guardrail state — set once during bootstrap via configureGuardrails().
 let guardrailProvider: GuardrailProvider | undefined;
 let guardrailFailClosed = true;
 
-/** Call once at startup if guardrails.enabled is true. */
 export function configureGuardrails(provider: GuardrailProvider | undefined, failClosed = true): void {
   guardrailProvider = provider;
   guardrailFailClosed = failClosed;
@@ -159,7 +157,6 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
 
-  // Guardrail evaluation: runs before plugin hooks when configured.
   if (guardrailProvider) {
     const normalizedParams = isPlainObject(params) ? (params as Record<string, unknown>) : {};
     const result = await evaluateGuardrail(guardrailProvider, {

@@ -1150,6 +1150,7 @@
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/guardrails",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",

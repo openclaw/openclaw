@@ -1,4 +1,13 @@
-# Guardrails: Pre-Tool-Call Authorization
+---
+summary: "Pluggable pre-tool-call authorization via GuardrailProvider"
+read_when:
+  - Adding policy-based tool authorization
+  - Configuring AllowlistProvider or external guardrail providers
+  - Writing a custom GuardrailProvider
+title: "Guardrails"
+---
+
+# Guardrails
 
 > **Context:** [Issue #46441](https://github.com/openclaw/openclaw/issues/46441) — OpenClaw has exec approvals for shell commands, but no general-purpose authorization for other tools — file writes, browser actions, messaging, MCP tools, git operations. Guardrails add a core service that evaluates every tool call against a policy **before** execution.
 
