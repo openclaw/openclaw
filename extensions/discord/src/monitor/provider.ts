@@ -1064,7 +1064,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       // mention gating and self-message filtering. botUserName is only used for
       // logging and is non-critical.
       botUserId = applicationId;
-      runtime.warn?.(
+      runtime.log?.(
         `discord: using applicationId as botUserId fallback (fetchUser failed: ${String(err)})`,
       );
     }
