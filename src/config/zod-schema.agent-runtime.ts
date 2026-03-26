@@ -14,7 +14,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 import {
   ContextPruningSchema,
   CompactionSchema,
-} from "./zod-schema.agent-defaults.js";
+} from "./zod-schema.compaction.js";
 
 export const HeartbeatSchema = z
   .object({
