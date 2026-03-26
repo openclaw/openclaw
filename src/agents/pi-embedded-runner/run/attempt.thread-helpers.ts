@@ -31,6 +31,16 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     : undefined;
 }
 
+export function shouldUseOpenAIWebSocketTransport(params: {
+  provider: string;
+  modelApi?: string | null;
+}): boolean {
+  return (
+    (params.modelApi === "openai-responses" && params.provider === "openai") ||
+    (params.modelApi === "openai-codex-responses" && params.provider === "openai-codex")
+  );
+}
+
 export function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;

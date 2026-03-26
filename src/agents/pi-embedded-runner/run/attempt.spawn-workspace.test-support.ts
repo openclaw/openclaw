@@ -425,7 +425,7 @@ let runEmbeddedAttemptPromise:
   | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
   | undefined;
 
-export async function loadRunEmbeddedAttempt() {
+async function loadRunEmbeddedAttempt() {
   runEmbeddedAttemptPromise ??= import("./attempt.js").then((mod) => mod.runEmbeddedAttempt);
   return await runEmbeddedAttemptPromise;
 }
