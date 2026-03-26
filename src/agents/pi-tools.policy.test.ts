@@ -526,6 +526,33 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("keeps a thread-specific direct policy ahead of parent sender overrides", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner:thread:th_yyy": {
+              tools: { allow: ["read"] },
+            },
+            "ou-owner": {
+              toolsBySender: {
+                "id:ou-owner": { allow: ["read", "exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:direct:ou-owner:thread:th_yyy",
+        messageProvider: "feishu",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
   it("resolves account-scoped dm session keys from the session key itself", () => {
     const cfg = {
       channels: {

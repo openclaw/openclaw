@@ -442,21 +442,33 @@ function resolveDirectToolPolicyFromConfig(params: {
     return { rank: 0, scopePriority };
   };
 
-  let best: DirectPolicyResolution = { rank: 0, scopePriority };
+  const resolveDirectEntryPolicy = (direct: DirectToolPolicyEntry | undefined) => {
+    const senderPolicy = resolveSenderScopedPolicy(direct?.toolsBySender);
+    if (senderPolicy && pickSandboxToolPolicy(senderPolicy)) {
+      return { policy: senderPolicy, rank: 4, scopePriority };
+    }
+    if (direct?.tools && pickSandboxToolPolicy(direct.tools)) {
+      return { policy: direct.tools, rank: 3, scopePriority };
+    }
+    return { rank: 0, scopePriority };
+  };
+
   for (const directId of directIdsToTry) {
-    const scopedEntries = resolveDirectToolPolicyEntries(entries, directId);
-    const resolved = resolvePolicyFromEntries(scopedEntries);
-    if (resolved.rank > best.rank) {
-      best = {
+    const { direct } = resolveDirectToolPolicyEntries(entries, directId);
+    const resolved = resolveDirectEntryPolicy(direct);
+    // Parent directIds are only a fallback for thread-specific directIds. Keep probing parent
+    // candidates only until we find a direct-scoped match; wildcard DM policy is handled after
+    // the directId fallback chain so it cannot mask a more specific parent rule.
+    if (resolved.rank > 0) {
+      return {
         ...resolved,
         scopePriority,
       };
-      if (best.rank >= 4) {
-        break;
-      }
     }
   }
-  return best;
+
+  const wildcard = entries?.["*"];
+  return resolvePolicyFromEntries({ wildcard });
 }
 
 function resolveGroupPolicyLookupOptions(channel: string): { groupIdCaseInsensitive?: boolean } {
