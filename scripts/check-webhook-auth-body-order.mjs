@@ -8,10 +8,15 @@ import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs"
 const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
   "extensions/bluebubbles/src/monitor.ts",
+  "extensions/feishu/src/monitor.transport.ts",
   "extensions/googlechat/src/monitor.ts",
   "extensions/zalo/src/monitor.webhook.ts",
 ]);
 const blockedCallees = new Set(["readJsonBodyWithLimit", "readRequestBodyWithLimit"]);
+const allowedCallsites = new Set([
+  // Feishu signs the exact wire body, so this handler must read raw bytes before parsing JSON.
+  "extensions/feishu/src/monitor.transport.ts:199",
+]);
 
 function getCalleeName(expression) {
   const callee = unwrapExpression(expression);
@@ -46,6 +51,7 @@ export async function main() {
     sourceRoots,
     findCallLines: findBlockedWebhookBodyReadLines,
     skipRelativePath: (relPath) => !enforcedFiles.has(relPath.replaceAll(path.sep, "/")),
+    allowCallsite: (callsite) => allowedCallsites.has(callsite),
     header: "Found forbidden low-level body reads in auth-sensitive webhook handlers:",
     footer:
       "Use plugin-sdk webhook guards (`readJsonWebhookBodyOrReject` / `readWebhookBodyOrReject`) with explicit pre-auth/post-auth profiles.",
