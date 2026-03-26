@@ -437,6 +437,21 @@ describe("session history HTTP endpoints", () => {
           message: "missing scope: operator.read",
         },
       });
+
+      const httpHistoryWithoutScopes = await fetch(
+        `http://127.0.0.1:${harness.port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
+        {
+          headers: AUTH_HEADER,
+        },
+      );
+      expect(httpHistoryWithoutScopes.status).toBe(403);
+      await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "missing scope: operator.read",
+        },
+      });
     } finally {
       ws.close();
       await harness.close();
