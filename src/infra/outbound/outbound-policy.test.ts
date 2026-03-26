@@ -139,6 +139,25 @@ describe("outbound policy helpers", () => {
     ).toThrow(/target="C999" while bound to "C123"/);
   });
 
+  it("blocks same-provider cross-context uploads when allowWithinProvider is false", () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowWithinProvider: false } },
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg,
+        channel: "slack",
+        action: "upload-file",
+        args: { to: "C999" },
+        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
+      }),
+    ).toThrow(/target="C999" while bound to "C123"/);
+  });
+
   it("uses components when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: discordConfig,
@@ -187,6 +206,7 @@ describe("outbound policy helpers", () => {
 
   it("marks only supported cross-context actions", () => {
     expect(shouldApplyCrossContextMarker("send")).toBe(true);
+    expect(shouldApplyCrossContextMarker("upload-file")).toBe(true);
     expect(shouldApplyCrossContextMarker("thread-reply")).toBe(true);
     expect(shouldApplyCrossContextMarker("thread-create")).toBe(false);
   });
