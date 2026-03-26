@@ -243,6 +243,7 @@ node --require /tmp/patch.js openclaw.mjs config set channels.slack.dmPolicy '"o
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.allowFrom "$OPENCLAW_SLACK_ALLOWED_MEMBERS"
 node --require /tmp/patch.js openclaw.mjs config set channels.slack.groupPolicy '"open"'
 node --require /tmp/patch.js openclaw.mjs config set tools.profile full
+node --require /tmp/patch.js openclaw.mjs mcp set rag-search '{"url":"https://retrieval-mcp-server.internal.lemonforest-578b1773.eastus.azurecontainerapps.io/mcp","transport":"streamable-http"}'
 exec node --require /tmp/patch.js openclaw.mjs gateway --allow-unconfigured --bind lan
             '''
           ]
