@@ -22,13 +22,14 @@ want “always works” text responses without relying on external APIs.
 
 ## Beginner-friendly quick start
 
-You can use Claude Code CLI **without any config** (OpenClaw ships a built-in default):
+You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
+registers a default backend):
 
 ```bash
 openclaw agent --message "hi" --model claude-cli/opus-4.6
 ```
 
-Codex CLI also works out of the box:
+Codex CLI also works out of the box (via the bundled OpenAI plugin):
 
 ```bash
 openclaw agent --message "hi" --model codex-cli/gpt-5.4
@@ -180,9 +181,9 @@ Input modes:
 - `input: "stdin"` sends the prompt via stdin.
 - If the prompt is very long and `maxPromptArgChars` is set, stdin is used.
 
-## Defaults (built-in)
+## Defaults (plugin-owned)
 
-OpenClaw ships a default for `claude-cli`:
+The bundled Anthropic plugin registers a default for `claude-cli`:
 
 - `command: "claude"`
 - `args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"]`
@@ -193,18 +194,37 @@ OpenClaw ships a default for `claude-cli`:
 - `systemPromptWhen: "first"`
 - `sessionMode: "always"`
 
-OpenClaw also ships a default for `codex-cli`:
+The bundled OpenAI plugin also registers a default for `codex-cli`:
 
 - `command: "codex"`
-- `args: ["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
-- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
+- `args: ["exec","--json","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
+- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","workspace-write","--skip-git-repo-check"]`
 - `output: "jsonl"`
 - `resumeOutput: "text"`
 - `modelArg: "--model"`
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
 
+The bundled Google plugin also registers a default for `google-gemini-cli`:
+
+- `command: "gemini"`
+- `args: ["--prompt", "--output-format", "json"]`
+- `resumeArgs: ["--resume", "{sessionId}", "--prompt", "--output-format", "json"]`
+- `modelArg: "--model"`
+- `sessionMode: "existing"`
+- `sessionIdFields: ["session_id", "sessionId"]`
+
 Override only if needed (common: absolute `command` path).
+
+## Plugin-owned defaults
+
+CLI backend defaults are now part of the plugin surface:
+
+- Plugins register them with `api.registerCliBackend(...)`.
+- The backend `id` becomes the provider prefix in model refs.
+- User config in `agents.defaults.cliBackends.<id>` still overrides the plugin default.
+- Backend-specific config cleanup stays plugin-owned through the optional
+  `normalizeConfig` hook.
 
 ## Limitations
 

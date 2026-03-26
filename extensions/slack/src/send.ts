@@ -51,6 +51,8 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
@@ -230,6 +232,8 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
@@ -239,11 +243,13 @@ async function uploadSlackFile(params: {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
+  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
+  const uploadTitle = params.uploadTitle ?? uploadFileName;
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
-    filename: fileName ?? "upload",
+    filename: uploadFileName,
     length: buffer.length,
   });
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
@@ -274,7 +280,7 @@ async function uploadSlackFile(params: {
 
   // Complete the upload and share to channel/thread
   const completeResp = await params.client.files.completeUploadExternal({
-    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
+    files: [{ id: uploadUrlResp.file_id, title: uploadTitle }],
     channel_id: params.channelId,
     ...(params.caption ? { initial_comment: params.caption } : {}),
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
@@ -365,6 +371,8 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      uploadFileName: opts.uploadFileName,
+      uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,

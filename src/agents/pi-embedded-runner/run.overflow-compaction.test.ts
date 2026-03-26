@@ -9,18 +9,18 @@ import {
 import {
   loadRunOverflowCompactionHarness,
   mockedCoerceToFailoverError,
+  mockedCompactDirect,
+  mockedContextEngine,
   mockedDescribeFailoverError,
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveFailoverStatus,
-  mockedContextEngine,
-  mockedCompactDirect,
-  mockedRunEmbeddedAttempt,
   mockedRunContextEngineMaintenance,
-  resetRunOverflowCompactionHarnessMocks,
+  mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -32,41 +32,6 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
-  });
-
-  beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedRunContextEngineMaintenance.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedCoerceToFailoverError.mockReset();
-    mockedDescribeFailoverError.mockReset();
-    mockedResolveFailoverStatus.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedGlobalHookRunner.runBeforeAgentStart.mockReset();
-    mockedGlobalHookRunner.runBeforeCompaction.mockReset();
-    mockedGlobalHookRunner.runAfterCompaction.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
-    mockedCoerceToFailoverError.mockReturnValue(null);
-    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
-      message: err instanceof Error ? err.message : String(err),
-      reason: undefined,
-      status: undefined,
-      code: undefined,
-    }));
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
-    });
-    mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
   it("passes precomputed legacy before_agent_start result into the attempt", async () => {
@@ -300,7 +265,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     mockedPickFallbackThinkingLevel.mockReset();
     mockedPickFallbackThinkingLevel.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(
-      makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
+      makeAttemptResult({
+        promptError: new Error("unsupported reasoning mode"),
+      }),
     );
     mockedPickFallbackThinkingLevel.mockReturnValue("low");
 

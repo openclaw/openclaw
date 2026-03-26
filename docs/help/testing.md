@@ -23,6 +23,7 @@ This doc is a “how we test” guide:
 Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
+- Faster local full-suite run on a roomy machine: `pnpm test:max`
 
 When you touch tests or want extra confidence:
 
@@ -54,9 +55,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
-  - The shared extension lane still defaults to `threads`; the wrapper keeps explicit fork-only exceptions in `test/fixtures/test-parallel.behavior.json` when a file cannot safely share a non-isolated worker.
-  - The channel suite (`vitest.channels.config.ts`) now also defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
+  - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
+  - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
   - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
@@ -72,15 +72,16 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
-  - Extension scoped config defaults to `threads`.
-  - Channel scoped config defaults to `threads`.
+  - Unit, channel, extension, and gateway wrapper lanes all default to `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
   - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:
   - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
+  - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
+  - `pnpm test:max` exposes that same planner profile for a full local run.
+  - On Node 25, the normal local profile keeps top-level lane parallelism off; `pnpm test:max` re-enables it. On Node 22/24 LTS, normal local runs can also use top-level lane parallelism.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
   - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
   - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
@@ -295,6 +296,19 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
+Docker recipe:
+
+```bash
+pnpm test:docker:live-cli-backend
+```
+
+Notes:
+
+- The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
+- It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user, because Claude CLI rejects `bypassPermissions` when invoked as root.
+- For `claude-cli`, it installs the Linux `@anthropic-ai/claude-code` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- It copies `~/.claude` into the container when available, but on machines where Claude auth is backed by `ANTHROPIC_API_KEY`, it also preserves `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_OLD` for the child Claude CLI via `OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV`.
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
@@ -424,10 +438,17 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional "works in Linux" checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted). They also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
+These Docker runners split into two buckets:
+
+- Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted).
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
+
+The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
+- Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
@@ -440,6 +461,17 @@ real Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
 live coverage from that Docker lane.
+`test:docker:openwebui` is a higher-level compatibility smoke: it starts an
+OpenClaw gateway container with the OpenAI-compatible HTTP endpoints enabled,
+starts a pinned Open WebUI container against that gateway, signs in through
+Open WebUI, verifies `/api/models` exposes `openclaw/default`, then sends a
+real chat request through Open WebUI's `/api/chat/completions` proxy.
+The first run can be noticeably slower because Docker may need to pull the
+Open WebUI image and Open WebUI may need to finish its own cold-start setup.
+This lane expects a usable live model key, and `OPENCLAW_PROFILE_FILE`
+(`~/.profile` by default) is the primary way to provide it in Dockerized runs.
+Successful runs print a small JSON payload like `{ "ok": true, "model":
+"openclaw/default", ... }`.
 
 Manual ACP plain-language thread smoke (not CI):
 
@@ -451,13 +483,17 @@ Useful env vars:
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (default: `~/.openclaw/workspace`) mounted to `/home/node/.openclaw/workspace`
 - `OPENCLAW_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
+- `OPENCLAW_DOCKER_CLI_TOOLS_DIR=...` (default: `~/.cache/openclaw/docker-cli-tools`) mounted to `/home/node/.npm-global` for cached CLI installs inside Docker
 - External CLI auth dirs under `$HOME` are mounted read-only under `/host-auth/...`, then copied into `/home/node/...` before tests start
-  - Default: mount all supported dirs (`.codex`, `.claude`, `.qwen`, `.minimax`)
+  - Default: mount all supported dirs (`.codex`, `.claude`, `.minimax`)
   - Narrowed provider runs mount only the needed dirs inferred from `OPENCLAW_LIVE_PROVIDERS` / `OPENCLAW_LIVE_GATEWAY_PROVIDERS`
   - Override manually with `OPENCLAW_DOCKER_AUTH_DIRS=all`, `OPENCLAW_DOCKER_AUTH_DIRS=none`, or a comma list like `OPENCLAW_DOCKER_AUTH_DIRS=.claude,.codex`
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` to narrow the run
 - `OPENCLAW_LIVE_GATEWAY_PROVIDERS=...` / `OPENCLAW_LIVE_PROVIDERS=...` to filter providers in-container
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
+- `OPENCLAW_OPENWEBUI_MODEL=...` to choose the model exposed by the gateway for the Open WebUI smoke
+- `OPENCLAW_OPENWEBUI_PROMPT=...` to override the nonce-check prompt used by the Open WebUI smoke
+- `OPENWEBUI_IMAGE=...` to override the pinned Open WebUI image tag
 
 ## Docs sanity
 
