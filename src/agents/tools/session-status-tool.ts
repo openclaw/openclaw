@@ -499,6 +499,7 @@ export function createSessionStatusTool(opts?: {
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+        includeTranscriptUsage: true,
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
