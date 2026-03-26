@@ -107,6 +107,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 const TEST_WEBHOOK_PASSWORD = "secret-token";
 
 function createMockRuntime(): PluginRuntime {
@@ -142,6 +143,12 @@ describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -156,6 +163,7 @@ describe("BlueBubbles webhook monitor", () => {
 
   afterEach(() => {
     unregister?.();
+    vi.unstubAllGlobals();
   });
 
   function setupWebhookTarget(params?: {

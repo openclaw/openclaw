@@ -108,6 +108,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 
 function createMockRuntime(): PluginRuntime {
   return createBlueBubblesMonitorTestRuntime({
@@ -180,6 +181,12 @@ describe("BlueBubbles webhook monitor", () => {
   }
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -201,6 +208,7 @@ describe("BlueBubbles webhook monitor", () => {
     unregister?.();
     setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   describe("DM pairing behavior vs allowFrom", () => {
@@ -499,9 +507,13 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
 
-    it("does not enrich group participants unless the config flag is enabled", async () => {
+    it("does not enrich group participants when the config flag is disabled", async () => {
       const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
-      setupWebhookTarget();
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: false,
+        }),
+      });
       setBlueBubblesParticipantContactDepsForTest({
         platform: "darwin",
         resolvePhoneNames,
@@ -554,6 +566,57 @@ describe("BlueBubbles webhook monitor", () => {
       expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
       const callArgs = getFirstDispatchCall();
       expect(callArgs.ctx.GroupMembers).toBe(
+        "Alice Contact (+15551234567), Bob Contact (+15557654321)",
+      );
+    });
+
+    it("fetches missing group participants from the BlueBubbles API before contact enrichment", async () => {
+      const resolvePhoneNames = vi.fn(
+        async (phoneKeys: string[]) =>
+          new Map(
+            phoneKeys.map((phoneKey) => [
+              phoneKey,
+              phoneKey === "5551234567" ? "Alice Contact" : "Bob Contact",
+            ]),
+          ),
+      );
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "iMessage;+;chat123456",
+                participants: [{ address: "+15551234567" }, { address: "+15557654321" }],
+              },
+            ],
+          }),
+      });
+      setupWebhookTarget({
+        account: createMockAccount({
+          enrichGroupParticipantsFromContacts: true,
+        }),
+      });
+      setBlueBubblesParticipantContactDepsForTest({
+        platform: "darwin",
+        resolvePhoneNames,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello bert",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/chat/query"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(resolvePhoneNames).toHaveBeenCalledTimes(1);
+      expect(getFirstDispatchCall().ctx.GroupMembers).toBe(
         "Alice Contact (+15551234567), Bob Contact (+15557654321)",
       );
     });
