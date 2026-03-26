@@ -160,10 +160,19 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
 export function resolveMattermostReplyRootId(params: {
   threadRootId?: string;
   replyToId?: string;
+  /** The root_id from the inbound post — used to correct non-root replyToId values. */
+  inboundRootId?: string;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
   if (threadRootId) {
     return threadRootId;
+  }
+  // When the agent sets replyToId (e.g. via [[reply-to:current]]), it may point at a
+  // non-root reply post.  Mattermost requires root_id to be the thread's root post,
+  // so prefer the inbound post's root_id when available.
+  const inboundRoot = params.inboundRootId?.trim();
+  if (inboundRoot) {
+    return inboundRoot;
   }
   return params.replyToId?.trim() || undefined;
 }
@@ -497,6 +506,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 replyToId: resolveMattermostReplyRootId({
                   threadRootId: threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
+                  inboundRootId: opts.post.root_id?.trim() || undefined,
                 }),
                 textLimit,
                 tableMode,
@@ -600,6 +610,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     teamId?: string;
     postId: string;
     effectiveReplyToId?: string;
+    inboundRootId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
@@ -704,6 +715,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             replyToId: resolveMattermostReplyRootId({
               threadRootId: params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
+              inboundRootId: params.inboundRootId,
             }),
             textLimit,
             // The picker path already converts and trims text before capture/delivery.
@@ -925,6 +937,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           postId: params.payload.post_id,
           effectiveReplyToId: threadContext.effectiveReplyToId,
+          inboundRootId: params.post.root_id?.trim() || undefined,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
@@ -1415,6 +1428,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             replyToId: resolveMattermostReplyRootId({
               threadRootId: effectiveReplyToId,
               replyToId: payload.replyToId,
+              inboundRootId: threadRootId,
             }),
             textLimit,
             tableMode,

@@ -155,6 +155,41 @@ describe("resolveMattermostReplyRootId", () => {
   it("falls back to undefined when neither reply target is available", () => {
     expect(resolveMattermostReplyRootId({})).toBeUndefined();
   });
+
+  it("prefers inboundRootId over replyToId when threadRootId is absent (#30977)", () => {
+    // In DMs with replyToMode "off", effectiveReplyToId (threadRootId param) is
+    // undefined.  The core dispatcher sets payload.replyToId to the inbound
+    // message's own ID via [[reply-to:current]], which may be a non-root reply
+    // post.  Mattermost rejects non-root IDs as root_id with 400 "Invalid
+    // RootId parameter".  inboundRootId (the inbound post's root_id) is always
+    // a valid thread root and must take priority.
+    expect(
+      resolveMattermostReplyRootId({
+        replyToId: "child-reply-post",
+        inboundRootId: "actual-thread-root",
+      }),
+    ).toBe("actual-thread-root");
+  });
+
+  it("falls back to replyToId when both threadRootId and inboundRootId are absent", () => {
+    // Standalone top-level message: no thread context, replyToId is the post's
+    // own ID (a valid root).
+    expect(
+      resolveMattermostReplyRootId({
+        replyToId: "standalone-post-id",
+      }),
+    ).toBe("standalone-post-id");
+  });
+
+  it("prefers threadRootId over inboundRootId", () => {
+    expect(
+      resolveMattermostReplyRootId({
+        threadRootId: "effective-reply-to",
+        replyToId: "child-post",
+        inboundRootId: "inbound-root",
+      }),
+    ).toBe("effective-reply-to");
+  });
 });
 
 describe("resolveMattermostEffectiveReplyToId", () => {
