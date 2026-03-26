@@ -201,6 +201,10 @@ async function bootstrapLaunchAgentOrThrow(params: {
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
+  // Track the most relevant error detail across retries so that the final
+  // error message shown to the user reflects the actual failure, not a stale
+  // "already bootstrapped" message from an earlier attempt.
+  let effectiveDetail = detail;
 
   // If the service is already registered (e.g. re-install without prior uninstall),
   // bootout the stale registration and retry once.
@@ -211,6 +215,7 @@ async function bootstrapLaunchAgentOrThrow(params: {
       return;
     }
     const retryDetail = (retry.stderr || retry.stdout).trim();
+    effectiveDetail = retryDetail;
     if (isUnsupportedGuiDomain(retryDetail)) {
       // Fall through to the legacy load fallback below.
     } else if (!isAlreadyBootstrapped(retryDetail)) {
@@ -220,18 +225,22 @@ async function bootstrapLaunchAgentOrThrow(params: {
 
   // If the gui/ domain is unavailable (SSH, headless, or sudo), try the
   // deprecated-but-universal `launchctl load` as a last resort before giving up.
-  if (isUnsupportedGuiDomain(detail) || isAlreadyBootstrapped(detail)) {
+  if (isUnsupportedGuiDomain(effectiveDetail) || isAlreadyBootstrapped(effectiveDetail)) {
     const load = await execLaunchctl(["load", "-w", params.plistPath]);
     if (load.code === 0) {
       return;
     }
-    // `launchctl load` also failed — throw the original gui-domain error so the
-    // user gets the actionable hint about desktop sessions.
-    throwBootstrapGuiSessionError({
-      detail,
-      domain: params.domain,
-      actionHint: params.actionHint,
-    });
+    const loadDetail = (load.stderr || load.stdout).trim();
+    // Only show GUI-session guidance when the failure is actually gui-domain related.
+    // For other load failures (e.g. plist syntax, permissions), surface the real error.
+    if (isUnsupportedGuiDomain(effectiveDetail)) {
+      throwBootstrapGuiSessionError({
+        detail: effectiveDetail,
+        domain: params.domain,
+        actionHint: params.actionHint,
+      });
+    }
+    throw new Error(`launchctl load failed: ${loadDetail || effectiveDetail}`);
   }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
@@ -469,7 +478,8 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   const normalized = detail.toLowerCase();
   return (
     normalized.includes("domain does not support specified action") ||
-    normalized.includes("bootstrap failed: 125")
+    normalized.includes("bootstrap failed: 125") ||
+    normalized.includes("could not find domain for")
   );
 }
 

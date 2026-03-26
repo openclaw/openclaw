@@ -497,6 +497,19 @@ describe("launchd install", () => {
     expect(bootoutAfterBootstrap).toBeGreaterThanOrEqual(0);
   });
 
+  it("falls back to launchctl load for 'Could not find domain' error from issue #8619", async () => {
+    state.bootstrapError = "Could not find domain for user gui: 1000";
+    // loadError is empty → launchctl load succeeds
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+    });
+    expect(state.launchctlCalls.some((c) => c[0] === "load" && c[1] === "-w")).toBe(true);
+  });
+
   it("surfaces generic bootstrap failures without GUI-specific guidance", async () => {
     state.bootstrapError = "Operation not permitted";
     const env = createDefaultLaunchdEnv();
