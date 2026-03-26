@@ -1,9 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSignalEventHandler } from "./event-handler.js";
-import {
-  createBaseSignalEventHandlerDeps,
-  createSignalReceiveEvent,
-} from "./event-handler.test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { sendTypingMock, sendReadReceiptMock, dispatchInboundMessageMock } = vi.hoisted(() => ({
   sendTypingMock: vi.fn(),
@@ -35,6 +30,10 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
+
 function makeDeps() {
   return createBaseSignalEventHandlerDeps({
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -44,6 +43,13 @@ function makeDeps() {
 }
 
 describe("signal system message filtering", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ createSignalEventHandler } = await import("./event-handler.js"));
+    ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
+      await import("./event-handler.test-harness.js"));
+  });
+
   beforeEach(() => {
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
