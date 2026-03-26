@@ -21,7 +21,6 @@ export type PluginCapabilityKind =
   | "speech"
   | "media-understanding"
   | "image-generation"
-  | "video-generation"
   | "web-search"
   | "channel";
 
@@ -166,7 +165,6 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
-    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "channel" as const, ids: plugin.channelIds },
   ].filter((entry) => entry.ids.length > 0);

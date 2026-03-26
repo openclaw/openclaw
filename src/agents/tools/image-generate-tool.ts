@@ -16,7 +16,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
-import { ToolInputError, readBooleanParam, readNumberParam, readStringParam } from "./common.js";
+import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   applyImageGenerationModelConfigDefaults,
@@ -105,18 +105,6 @@ const ImageGenerateToolSchema = Type.Object({
       minimum: 1,
       maximum: MAX_COUNT,
     }),
-  ),
-  seed: Type.Optional(Type.Number({ description: "Random seed for reproducibility." })),
-  watermark: Type.Optional(Type.Boolean({ description: "Add watermark to image." })),
-  guidanceScale: Type.Optional(
-    Type.Number({
-      description: "Controls prompt adherence strength (1.0-20.0). Higher means stricter.",
-      minimum: 1,
-      maximum: 20,
-    }),
-  ),
-  optimizePrompt: Type.Optional(
-    Type.Boolean({ description: "Enable automatic prompt optimization for better results." }),
   ),
 });
 
@@ -591,11 +579,6 @@ export function createImageGenerateTool(options?: {
         resolution,
       });
 
-      const seed = readNumberParam(params, "seed", { integer: true });
-      const watermark = readBooleanParam(params, "watermark");
-      const guidanceScale = readNumberParam(params, "guidanceScale");
-      const optimizePrompt = readBooleanParam(params, "optimizePrompt");
-
       const result = await generateImage({
         cfg: effectiveCfg,
         prompt,
@@ -606,10 +589,6 @@ export function createImageGenerateTool(options?: {
         resolution,
         count,
         inputImages,
-        seed,
-        watermark,
-        guidanceScale,
-        optimizePrompt,
       });
 
       const savedImages = await Promise.all(

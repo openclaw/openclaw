@@ -256,7 +256,6 @@ export function buildAgentSystemPrompt(params: {
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
-    video_generate: "Generate short videos with the configured video-generation model",
   };
 
   const toolOrder = [
@@ -285,7 +284,6 @@ export function buildAgentSystemPrompt(params: {
     "session_status",
     "image",
     "image_generate",
-    "video_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
