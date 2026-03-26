@@ -740,6 +740,44 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("falls back to the generic multi-image runtime when openrouter has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubOpenAiCompletionsOkFetch("ok multi");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+            imageModel: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "openrouter-test",
+              models: [makeModelDefinition("google/gemini-2.5-flash-lite", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe the images.",
+        images: [
+          `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        ],
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok multi" })]),
+      );
+    });
+  });
+
   it("falls back to the generic image runtime when minimax-portal has no media provider registration", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
