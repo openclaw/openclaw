@@ -40,16 +40,11 @@ function maybeBootstrapChannelPlugin(params: {
     return;
   }
 
-  // Check the pinned channel registry first — it survives subagent registry
-  // swaps that can evict channel entries from the mutable active registry.
-  const channelRegistry = getActivePluginChannelRegistry();
-  const pinnedHasRequestedChannel = channelRegistry?.channels?.some(
-    (entry) => entry?.plugin?.id === params.channel,
-  );
-  if (pinnedHasRequestedChannel) {
-    return;
-  }
-
+  // This function is only reached after both getChannelPlugin() and
+  // resolveDirectFromActiveRegistry() returned undefined, so neither the
+  // pinned nor active registries contain the requested channel.  Only
+  // check the active registry here to avoid a redundant bootstrap when
+  // the channel was loaded into the mutable registry by another path.
   const activeRegistry = getActivePluginRegistry();
   const activeHasRequestedChannel = activeRegistry?.channels?.some(
     (entry) => entry?.plugin?.id === params.channel,
@@ -98,9 +93,11 @@ function resolveDirectFromActiveRegistry(
   }
 
   // Fall back to the mutable active registry for channels that were loaded
-  // after the initial pin (e.g. via maybeBootstrapChannelPlugin).
+  // after the initial pin (e.g. via maybeBootstrapChannelPlugin).  Skip when
+  // it's the same object as the channel registry (un-pinned case) to avoid
+  // iterating the same list twice.
   const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
+  if (!activeRegistry || activeRegistry === channelRegistry) {
     return undefined;
   }
   for (const entry of activeRegistry.channels) {
