@@ -27,7 +27,7 @@ openclaw onboard
 openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
-### Config snippet
+### Claude CLI config snippet
 
 ```json5
 {
