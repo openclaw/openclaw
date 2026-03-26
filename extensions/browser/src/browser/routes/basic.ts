@@ -6,7 +6,7 @@ import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { resolveProfileContext } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
+import { getProfileContext, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
@@ -135,7 +135,33 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       res,
       ctx,
       run: async (profileCtx) => {
-        await profileCtx.ensureBrowserAvailable();
+        // Allow runtime headless override via query param (e.g. ?headless=true)
+        const headlessParam = toBoolean(req.query.headless);
+        if (headlessParam) {
+          // Headless mode only works with locally-launched profiles (openclaw driver).
+          // Extension-based profiles (chrome) attach to an existing browser and cannot be made headless.
+          if (profileCtx.profile.driver === "existing-session") {
+            return jsonError(
+              res,
+              400,
+              `Headless mode is not supported with extension-based profile "${profileCtx.profile.name}". Use an openclaw-managed profile instead.`,
+            );
+          }
+        }
+
+        // Scope headless override to this start operation only — don't permanently
+        // mutate shared resolved state, otherwise a subsequent start without
+        // ?headless=true would still launch headless.
+        const current = ctx.state();
+        const previousHeadless = current.resolved.headless;
+        if (headlessParam) {
+          current.resolved.headless = true;
+        }
+        try {
+          await profileCtx.ensureBrowserAvailable();
+        } finally {
+          current.resolved.headless = previousHeadless;
+        }
         res.json({ ok: true, profile: profileCtx.profile.name });
       },
     });

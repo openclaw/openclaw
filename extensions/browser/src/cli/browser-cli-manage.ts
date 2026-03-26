@@ -176,11 +176,29 @@ export function registerBrowserManageCommands(
   browser
     .command("start")
     .description("Start the browser (no-op if already running)")
-    .action(async (_opts, cmd) => {
+    .option("--headless", "Launch browser in headless mode (no visible window)")
+    .action(async (opts: { headless?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        await runBrowserToggle(parent, { profile, path: "/start" });
+        const query: Record<string, string | boolean | undefined> = {
+          ...resolveProfileQuery(profile),
+        };
+        if (opts.headless) {
+          query.headless = "true";
+        }
+        await callBrowserRequest(parent, {
+          method: "POST",
+          path: "/start",
+          query: Object.keys(query).length > 0 ? query : undefined,
+        });
+        const status = await fetchBrowserStatus(parent, profile);
+        if (printJsonResult(parent, status)) {
+          return;
+        }
+        const name = status.profile ?? "openclaw";
+        const headlessLabel = status.headless ? " (headless)" : "";
+        defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
       });
     });
 
