@@ -342,6 +342,63 @@ For each confirmed issue, spawn a sub-agent using sessions_spawn. Launch up to 8
 
 **Write claims:** After spawning each sub-agent, read the claims file, add `{SOURCE_REPO}#{N}` with the current ISO timestamp, and write it back (same procedure as cron mode above). This covers interactive usage where watch mode might overlap with cron runs.
 
+### Type Definitions Discovery
+
+Before constructing the sub-agent prompt, gather type definitions from the target repository to prevent type system incompatibilities.
+
+**For each issue to be processed:**
+
+1. **Detect type definitions directory:**
+   Check for common type definition locations in the repository (in order of preference):
+
+   ```bash
+   # Try src/types/ first
+   if curl -s -o /dev/null -w "%{http_code}" \
+     -H "Authorization: Bearer $GH_TOKEN" \
+     "https://api.github.com/repos/{SOURCE_REPO}/contents/src/types?ref={BASE_BRANCH}" | grep -q "200"; then
+     TYPES_DIR="src/types"
+   # Then try types/
+   elif curl -s -o /dev/null -w "%{http_code}" \
+     -H "Authorization: Bearer $GH_TOKEN" \
+     "https://api.github.com/repos/{SOURCE_REPO}/contents/types?ref={BASE_BRANCH}" | grep -q "200"; then
+     TYPES_DIR="types"
+   else
+     TYPES_DIR=""
+   fi
+   ```
+
+2. **Fetch type definition files (if TYPES_DIR is set):**
+
+   ```bash
+   if [ -n "$TYPES_DIR" ]; then
+     # Get list of files in the types directory
+     TYPE_FILES=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+       -H "Accept: application/vnd.github+json" \
+       "https://api.github.com/repos/{SOURCE_REPO}/contents/$TYPES_DIR?ref={BASE_BRANCH}" \
+       | jq -r '.[] | select(.type == "file" and (.name | endswith(".ts") or endswith(".d.ts"))) | .name')
+
+     # Fetch content of each type file
+     TYPE_DEFINITIONS=""
+     for file in $TYPE_FILES; do
+       CONTENT=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+         -H "Accept: application/vnd.github.raw" \
+         "https://api.github.com/repos/{SOURCE_REPO}/contents/$TYPES_DIR/$file?ref={BASE_BRANCH}")
+       TYPE_DEFINITIONS="$TYPE_DEFINITIONS
+
+## $TYPES_DIR/$file
+
+\`\`\`typescript
+$CONTENT
+\`\`\`
+"
+     done
+   else
+     TYPE_DEFINITIONS="(No centralized types directory found. Agent may define types as needed.)"
+   fi
+   ```
+
+3. **Store TYPE_DEFINITIONS** for inclusion in the sub-agent prompt template.
+
 ### Sub-agent Task Prompt
 
 For each issue, construct the following prompt and pass it to sessions_spawn. Variables to inject into the template:
@@ -353,8 +410,9 @@ For each issue, construct the following prompt and pass it to sessions_spawn. Va
 - {number}, {title}, {url}, {labels}, {body} — from the issue
 - {BASE_BRANCH} — from Phase 4
 - {notify_channel} — Telegram channel ID for notifications (empty if not set). Replace {notify_channel} in the template below with the value of `--notify-channel` flag (or leave as empty string if not provided).
+- {TYPE_DEFINITIONS} — Type definitions gathered from the repository (from Type Definitions Discovery above)
 
-When constructing the task, replace all template variables including {notify_channel} with actual values.
+When constructing the task, replace all template variables including {notify_channel} and {TYPE_DEFINITIONS} with actual values.
 
 ```
 You are a focused code-fix agent. Your task is to fix a single GitHub issue and open a PR.
@@ -384,6 +442,12 @@ URL: {url}
 Labels: {labels}
 Body: {body}
 </issue>
+
+<types>
+The repository uses the following type definitions. Use ONLY these types in your implementation. Do NOT create new type names unless the issue specifically requires new types to be added.
+
+{TYPE_DEFINITIONS}
+</types>
 
 <instructions>
 Follow these steps in order. If any step fails, report the failure and stop.
@@ -425,6 +489,8 @@ git checkout -b fix/issue-{number} {BASE_BRANCH}
 
 4. IMPLEMENT — Make the minimal, focused fix:
 - Follow existing code style and conventions
+- Use ONLY the type definitions provided in the <types> section above — do NOT create new type names
+- If you need a type that doesn't exist, use the closest existing type or propose it in your PR description
 - Change only what is necessary to fix the issue
 - Do not add unrelated changes or new dependencies without justification
 
@@ -722,6 +788,8 @@ If `--yes` is NOT set and this is not a subsequent watch poll: ask the user to c
 
 For each PR with actionable comments, spawn a sub-agent. Launch up to 8 concurrently.
 
+**Before spawning each review fix sub-agent,** gather type definitions from the repository using the same Type Definitions Discovery procedure from Phase 5 (check for `src/types/` or `types/`, fetch all `.ts` and `.d.ts` files, build TYPE_DEFINITIONS variable).
+
 **Review fix sub-agent prompt:**
 
 ```
@@ -755,6 +823,12 @@ Each comment has:
 - source: where the comment came from (review, inline, pr_body, greptile, etc.)
 </review_comments>
 
+<types>
+The repository uses the following type definitions. Use ONLY these types when implementing review feedback. Do NOT create new type names unless a review comment specifically asks for it.
+
+{TYPE_DEFINITIONS}
+</types>
+
 <instructions>
 Follow these steps in order:
 
@@ -776,6 +850,7 @@ git pull {PUSH_REMOTE} {branch_name}
 3. IMPLEMENT — For each comment, make the requested change:
 - Read the file and locate the relevant code
 - Make the change the reviewer requested
+- Use ONLY the type definitions provided in the <types> section — do NOT create new type names
 - If the comment is vague or you disagree, still attempt a reasonable fix but note your concern
 - If the comment asks for something impossible or contradictory, skip it and explain why in your reply
 
