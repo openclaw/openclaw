@@ -71,6 +71,12 @@ async function resolveImageRuntime(params: {
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
+  // When the resolver synthesized a model for a registry miss (registryHit is null),
+  // preserve the 'Unknown model' error path so that providers with special fallback
+  // recovery (e.g. MiniMax VLM) can catch and handle it correctly.
+  if (!registryHit && !model.input?.includes("image")) {
+    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
+  }
   if (!model.input?.includes("image")) {
     throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
   }
