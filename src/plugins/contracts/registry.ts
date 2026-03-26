@@ -76,6 +76,7 @@ type PluginRegistrationContractEntry = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  videoGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -421,6 +422,10 @@ function upsertPluginRegistrationContractEntry(
     existing.imageGenerationProviderIds,
     next.imageGenerationProviderIds,
   );
+  existing.videoGenerationProviderIds = mergeIds(
+    existing.videoGenerationProviderIds,
+    next.videoGenerationProviderIds,
+  );
   existing.webSearchProviderIds = mergeIds(
     existing.webSearchProviderIds,
     next.webSearchProviderIds,
@@ -445,6 +450,7 @@ function mergeProviderContractRegistrations(
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: [],
       toolNames: [],
     });
@@ -464,6 +470,9 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
           (provider) => provider.id,
         ),
         imageGenerationProviderIds: captured.imageGenerationProviders.map(
+          (provider) => provider.id,
+        ),
+        videoGenerationProviderIds: captured.videoGenerationProviders.map(
           (provider) => provider.id,
         ),
         webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),

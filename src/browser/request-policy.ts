@@ -18,7 +18,10 @@ export function normalizeBrowserRequestPath(value: string): string {
 
 export function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
   const normalizedPath = normalizeBrowserRequestPath(path);
-  if (method === "POST" && normalizedPath === "/profiles/create") {
+  if (
+    method === "POST" &&
+    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+  ) {
     return true;
   }
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
