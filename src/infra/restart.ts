@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -118,6 +119,7 @@ export function emitGatewayRestart(): boolean {
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
   authorizeGatewaySigusr1Restart();
+  bumpSkillsSnapshotVersion({ reason: "manual" });
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
       process.emit("SIGUSR1");
