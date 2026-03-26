@@ -2,19 +2,19 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { DEFAULT_UPLOAD_DIR } from "./paths.js";
+import { DEFAULT_UPLOAD_DIR } from "../../extensions/browser/src/browser/paths.js";
 import {
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
-} from "./pw-tools-core.test-harness.js";
+} from "../../extensions/browser/src/browser/pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-let mod: typeof import("./pw-tools-core.js");
+let mod: typeof import("../../extensions/browser/src/browser/pw-tools-core.js");
 
 describe("pw-tools-core", () => {
   beforeAll(async () => {
     vi.resetModules();
-    mod = await import("./pw-tools-core.js");
+    mod = await import("../../extensions/browser/src/browser/pw-tools-core.js");
   });
 
   it("last file-chooser arm wins", async () => {

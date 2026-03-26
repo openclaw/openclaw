@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaNodes,
-} from "./chrome-mcp.snapshot.js";
+} from "../../extensions/browser/src/browser/chrome-mcp.snapshot.js";
 
 const snapshot = {
   id: "root",

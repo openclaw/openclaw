@@ -18,7 +18,7 @@ const restoreRoleRefsForTarget = vi.fn(() => {});
 const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
 
-vi.mock("./pw-session.js", () => ({
+vi.mock("../../extensions/browser/src/browser/pw-session.js", () => ({
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -26,17 +26,18 @@ vi.mock("./pw-session.js", () => ({
   restoreRoleRefsForTarget,
 }));
 
-vi.mock("./pw-tools-core.snapshot.js", () => ({
+vi.mock("../../extensions/browser/src/browser/pw-tools-core.snapshot.js", () => ({
   closePageViaPlaywright,
   resizeViewportViaPlaywright,
 }));
 
-let batchViaPlaywright: typeof import("./pw-tools-core.interactions.js").batchViaPlaywright;
+let batchViaPlaywright: typeof import("../../extensions/browser/src/browser/pw-tools-core.interactions.js").batchViaPlaywright;
 
 describe("batchViaPlaywright", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ batchViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+    ({ batchViaPlaywright } =
+      await import("../../extensions/browser/src/browser/pw-tools-core.interactions.js"));
   });
 
   beforeEach(() => {

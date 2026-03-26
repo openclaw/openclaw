@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchBrowserUrlPattern } from "./url-pattern.js";
+import { matchBrowserUrlPattern } from "../../extensions/browser/src/browser/url-pattern.js";
 
 describe("browser url pattern matching", () => {
   it("matches exact URLs", () => {

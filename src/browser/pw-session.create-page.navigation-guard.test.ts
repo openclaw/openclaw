@@ -1,9 +1,12 @@
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as chromeModule from "../../extensions/browser/src/browser/chrome.js";
+import { InvalidBrowserNavigationUrlError } from "../../extensions/browser/src/browser/navigation-guard.js";
+import {
+  closePlaywrightBrowserConnection,
+  createPageViaPlaywright,
+} from "../../extensions/browser/src/browser/pw-session.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import * as chromeModule from "./chrome.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import { closePlaywrightBrowserConnection, createPageViaPlaywright } from "./pw-session.js";
 
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl");

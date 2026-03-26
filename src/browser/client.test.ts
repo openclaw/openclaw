@@ -7,8 +7,13 @@ import {
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
-} from "./client-actions.js";
-import { browserOpenTab, browserSnapshot, browserStatus, browserTabs } from "./client.js";
+} from "../../extensions/browser/src/browser/client-actions.js";
+import {
+  browserOpenTab,
+  browserSnapshot,
+  browserStatus,
+  browserTabs,
+} from "../../extensions/browser/src/browser/client.js";
 
 describe("browser client", () => {
   function stubSnapshotFetch(calls: string[]) {

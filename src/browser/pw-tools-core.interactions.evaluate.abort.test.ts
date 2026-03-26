@@ -19,7 +19,7 @@ const refLocator = vi.fn(() => {
   return locator;
 });
 
-vi.mock("./pw-session.js", () => {
+vi.mock("../../extensions/browser/src/browser/pw-session.js", () => {
   return {
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
@@ -29,7 +29,7 @@ vi.mock("./pw-session.js", () => {
   };
 });
 
-let evaluateViaPlaywright: typeof import("./pw-tools-core.interactions.js").evaluateViaPlaywright;
+let evaluateViaPlaywright: typeof import("../../extensions/browser/src/browser/pw-tools-core.interactions.js").evaluateViaPlaywright;
 
 function createPendingEval() {
   let evalCalled!: () => void;
@@ -48,7 +48,8 @@ describe("evaluateViaPlaywright (abort)", () => {
     vi.clearAllMocks();
     page = null;
     locator = null;
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+    ({ evaluateViaPlaywright } =
+      await import("../../extensions/browser/src/browser/pw-tools-core.interactions.js"));
   });
 
   it.each([

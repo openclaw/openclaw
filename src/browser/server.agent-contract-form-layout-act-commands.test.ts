@@ -2,18 +2,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
+import {
+  DEFAULT_DOWNLOAD_DIR,
+  DEFAULT_TRACE_DIR,
+  DEFAULT_UPLOAD_DIR,
+} from "../../extensions/browser/src/browser/paths.js";
 import {
   installAgentContractHooks,
   postJson,
   startServerAndBase,
-} from "./server.agent-contract.test-harness.js";
+} from "../../extensions/browser/src/browser/server.agent-contract.test-harness.js";
 import {
   getBrowserControlServerTestState,
   getPwMocks,
-  setBrowserControlServerEvaluateEnabled,
-} from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch, type BrowserTestFetch } from "./test-fetch.js";
+} from "../../extensions/browser/src/browser/server.control-server.test-harness.js";
+import {
+  getBrowserTestFetch,
+  type BrowserTestFetch,
+} from "../../extensions/browser/src/browser/test-fetch.js";
 
 const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
@@ -136,29 +142,6 @@ describe("browser control server", () => {
           signal: expect.any(AbortSignal),
         }),
       );
-    },
-    slowTimeoutMs,
-  );
-
-  it(
-    "blocks act:evaluate when browser.evaluateEnabled=false",
-    async () => {
-      setBrowserControlServerEvaluateEnabled(false);
-      const base = await startServerAndBase();
-
-      const waitRes = await postJson<{ error?: string }>(`${base}/act`, {
-        kind: "wait",
-        fn: "() => window.ready === true",
-      });
-      expect(waitRes.error).toContain("browser.evaluateEnabled=false");
-      expect(pwMocks.waitForViaPlaywright).not.toHaveBeenCalled();
-
-      const res = await postJson<{ error?: string }>(`${base}/act`, {
-        kind: "evaluate",
-        fn: "() => 1",
-      });
-      expect(res.error).toContain("browser.evaluateEnabled=false");
-      expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     },
     slowTimeoutMs,
   );

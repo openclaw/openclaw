@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot.js";
+import { resolveTargetIdAfterNavigate } from "../../../extensions/browser/src/browser/routes/agent.snapshot.js";
 
 type Tab = { targetId: string; url: string };
 

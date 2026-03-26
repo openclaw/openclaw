@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import {
+  createBrowserRouteApp,
+  createBrowserRouteResponse,
+} from "../../../extensions/browser/src/browser/routes/test-helpers.js";
 
-vi.mock("../chrome-mcp.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
-let registerBrowserBasicRoutes: typeof import("./basic.js").registerBrowserBasicRoutes;
-let BrowserProfileUnavailableError: typeof import("../errors.js").BrowserProfileUnavailableError;
+let registerBrowserBasicRoutes: typeof import("../../../extensions/browser/src/browser/routes/basic.js").registerBrowserBasicRoutes;
+let BrowserProfileUnavailableError: typeof import("../../../extensions/browser/src/browser/errors.js").BrowserProfileUnavailableError;
 
 function createExistingSessionProfileState(params?: { isHttpReachable?: () => Promise<boolean> }) {
   return {
@@ -54,8 +57,10 @@ async function callBasicRouteWithState(params: {
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ BrowserProfileUnavailableError } = await import("../errors.js"));
-  ({ registerBrowserBasicRoutes } = await import("./basic.js"));
+  ({ BrowserProfileUnavailableError } =
+    await import("../../../extensions/browser/src/browser/errors.js"));
+  ({ registerBrowserBasicRoutes } =
+    await import("../../../extensions/browser/src/browser/routes/basic.js"));
 });
 
 describe("basic browser routes", () => {

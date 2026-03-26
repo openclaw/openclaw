@@ -1,7 +1,12 @@
 import { Command } from "commander";
-import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import type { CliRuntimeCapture } from "./test-runtime-capture.js";
+
+type BrowserParentOpts = GatewayRpcOpts & {
+  json?: boolean;
+  browserProfile?: string;
+};
 
 export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   program: Command;

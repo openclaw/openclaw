@@ -4,7 +4,7 @@ import {
   PROFILE_WS_REACHABILITY_MAX_TIMEOUT_MS,
   PROFILE_WS_REACHABILITY_MIN_TIMEOUT_MS,
   resolveCdpReachabilityTimeouts,
-} from "./cdp-timeouts.js";
+} from "../../extensions/browser/src/browser/cdp-timeouts.js";
 
 describe("resolveCdpReachabilityTimeouts", () => {
   it("uses loopback defaults when timeout is omitted", () => {

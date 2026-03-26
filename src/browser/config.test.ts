@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "../../extensions/browser/src/browser/config.js";
+import { getBrowserProfileCapabilities } from "../../extensions/browser/src/browser/profile-capabilities.js";
 import { withEnv } from "../test-utils/env.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
-import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {

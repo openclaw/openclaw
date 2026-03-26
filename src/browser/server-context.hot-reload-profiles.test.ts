@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserServerState } from "./server-context.types.js";
+import type { BrowserServerState } from "../../extensions/browser/src/browser/server-context.types.js";
 
 let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
 
@@ -18,37 +18,42 @@ function buildConfig() {
   };
 }
 
-vi.mock("../config/config.js", () => ({
-  createConfigIO: () => ({
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    createConfigIO: () => ({
+      loadConfig: () => {
+        // Always return fresh config for createConfigIO to simulate fresh disk read
+        return buildConfig();
+      },
+    }),
+    getRuntimeConfigSnapshot: () => null,
     loadConfig: () => {
-      // Always return fresh config for createConfigIO to simulate fresh disk read
-      return buildConfig();
+      // simulate stale loadConfig that doesn't see updates unless cache cleared
+      if (!cachedConfig) {
+        cachedConfig = buildConfig();
+      }
+      return cachedConfig;
     },
-  }),
-  getRuntimeConfigSnapshot: () => null,
-  loadConfig: () => {
-    // simulate stale loadConfig that doesn't see updates unless cache cleared
-    if (!cachedConfig) {
-      cachedConfig = buildConfig();
-    }
-    return cachedConfig;
-  },
-  writeConfigFile: vi.fn(async () => {}),
-}));
+    writeConfigFile: vi.fn(async () => {}),
+  };
+});
 
 describe("server-context hot-reload profiles", () => {
   let loadConfig: typeof import("../config/config.js").loadConfig;
-  let resolveBrowserConfig: typeof import("./config.js").resolveBrowserConfig;
-  let resolveProfile: typeof import("./config.js").resolveProfile;
-  let refreshResolvedBrowserConfigFromDisk: typeof import("./resolved-config-refresh.js").refreshResolvedBrowserConfigFromDisk;
-  let resolveBrowserProfileWithHotReload: typeof import("./resolved-config-refresh.js").resolveBrowserProfileWithHotReload;
+  let resolveBrowserConfig: typeof import("../../extensions/browser/src/browser/config.js").resolveBrowserConfig;
+  let resolveProfile: typeof import("../../extensions/browser/src/browser/config.js").resolveProfile;
+  let refreshResolvedBrowserConfigFromDisk: typeof import("../../extensions/browser/src/browser/resolved-config-refresh.js").refreshResolvedBrowserConfigFromDisk;
+  let resolveBrowserProfileWithHotReload: typeof import("../../extensions/browser/src/browser/resolved-config-refresh.js").resolveBrowserProfileWithHotReload;
 
   beforeEach(async () => {
     vi.resetModules();
     ({ loadConfig } = await import("../config/config.js"));
-    ({ resolveBrowserConfig, resolveProfile } = await import("./config.js"));
+    ({ resolveBrowserConfig, resolveProfile } =
+      await import("../../extensions/browser/src/browser/config.js"));
     ({ refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
-      await import("./resolved-config-refresh.js"));
+      await import("../../extensions/browser/src/browser/resolved-config-refresh.js"));
     vi.clearAllMocks();
     cfgProfiles = {
       openclaw: { cdpPort: 18800, color: "#FF4500" },

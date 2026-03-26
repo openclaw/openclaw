@@ -8,7 +8,7 @@ import {
   resolvePathWithinRoot,
   resolveStrictExistingPathsWithinRoot,
   resolveWritablePathWithinRoot,
-} from "./paths.js";
+} from "../../extensions/browser/src/browser/paths.js";
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-paths-"));

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserServerState } from "./server-context.js";
+import type { BrowserServerState } from "../../extensions/browser/src/browser/server-context.js";
 
-vi.mock("./chrome-mcp.js", () => ({
+vi.mock("../../extensions/browser/src/browser/chrome-mcp.js", () => ({
   closeChromeMcpSession: vi.fn(async () => true),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   focusChromeMcpTab: vi.fn(async () => {}),
@@ -19,8 +19,8 @@ vi.mock("./chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
 }));
 
-let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
-let chromeMcp: typeof import("./chrome-mcp.js");
+let createBrowserRouteContext: typeof import("../../extensions/browser/src/browser/server-context.js").createBrowserRouteContext;
+let chromeMcp: typeof import("../../extensions/browser/src/browser/chrome-mcp.js");
 
 function makeState(): BrowserServerState {
   return {
@@ -64,8 +64,9 @@ afterEach(() => {
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ createBrowserRouteContext } = await import("./server-context.js"));
-  chromeMcp = await import("./chrome-mcp.js");
+  ({ createBrowserRouteContext } =
+    await import("../../extensions/browser/src/browser/server-context.js"));
+  chromeMcp = await import("../../extensions/browser/src/browser/chrome-mcp.js");
 });
 
 describe("browser server-context existing-session profile", () => {

@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../../../extensions/browser/src/browser/server-context.js";
 
-let createBrowserRouteDispatcher: typeof import("./dispatcher.js").createBrowserRouteDispatcher;
+let createBrowserRouteDispatcher: typeof import("../../../extensions/browser/src/browser/routes/dispatcher.js").createBrowserRouteDispatcher;
 
 describe("browser route dispatcher (abort)", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("./index.js", () => {
+    vi.doMock("../../../extensions/browser/src/browser/routes/index.js", () => {
       return {
         registerBrowserRoutes(app: { get: (path: string, handler: unknown) => void }) {
           app.get(
@@ -40,7 +40,8 @@ describe("browser route dispatcher (abort)", () => {
         },
       };
     });
-    ({ createBrowserRouteDispatcher } = await import("./dispatcher.js"));
+    ({ createBrowserRouteDispatcher } =
+      await import("../../../extensions/browser/src/browser/routes/dispatcher.js"));
   });
 
   it("propagates AbortSignal and lets handlers observe abort", async () => {

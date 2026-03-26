@@ -3,14 +3,17 @@ import {
   appendCdpPath,
   getHeadersWithAuth,
   normalizeCdpHttpBaseForJsonEndpoints,
-} from "./cdp.helpers.js";
-import { __test } from "./client-fetch.js";
-import { resolveBrowserConfig, resolveProfile } from "./config.js";
-import { shouldRejectBrowserMutation } from "./csrf.js";
-import { toBoolean } from "./routes/utils.js";
-import type { BrowserServerState } from "./server-context.js";
-import { listKnownProfileNames } from "./server-context.js";
-import { resolveTargetIdFromTabs } from "./target-id.js";
+} from "../../extensions/browser/src/browser/cdp.helpers.js";
+import { __test } from "../../extensions/browser/src/browser/client-fetch.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+} from "../../extensions/browser/src/browser/config.js";
+import { shouldRejectBrowserMutation } from "../../extensions/browser/src/browser/csrf.js";
+import { toBoolean } from "../../extensions/browser/src/browser/routes/utils.js";
+import type { BrowserServerState } from "../../extensions/browser/src/browser/server-context.js";
+import { listKnownProfileNames } from "../../extensions/browser/src/browser/server-context.js";
+import { resolveTargetIdFromTabs } from "../../extensions/browser/src/browser/target-id.js";
 
 describe("toBoolean", () => {
   it("parses yes/no and 1/0", () => {

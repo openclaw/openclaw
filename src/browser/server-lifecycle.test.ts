@@ -9,22 +9,22 @@ const { createBrowserRouteContextMock, listKnownProfileNamesMock } = vi.hoisted(
   listKnownProfileNamesMock: vi.fn(),
 }));
 
-vi.mock("./chrome.js", () => ({
+vi.mock("../../extensions/browser/src/browser/chrome.js", () => ({
   stopOpenClawChrome: stopOpenClawChromeMock,
 }));
 
-vi.mock("./server-context.js", () => ({
+vi.mock("../../extensions/browser/src/browser/server-context.js", () => ({
   createBrowserRouteContext: createBrowserRouteContextMock,
   listKnownProfileNames: listKnownProfileNamesMock,
 }));
 
-let ensureExtensionRelayForProfiles: typeof import("./server-lifecycle.js").ensureExtensionRelayForProfiles;
-let stopKnownBrowserProfiles: typeof import("./server-lifecycle.js").stopKnownBrowserProfiles;
+let ensureExtensionRelayForProfiles: typeof import("../../extensions/browser/src/browser/server-lifecycle.js").ensureExtensionRelayForProfiles;
+let stopKnownBrowserProfiles: typeof import("../../extensions/browser/src/browser/server-lifecycle.js").stopKnownBrowserProfiles;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } =
-    await import("./server-lifecycle.js"));
+    await import("../../extensions/browser/src/browser/server-lifecycle.js"));
   createBrowserRouteContextMock.mockClear();
   listKnownProfileNamesMock.mockClear();
   stopOpenClawChromeMock.mockClear();

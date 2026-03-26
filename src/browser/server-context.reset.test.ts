@@ -11,10 +11,10 @@ const pwAiMocks = vi.hoisted(() => ({
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
 }));
 
-vi.mock("./trash.js", () => trashMocks);
-vi.mock("./pw-ai.js", () => pwAiMocks);
+vi.mock("../../extensions/browser/src/browser/trash.js", () => trashMocks);
+vi.mock("../../extensions/browser/src/browser/pw-ai.js", () => pwAiMocks);
 
-let createProfileResetOps: typeof import("./server-context.reset.js").createProfileResetOps;
+let createProfileResetOps: typeof import("../../extensions/browser/src/browser/server-context.reset.js").createProfileResetOps;
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -22,7 +22,8 @@ afterEach(() => {
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ createProfileResetOps } = await import("./server-context.reset.js"));
+  ({ createProfileResetOps } =
+    await import("../../extensions/browser/src/browser/server-context.reset.js"));
 });
 
 function localOpenClawProfile(): Parameters<typeof createProfileResetOps>[0]["profile"] {

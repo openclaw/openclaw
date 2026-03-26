@@ -5,18 +5,19 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-import "./server-context.chrome-test-harness.js";
-import * as cdpModule from "./cdp.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import { createBrowserRouteContext } from "./server-context.js";
+import "../../extensions/browser/src/browser/server-context.chrome-test-harness.js";
+import * as cdpModule from "../../extensions/browser/src/browser/cdp.js";
+import { InvalidBrowserNavigationUrlError } from "../../extensions/browser/src/browser/navigation-guard.js";
+import { createBrowserRouteContext } from "../../extensions/browser/src/browser/server-context.js";
 import {
   makeManagedTabsWithNew,
   makeState,
   originalFetch,
-} from "./server-context.remote-tab-ops.harness.js";
+} from "../../extensions/browser/src/browser/server-context.remote-tab-ops.harness.js";
 
 afterEach(async () => {
-  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
+  const { closePlaywrightBrowserConnection } =
+    await import("../../extensions/browser/src/browser/pw-session.js");
   await closePlaywrightBrowserConnection().catch(() => {});
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();

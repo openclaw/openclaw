@@ -20,9 +20,11 @@ const refLocator = vi.fn(() => {
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
 
 const resolveStrictExistingPathsWithinRoot =
-  vi.fn<typeof import("./paths.js").resolveStrictExistingPathsWithinRoot>();
+  vi.fn<
+    typeof import("../../extensions/browser/src/browser/paths.js").resolveStrictExistingPathsWithinRoot
+  >();
 
-vi.mock("./pw-session.js", () => {
+vi.mock("../../extensions/browser/src/browser/pw-session.js", () => {
   return {
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
@@ -32,14 +34,14 @@ vi.mock("./pw-session.js", () => {
   };
 });
 
-vi.mock("./paths.js", () => {
+vi.mock("../../extensions/browser/src/browser/paths.js", () => {
   return {
     DEFAULT_UPLOAD_DIR: "/tmp/openclaw/uploads",
     resolveStrictExistingPathsWithinRoot,
   };
 });
 
-let setInputFilesViaPlaywright: typeof import("./pw-tools-core.interactions.js").setInputFilesViaPlaywright;
+let setInputFilesViaPlaywright: typeof import("../../extensions/browser/src/browser/pw-tools-core.interactions.js").setInputFilesViaPlaywright;
 
 function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
   const setInputFiles = vi.fn(async () => {});
@@ -56,7 +58,8 @@ function seedSingleLocatorPage(): { setInputFiles: ReturnType<typeof vi.fn> } {
 describe("setInputFilesViaPlaywright", () => {
   beforeEach(async () => {
     vi.resetModules();
-    ({ setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+    ({ setInputFilesViaPlaywright } =
+      await import("../../extensions/browser/src/browser/pw-tools-core.interactions.js"));
     vi.clearAllMocks();
     page = null;
     locator = null;

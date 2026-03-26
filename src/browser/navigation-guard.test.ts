@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   requiresInspectableBrowserNavigationRedirects,
-} from "./navigation-guard.js";
+} from "../../extensions/browser/src/browser/navigation-guard.js";
+import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 
 function createLookupFn(address: string): LookupFn {
   const family = address.includes(":") ? 6 : 4;

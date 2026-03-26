@@ -55,16 +55,19 @@ function createBrowser(pages: unknown[]) {
 }
 
 let chromiumMock: typeof import("playwright-core").chromium;
-let snapshotAiViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
-let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
-let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
+let snapshotAiViaPlaywright: typeof import("../../extensions/browser/src/browser/pw-tools-core.snapshot.js").snapshotAiViaPlaywright;
+let clickViaPlaywright: typeof import("../../extensions/browser/src/browser/pw-tools-core.interactions.js").clickViaPlaywright;
+let closePlaywrightBrowserConnection: typeof import("../../extensions/browser/src/browser/pw-session.js").closePlaywrightBrowserConnection;
 
 beforeAll(async () => {
   const pw = await import("playwright-core");
   chromiumMock = pw.chromium;
-  ({ snapshotAiViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
-  ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
+  ({ snapshotAiViaPlaywright } =
+    await import("../../extensions/browser/src/browser/pw-tools-core.snapshot.js"));
+  ({ clickViaPlaywright } =
+    await import("../../extensions/browser/src/browser/pw-tools-core.interactions.js"));
+  ({ closePlaywrightBrowserConnection } =
+    await import("../../extensions/browser/src/browser/pw-session.js"));
 });
 
 afterEach(async () => {

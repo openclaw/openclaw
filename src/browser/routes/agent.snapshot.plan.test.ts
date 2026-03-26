@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveBrowserConfig, resolveProfile } from "../config.js";
-import { resolveSnapshotPlan } from "./agent.snapshot.plan.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+} from "../../../extensions/browser/src/browser/config.js";
+import { resolveSnapshotPlan } from "../../../extensions/browser/src/browser/routes/agent.snapshot.plan.js";
 
 describe("resolveSnapshotPlan", () => {
   it("defaults existing-session snapshots to ai when format is omitted", () => {

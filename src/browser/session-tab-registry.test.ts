@@ -5,7 +5,7 @@ import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-} from "./session-tab-registry.js";
+} from "../../extensions/browser/src/browser/session-tab-registry.js";
 
 describe("session tab registry", () => {
   beforeEach(() => {

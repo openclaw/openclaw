@@ -1,6 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
-import type { BrowserRequest } from "./types.js";
+import {
+  createBrowserRouteApp,
+  createBrowserRouteResponse,
+} from "../../../extensions/browser/src/browser/routes/test-helpers.js";
+import type { BrowserRequest } from "../../../extensions/browser/src/browser/routes/types.js";
 
 const routeState = vi.hoisted(() => ({
   profileCtx: {
@@ -33,7 +36,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../chrome-mcp.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/chrome-mcp.js", () => ({
   clickChromeMcpElement: vi.fn(async () => {}),
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
@@ -48,18 +51,18 @@ vi.mock("../chrome-mcp.js", () => ({
   takeChromeMcpSnapshot: chromeMcpMocks.takeChromeMcpSnapshot,
 }));
 
-vi.mock("../cdp.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/cdp.js", () => ({
   captureScreenshot: vi.fn(),
   snapshotAria: vi.fn(),
 }));
 
-vi.mock("../navigation-guard.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/navigation-guard.js", () => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
   withBrowserNavigationPolicy: vi.fn(() => ({})),
 }));
 
-vi.mock("../screenshot.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({
@@ -73,7 +76,7 @@ vi.mock("../../media/store.js", () => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
-vi.mock("./agent.shared.js", () => ({
+vi.mock("../../../extensions/browser/src/browser/routes/agent.shared.js", () => ({
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn(),
   readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
@@ -94,13 +97,15 @@ vi.mock("./agent.shared.js", () => ({
   }),
 }));
 
-let registerBrowserAgentActRoutes: typeof import("./agent.act.js").registerBrowserAgentActRoutes;
-let registerBrowserAgentSnapshotRoutes: typeof import("./agent.snapshot.js").registerBrowserAgentSnapshotRoutes;
+let registerBrowserAgentActRoutes: typeof import("../../../extensions/browser/src/browser/routes/agent.act.js").registerBrowserAgentActRoutes;
+let registerBrowserAgentSnapshotRoutes: typeof import("../../../extensions/browser/src/browser/routes/agent.snapshot.js").registerBrowserAgentSnapshotRoutes;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ registerBrowserAgentActRoutes } = await import("./agent.act.js"));
-  ({ registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js"));
+  ({ registerBrowserAgentActRoutes } =
+    await import("../../../extensions/browser/src/browser/routes/agent.act.js"));
+  ({ registerBrowserAgentSnapshotRoutes } =
+    await import("../../../extensions/browser/src/browser/routes/agent.snapshot.js"));
 });
 
 function getSnapshotGetHandler() {

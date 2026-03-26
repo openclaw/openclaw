@@ -8,8 +8,8 @@ import {
   resetBrowserControlServerTestContext,
   setBrowserControlServerReachable,
   startBrowserControlServerFromConfig,
-} from "./server.control-server.test-harness.js";
-import { getBrowserTestFetch } from "./test-fetch.js";
+} from "../../extensions/browser/src/browser/server.control-server.test-harness.js";
+import { getBrowserTestFetch } from "../../extensions/browser/src/browser/test-fetch.js";
 
 describe("browser control server", () => {
   installBrowserControlServerHooks();

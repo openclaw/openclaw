@@ -6,15 +6,15 @@ vi.hoisted(() => {
   vi.resetModules();
 });
 
-import "./server-context.chrome-test-harness.js";
+import "../../extensions/browser/src/browser/server-context.chrome-test-harness.js";
 import {
   PROFILE_ATTACH_RETRY_TIMEOUT_MS,
   PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-} from "./cdp-timeouts.js";
-import * as chromeModule from "./chrome.js";
-import type { RunningChrome } from "./chrome.js";
-import type { BrowserServerState } from "./server-context.js";
-import { createBrowserRouteContext } from "./server-context.js";
+} from "../../extensions/browser/src/browser/cdp-timeouts.js";
+import * as chromeModule from "../../extensions/browser/src/browser/chrome.js";
+import type { RunningChrome } from "../../extensions/browser/src/browser/chrome.js";
+import type { BrowserServerState } from "../../extensions/browser/src/browser/server-context.js";
+import { createBrowserRouteContext } from "../../extensions/browser/src/browser/server-context.js";
 
 function makeBrowserState(): BrowserServerState {
   return {

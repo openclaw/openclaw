@@ -25,7 +25,7 @@ import * as fs from "node:fs";
 import os from "node:os";
 
 async function loadResolveBrowserExecutableForPlatform() {
-  const mod = await import("./chrome.executables.js");
+  const mod = await import("../../extensions/browser/src/browser/chrome.executables.js");
   return mod.resolveBrowserExecutableForPlatform;
 }
 

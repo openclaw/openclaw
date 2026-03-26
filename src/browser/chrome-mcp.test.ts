@@ -6,7 +6,7 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
-} from "./chrome-mcp.js";
+} from "../../extensions/browser/src/browser/chrome-mcp.js";
 
 type ToolCall = {
   name: string;

@@ -6,7 +6,7 @@ import {
   hasProxyEnv,
   withNoProxyForCdpUrl,
   withNoProxyForLocalhost,
-} from "./cdp-proxy-bypass.js";
+} from "../../extensions/browser/src/browser/cdp-proxy-bypass.js";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -202,7 +202,8 @@ describe("cdp-proxy-bypass", () => {
 describe("withNoProxyForLocalhost concurrency", () => {
   it("does not leak NO_PROXY when called concurrently", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost } =
+        await import("../../extensions/browser/src/browser/cdp-proxy-bypass.js");
 
       // Simulate concurrent calls
       const callA = withNoProxyForLocalhost(async () => {
@@ -229,7 +230,8 @@ describe("withNoProxyForLocalhost concurrency", () => {
 describe("withNoProxyForLocalhost reverse exit order", () => {
   it("restores NO_PROXY when first caller exits before second", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost } =
+        await import("../../extensions/browser/src/browser/cdp-proxy-bypass.js");
 
       // Call A enters first, exits first (short task)
       // Call B enters second, exits last (long task)
@@ -259,7 +261,8 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost } =
+        await import("../../extensions/browser/src/browser/cdp-proxy-bypass.js");
 
       await withNoProxyForLocalhost(async () => {
         // Should not modify since loopback is already covered
