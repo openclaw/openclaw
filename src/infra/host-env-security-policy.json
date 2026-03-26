@@ -69,7 +69,11 @@
     "CURL_HOME",
     "BROWSER",
     "SDKMAN_DIR",
-    "NVM_DIR"
+    "NVM_DIR",
+    "CLASSPATH",
+    "GOFLAGS",
+    "PHPRC",
+    "XDG_CONFIG_HOME"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "OPENCLAW_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
