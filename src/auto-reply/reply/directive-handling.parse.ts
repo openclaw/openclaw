@@ -13,8 +13,8 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import type { QueueDropPolicy, QueueMode } from "./queue.js";
-import { extractQueueDirective } from "./queue.js";
+import { extractQueueDirective } from "./queue/directive.js";
+import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
 export type InlineDirectives = {
   cleaned: string;

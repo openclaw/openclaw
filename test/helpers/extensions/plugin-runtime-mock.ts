@@ -87,6 +87,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     system: {
       enqueueSystemEvent: vi.fn() as unknown as PluginRuntime["system"]["enqueueSystemEvent"],
       requestHeartbeatNow: vi.fn() as unknown as PluginRuntime["system"]["requestHeartbeatNow"],
+      runHeartbeatOnce: vi.fn(async () => ({
+        status: "ran" as const,
+        durationMs: 0,
+      })) as unknown as PluginRuntime["system"]["runHeartbeatOnce"],
       runCommandWithTimeout: vi.fn() as unknown as PluginRuntime["system"]["runCommandWithTimeout"],
       formatNativeDependencyHint: vi.fn(
         () => "",
@@ -297,6 +301,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       line: {} as PluginRuntime["channel"]["line"],
       slack: {} as PluginRuntime["channel"]["slack"],
       telegram: {} as PluginRuntime["channel"]["telegram"],
+      matrix: {} as PluginRuntime["channel"]["matrix"],
       signal: {} as PluginRuntime["channel"]["signal"],
       imessage: {} as PluginRuntime["channel"]["imessage"],
       whatsapp: {} as PluginRuntime["channel"]["whatsapp"],

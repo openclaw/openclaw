@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getMediaUnderstandingProvider } from "../../media-understanding/providers/index.js";
+import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
-import { loadWebMedia } from "../../plugin-sdk/web-media.js";
+import { loadWebMedia } from "../../media/web-media.js";
+import type { MediaUnderstandingProvider } from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
@@ -38,10 +39,24 @@ const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
 const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
 const DEFAULT_MAX_IMAGES = 20;
 
+const imageToolProviderDeps = {
+  buildProviderRegistry,
+  getMediaUnderstandingProvider,
+};
+
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   resolveImageToolMaxTokens,
+  setProviderDepsForTest(overrides?: {
+    buildProviderRegistry?: typeof buildProviderRegistry;
+    getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
+  }) {
+    imageToolProviderDeps.buildProviderRegistry =
+      overrides?.buildProviderRegistry ?? buildProviderRegistry;
+    imageToolProviderDeps.getMediaUnderstandingProvider =
+      overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
+  },
 } as const;
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
@@ -139,13 +154,16 @@ async function runImagePrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
-  const providerRegistry = buildProviderRegistry(undefined, providerCfg);
+  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const imageProvider = getMediaUnderstandingProvider(provider, providerRegistry);
+      const imageProvider = imageToolProviderDeps.getMediaUnderstandingProvider(
+        provider,
+        providerRegistry as Map<string, MediaUnderstandingProvider>,
+      );
       if (!imageProvider) {
         throw new Error(`No media-understanding provider registered for ${provider}`);
       }
@@ -252,10 +270,6 @@ export function createImageTool(options?: {
   const description = options?.modelHasVision
     ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
     : "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
-
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
 
   return {
     label: "Image",
@@ -403,6 +417,13 @@ export function createImageTool(options?: {
                   : resolvedImage,
               };
         const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
+        const mediaLocalRoots = resolveMediaToolLocalRoots(
+          options?.workspaceDir,
+          {
+            workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          },
+          resolvedPath ? [resolvedPath] : undefined,
+        );
 
         const media = isDataUrl
           ? decodeDataUrl(resolvedImage)
@@ -414,7 +435,7 @@ export function createImageTool(options?: {
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
-                localRoots,
+                localRoots: mediaLocalRoots,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);

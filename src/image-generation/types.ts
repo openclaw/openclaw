@@ -25,11 +25,18 @@ export type ImageGenerationRequest = {
   cfg: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
+  timeoutMs?: number;
   count?: number;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
+  seed?: number;
+  watermark?: boolean;
+  guidanceScale?: number;
+  optimizePrompt?: boolean;
+  /** Provider-specific options (e.g. sequential generation). */
+  providerOptions?: Record<string, unknown>;
 };
 
 export type ImageGenerationResult = {

@@ -1,67 +1,3 @@
-import { KIMI_CODING_MODEL_REF } from "../../extensions/kimi-coding/onboard.js";
-import {
-  KIMI_DEFAULT_MODEL_ID as KIMI_CODING_MODEL_ID,
-  KIMI_CODING_BASE_URL,
-} from "../../extensions/kimi-coding/provider-catalog.js";
-import {
-  DEFAULT_MINIMAX_BASE_URL,
-  MINIMAX_API_BASE_URL,
-  MINIMAX_API_COST,
-  MINIMAX_CN_API_BASE_URL,
-  MINIMAX_HOSTED_COST,
-  MINIMAX_HOSTED_MODEL_ID,
-  MINIMAX_HOSTED_MODEL_REF,
-  MINIMAX_LM_STUDIO_COST,
-  buildMinimaxApiModelDefinition,
-  buildMinimaxModelDefinition,
-} from "../../extensions/minimax/model-definitions.js";
-import {
-  buildMistralModelDefinition,
-  MISTRAL_BASE_URL,
-  MISTRAL_DEFAULT_COST,
-  MISTRAL_DEFAULT_MODEL_ID,
-  MISTRAL_DEFAULT_MODEL_REF,
-} from "../../extensions/mistral/model-definitions.js";
-import {
-  MODELSTUDIO_CN_BASE_URL,
-  MODELSTUDIO_DEFAULT_COST,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  MODELSTUDIO_DEFAULT_MODEL_REF,
-  MODELSTUDIO_GLOBAL_BASE_URL,
-  buildModelStudioDefaultModelDefinition,
-  buildModelStudioModelDefinition,
-} from "../../extensions/modelstudio/model-definitions.js";
-import {
-  MOONSHOT_CN_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "../../extensions/moonshot/onboard.js";
-import {
-  buildMoonshotProvider,
-  MOONSHOT_BASE_URL,
-  MOONSHOT_DEFAULT_MODEL_ID,
-} from "../../extensions/moonshot/provider-catalog.js";
-import { QIANFAN_DEFAULT_MODEL_REF } from "../../extensions/qianfan/onboard.js";
-import {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-} from "../../extensions/qianfan/provider-catalog.js";
-import {
-  XAI_BASE_URL,
-  XAI_DEFAULT_COST,
-  XAI_DEFAULT_MODEL_ID,
-  XAI_DEFAULT_MODEL_REF,
-  buildXaiModelDefinition,
-} from "../../extensions/xai/model-definitions.js";
-import {
-  buildZaiModelDefinition,
-  resolveZaiBaseUrl,
-  ZAI_CN_BASE_URL,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-  ZAI_DEFAULT_COST,
-  ZAI_DEFAULT_MODEL_ID,
-  ZAI_GLOBAL_BASE_URL,
-} from "../../extensions/zai/model-definitions.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -69,7 +5,254 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
-} from "../providers/kilocode-shared.js";
+} from "./provider-model-kilocode.js";
+import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-model-minimax.js";
+
+const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
+const KIMI_CODING_MODEL_ID = "kimi-code";
+const KIMI_CODING_MODEL_REF = `kimi/${KIMI_CODING_MODEL_ID}`;
+
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
+const MINIMAX_HOSTED_MODEL_ID = MINIMAX_DEFAULT_MODEL_ID;
+const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
+const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
+const MINIMAX_API_COST = { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 };
+const MINIMAX_HOSTED_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const MINIMAX_LM_STUDIO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+const MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+const MISTRAL_DEFAULT_MODEL_ID = "mistral-large-latest";
+const MISTRAL_DEFAULT_MODEL_REF = `mistral/${MISTRAL_DEFAULT_MODEL_ID}`;
+const MISTRAL_DEFAULT_CONTEXT_WINDOW = 262144;
+const MISTRAL_DEFAULT_MAX_TOKENS = 16384;
+const MISTRAL_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+const MODELSTUDIO_CN_BASE_URL = "https://coding.dashscope.aliyuncs.com/v1";
+const MODELSTUDIO_GLOBAL_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
+const MODELSTUDIO_DEFAULT_MODEL_ID = "qwen3.5-plus";
+const MODELSTUDIO_DEFAULT_MODEL_REF = `modelstudio/${MODELSTUDIO_DEFAULT_MODEL_ID}`;
+const MODELSTUDIO_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const MODELSTUDIO_MODEL_CATALOG = {
+  "qwen3.5-plus": {
+    name: "qwen3.5-plus",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "qwen3-max-2026-01-23": {
+    name: "qwen3-max-2026-01-23",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 65536,
+  },
+  "qwen3-coder-next": {
+    name: "qwen3-coder-next",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 262144,
+    maxTokens: 65536,
+  },
+  "qwen3-coder-plus": {
+    name: "qwen3-coder-plus",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "MiniMax-M2.5": {
+    name: "MiniMax-M2.5",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 1000000,
+    maxTokens: 65536,
+  },
+  "glm-5": {
+    name: "glm-5",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 16384,
+  },
+  "glm-4.7": {
+    name: "glm-4.7",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 202752,
+    maxTokens: 16384,
+  },
+  "kimi-k2.5": {
+    name: "kimi-k2.5",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 262144,
+    maxTokens: 32768,
+  },
+} as const;
+
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+const MOONSHOT_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
+const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
+const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
+
+const XAI_BASE_URL = "https://api.x.ai/v1";
+const XAI_DEFAULT_MODEL_ID = "grok-4";
+const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+const XAI_DEFAULT_CONTEXT_WINDOW = 131072;
+const XAI_DEFAULT_MAX_TOKENS = 8192;
+const XAI_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
+const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
+const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
+const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
+const ZAI_DEFAULT_MODEL_ID = "glm-5";
+const ZAI_DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+const ZAI_MODEL_CATALOG = {
+  "glm-5": { name: "GLM-5", reasoning: true },
+  "glm-5-turbo": { name: "GLM-5 Turbo", reasoning: true },
+  "glm-4.7": { name: "GLM-4.7", reasoning: true },
+  "glm-4.7-flash": { name: "GLM-4.7 Flash", reasoning: true },
+  "glm-4.7-flashx": { name: "GLM-4.7 FlashX", reasoning: true },
+} as const;
+
+function buildMinimaxModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  cost: ModelDefinitionConfig["cost"];
+  contextWindow: number;
+  maxTokens: number;
+}): ModelDefinitionConfig {
+  const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as keyof typeof MINIMAX_TEXT_MODEL_CATALOG];
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? false,
+    input: ["text"],
+    cost: params.cost,
+    contextWindow: params.contextWindow,
+    maxTokens: params.maxTokens,
+  };
+}
+
+function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
+  return buildMinimaxModelDefinition({
+    id: modelId,
+    cost: MINIMAX_API_COST,
+    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+  });
+}
+
+function buildMistralModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: MISTRAL_DEFAULT_MODEL_ID,
+    name: "Mistral Large",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MISTRAL_DEFAULT_COST,
+    contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
+  };
+}
+
+function buildModelStudioModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  input?: string[];
+  cost?: ModelDefinitionConfig["cost"];
+  contextWindow?: number;
+  maxTokens?: number;
+}): ModelDefinitionConfig {
+  const catalog = MODELSTUDIO_MODEL_CATALOG[params.id as keyof typeof MODELSTUDIO_MODEL_CATALOG];
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? params.id,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? false,
+    input:
+      (params.input as ("text" | "image")[]) ??
+      ([...(catalog?.input ?? ["text"])] as ("text" | "image")[]),
+    cost: params.cost ?? MODELSTUDIO_DEFAULT_COST,
+    contextWindow: params.contextWindow ?? catalog?.contextWindow ?? 262144,
+    maxTokens: params.maxTokens ?? catalog?.maxTokens ?? 65536,
+  };
+}
+
+function buildModelStudioDefaultModelDefinition(): ModelDefinitionConfig {
+  return buildModelStudioModelDefinition({ id: MODELSTUDIO_DEFAULT_MODEL_ID });
+}
+
+function createMoonshotModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: MOONSHOT_DEFAULT_MODEL_ID,
+    name: "Kimi K2.5",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
+}
+
+function buildXaiModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: XAI_DEFAULT_MODEL_ID,
+    name: "Grok 4",
+    reasoning: false,
+    input: ["text"],
+    cost: XAI_DEFAULT_COST,
+    contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: XAI_DEFAULT_MAX_TOKENS,
+  };
+}
+
+function resolveZaiBaseUrl(endpoint?: string): string {
+  switch (endpoint) {
+    case "coding-cn":
+      return ZAI_CODING_CN_BASE_URL;
+    case "global":
+      return ZAI_GLOBAL_BASE_URL;
+    case "cn":
+      return ZAI_CN_BASE_URL;
+    case "coding-global":
+      return ZAI_CODING_GLOBAL_BASE_URL;
+    default:
+      return ZAI_GLOBAL_BASE_URL;
+  }
+}
+
+function buildZaiModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  cost?: ModelDefinitionConfig["cost"];
+  contextWindow?: number;
+  maxTokens?: number;
+}): ModelDefinitionConfig {
+  const catalog = ZAI_MODEL_CATALOG[params.id as keyof typeof ZAI_MODEL_CATALOG];
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? `GLM ${params.id}`,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? true,
+    input: ["text"],
+    cost: params.cost ?? ZAI_DEFAULT_COST,
+    contextWindow: params.contextWindow ?? 204800,
+    maxTokens: params.maxTokens ?? 131072,
+  };
+}
 
 export {
   DEFAULT_MINIMAX_BASE_URL,
@@ -124,7 +307,7 @@ export {
 };
 
 export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
-  return buildMoonshotProvider().models[0];
+  return createMoonshotModelDefinition();
 }
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {

@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
-import { resolveLoggerBackedRuntime } from "../../shared/runtime.js";
+import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
 import {
   type RuntimeEnv,
   isRequestBodyLimitError,

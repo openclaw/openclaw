@@ -248,6 +248,60 @@ describe("ensureChannelSetupPluginInstalled", () => {
     );
   });
 
+  it("does not default to bundled local path when an external catalog overrides the npm spec", async () => {
+    const runtime = makeRuntime();
+    const select = vi.fn((async <T extends string>() => "skip" as T) as WizardPrompter["select"]);
+    const prompter = makePrompter({ select: select as unknown as WizardPrompter["select"] });
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    resolveBundledPluginSources.mockReturnValue(
+      new Map([
+        [
+          "whatsapp",
+          {
+            pluginId: "whatsapp",
+            localPath: "/opt/openclaw/extensions/whatsapp",
+            npmSpec: "@openclaw/whatsapp",
+          },
+        ],
+      ]),
+    );
+
+    await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
+        },
+        install: {
+          npmSpec: "@vendor/whatsapp-fork",
+        },
+      },
+      prompter,
+      runtime,
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: "npm",
+        options: [
+          expect.objectContaining({
+            value: "npm",
+            label: "Download from npm (@vendor/whatsapp-fork)",
+          }),
+          expect.objectContaining({
+            value: "skip",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("falls back to local path after npm install failure", async () => {
     const runtime = makeRuntime();
     const note = vi.fn(async () => {});
@@ -340,6 +394,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
+      videoGenerationProviderIds: [],
       webSearchProviderIds: [],
       gatewayMethods: [],
       cliCommands: [],

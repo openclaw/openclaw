@@ -48,25 +48,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  listLineAccountIds,
-  normalizeAccountId as normalizeLineAccountId,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
-  createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
-  pushMessageLine,
-  pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -75,34 +56,35 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import {
+  buildTemplateMessageFromPayload,
+  createQuickReplyItems,
+  monitorLineProvider,
+  probeLineBot,
+  pushFlexMessage,
+  pushLocationMessage,
+  pushMessageLine,
+  pushMessagesLine,
+  pushTemplateMessage,
+  pushTextMessageWithQuickReplies,
+  sendMessageLine,
+} from "../../plugin-sdk/line-runtime.js";
+import {
+  listLineAccountIds,
+  normalizeAccountId as normalizeLineAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../../plugin-sdk/line.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
+import { createRuntimeMatrix } from "./runtime-matrix.js";
 import { createRuntimeSignal } from "./runtime-signal.js";
 import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
 import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
-
-function defineCachedValue<T extends object, K extends PropertyKey>(
-  target: T,
-  key: K,
-  create: () => unknown,
-): void {
-  let cached: unknown;
-  let ready = false;
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (!ready) {
-        cached = create();
-        ready = true;
-      }
-      return cached;
-    },
-  });
-}
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   const channelRuntime = {
@@ -206,18 +188,19 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
   } satisfies Omit<
     PluginRuntime["channel"],
-    "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
   > &
     Partial<
       Pick<
         PluginRuntime["channel"],
-        "discord" | "slack" | "telegram" | "signal" | "imessage" | "whatsapp"
+        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
       >
     >;
 
   defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
   defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
   defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
+  defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
   defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
   defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
   defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);
