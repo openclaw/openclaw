@@ -8,19 +8,9 @@ title: "Linode (Akamai Connected Cloud)"
 
 # OpenClaw on Linode (Akamai Connected Cloud)
 
-## Goal
-
 Run a persistent OpenClaw Gateway on [Akamai Connected Cloud (Linode)](https://www.linode.com/) for **$5/month** with low-latency access from anywhere in the world.
 
-## Why Linode
-
-Linode is part of Akamai Connected Cloud, giving you access to **30+ global data centers** spanning North America, Europe, Asia-Pacific, South America, and Africa. This means you can deploy your Gateway close to wherever you or your users are, minimizing latency for real-time messaging channels like WhatsApp, Telegram, and Discord.
-
-- **Global reach** — deploy in the region closest to your users for the lowest round-trip times
-- **$5/month Nanode** — 1 vCPU, 1GB RAM, 25GB SSD, enough to run the Gateway 24/7
-- **Free Cloud Firewall** — network-level filtering before traffic reaches your instance
-- **Simple scaling** — resize to a larger plan from the Cloud Manager with no re-provisioning
-- **Automated backups** — optional $2/month add-on for worry-free snapshots
+Linode is part of Akamai Connected Cloud, giving you access to **30+ global data centers** spanning North America, Europe, Asia-Pacific, South America, and Africa.
 
 ---
 
@@ -58,18 +48,15 @@ ssh root@YOUR_LINODE_IP
 # Update system
 apt update && apt upgrade -y
 
-# Install OpenClaw (installs Node.js automatically if needed)
+# Install Node.js 24
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+apt install -y nodejs
+
+# Install OpenClaw
 curl -fsSL https://openclaw.ai/install.sh | bash
-
-# Verify
-openclaw --version
 ```
 
-## 4) Run Onboarding
-
-```bash
-openclaw onboard --install-daemon
-```
+This should automatically trigger the onboarding wizard.
 
 The wizard will walk you through:
 
@@ -78,7 +65,7 @@ The wizard will walk you through:
 - Gateway token (auto-generated)
 - Daemon installation (systemd)
 
-## 5) Verify the Gateway
+## 4) Verify the Gateway
 
 ```bash
 # Check status
@@ -91,7 +78,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Access the Dashboard
+## 5) Access the Dashboard
 
 The gateway binds to loopback by default. To access the Control UI:
 
@@ -132,7 +119,7 @@ openclaw gateway restart
 
 Open: `http://<tailscale-ip>:18789` (token required).
 
-## 7) Connect Your Channels
+## 6) Connect Your Channels
 
 ### Telegram
 
