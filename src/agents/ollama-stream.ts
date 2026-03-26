@@ -488,7 +488,9 @@ export function createOllamaStreamFn(
 
         if (!response.ok) {
           const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`Ollama API error ${response.status}: ${errorText}`);
+          const err = new Error(`${response.status} ${errorText}`);
+          (err as Error & { status: number }).status = response.status;
+          throw err;
         }
 
         if (!response.body) {
