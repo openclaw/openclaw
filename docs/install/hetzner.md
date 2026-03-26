@@ -210,6 +210,8 @@ For the generic Docker flow, see [Docker](/install/docker).
   <Step title="Hetzner-specific access">
     After the shared build and launch steps, tunnel from your laptop:
 
+    > **Note:** SSH tunnels require `AllowTcpForwarding yes` in the server's `/etc/ssh/sshd_config`. Hetzner's default images may have this disabled. If the tunnel connects but the forwarded port is not reachable, check this setting and restart sshd (`systemctl restart sshd`) after changing it.
+
     ```bash
     ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
     ```

@@ -306,6 +306,8 @@ docker compose logs -f openclaw-gateway
 
 从你的笔记本电脑：
 
+> **注意：** SSH 隧道要求服务器的 `/etc/ssh/sshd_config` 中设置 `AllowTcpForwarding yes`。Hetzner 的默认镜像可能已禁用此选项。如果隧道已连接但转发端口不可达，请检查此设置并在更改后重启 sshd（`systemctl restart sshd`）。
+
 ```bash
 ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 ```
