@@ -125,7 +125,7 @@ jq -e '
 rg -Fq 'wrapper_dir="${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$START_GATEWAY"
 rg -Fq -- '--arg wrapper_bin_dir "${OPENCLAW_WRAPPER_BIN_DIR:-/home/node/.openclaw/bin}"' "$START_GATEWAY"
 rg -Fq '.id as $agent_id' "$START_GATEWAY"
-rg -Fq '["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier"]' "$START_GATEWAY"
+rg -Fq '["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier", "frontend-dev"]' "$START_GATEWAY"
 rg -Fq 'prepend_unique($entry; $existing)' "$START_GATEWAY"
 rg -Fq '. "${SCRIPT_DIR}/lib-prompts.sh"' "$START_GATEWAY"
 rg -Fq '__START_GATEWAY_MONITORING_PROMPT__' "$REPO_ROOT/scripts/sre-runtime/lib-prompts.sh"
@@ -151,7 +151,7 @@ jq --arg wrapper_bin_dir "/tmp/openclaw-bin" '
     (.agents.list // [])
     | map(
         .id as $agent_id
-        | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier"] | index($agent_id)) != null then
+        | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier", "frontend-dev"] | index($agent_id)) != null then
             .tools = (.tools // {})
             | .tools.exec = (
                 if ((.tools.exec // null) | type) == "object" then
@@ -177,6 +177,7 @@ jq --arg wrapper_bin_dir "/tmp/openclaw-bin" '
 jq -e '.agents.list[] | select(.id=="sre").tools.exec.pathPrepend[0] == "/tmp/openclaw-bin"' "$TMP_CONFIG" >/dev/null
 jq -e '.agents.list[] | select(.id=="sre-verifier").tools.exec.pathPrepend[0] == "/tmp/openclaw-bin"' "$TMP_CONFIG" >/dev/null
 jq -e '.agents.list[] | select(.id=="sre-k8s").tools.exec.pathPrepend[0] == "/tmp/openclaw-bin"' "$TMP_CONFIG" >/dev/null
+jq -e '.agents.list[] | select(.id=="frontend-dev").tools.exec.pathPrepend[0] == "/tmp/openclaw-bin"' "$TMP_CONFIG" >/dev/null
 jq -e '.agents.list[] | select(.id=="main") | (.tools.exec.pathPrepend | not)' "$TMP_CONFIG" >/dev/null
 
 # Integration test: monitoring prompt resolution via jq pipeline
