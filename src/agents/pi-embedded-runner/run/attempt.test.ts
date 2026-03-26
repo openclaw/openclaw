@@ -1573,9 +1573,29 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   });
 
   it("does not repair tool arguments when trailing junk exceeds the Kimi-specific allowance", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const streamedToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const endMessageToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
     const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
     const baseFn = vi.fn(() =>
       createFakeStream({
         events: [
@@ -1590,9 +1610,10 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
             contentIndex: 0,
             toolCall: streamedToolCall,
             partial: partialMessage,
+            message: endMessage,
           },
         ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
+        resultMessage: finalMessage,
       }),
     );
 
@@ -1600,15 +1621,39 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     for await (const _item of stream) {
       // drain
     }
+    const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
+    expect(endMessageToolCall.arguments).toEqual({});
+    expect(finalToolCall.arguments).toEqual({});
+    expect(result).toBe(finalMessage);
   });
 
   it("clears a cached repair when later deltas make the trailing suffix invalid", async () => {
-    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
-    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const streamedToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const endMessageToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/tmp/report.txt" },
+    };
     const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
     const baseFn = vi.fn(() =>
       createFakeStream({
         events: [
@@ -1635,9 +1680,10 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
             contentIndex: 0,
             toolCall: streamedToolCall,
             partial: partialMessage,
+            message: endMessage,
           },
         ],
-        resultMessage: { role: "assistant", content: [partialToolCall] },
+        resultMessage: finalMessage,
       }),
     );
 
@@ -1645,9 +1691,71 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     for await (const _item of stream) {
       // drain
     }
+    const result = await stream.result();
 
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
+    expect(endMessageToolCall.arguments).toEqual({});
+    expect(finalToolCall.arguments).toEqual({});
+    expect(result).toBe(finalMessage);
+  });
+
+  it("clears malformed final tool arguments when Kimi leaves a string unterminated", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "write",
+      arguments: { path: "/tmp/report.txt", content: "" },
+    };
+    const streamedToolCall = {
+      type: "toolCall",
+      name: "write",
+      arguments: { path: "/tmp/report.txt", content: "" },
+    };
+    const endMessageToolCall = {
+      type: "toolCall",
+      name: "write",
+      arguments: { path: "/tmp/report.txt", content: "" },
+    };
+    const finalToolCall = {
+      type: "toolCall",
+      name: "write",
+      arguments: { path: "/tmp/report.txt", content: "" },
+    };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt","content":"',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
+    expect(endMessageToolCall.arguments).toEqual({});
+    expect(finalToolCall.arguments).toEqual({});
+    expect(result).toBe(finalMessage);
   });
 });
 
