@@ -1,5 +1,6 @@
 import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
-import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
+import * as harness from "./bot.media.e2e-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
 
@@ -16,13 +17,12 @@ export const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
-const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 150_000;
-
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
 let onSpyRef: Mock;
 let sendChatActionSpyRef: Mock;
 let fetchRemoteMediaSpyRef: Mock;
+let undiciFetchSpyRef: Mock;
 let resetFetchRemoteMediaMockRef: () => void;
 
 type FetchMockHandle = Mock & { mockRestore: () => void };
@@ -58,10 +58,11 @@ export async function createBotHandlerWithOptions(options: {
 
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
+  const effectiveProxyFetch = options.proxyFetch ?? (undiciFetchSpyRef as unknown as typeof fetch);
   createTelegramBotRef({
     token: "tok",
     testTimings: TELEGRAM_TEST_TIMINGS,
-    ...(options.proxyFetch ? { proxyFetch: options.proxyFetch } : {}),
+    ...(effectiveProxyFetch ? { proxyFetch: effectiveProxyFetch } : {}),
     runtime: {
       log: runtimeLog as (...data: unknown[]) => void,
       error: runtimeError as (...data: unknown[]) => void,
@@ -81,6 +82,12 @@ export function mockTelegramFileDownload(params: {
   contentType: string;
   bytes: Uint8Array;
 }): FetchMockHandle {
+  undiciFetchSpyRef.mockResolvedValueOnce(
+    new Response(Buffer.from(params.bytes), {
+      status: 200,
+      headers: { "content-type": params.contentType },
+    }),
+  );
   fetchRemoteMediaSpyRef.mockResolvedValueOnce({
     buffer: Buffer.from(params.bytes),
     contentType: params.contentType,
@@ -90,6 +97,12 @@ export function mockTelegramFileDownload(params: {
 }
 
 export function mockTelegramPngDownload(): FetchMockHandle {
+  undiciFetchSpyRef.mockResolvedValue(
+    new Response(Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    }),
+  );
   fetchRemoteMediaSpyRef.mockResolvedValue({
     buffer: Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])),
     contentType: "image/png",
@@ -102,25 +115,11 @@ export function watchTelegramFetch(): FetchMockHandle {
   return createFetchMockHandle();
 }
 
-beforeEach(() => {
-  vi.useRealTimers();
-  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-  resolvePinnedHostnameSpy = vi
-    .spyOn(ssrf, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
-});
-
-afterEach(() => {
-  lookupMock.mockClear();
-  resolvePinnedHostnameSpy?.mockRestore();
-  resolvePinnedHostnameSpy = null;
-});
-
-beforeAll(async () => {
-  const harness = await import("./bot.media.e2e-harness.js");
+async function loadTelegramBotHarness() {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
   fetchRemoteMediaSpyRef = harness.fetchRemoteMediaSpy;
+  undiciFetchSpyRef = harness.undiciFetchSpy;
   resetFetchRemoteMediaMockRef = harness.resetFetchRemoteMediaMock;
   const botModule = await import("./bot.js");
   botModule.setTelegramBotRuntimeForTest(
@@ -135,7 +134,23 @@ beforeAll(async () => {
     });
   const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
   replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
-}, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
+}
+
+beforeEach(async () => {
+  vi.resetModules();
+  await loadTelegramBotHarness();
+  vi.useRealTimers();
+  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+  resolvePinnedHostnameSpy = vi
+    .spyOn(ssrf, "resolvePinnedHostname")
+    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+});
+
+afterEach(() => {
+  lookupMock.mockClear();
+  resolvePinnedHostnameSpy?.mockRestore();
+  resolvePinnedHostnameSpy = null;
+});
 
 vi.mock("./sticker-cache.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sticker-cache.js")>();

@@ -10,6 +10,7 @@ export type BuiltInAuthChoice =
   | "claude-cli"
   | "token"
   | "chutes"
+  | "deepseek-api-key"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
@@ -42,12 +43,13 @@ export type BuiltInAuthChoice =
   | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
-  | "qwen-portal"
   | "xai-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-standard-api-key-cn"
+  | "modelstudio-standard-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
@@ -58,6 +60,7 @@ export type BuiltInAuthChoiceGroupId =
   | "openai"
   | "anthropic"
   | "chutes"
+  | "deepseek"
   | "google"
   | "copilot"
   | "openrouter"
@@ -73,7 +76,6 @@ export type BuiltInAuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "mistral"
-  | "qwen"
   | "together"
   | "huggingface"
   | "qianfan"
@@ -115,6 +117,7 @@ export type OnboardOptions = {
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
+  deepseekApiKey?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;
@@ -140,6 +143,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioStandardApiKeyCn?: string;
+  modelstudioStandardApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;

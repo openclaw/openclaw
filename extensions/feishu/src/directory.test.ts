@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -45,6 +45,26 @@ describe("feishu directory (config-backed)", () => {
     expect(peers).toEqual([
       { kind: "user", id: "alice" },
       { kind: "user", id: "carla" },
+    ]);
+  });
+
+  it("normalizes spaced provider-prefixed peer entries", async () => {
+    resolveFeishuAccountMock.mockReturnValueOnce({
+      configured: false,
+      config: {
+        allowFrom: [" feishu:user:ou_alice "],
+        dms: {
+          " lark:dm:ou_carla ": {},
+        },
+        groups: {},
+        groupAllowFrom: [],
+      },
+    });
+
+    const peers = await listFeishuDirectoryPeers({ cfg });
+    expect(peers).toEqual([
+      { kind: "user", id: "ou_alice" },
+      { kind: "user", id: "ou_carla" },
     ]);
   });
 

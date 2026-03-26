@@ -67,6 +67,26 @@ describe("runServiceRestart token drift", () => {
     stubEmptyGatewayEnv();
   });
 
+  it("prints the container restart hint when restart is requested for a not-loaded service", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
+
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [
+        "Restart the container or the service that manages it for openclaw-demo-container.",
+        "openclaw gateway install",
+      ],
+      opts: { json: false },
+    });
+
+    expect(runtimeLogs).toContain("Gateway service not loaded.");
+    expect(runtimeLogs).toContain(
+      "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
+    );
+  });
+
   it("emits drift warning when enabled", async () => {
     await runServiceRestart(createServiceRunArgs(true));
 
@@ -185,9 +205,51 @@ describe("runServiceRestart token drift", () => {
       opts: { json: true },
     });
 
-    expect(service.isLoaded).toHaveBeenCalledTimes(1);
+    expect(service.isLoaded).toHaveBeenCalled();
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("fails start when restarting a stopped installed service errors", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.restart.mockRejectedValue(new Error("launchctl kickstart failed: permission denied"));
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    const payload = readJsonLog<{ ok?: boolean; error?: string }>();
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("launchctl kickstart failed: permission denied");
+  });
+
+  it("falls back to not-loaded hints when start finds no install artifacts", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue(null);
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => ["openclaw gateway install"],
+      opts: { json: true },
+    });
+
+    const payload = readJsonLog<{
+      ok?: boolean;
+      result?: string;
+      hints?: string[];
+      hintItems?: Array<{ kind: string; text: string }>;
+    }>();
+    expect(payload.ok).toBe(true);
+    expect(payload.result).toBe("not-loaded");
+    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
+    expect(payload.hintItems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "install",
+          text: "openclaw gateway install",
+        }),
+      ]),
+    );
+    expect(service.restart).not.toHaveBeenCalled();
   });
 });

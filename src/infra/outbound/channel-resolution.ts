@@ -13,6 +13,10 @@ import {
 
 const bootstrapAttempts = new Set<string>();
 
+export function resetOutboundChannelResolutionStateForTest(): void {
+  bootstrapAttempts.clear();
+}
+
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
 ): DeliverableMessageChannel | undefined {

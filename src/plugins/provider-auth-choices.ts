@@ -16,6 +16,7 @@ export type ProviderAuthChoiceMetadata = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  onboardingScopes?: ("text-inference" | "image-generation")[];
 };
 
 export type ProviderOnboardAuthFlag = {
@@ -52,6 +53,7 @@ export function resolveManifestProviderAuthChoices(params?: {
       ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
       ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
       ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+      ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
     })),
   );
 }

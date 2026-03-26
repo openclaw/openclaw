@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging.js";
 import {
   resolveChannelPluginIds,
@@ -44,7 +45,11 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     return;
   }
   const config = loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const resolvedConfig = applyPluginAutoEnable({ config, env: process.env }).config;
+  const workspaceDir = resolveAgentWorkspaceDir(
+    resolvedConfig,
+    resolveDefaultAgentId(resolvedConfig),
+  );
   const logger: PluginLogger = {
     info: (msg) => log.info(msg),
     warn: (msg) => log.warn(msg),
@@ -52,13 +57,14 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     debug: (msg) => log.debug(msg),
   };
   loadOpenClawPlugins({
-    config,
+    config: resolvedConfig,
     workspaceDir,
     logger,
+    throwOnLoadError: true,
     ...(scope === "configured-channels"
       ? {
           onlyPluginIds: resolveConfiguredChannelPluginIds({
-            config,
+            config: resolvedConfig,
             workspaceDir,
             env: process.env,
           }),
@@ -66,7 +72,7 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
       : scope === "channels"
         ? {
             onlyPluginIds: resolveChannelPluginIds({
-              config,
+              config: resolvedConfig,
               workspaceDir,
               env: process.env,
             }),
