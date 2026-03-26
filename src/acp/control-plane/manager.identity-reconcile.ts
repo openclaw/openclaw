@@ -21,6 +21,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   meta: SessionAcpMeta;
   runtimeStatus?: AcpRuntimeStatus;
   failOnStatusError: boolean;
+  signal?: AbortSignal;
   setCachedHandle: (sessionKey: string, handle: AcpRuntimeHandle) => void;
   writeSessionMeta: (params: {
     cfg: OpenClawConfig;
@@ -43,6 +44,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
         run: async () =>
           await params.runtime.getStatus!({
             handle: params.handle,
+            ...(params.signal ? { signal: params.signal } : {}),
           }),
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "Could not read ACP runtime status.",
@@ -98,13 +100,20 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
           : {}),
       }
     : params.handle;
-  if (handleChanged) {
+  if (handleChanged && !params.signal?.aborted) {
     params.setCachedHandle(params.sessionKey, nextHandle);
   }
 
   const metaChanged =
     !identityEquals(currentIdentity, nextIdentity) || hasLegacyAcpIdentityProjection(params.meta);
   if (!metaChanged) {
+    return {
+      handle: nextHandle,
+      meta: params.meta,
+      runtimeStatus,
+    };
+  }
+  if (params.signal?.aborted) {
     return {
       handle: nextHandle,
       meta: params.meta,
@@ -143,6 +152,14 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
     mutate: (current, entry) => {
       if (!entry) {
         return null;
+      }
+      // Re-check abort *inside* the mutator so that if the signal fires while
+      // waiting on the updateSessionStore lock, we still no-op instead of
+      // overwriting newer session state with stale reconcile data.
+      // Return undefined (not null) so upsertAcpSessionMeta treats this as a
+      // no-op rather than a delete operation.
+      if (params.signal?.aborted) {
+        return undefined;
       }
       const base = current ?? entry.acp;
       if (!base) {
