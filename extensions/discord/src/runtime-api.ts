@@ -50,3 +50,4 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+export { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
