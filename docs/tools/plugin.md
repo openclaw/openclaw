@@ -90,7 +90,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
     `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
-    `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
+    `qianfan`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
   </Accordion>
 

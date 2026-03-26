@@ -263,7 +263,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     );
   }
 
-  const client = createMattermostClient({ baseUrl, botToken });
+  const client = createMattermostClient({
+    baseUrl,
+    botToken,
+    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+  });
   const botUser = await fetchMattermostMe(client);
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
