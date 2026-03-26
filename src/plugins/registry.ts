@@ -272,7 +272,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     const normalized = names.map((name) => name.trim()).filter(Boolean);
+
+    // Deduplicate: skip if any of the tool's names are already registered
     if (normalized.length > 0) {
+      const existingNames = new Set(registry.tools.flatMap((t) => t.names));
+      const alreadyRegistered = normalized.some((n) => existingNames.has(n));
+      if (alreadyRegistered) {
+        return;
+      }
       record.toolNames.push(...normalized);
     }
     registry.tools.push({
