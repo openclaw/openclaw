@@ -60,6 +60,10 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {
       page: 1,
       surface,
+      chatType: params.ctx.ChatType,
+      isGroup: params.isGroup,
+      threadId: params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId) : undefined,
+      sessionKey: params.sessionKey,
     });
 
     if (result.totalPages > 1) {

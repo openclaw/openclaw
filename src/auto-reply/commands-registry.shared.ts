@@ -294,6 +294,22 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "sessions",
+      nativeName: "sessions",
+      description: "List and switch chat sessions in ordinary direct chats.",
+      textAlias: "/sessions",
+      category: "session",
+      args: [
+        {
+          name: "target",
+          description: "back | number | sessionId prefix",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
       description: "List, kill, log, spawn, or steer subagent runs for this session.",

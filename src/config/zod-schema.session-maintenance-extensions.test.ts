@@ -19,6 +19,11 @@ describe("SessionSchema maintenance extensions", () => {
     expect(() => SessionSchema.parse({ parentForkMaxTokens: 0 })).not.toThrow();
   });
 
+  it("accepts historyLimit including 0 to disable switchable session history", () => {
+    expect(() => SessionSchema.parse({ historyLimit: 5 })).not.toThrow();
+    expect(() => SessionSchema.parse({ historyLimit: 0 })).not.toThrow();
+  });
+
   it("rejects negative parentForkMaxTokens", () => {
     expect(() =>
       SessionSchema.parse({

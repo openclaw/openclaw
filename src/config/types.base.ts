@@ -117,6 +117,8 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
+  /** Maximum number of prior sessions kept switchable per chat session key. Set to 0 to disable. */
+  historyLimit?: number;
   /**
    * Max parent transcript token count allowed for thread/session forking.
    * If parent totalTokens is above this value, OpenClaw skips parent fork and

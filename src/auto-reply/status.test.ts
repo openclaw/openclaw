@@ -1364,6 +1364,28 @@ describe("buildCommandsMessage", () => {
     );
     expect(text).toContain("/demo_skill - Demo skill");
   });
+
+  it("hides /sessions outside ordinary direct chats", () => {
+    const text = buildCommandsMessage(
+      {
+        commands: { config: false, debug: false },
+      } as unknown as OpenClawConfig,
+      undefined,
+      { chatType: "group", isGroup: true },
+    );
+    expect(text).not.toContain("/sessions -");
+  });
+
+  it("shows /sessions in ordinary direct chats", () => {
+    const text = buildCommandsMessage(
+      {
+        commands: { config: false, debug: false },
+      } as unknown as OpenClawConfig,
+      undefined,
+      { chatType: "direct", isGroup: false },
+    );
+    expect(text).toContain("/sessions -");
+  });
 });
 
 describe("buildHelpMessage", () => {

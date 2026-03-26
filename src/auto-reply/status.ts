@@ -15,10 +15,12 @@ import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  isThreadSessionKey,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -901,6 +903,10 @@ const COMMANDS_PER_PAGE = 8;
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  chatType?: string;
+  isGroup?: boolean;
+  threadId?: string;
+  sessionKey?: string;
 };
 
 export type CommandsMessageResult = {
@@ -1070,6 +1076,18 @@ function formatCommandList(items: CommandsListItem[]): string {
   return lines.join("\n");
 }
 
+function isOrdinaryDirectCommandsContext(options?: CommandsMessageOptions): boolean {
+  const chatType = normalizeChatType(options?.chatType);
+  const threadId = options?.threadId?.trim() ?? "";
+  if (threadId || isThreadSessionKey(options?.sessionKey)) {
+    return false;
+  }
+  if (options?.isGroup) {
+    return false;
+  }
+  return !chatType || chatType === "direct";
+}
+
 export function buildCommandsMessage(
   cfg?: OpenClawConfig,
   skillCommands?: SkillCommandSpec[],
@@ -1088,9 +1106,14 @@ export function buildCommandsMessagePaginated(
   const surface = options?.surface?.toLowerCase();
   const isTelegram = surface === "telegram";
 
-  const commands = cfg
-    ? listChatCommandsForConfig(cfg, { skillCommands })
-    : listChatCommands({ skillCommands });
+  const commands = (
+    cfg ? listChatCommandsForConfig(cfg, { skillCommands }) : listChatCommands({ skillCommands })
+  ).filter((command) => {
+    if (command.key !== "sessions") {
+      return true;
+    }
+    return isOrdinaryDirectCommandsContext(options);
+  });
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 

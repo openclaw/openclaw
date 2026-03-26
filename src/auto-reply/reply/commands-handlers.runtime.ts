@@ -28,6 +28,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleSessionsListCommand } from "./commands-sessions.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -41,6 +42,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleSendPolicyCommand,
     handleFastCommand,
     handleUsageCommand,
+    handleSessionsListCommand,
     handleSessionCommand,
     handleRestartCommand,
     handleTtsCommands,
