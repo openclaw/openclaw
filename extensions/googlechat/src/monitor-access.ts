@@ -78,16 +78,29 @@ function resolveGroupConfig(params: {
   const entries = groups ?? {};
   const keys = Object.keys(entries);
   if (keys.length === 0) {
-    return { entry: undefined, allowlistConfigured: false };
+    return { entry: undefined, allowlistConfigured: false, deprecatedNameMatch: false };
   }
-  const normalizedName = groupName?.trim().toLowerCase();
-  const candidates = [groupId, groupName ?? "", normalizedName ?? ""].filter(Boolean);
-  let entry = candidates.map((candidate) => entries[candidate]).find(Boolean);
-  if (!entry && normalizedName) {
-    entry = entries[normalizedName];
-  }
+  const entry = entries[groupId];
+  const normalizedGroupName = groupName?.trim().toLowerCase() ?? "";
+  const deprecatedNameMatch =
+    !entry &&
+    Boolean(
+      groupName &&
+      keys.some((key) => {
+        const trimmed = key.trim();
+        if (!trimmed || trimmed === "*" || /^spaces\//i.test(trimmed)) {
+          return false;
+        }
+        return trimmed === groupName || trimmed.toLowerCase() === normalizedGroupName;
+      }),
+    );
   const fallback = entries["*"];
-  return { entry: entry ?? fallback, allowlistConfigured: true, fallback };
+  return {
+    entry: deprecatedNameMatch ? undefined : (entry ?? fallback),
+    allowlistConfigured: true,
+    fallback,
+    deprecatedNameMatch,
+  };
 }
 
 function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: string | null) {
@@ -108,6 +121,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
 }
 
 const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
+const warnedMutableGroupKeys = new Set<string>();
 
 function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, entries: string[]) {
   const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
@@ -124,6 +138,29 @@ function warnDeprecatedUsersEmailEntries(logVerbose: (message: string) => void, 
   warnedDeprecatedUsersEmailAllowFrom.add(key);
   logVerbose(
     `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
+  );
+}
+
+function warnMutableGroupKeysConfigured(
+  logVerbose: (message: string) => void,
+  groups?: Record<string, GoogleChatGroupEntry>,
+) {
+  const mutableKeys = Object.keys(groups ?? {})
+    .map((key) => key.trim())
+    .filter((key) => key && key !== "*" && !/^spaces\//i.test(key));
+  if (mutableKeys.length === 0) {
+    return;
+  }
+  const warningKey = mutableKeys
+    .map((key) => key.toLowerCase())
+    .sort()
+    .join(",");
+  if (warnedMutableGroupKeys.has(warningKey)) {
+    return;
+  }
+  warnedMutableGroupKeys.add(warningKey);
+  logVerbose(
+    `Deprecated Google Chat group key detected: group routing now requires stable space ids (spaces/<spaceId>). Update channels.googlechat.groups keys: ${mutableKeys.join(", ")}`,
   );
 }
 
@@ -185,6 +222,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
     log: logVerbose,
   });
+  warnMutableGroupKeysConfigured(logVerbose, account.config.groups ?? undefined);
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
@@ -195,6 +233,10 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   let effectiveWasMentioned: boolean | undefined;
 
   if (isGroup) {
+    if (groupConfigResolved.deprecatedNameMatch) {
+      logVerbose(`drop group message (deprecated mutable group key matched, space=${spaceId})`);
+      return { ok: false };
+    }
     const groupAllowlistConfigured = groupConfigResolved.allowlistConfigured;
     const routeAccess = evaluateGroupRouteAccessForPolicy({
       groupPolicy,
