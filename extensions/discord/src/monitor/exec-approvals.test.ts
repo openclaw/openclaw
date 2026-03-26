@@ -4,12 +4,20 @@ import path from "node:path";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
+import {
+  clearSessionStoreCacheForTest,
+  resolveSessionStoreStatePath,
+} from "../../../../src/config/sessions.js";
 import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
-const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
+const STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-test-"));
+const STORE_PATH = path.join(STORE_DIR, "sessions.json");
 
 const writeStore = (store: Record<string, unknown>) => {
+  fs.rmSync(path.dirname(resolveSessionStoreStatePath(STORE_PATH)), {
+    recursive: true,
+    force: true,
+  });
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   // CI runners can have coarse mtime resolution; avoid returning stale cached stores.
   clearSessionStoreCacheForTest();

@@ -40,7 +40,8 @@ Use this skill when the user asks about prior chats, parent conversations, or hi
 
 Session logs live at: `~/.openclaw/agents/<agentId>/sessions/` (use the `agent=<id>` value from the system prompt Runtime line).
 
-- **`sessions.json`** - Index mapping session keys to session IDs
+- **`sessions.json`** - Legacy session metadata/index store before migration
+- **`sessions.d/`** - Migrated session metadata/index store after migration
 - **`<session-id>.jsonl`** - Full conversation transcript per session
 
 ## Structure
@@ -129,7 +130,9 @@ rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl
 
 - Sessions are append-only JSONL (one JSON object per line)
 - Large sessions can be several MB - use `head`/`tail` for sampling
-- The `sessions.json` index maps chat providers (discord, whatsapp, etc.) to session IDs
+- Session metadata may be stored in legacy `sessions.json` or migrated `sessions.d/`
+- After migration, the old monolithic store may be preserved as `sessions.json.bak.<timestamp>`
+- The session metadata store maps chat providers (discord, whatsapp, etc.) to session IDs
 - Deleted sessions have `.deleted.<timestamp>` suffix
 
 ## Fast text-only hint (low noise)

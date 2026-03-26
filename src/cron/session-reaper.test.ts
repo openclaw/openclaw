@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
@@ -102,7 +103,7 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(true);
     expect(result.pruned).toBe(1);
 
-    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    const updated = loadSessionStore(storePath, { skipCache: true });
     expect(updated["agent:main:cron:job1"]).toBeDefined();
     expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined();
     expect(updated["agent:main:cron:job1:run:recent-run"]).toBeDefined();

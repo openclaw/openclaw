@@ -2,13 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findCommandByNativeName,
   resolveCommandArgChoices,
 } from "../../../../src/auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store.js";
+import {
+  clearSessionStoreCacheForTest,
+  resolveSessionStoreStatePath,
+} from "../../../../src/config/sessions.js";
 import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/extensions/configured-binding-runtime.js";
 import { resolveDiscordNativeChoiceContext } from "./native-command-ui.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -47,10 +50,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   );
 });
 
-const STORE_PATH = path.join(
-  os.tmpdir(),
-  `openclaw-discord-think-autocomplete-${process.pid}.json`,
-);
+const STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-discord-think-autocomplete-"));
+const STORE_PATH = path.join(STORE_DIR, "sessions.json");
 const SESSION_KEY = "agent:main:main";
 
 describe("discord native /think autocomplete", () => {
@@ -60,6 +61,10 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(null);
+    fs.rmSync(path.dirname(resolveSessionStoreStatePath(STORE_PATH)), {
+      recursive: true,
+      force: true,
+    });
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
@@ -79,6 +84,10 @@ describe("discord native /think autocomplete", () => {
     try {
       fs.unlinkSync(STORE_PATH);
     } catch {}
+  });
+
+  afterAll(() => {
+    fs.rmSync(STORE_DIR, { recursive: true, force: true });
   });
 
   function createConfig() {

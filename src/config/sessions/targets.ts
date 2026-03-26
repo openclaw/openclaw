@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
+import { isDirectorySessionStoreActive, resolveSessionStoreStatePath } from "./store-directory.js";
 
 export type SessionStoreSelectionOptions = {
   store?: string;
@@ -66,11 +67,40 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   try {
     const stat = fsSync.lstatSync(storePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      return undefined;
+      return resolveValidatedDirectoryStorePathSync({
+        storePath,
+        agentsRoot: params.agentsRoot,
+        realAgentsRoot: params.realAgentsRoot,
+      });
     }
     const realStorePath = fsSync.realpathSync.native(storePath);
     const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
+  } catch (err) {
+    if (shouldSkipDiscoveryError(err)) {
+      return resolveValidatedDirectoryStorePathSync({
+        storePath,
+        agentsRoot: params.agentsRoot,
+        realAgentsRoot: params.realAgentsRoot,
+      });
+    }
+    throw err;
+  }
+}
+
+function resolveValidatedDirectoryStorePathSync(params: {
+  storePath: string;
+  agentsRoot: string;
+  realAgentsRoot?: string;
+}): string | undefined {
+  try {
+    if (!isDirectorySessionStoreActive(params.storePath)) {
+      return undefined;
+    }
+    const statePath = resolveSessionStoreStatePath(params.storePath);
+    const realStatePath = fsSync.realpathSync.native(statePath);
+    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
+    return isWithinRoot(realStatePath, realAgentsRoot) ? path.resolve(params.storePath) : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
       return undefined;
@@ -88,11 +118,40 @@ async function resolveValidatedDiscoveredStorePath(params: {
   try {
     const stat = await fs.lstat(storePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      return undefined;
+      return await resolveValidatedDirectoryStorePath({
+        storePath,
+        agentsRoot: params.agentsRoot,
+        realAgentsRoot: params.realAgentsRoot,
+      });
     }
     const realStorePath = await fs.realpath(storePath);
     const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
+  } catch (err) {
+    if (shouldSkipDiscoveryError(err)) {
+      return await resolveValidatedDirectoryStorePath({
+        storePath,
+        agentsRoot: params.agentsRoot,
+        realAgentsRoot: params.realAgentsRoot,
+      });
+    }
+    throw err;
+  }
+}
+
+async function resolveValidatedDirectoryStorePath(params: {
+  storePath: string;
+  agentsRoot: string;
+  realAgentsRoot?: string;
+}): Promise<string | undefined> {
+  try {
+    if (!isDirectorySessionStoreActive(params.storePath)) {
+      return undefined;
+    }
+    const statePath = resolveSessionStoreStatePath(params.storePath);
+    const realStatePath = await fs.realpath(statePath);
+    const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
+    return isWithinRoot(realStatePath, realAgentsRoot) ? path.resolve(params.storePath) : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
       return undefined;

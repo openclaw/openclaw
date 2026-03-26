@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isDirectorySessionStoreActive, loadSessionStoreFromDirectory } from "./store-directory.js";
 import type { SessionEntry } from "./types.js";
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry | undefined> {
@@ -8,6 +9,9 @@ function isSessionStoreRecord(value: unknown): value is Record<string, SessionEn
 export function readSessionStoreReadOnly(
   storePath: string,
 ): Record<string, SessionEntry | undefined> {
+  if (isDirectorySessionStoreActive(storePath)) {
+    return loadSessionStoreFromDirectory({ storePath }).store;
+  }
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     if (!raw.trim()) {

@@ -20,8 +20,10 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { STATE_DIR } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -112,6 +114,7 @@ import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
+import { runStartupSessionStoreMigration } from "./server-session-store-migration.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -532,6 +535,15 @@ export async function startGatewayServer(
     env: process.env,
     log,
   });
+  if (!minimalTestGateway) {
+    await runStartupSessionStoreMigration({
+      stateDir: STATE_DIR,
+      configuredStorePath: cfgAtStart.session?.store
+        ? resolveStorePath(cfgAtStart.session.store)
+        : undefined,
+      log,
+    });
+  }
   const matrixInstallPathIssue = await detectPluginInstallPathIssue({
     pluginId: "matrix",
     install: cfgAtStart.plugins?.installs?.matrix,

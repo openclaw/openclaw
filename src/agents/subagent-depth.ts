@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  isDirectorySessionStoreActive,
+  loadSessionStoreFromDirectory,
+} from "../config/sessions/store-directory.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
@@ -36,6 +40,12 @@ function normalizeSessionKey(value: unknown): string | undefined {
 
 function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
   try {
+    if (isDirectorySessionStoreActive(storePath)) {
+      return loadSessionStoreFromDirectory({ storePath }).store as Record<
+        string,
+        SessionDepthEntry
+      >;
+    }
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = parseJsonWithJson5Fallback(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {

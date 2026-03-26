@@ -10,6 +10,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionKey,
+  resolveSessionStoreStatePath,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateLastRoute,
@@ -448,8 +449,7 @@ describe("sessions", () => {
     const store = loadSessionStore(storePath);
     expect(store["agent:main:main"]?.sessionId).toBe("sess-1");
 
-    const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw.trim().startsWith("{")).toBe(true);
+    expect(await fs.stat(resolveSessionStoreStatePath(storePath))).toBeDefined();
   });
 
   it("normalizes last route fields on write", async () => {

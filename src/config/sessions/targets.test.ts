@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
+import { migrateSessionStoreToDirectory } from "./store.js";
 import {
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
@@ -262,6 +263,21 @@ describe("resolveAllAgentSessionStoreTargets", () => {
           agentId: "ops",
           storePath: expect.stringContaining(path.join("ops", "sessions", "sessions.json")),
         });
+      });
+    });
+
+    it(`keeps migrated directory-backed stores discoverable after sessions.json promotion (${resolver.label})`, async () => {
+      await withTempHome(async (home) => {
+        const { storePaths } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
+
+        await migrateSessionStoreToDirectory(storePaths.ops);
+        await migrateSessionStoreToDirectory(storePaths.retired);
+
+        const targets = await resolver.resolve(
+          createCustomRootCfg(path.join(home, "custom-state")),
+          process.env,
+        );
+        expectTargetsToContainStores(targets, storePaths);
       });
     });
   }
