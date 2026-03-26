@@ -35,7 +35,14 @@ describe("cli program (nodes basics)", () => {
 
   async function runProgram(argv: string[]) {
     runtime.log.mockClear();
+    runtime.writeJson.mockClear();
     await program.parseAsync(argv, { from: "user" });
+  }
+
+  async function expectRunProgramFailure(argv: string[], expectedError: RegExp) {
+    runtime.error.mockClear();
+    await expect(program.parseAsync(argv, { from: "user" })).rejects.toThrow(/exit/i);
+    expect(runtime.error.mock.calls.some(([msg]) => expectedError.test(String(msg)))).toBe(true);
   }
 
   function getRuntimeOutput() {
@@ -98,6 +105,209 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
+  });
+
+  it("runs nodes list and includes paired nodes from node.list when node.pair.list is empty", async () => {
+    const now = Date.now();
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          ts: now,
+          nodes: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              paired: true,
+              connected: true,
+              connectedAtMs: now - 1_000,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.list" }));
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 1");
+    expect(output).toContain("One");
+  });
+
+  it("runs nodes list and falls back to node.pair.list when node.list is unavailable", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: Date.now() - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("unknown method");
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "node.pair.list" }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ method: "node.list" }),
+    );
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 1");
+    expect(output).toContain("One");
+  });
+
+  it("runs nodes list and falls back to node.pair.list on invalid request", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: Date.now() - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("invalid request");
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 1");
+    expect(output).toContain("One");
+  });
+
+  it("runs nodes list and falls back to node.pair.list on missing read scope", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: Date.now() - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("missing scope: operator.read");
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain("Pending: 0 · Paired: 1");
+    expect(output).toContain("One");
+  });
+
+  it("fails clearly for nodes list --connected when node.list is unavailable", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              lastConnectedAtMs: Date.now() - 1_000,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("unknown method");
+      }
+      return { ok: true };
+    });
+
+    await expectRunProgramFailure(
+      ["nodes", "list", "--connected"],
+      /node\.list is unavailable .* require live node data/i,
+    );
+  });
+
+  it("preserves legacy paired metadata in nodes list --json fallback output", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [
+            {
+              nodeId: "n1",
+              token: "tok-1",
+              displayName: "One",
+              remoteIp: "10.0.0.1",
+              approvedAtMs: 123,
+              createdAtMs: 122,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.list") {
+        throw new Error("unknown method");
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list", "--json"]);
+
+    const payload = runtime.writeJson.mock.calls.at(-1)?.[0] as
+      | {
+          paired: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    expect(payload).toBeDefined();
+    const jsonPayload = payload as {
+      paired: Array<Record<string, unknown>>;
+    };
+    expect(jsonPayload.paired).toHaveLength(1);
+    expect(jsonPayload.paired[0]?.token).toBe("tok-1");
+    expect(jsonPayload.paired[0]?.approvedAtMs).toBe(123);
+    expect(jsonPayload.paired[0]?.createdAtMs).toBe(122);
   });
 
   it("runs nodes status --last-connected and filters by age", async () => {

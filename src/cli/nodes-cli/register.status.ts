@@ -8,7 +8,7 @@ import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
+import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -94,6 +94,110 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.error(`${label}: ${message}`);
     defaultRuntime.exit(1);
     return undefined;
+  }
+}
+
+function messageFromError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  if (typeof error === "object" && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function shouldFallbackToPairList(error: unknown): boolean {
+  const message = messageFromError(error).toLowerCase();
+  return (
+    message.includes("unknown method") ||
+    message.includes("method not found") ||
+    message.includes("invalid request") ||
+    message.includes("missing scope: operator.read") ||
+    message.includes("not implemented") ||
+    message.includes("unsupported")
+  );
+}
+
+type NodesListEntry = NodeListNode & PairedNode;
+
+function mergePairedNodeSources(params: {
+  liveNodes: NodeListNode[] | null;
+  pairedNodes: PairedNode[];
+}): NodesListEntry[] {
+  const merged = new Map<string, NodesListEntry>();
+
+  for (const paired of params.pairedNodes) {
+    merged.set(paired.nodeId, {
+      ...paired,
+      paired: true,
+      connected: false,
+    });
+  }
+
+  for (const live of params.liveNodes ?? []) {
+    const previous = merged.get(live.nodeId);
+    if (!live.paired && !previous?.paired) {
+      continue;
+    }
+    merged.set(live.nodeId, {
+      ...previous,
+      ...live,
+      displayName: live.displayName ?? previous?.displayName,
+      platform: live.platform ?? previous?.platform,
+      version: live.version ?? previous?.version,
+      coreVersion: live.coreVersion ?? previous?.coreVersion,
+      uiVersion: live.uiVersion ?? previous?.uiVersion,
+      remoteIp: live.remoteIp ?? previous?.remoteIp,
+      permissions: live.permissions ?? previous?.permissions,
+      paired: true,
+      connected: live.connected ?? previous?.connected,
+      connectedAtMs: live.connectedAtMs ?? previous?.connectedAtMs,
+      lastConnectedAtMs: previous?.lastConnectedAtMs,
+    });
+  }
+
+  return [...merged.values()];
+}
+
+async function loadPairedNodesForList(opts: NodesRpcOpts): Promise<{
+  pending: ReturnType<typeof parsePairingList>["pending"];
+  paired: NodesListEntry[];
+  usedFallback: boolean;
+}> {
+  const pairingResult = await callGatewayCli("node.pair.list", opts, {});
+  const { pending, paired } = parsePairingList(pairingResult);
+  try {
+    const liveNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+    return {
+      pending,
+      paired: mergePairedNodeSources({ liveNodes, pairedNodes: paired }),
+      usedFallback: false,
+    };
+  } catch (error) {
+    if (!shouldFallbackToPairList(error)) {
+      throw error;
+    }
+    return {
+      pending,
+      paired: mergePairedNodeSources({ liveNodes: null, pairedNodes: paired }),
+      usedFallback: true,
+    };
   }
 }
 
@@ -304,35 +408,29 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.pair.list", opts, {});
-          const { pending, paired } = parsePairingList(result);
+          const { pending, paired, usedFallback } = await loadPairedNodesForList(opts);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
+          if (usedFallback && hasFilters) {
+            throw new Error(
+              "node.list is unavailable on this gateway; --connected and --last-connected require live node data",
+            );
+          }
           const pendingRows = hasFilters ? [] : pending;
-          const connectedById = hasFilters
-            ? new Map(
-                parseNodeList(await callGatewayCli("node.list", opts, {})).map((node) => [
-                  node.nodeId,
-                  node,
-                ]),
-              )
-            : null;
           const filteredPaired = paired.filter((node) => {
             if (connectedOnly) {
-              const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) {
+              if (!node.connected) {
                 return false;
               }
             }
             if (sinceMs !== undefined) {
-              const live = connectedById?.get(node.nodeId);
               const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
+                typeof node.connectedAtMs === "number"
+                  ? node.connectedAtMs
+                  : typeof node.lastConnectedAtMs === "number"
+                    ? node.lastConnectedAtMs
                     : undefined;
               if (typeof lastConnectedAtMs !== "number") {
                 return false;
@@ -368,12 +466,11 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           if (filteredPaired.length > 0) {
             const pairedRows = filteredPaired.map((n) => {
-              const live = connectedById?.get(n.nodeId);
               const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof live?.connectedAtMs === "number"
-                    ? live.connectedAtMs
+                typeof n.connectedAtMs === "number"
+                  ? n.connectedAtMs
+                  : typeof n.lastConnectedAtMs === "number"
+                    ? n.lastConnectedAtMs
                     : undefined;
               return {
                 Node: n.displayName?.trim() ? n.displayName.trim() : n.nodeId,

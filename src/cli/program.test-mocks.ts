@@ -21,6 +21,7 @@ const programMocks = vi.hoisted(() => {
     ensurePluginRegistryLoaded: vi.fn(),
     runtime: {
       log: vi.fn(),
+      writeJson: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(() => {
         throw new Error("exit");
@@ -47,6 +48,7 @@ export const ensurePluginRegistryLoaded = programMocks.ensurePluginRegistryLoade
 
 export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;
+  writeJson: Mock<(...args: unknown[]) => void>;
   error: Mock<(...args: unknown[]) => void>;
   exit: Mock<(...args: unknown[]) => never>;
 };
