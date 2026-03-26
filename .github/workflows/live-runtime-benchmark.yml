@@ -6,13 +6,17 @@ on:
     paths:
       - ".github/workflows/live-runtime-benchmark.yml"
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
+      checkout_repository:
+        description: "Repository containing the benchmark implementation"
+        required: false
+        default: "THESPRYGUY/openclaw-CyborgClaw"
       checkout_ref:
         description: "Git ref to check out for the benchmark implementation"
         required: false
-        default: "m20-trust-the-refusal-closeout"
+        default: "ae3dbc882f5e5a602bbd7ebd13a296ef60d34b87"
       pack:
         description: "Pack reference to prove during the live benchmark run"
         required: false
@@ -48,13 +52,16 @@ permissions:
 
 jobs:
   live-runtime-benchmark:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.OPENCLAW_LIVE_BENCHMARK_ENABLED != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || vars.OPENCLAW_LIVE_BENCHMARK_CHECKOUT_REF || 'm20-trust-the-refusal-closeout' }}
+      # Temporary bridge until the benchmark implementation lands on upstream main.
+      CHECKOUT_REPOSITORY: ${{ github.event.inputs.checkout_repository || vars.OPENCLAW_LIVE_BENCHMARK_CHECKOUT_REPOSITORY || 'THESPRYGUY/openclaw-CyborgClaw' }}
+      CHECKOUT_REF: ${{ github.event.inputs.checkout_ref || vars.OPENCLAW_LIVE_BENCHMARK_CHECKOUT_REF || 'ae3dbc882f5e5a602bbd7ebd13a296ef60d34b87' }}
       LIVE_BENCHMARK_PACK_REF: ${{ github.event.inputs.pack || 'examples/voltaris-v2-pack' }}
       LIVE_BENCHMARK_PROFILE: ${{ github.event.inputs.profile || 'voltaris-proof' }}
-      OPENCLAW_LIVE_BENCHMARK_ENABLED: ${{ vars.OPENCLAW_LIVE_BENCHMARK_ENABLED || 'true' }}
+      OPENCLAW_LIVE_BENCHMARK_ENABLED: ${{ github.event_name == 'workflow_dispatch' && 'true' || vars.OPENCLAW_LIVE_BENCHMARK_ENABLED || 'true' }}
       OPENCLAW_LIVE_BENCHMARK_MODEL: ${{ github.event.inputs.model || vars.OPENCLAW_LIVE_BENCHMARK_MODEL || 'openai-codex/gpt-5.3-codex' }}
       OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON: ${{ secrets.OPENCLAW_LIVE_BENCHMARK_AUTH_PROFILES_JSON }}
       OPENCLAW_LIVE_BENCHMARK_REPEAT_RUNS: ${{ github.event.inputs.repeat_runs || vars.OPENCLAW_LIVE_BENCHMARK_REPEAT_RUNS || '2' }}
@@ -66,6 +73,7 @@ jobs:
       - name: Checkout benchmark ref
         uses: actions/checkout@v4
         with:
+          repository: ${{ env.CHECKOUT_REPOSITORY }}
           ref: ${{ env.CHECKOUT_REF }}
           submodules: false
 
@@ -133,6 +141,7 @@ jobs:
           lines: list[str] = [
             "## Live runtime benchmark",
             "",
+            f"- Checkout repo: `{os.environ.get('CHECKOUT_REPOSITORY', 'unknown')}`",
             f"- Checkout ref: `{os.environ.get('CHECKOUT_REF', 'unknown')}`",
           ]
 
