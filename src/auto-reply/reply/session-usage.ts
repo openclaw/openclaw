@@ -7,7 +7,10 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  type SessionFailureReport,
+  type SessionRetryReport,
   type SessionSystemPromptReport,
+  type SessionVerifyReport,
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
@@ -73,6 +76,9 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensUsed?: number;
   promptTokens?: number;
   systemPromptReport?: SessionSystemPromptReport;
+  verifyReport?: SessionVerifyReport;
+  failureReport?: SessionFailureReport;
+  retryReport?: SessionRetryReport;
   cliSessionId?: string;
   logLabel?: string;
 }): Promise<void> {
@@ -89,6 +95,9 @@ export async function persistSessionUsageUpdate(params: {
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
   const hasFreshContextSnapshot = Boolean(params.lastCallUsage) || hasPromptTokens;
+  const hasReportUpdate = Boolean(
+    params.systemPromptReport || params.verifyReport || params.failureReport || params.retryReport,
+  );
 
   if (hasUsage || hasFreshContextSnapshot) {
     try {
@@ -121,6 +130,9 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            verifyReport: params.verifyReport ?? entry.verifyReport,
+            failureReport: params.failureReport ?? entry.failureReport,
+            retryReport: params.retryReport ?? entry.retryReport,
             updatedAt: Date.now(),
           };
           if (hasUsage) {
@@ -150,7 +162,7 @@ export async function persistSessionUsageUpdate(params: {
     return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
+  if (params.modelUsed || params.contextTokensUsed || hasReportUpdate) {
     try {
       await updateSessionStoreEntry({
         storePath,
@@ -161,6 +173,9 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            verifyReport: params.verifyReport ?? entry.verifyReport,
+            failureReport: params.failureReport ?? entry.failureReport,
+            retryReport: params.retryReport ?? entry.retryReport,
             updatedAt: Date.now(),
           };
           return applyCliSessionIdToSessionPatch(params, entry, patch);

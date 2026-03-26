@@ -1,9 +1,11 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
+import { buildDelegationProfile } from "./delegation-profile.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
-
+import { resolveTaskProfile } from "./task-profile.js";
+import { discoverWorkspacePolicyFiles, type WorkspaceBootstrapFile } from "./workspace.js";
 function extractBetween(
   input: string,
   startMarker: string,
@@ -19,7 +21,6 @@ function extractBetween(
   }
   return { text: input.slice(start, end), found: true };
 }
-
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
@@ -77,6 +78,28 @@ function extractToolListText(systemPrompt: string): string {
   return extracted.text.replace(markerA, "").trim();
 }
 
+function buildPromptBudget(params: {
+  systemPromptChars: number;
+  workspaceInjectedChars: number;
+  skillsPromptChars: number;
+  toolListChars: number;
+  toolSchemaChars: number;
+}): SessionSystemPromptReport["promptBudget"] {
+  const workspaceInjectedChars = Math.max(0, params.workspaceInjectedChars);
+  const skillsPromptChars = Math.max(0, params.skillsPromptChars);
+  const toolListChars = Math.max(0, params.toolListChars);
+  const toolSchemaChars = Math.max(0, params.toolSchemaChars);
+  const trackedInsideSystemPrompt = workspaceInjectedChars + skillsPromptChars + toolListChars;
+  return {
+    totalTrackedChars: Math.max(0, params.systemPromptChars) + toolSchemaChars,
+    workspaceInjectedChars,
+    skillsPromptChars,
+    toolListChars,
+    otherSystemPromptChars: Math.max(0, params.systemPromptChars - trackedInsideSystemPrompt),
+    toolSchemaChars,
+  };
+}
+
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -85,6 +108,8 @@ export function buildSystemPromptReport(params: {
   provider?: string;
   model?: string;
   workspaceDir?: string;
+  spawnedBy?: string | null;
+  config?: OpenClawConfig;
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars?: number;
   bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
@@ -94,6 +119,9 @@ export function buildSystemPromptReport(params: {
   injectedFiles: EmbeddedContextFile[];
   skillsPrompt: string;
   tools: AgentTool[];
+  taskProfile?: SessionSystemPromptReport["taskProfile"];
+  toolPruning?: SessionSystemPromptReport["toolPruning"];
+  skillPruning?: SessionSystemPromptReport["skillPruning"];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
   const projectContext = extractBetween(
@@ -107,6 +135,34 @@ export function buildSystemPromptReport(params: {
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({
+    bootstrapFiles: params.bootstrapFiles,
+    injectedFiles: params.injectedFiles,
+  });
+  const discoveredWorkspacePolicyFiles = discoverWorkspacePolicyFiles({
+    dir: params.workspaceDir,
+    bootstrapFiles: params.bootstrapFiles,
+  });
+  const injectedWorkspacePolicyFiles = discoveredWorkspacePolicyFiles.filter(
+    (file) => file.autoInjected,
+  );
+  const conflictCount =
+    new Set(
+      injectedWorkspacePolicyFiles
+        .filter((file) => file.conflictSummary)
+        .map((file) => `${file.policyRole}:${file.name}`),
+    ).size > 0
+      ? new Set(
+          injectedWorkspacePolicyFiles
+            .filter((file) => file.conflictSummary)
+            .map((file) => file.policyRole),
+        ).size
+      : 0;
+  const workspaceInjectedChars = injectedWorkspaceFiles.reduce(
+    (sum, file) => sum + Math.max(0, file.injectedChars),
+    0,
+  );
+  const slicedFiles = injectedWorkspaceFiles.filter((file) => file.sliced);
 
   return {
     source: params.source,
@@ -120,15 +176,56 @@ export function buildSystemPromptReport(params: {
     bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
     ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),
     sandbox: params.sandbox,
+    taskProfile:
+      params.taskProfile ??
+      resolveTaskProfile({
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        tools: params.tools,
+      }),
+    workspacePolicyDiscovery: {
+      totalDiscovered: discoveredWorkspacePolicyFiles.length,
+      injectedCount: discoveredWorkspacePolicyFiles.filter((file) => file.autoInjected).length,
+      candidateCount: discoveredWorkspacePolicyFiles.filter((file) => !file.autoInjected).length,
+      mergeOrder: injectedWorkspacePolicyFiles.map((file) => file.name),
+      conflictCount,
+      entries: discoveredWorkspacePolicyFiles,
+    },
+    policySlicing: {
+      totalSlicedChars: slicedFiles.reduce(
+        (sum, file) => sum + Math.max(0, file.slicedChars ?? 0),
+        0,
+      ),
+      slicedFileCount: slicedFiles.length,
+      entries: slicedFiles.map((file) => ({
+        name: file.name,
+        path: file.path,
+        slicedChars: Math.max(0, file.slicedChars ?? 0),
+        reasons: file.sliceReasons ?? [],
+      })),
+    },
+    ...(params.toolPruning ? { toolPruning: params.toolPruning } : {}),
+    ...(params.skillPruning ? { skillPruning: params.skillPruning } : {}),
+    delegationProfile: buildDelegationProfile({
+      sessionKey: params.sessionKey,
+      spawnedBy: params.spawnedBy,
+      workspaceDir: params.workspaceDir,
+      tools: params.tools,
+      config: params.config,
+    }),
     systemPrompt: {
       chars: systemPrompt.length,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
+    promptBudget: buildPromptBudget({
+      systemPromptChars: systemPrompt.length,
+      workspaceInjectedChars,
+      skillsPromptChars: params.skillsPrompt.length,
+      toolListChars,
+      toolSchemaChars: toolsSchemaChars,
     }),
+    injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
       entries: skillsEntries,

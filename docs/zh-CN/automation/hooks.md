@@ -612,7 +612,7 @@ openclaw hooks enable session-memory
 
 ### bootstrap-extra-files
 
-在 `agent:bootstrap` 期间注入额外的引导文件（例如 monorepo 本地的 `AGENTS.md` / `TOOLS.md`）。
+在 `agent:bootstrap` 期间注入额外的引导文件（例如 monorepo 本地的 `AGENTS.md` / `OPENCLAW.md` / `CLAUDE.md` / `TOOLS.md`）。
 
 **事件**：`agent:bootstrap`
 
@@ -642,8 +642,8 @@ openclaw hooks enable session-memory
 
 - 路径相对于工作区解析。
 - 文件必须保持在工作区内部（通过 realpath 检查）。
-- 仅加载已识别的引导基础文件名。
-- 会保留子智能体允许列表（仅 `AGENTS.md` 和 `TOOLS.md`）。
+- 仅加载已识别的引导基础文件名（`AGENTS.md`、`OPENCLAW.md`、`CLAUDE.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`、`MEMORY.md`、`memory.md`）。
+- 子智能体/cron 会话会保留更窄的允许列表（`AGENTS.md`、`OPENCLAW.md`、`CLAUDE.md`、`TOOLS.md`、`SOUL.md`、`IDENTITY.md`、`USER.md`）。
 
 **启用**：
 

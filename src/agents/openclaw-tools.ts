@@ -229,6 +229,8 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
+      buildRunId: options?.buildRunId ?? null,
+      buildRunDir: options?.buildRunDir ?? null,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

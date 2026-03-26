@@ -76,6 +76,8 @@ export type AgentCommandOpts = {
   groupChannel?: SpawnedRunMetadata["groupChannel"];
   groupSpace?: SpawnedRunMetadata["groupSpace"];
   spawnedBy?: SpawnedRunMetadata["spawnedBy"];
+  buildRunId?: SpawnedRunMetadata["buildRunId"];
+  buildRunDir?: SpawnedRunMetadata["buildRunDir"];
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;

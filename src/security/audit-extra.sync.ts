@@ -617,6 +617,8 @@ export function collectHooksHardeningFindings(
       severity: "warn",
       title: "Hooks token looks short",
       detail: `hooks.token is ${token.length} chars; prefer a long random token.`,
+      remediation:
+        "Generate a longer random hooks.token (recommended 24+ chars) before exposing hook ingress outside a trusted local boundary.",
     });
   }
 

@@ -333,6 +333,9 @@ export async function runReplyAgent(params: {
       cacheWrite: undefined,
       contextTokens: undefined,
       systemPromptReport: undefined,
+      verifyReport: undefined,
+      failureReport: undefined,
+      retryReport: undefined,
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
@@ -533,6 +536,9 @@ export async function runReplyAgent(params: {
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
+      verifyReport: runResult.meta?.verifyReport,
+      failureReport: runResult.meta?.failureReport,
+      retryReport: runResult.meta?.retryReport,
       cliSessionId,
     });
 

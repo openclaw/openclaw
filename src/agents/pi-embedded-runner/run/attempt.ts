@@ -93,13 +93,16 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { resolveStoredSubagentCapabilities } from "../../subagent-capabilities.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { resolveTaskProfile } from "../../task-profile.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
+import { buildVerifyReport } from "../../verify-report.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -1519,11 +1522,21 @@ export {
   resolveAttemptSpawnWorkspaceDir,
 } from "./attempt.thread-helpers.js";
 
-export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
+export function resolvePromptModeForSession(
+  sessionKey?: string,
+  cfg?: OpenClawConfig,
+): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
   }
-  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
+  if (isCronSessionKey(sessionKey)) {
+    return "minimal";
+  }
+  if (!isSubagentSessionKey(sessionKey)) {
+    return "full";
+  }
+  const capabilities = cfg ? resolveStoredSubagentCapabilities(sessionKey, { cfg }) : undefined;
+  return capabilities?.rolePreset === "builder" ? "full" : "minimal";
 }
 
 export function shouldInjectHeartbeatPrompt(params: {
@@ -1696,6 +1709,12 @@ export async function runEmbeddedAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const resolvedTaskProfile = resolveTaskProfile({
+    promptText: params.prompt,
+    sessionKey: params.sessionKey,
+    workspaceDir: effectiveWorkspace,
+    tools: [],
+  });
 
   let restoreSkillEnv: (() => void) | undefined;
   try {
@@ -1714,11 +1733,17 @@ export async function runEmbeddedAttempt(
           config: params.config,
         });
 
+    const dynamicSkillPruningReportRef: {
+      current?: NonNullable<ReturnType<typeof buildSystemPromptReport>["skillPruning"]>;
+    } = {};
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      taskProfile: resolvedTaskProfile.id,
+      promptText: params.prompt,
+      dynamicSkillPruningReportRef,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -1773,6 +1798,9 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    const dynamicToolPruningReportRef: {
+      current?: NonNullable<ReturnType<typeof buildSystemPromptReport>["toolPruning"]>;
+    } = {};
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
@@ -1792,6 +1820,8 @@ export async function runEmbeddedAttempt(
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
           spawnedBy: params.spawnedBy,
+          buildRunId: params.buildRunId,
+          buildRunDir: params.buildRunDir,
           senderId: params.senderId,
           senderName: params.senderName,
           senderUsername: params.senderUsername,
@@ -1825,6 +1855,8 @@ export async function runEmbeddedAttempt(
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
+          taskPrompt: params.prompt,
+          dynamicToolPruningReportRef,
           onYield: (message) => {
             yieldDetected = true;
             yieldMessage = message;
@@ -1969,7 +2001,7 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const promptMode = resolvePromptModeForSession(params.sessionKey, params.config);
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -2021,6 +2053,8 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
       model: params.modelId,
       workspaceDir: effectiveWorkspace,
+      spawnedBy: params.spawnedBy,
+      config: params.config,
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
       bootstrapTruncation: buildBootstrapTruncationReportMeta({
@@ -2040,6 +2074,9 @@ export async function runEmbeddedAttempt(
       injectedFiles: contextFiles,
       skillsPrompt,
       tools: effectiveTools,
+      taskProfile: resolvedTaskProfile,
+      toolPruning: dynamicToolPruningReportRef.current,
+      skillPruning: dynamicSkillPruningReportRef.current,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
@@ -2626,6 +2663,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
         getSuccessfulCronAdds,
+        getVerifyEntries,
         didSendViaMessagingTool,
         getLastToolError,
         getUsageTotals,
@@ -3204,6 +3242,10 @@ export async function runEmbeddedAttempt(
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
         successfulCronAdds: getSuccessfulCronAdds(),
+        verifyReport: buildVerifyReport({
+          generatedAt: Date.now(),
+          entries: getVerifyEntries(),
+        }),
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),

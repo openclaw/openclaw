@@ -1402,8 +1402,11 @@ export function registerSubagentRun(params: {
   task: string;
   cleanup: "delete" | "keep";
   label?: string;
+  rolePreset?: import("./subagent-capabilities.js").SubagentRolePreset;
   model?: string;
   workspaceDir?: string;
+  buildRunId?: string;
+  buildRunDir?: string;
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
@@ -1436,8 +1439,11 @@ export function registerSubagentRun(params: {
     expectsCompletionMessage: params.expectsCompletionMessage,
     spawnMode,
     label: params.label,
+    rolePreset: params.rolePreset,
     model: params.model,
     workspaceDir: params.workspaceDir,
+    buildRunId: params.buildRunId,
+    buildRunDir: params.buildRunDir,
     runTimeoutSeconds,
     createdAt: now,
     startedAt: now,

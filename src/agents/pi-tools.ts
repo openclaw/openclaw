@@ -1,5 +1,6 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -16,6 +17,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
+import { pruneToolsForPrompt } from "./dynamic-tool-pruning.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { hasNativeWebSearchTool } from "./model-compat.js";
@@ -46,6 +48,10 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import {
+  constrainTaskProfileToolPackToAvailableTools,
+  resolveTaskProfileToolPack,
+} from "./task-profile-tool-pack.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -255,6 +261,10 @@ export function createOpenClawCodingTools(options?: {
   groupSpace?: string | null;
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
+  /** Shared build-run id inherited across planner / builder / evaluator spawns. */
+  buildRunId?: string | null;
+  /** Stable artifact root inherited across planner / builder / evaluator spawns. */
+  buildRunDir?: string | null;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -275,6 +285,10 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Current task prompt, used to infer a default tool pack when no explicit profile is set. */
+  taskPrompt?: string;
+  /** Mutable sink for reporting dynamic tool pruning decisions back to runtime reporting. */
+  dynamicToolPruningReportRef?: { current?: SessionSystemPromptReport["toolPruning"] };
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -320,19 +334,50 @@ export function createOpenClawCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const defaultTaskProfileToolPack = resolveTaskProfileToolPack({
+    promptText: options?.taskPrompt,
+    sessionKey: options?.sessionKey,
+    workspaceDir: options?.workspaceDir,
+  });
+  const hasExplicitAllowlist =
+    Boolean(globalPolicy?.allow?.length) ||
+    Boolean(globalProviderPolicy?.allow?.length) ||
+    Boolean(agentPolicy?.allow?.length) ||
+    Boolean(agentProviderPolicy?.allow?.length) ||
+    Boolean(groupPolicy?.allow?.length);
+  const shouldApplyDefaultTaskProfileToolPack =
+    Boolean(options?.taskPrompt?.trim()) &&
+    !profile &&
+    !providerProfile &&
+    !hasExplicitAllowlist &&
+    Boolean(defaultTaskProfileToolPack.policy?.allow?.length);
+  const shouldApplyDynamicToolPruning =
+    Boolean(options?.taskPrompt?.trim()) && !profile && !providerProfile && !hasExplicitAllowlist;
 
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  const explicitToolAllowlist = collectExplicitAllowlist([
+    profilePolicyWithAlsoAllow,
+    providerProfilePolicyWithAlsoAllow,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    sandbox?.tools,
+  ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
     options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey)
+      ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey, {
+          explicitAllow: explicitToolAllowlist,
+        })
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -538,6 +583,8 @@ export function createOpenClawCodingTools(options?: {
       currentMessageId: options?.currentMessageId,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
+      buildRunId: options?.buildRunId ?? null,
+      buildRunDir: options?.buildRunDir ?? null,
       modelHasVision: options?.modelHasVision,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
@@ -581,11 +628,24 @@ export function createOpenClawCodingTools(options?: {
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const constrainedDefaultTaskProfileToolPack = constrainTaskProfileToolPackToAvailableTools(
+    defaultTaskProfileToolPack,
+    toolsByAuthorization.map((tool) => tool.name),
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: logWarn,
     steps: [
+      ...(shouldApplyDefaultTaskProfileToolPack
+        ? [
+            {
+              policy: constrainedDefaultTaskProfileToolPack.policy,
+              label: `task-profile-tool-pack (${defaultTaskProfileToolPack.taskProfile}:${defaultTaskProfileToolPack.toolProfile})`,
+              stripPluginOnlyAllowlist: true,
+            },
+          ]
+        : []),
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
@@ -604,10 +664,28 @@ export function createOpenClawCodingTools(options?: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
+  const dynamicToolPruned = shouldApplyDynamicToolPruning
+    ? pruneToolsForPrompt({
+        tools: subagentFiltered,
+        promptText: options?.taskPrompt,
+        taskProfile: constrainedDefaultTaskProfileToolPack.taskProfile,
+      })
+    : {
+        tools: subagentFiltered,
+        report: {
+          prunedCount: 0,
+          prunedSummaryChars: 0,
+          prunedSchemaChars: 0,
+          entries: [],
+        } satisfies NonNullable<SessionSystemPromptReport["toolPruning"]>,
+      };
+  if (options?.dynamicToolPruningReportRef) {
+    options.dynamicToolPruningReportRef.current = dynamicToolPruned.report;
+  }
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
-  const normalized = subagentFiltered.map((tool) =>
+  const normalized = dynamicToolPruned.tools.map((tool) =>
     normalizeToolParameters(tool, {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,

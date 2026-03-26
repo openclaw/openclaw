@@ -3,6 +3,9 @@ summary: "Agent workspace: location, layout, and backup strategy"
 read_when:
   - You need to explain the agent workspace or its file layout
   - You want to back up or migrate an agent workspace
+owner: "OpenClaw harness"
+freshness: "monthly"
+last_reviewed: "2026-03-25"
 title: "Agent Workspace"
 ---
 
@@ -70,6 +73,16 @@ These are the standard files OpenClaw expects inside the workspace:
   - Loaded at the start of every session.
   - Good place for rules, priorities, and "how to behave" details.
 
+- `OPENCLAW.md` (optional)
+  - Additional workspace-specific operating focus.
+  - Loaded when present in the workspace root.
+  - Useful for repo-local guidance you want injected without overloading `AGENTS.md`.
+
+- `CLAUDE.md` (optional)
+  - Additional compatibility-oriented workspace policy.
+  - Loaded when present in the workspace root or when discovered via bootstrap-extra-files.
+  - Useful when a repo already carries Claude/Codex-oriented rules you want OpenClaw to inherit.
+
 - `SOUL.md`
   - Persona, tone, and boundaries.
   - Loaded every session.
@@ -122,6 +135,11 @@ adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and
 `agents.defaults.bootstrapTotalMaxChars` (default: 150000).
 `openclaw setup` can recreate missing defaults without overwriting existing
 files.
+
+OpenClaw also records workspace policy discovery metadata in `/context`,
+including each policy file's source, merge tier, relative priority, and
+overlap/conflict hints. This makes it easier to see how `AGENTS.md`,
+`OPENCLAW.md`, and `CLAUDE.md` combine during a real run.
 
 ## What is NOT in the workspace
 

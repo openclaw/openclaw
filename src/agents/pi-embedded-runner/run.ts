@@ -36,6 +36,7 @@ import {
   resolveFailoverStatus,
 } from "../failover-error.js";
 import { shouldAllowCooldownProbeForReason } from "../failover-policy.js";
+import { buildFailureReport } from "../failure-report.js";
 import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
@@ -63,6 +64,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { buildRetryReport } from "../retry-report.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -781,6 +783,38 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
       let timeoutCompactionAttempts = 0;
+      const retryEntries: Array<{
+        attempt: number;
+        reason:
+          | "auth_refresh"
+          | "profile_rotation"
+          | "thinking_fallback"
+          | "overflow_retry"
+          | "overflow_compaction"
+          | "tool_result_truncation";
+        detail?: string;
+      }> = [];
+      const recordRetry = (
+        reason: (typeof retryEntries)[number]["reason"],
+        detail?: string,
+      ): void => {
+        retryEntries.push({
+          attempt: Math.max(1, runLoopIterations),
+          reason,
+          ...(detail ? { detail } : {}),
+        });
+      };
+      const buildCurrentRetryReport = (overrides?: {
+        exhausted?: boolean;
+        attemptsUsed?: number;
+      }) =>
+        buildRetryReport({
+          generatedAt: Date.now(),
+          maxAttempts: MAX_RUN_LOOP_ITERATIONS,
+          attemptsUsed: overrides?.attemptsUsed ?? runLoopIterations,
+          exhausted: overrides?.exhausted,
+          entries: retryEntries,
+        });
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -914,6 +948,14 @@ export async function runEmbeddedPiAgent(
                   lastRunPromptUsage,
                   lastTurnTotal,
                 }),
+                failureReport: buildFailureReport({
+                  generatedAt: Date.now(),
+                  runError: { kind: "retry_limit", message },
+                }),
+                retryReport: buildCurrentRetryReport({
+                  exhausted: true,
+                  attemptsUsed: runLoopIterations,
+                }),
                 error: { kind: "retry_limit", message },
               },
             };
@@ -941,6 +983,8 @@ export async function runEmbeddedPiAgent(
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
+            buildRunId: params.buildRunId,
+            buildRunDir: params.buildRunDir,
             senderId: params.senderId,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
@@ -1048,6 +1092,28 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const buildCurrentFailureReport = (overrides?: {
+            aborted?: boolean;
+            timedOut?: boolean;
+            runError?: {
+              kind:
+                | "context_overflow"
+                | "compaction_failure"
+                | "role_ordering"
+                | "image_size"
+                | "retry_limit";
+              message: string;
+            };
+          }) =>
+            buildFailureReport({
+              generatedAt: Date.now(),
+              aborted: overrides?.aborted ?? aborted,
+              timedOut: overrides?.timedOut ?? (timedOut && !timedOutDuringCompaction && !aborted),
+              runError: overrides?.runError,
+              verifyReport: attempt.verifyReport,
+              lastToolError: attempt.lastToolError,
+              lastAssistant,
+            });
 
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
@@ -1193,6 +1259,10 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              recordRetry(
+                "overflow_retry",
+                "context overflow persisted after in-attempt compaction",
+              );
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
@@ -1285,6 +1355,7 @@ export async function runEmbeddedPiAgent(
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                recordRetry("overflow_compaction", "auto-compaction succeeded");
                 continue;
               }
               log.warn(
@@ -1325,6 +1396,10 @@ export async function runEmbeddedPiAgent(
                 if (truncResult.truncated) {
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+                  );
+                  recordRetry(
+                    "tool_result_truncation",
+                    `truncated ${truncResult.truncatedCount} oversized tool result(s)`,
                   );
                   // Do NOT reset overflowCompactionAttempts here — the global cap must remain
                   // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
@@ -1375,6 +1450,11 @@ export async function runEmbeddedPiAgent(
                   lastTurnTotal,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
+                verifyReport: attempt.verifyReport,
+                failureReport: buildCurrentFailureReport({
+                  runError: { kind, message: errorText },
+                }),
+                retryReport: buildCurrentRetryReport(),
                 error: { kind, message: errorText },
               },
             };
@@ -1394,6 +1474,7 @@ export async function runEmbeddedPiAgent(
             const errorText = promptErrorDetails.message || describeUnknownError(promptError);
             if (await maybeRefreshRuntimeAuthForAuthError(errorText, runtimeAuthRetry)) {
               authRetryPending = true;
+              recordRetry("auth_refresh", "prompt auth error triggered runtime auth refresh");
               continue;
             }
             // Handle role ordering errors with a user-friendly message
@@ -1419,6 +1500,11 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  verifyReport: attempt.verifyReport,
+                  failureReport: buildCurrentFailureReport({
+                    runError: { kind: "role_ordering", message: errorText },
+                  }),
+                  retryReport: buildCurrentRetryReport(),
                   error: { kind: "role_ordering", message: errorText },
                 },
               };
@@ -1451,6 +1537,11 @@ export async function runEmbeddedPiAgent(
                     lastTurnTotal,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
+                  verifyReport: attempt.verifyReport,
+                  failureReport: buildCurrentFailureReport({
+                    runError: { kind: "image_size", message: errorText },
+                  }),
+                  retryReport: buildCurrentRetryReport(),
                   error: { kind: "image_size", message: errorText },
                 },
               };
@@ -1487,6 +1578,10 @@ export async function runEmbeddedPiAgent(
             ) {
               logPromptFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(promptFailoverReason);
+              recordRetry(
+                "profile_rotation",
+                `prompt-stage failover rotated auth profile (${promptFailoverReason ?? "unknown"})`,
+              );
               continue;
             }
             const fallbackThinking = pickFallbackThinkingLevel({
@@ -1498,6 +1593,7 @@ export async function runEmbeddedPiAgent(
                 `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
               );
               thinkLevel = fallbackThinking;
+              recordRetry("thinking_fallback", `prompt-stage fallback to ${fallbackThinking}`);
               continue;
             }
             // Throw FailoverError for prompt-side failover reasons when fallbacks
@@ -1533,6 +1629,7 @@ export async function runEmbeddedPiAgent(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            recordRetry("thinking_fallback", `assistant-stage fallback to ${fallbackThinking}`);
             continue;
           }
 
@@ -1569,6 +1666,7 @@ export async function runEmbeddedPiAgent(
             ))
           ) {
             authRetryPending = true;
+            recordRetry("auth_refresh", "assistant auth error triggered runtime auth refresh");
             continue;
           }
           if (imageDimensionError && lastProfileId) {
@@ -1620,6 +1718,10 @@ export async function runEmbeddedPiAgent(
             if (rotated) {
               logAssistantFailoverDecision("rotate_profile");
               await maybeBackoffBeforeOverloadFailover(assistantFailoverReason);
+              recordRetry(
+                "profile_rotation",
+                `assistant-stage failover rotated auth profile (${assistantFailoverReason ?? (timedOut ? "timeout" : "unknown")})`,
+              );
               continue;
             }
 
@@ -1715,6 +1817,9 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                verifyReport: attempt.verifyReport,
+                failureReport: buildCurrentFailureReport({ timedOut: true }),
+                retryReport: buildCurrentRetryReport(),
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1824,6 +1929,9 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              verifyReport: attempt.verifyReport,
+              failureReport: buildCurrentFailureReport(),
+              retryReport: buildCurrentRetryReport(),
               // Handle client tool calls (OpenResponses hosted tools)
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.

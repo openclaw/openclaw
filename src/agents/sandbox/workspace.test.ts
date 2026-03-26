@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_AGENTS_FILENAME } from "../workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_CLAUDE_FILENAME,
+  DEFAULT_OPENCLAW_FILENAME,
+} from "../workspace.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempRoots: string[] = [];
@@ -31,6 +35,34 @@ describe("ensureSandboxWorkspace", () => {
 
     await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).resolves.toBe(
       "seeded-agents",
+    );
+  });
+
+  it("seeds OPENCLAW.md from the source workspace", async () => {
+    const root = await makeTempRoot();
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    await fs.mkdir(seed, { recursive: true });
+    await fs.writeFile(path.join(seed, DEFAULT_OPENCLAW_FILENAME), "seeded-openclaw", "utf-8");
+
+    await ensureSandboxWorkspace(sandbox, seed, true);
+
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_OPENCLAW_FILENAME), "utf-8")).resolves.toBe(
+      "seeded-openclaw",
+    );
+  });
+
+  it("seeds CLAUDE.md from the source workspace", async () => {
+    const root = await makeTempRoot();
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    await fs.mkdir(seed, { recursive: true });
+    await fs.writeFile(path.join(seed, DEFAULT_CLAUDE_FILENAME), "seeded-claude", "utf-8");
+
+    await ensureSandboxWorkspace(sandbox, seed, true);
+
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_CLAUDE_FILENAME), "utf-8")).resolves.toBe(
+      "seeded-claude",
     );
   });
 

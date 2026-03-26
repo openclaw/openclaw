@@ -16,6 +16,9 @@ export type BootstrapInjectionStat = {
   rawChars: number;
   injectedChars: number;
   truncated: boolean;
+  sliced?: boolean;
+  slicedChars?: number;
+  sliceReasons?: string[];
 };
 
 export type BootstrapAnalyzedFile = BootstrapInjectionStat & {
@@ -125,20 +128,20 @@ export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): BootstrapInjectionStat[] {
-  const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
+  const injectedByPath = new Map<string, EmbeddedContextFile>();
+  const injectedByBaseName = new Map<string, EmbeddedContextFile>();
   for (const file of params.injectedFiles) {
     const pathValue = typeof file.path === "string" ? file.path.trim() : "";
     if (!pathValue) {
       continue;
     }
     if (!injectedByPath.has(pathValue)) {
-      injectedByPath.set(pathValue, file.content);
+      injectedByPath.set(pathValue, file);
     }
     const normalizedPath = pathValue.replace(/\\/g, "/");
     const baseName = path.posix.basename(normalizedPath);
     if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
+      injectedByBaseName.set(baseName, file);
     }
   }
   return params.bootstrapFiles.map((file) => {
@@ -148,8 +151,9 @@ export function buildBootstrapInjectionStats(params: {
       (pathValue ? injectedByPath.get(pathValue) : undefined) ??
       injectedByPath.get(file.name) ??
       injectedByBaseName.get(file.name);
-    const injectedChars = injected ? injected.length : 0;
-    const truncated = !file.missing && injectedChars < rawChars;
+    const injectedChars = injected ? injected.content.length : 0;
+    const sliced = injected?.policySlicing?.applied === true;
+    const truncated = !file.missing && !sliced && injectedChars < rawChars;
     return {
       name: file.name,
       path: pathValue || file.name,
@@ -157,6 +161,14 @@ export function buildBootstrapInjectionStats(params: {
       rawChars,
       injectedChars,
       truncated,
+      ...(sliced
+        ? {
+            sliced: true,
+            slicedChars:
+              injected?.policySlicing?.slicedChars ?? Math.max(0, rawChars - injectedChars),
+            sliceReasons: injected?.policySlicing?.reasons ?? [],
+          }
+        : {}),
     };
   });
 }

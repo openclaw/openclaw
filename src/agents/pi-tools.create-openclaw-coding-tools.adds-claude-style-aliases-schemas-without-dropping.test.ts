@@ -444,6 +444,54 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("exec")).toBe(false);
     expect(names.has("read")).toBe(false);
   });
+  it("applies a research-oriented default tool pack when the prompt is research-shaped", () => {
+    const tools = createOpenClawCodingTools({
+      taskPrompt: "Research the latest OpenClaw documentation and summarize the key changes",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("web_search")).toBe(true);
+    expect(names.has("web_fetch")).toBe(true);
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(false);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(false);
+  });
+  it("does not apply the default task-profile tool pack when an explicit allowlist is configured", () => {
+    const tools = createOpenClawCodingTools({
+      taskPrompt: "Research the latest OpenClaw documentation and summarize the key changes",
+      config: { tools: { allow: ["read", "exec"] } },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("web_search")).toBe(false);
+  });
+  it("prunes web, messaging, and mutation tools for read-only coding prompts", () => {
+    const tools = createOpenClawCodingTools({
+      taskPrompt: "Explain how src/version.ts works without changing any files.",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("write")).toBe(false);
+    expect(names.has("edit")).toBe(false);
+    expect(names.has("browser")).toBe(false);
+    expect(names.has("web_search")).toBe(false);
+    expect(names.has("web_fetch")).toBe(false);
+    expect(names.has("message")).toBe(false);
+    expect(names.has("sessions_send")).toBe(false);
+  });
+  it("does not apply dynamic tool pruning when an explicit allowlist is configured", () => {
+    const tools = createOpenClawCodingTools({
+      taskPrompt: "Explain how src/version.ts works without changing any files.",
+      config: { tools: { allow: ["read", "browser", "web_search"] } },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("web_search")).toBe(true);
+  });
   it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
     const googleTools = createOpenClawCodingTools({
       modelProvider: "google",

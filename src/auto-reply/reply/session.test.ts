@@ -1707,6 +1707,139 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
+  it("persists verifyReport when provided", async () => {
+    const storePath = await createStorePath("openclaw-usage-verify-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      verifyReport: {
+        status: "passed",
+        strategy: "command-tool",
+        generatedAt: Date.now(),
+        checksRun: 1,
+        checksPassed: 1,
+        checksFailed: 0,
+        entries: [
+          {
+            toolName: "exec",
+            command: "pnpm test",
+            kind: "test",
+            status: "passed",
+            exitCode: 0,
+            source: "tool-result",
+          },
+        ],
+      },
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].verifyReport).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        checksRun: 1,
+        checksPassed: 1,
+        checksFailed: 0,
+      }),
+    );
+  });
+
+  it("persists failureReport when provided", async () => {
+    const storePath = await createStorePath("openclaw-usage-failure-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      failureReport: {
+        status: "failed",
+        generatedAt: Date.now(),
+        category: "verification",
+        source: "verify-runner",
+        code: "verify_failed",
+        summary: "1/1 verification checks failed",
+        verifyChecksRun: 1,
+        verifyChecksFailed: 1,
+      },
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].failureReport).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        category: "verification",
+        code: "verify_failed",
+      }),
+    );
+  });
+
+  it("persists retryReport when provided", async () => {
+    const storePath = await createStorePath("openclaw-usage-retry-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "s1", updatedAt: Date.now() },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      retryReport: {
+        status: "used",
+        generatedAt: Date.now(),
+        maxAttempts: 8,
+        attemptsUsed: 3,
+        retriesUsed: 2,
+        remainingRetries: 5,
+        entries: [
+          {
+            attempt: 1,
+            reason: "auth_refresh",
+            detail: "prompt auth error triggered runtime auth refresh",
+          },
+          {
+            attempt: 2,
+            reason: "thinking_fallback",
+            detail: "assistant-stage fallback to minimal",
+          },
+        ],
+      },
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].retryReport).toEqual(
+      expect.objectContaining({
+        status: "used",
+        maxAttempts: 8,
+        attemptsUsed: 3,
+        retriesUsed: 2,
+        remainingRetries: 5,
+      }),
+    );
+    expect(stored[sessionKey].retryReport.entries).toEqual([
+      expect.objectContaining({
+        attempt: 1,
+        reason: "auth_refresh",
+      }),
+      expect.objectContaining({
+        attempt: 2,
+        reason: "thinking_fallback",
+      }),
+    ]);
+  });
+
   it("accumulates estimatedCostUsd across persisted usage updates", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
     const sessionKey = "main";

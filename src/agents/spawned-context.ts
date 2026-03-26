@@ -8,6 +8,8 @@ export type SpawnedRunMetadata = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   workspaceDir?: string | null;
+  buildRunId?: string | null;
+  buildRunDir?: string | null;
 };
 
 export type SpawnedToolContext = {
@@ -15,6 +17,8 @@ export type SpawnedToolContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   workspaceDir?: string;
+  buildRunId?: string | null;
+  buildRunDir?: string | null;
 };
 
 export type NormalizedSpawnedRunMetadata = {
@@ -23,6 +27,8 @@ export type NormalizedSpawnedRunMetadata = {
   groupChannel?: string;
   groupSpace?: string;
   workspaceDir?: string;
+  buildRunId?: string;
+  buildRunDir?: string;
 };
 
 function normalizeOptionalText(value?: string | null): string | undefined {
@@ -42,17 +48,24 @@ export function normalizeSpawnedRunMetadata(
     groupChannel: normalizeOptionalText(value?.groupChannel),
     groupSpace: normalizeOptionalText(value?.groupSpace),
     workspaceDir: normalizeOptionalText(value?.workspaceDir),
+    buildRunId: normalizeOptionalText(value?.buildRunId),
+    buildRunDir: normalizeOptionalText(value?.buildRunDir),
   };
 }
 
 export function mapToolContextToSpawnedRunMetadata(
   value?: SpawnedToolContext | null,
-): Pick<NormalizedSpawnedRunMetadata, "groupId" | "groupChannel" | "groupSpace" | "workspaceDir"> {
+): Pick<
+  NormalizedSpawnedRunMetadata,
+  "groupId" | "groupChannel" | "groupSpace" | "workspaceDir" | "buildRunId" | "buildRunDir"
+> {
   return {
     groupId: normalizeOptionalText(value?.agentGroupId),
     groupChannel: normalizeOptionalText(value?.agentGroupChannel),
     groupSpace: normalizeOptionalText(value?.agentGroupSpace),
     workspaceDir: normalizeOptionalText(value?.workspaceDir),
+    buildRunId: normalizeOptionalText(value?.buildRunId),
+    buildRunDir: normalizeOptionalText(value?.buildRunDir),
   };
 }
 

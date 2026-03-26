@@ -7,11 +7,18 @@ import {
   type Skill,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
+import {
+  buildEmptyDynamicSkillPruningReport,
+  pruneSkillsForPrompt,
+} from "../dynamic-skill-pruning.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
+import { filterSkillsForTaskProfile } from "../task-profile-skill-pack.js";
+import type { TaskProfileId } from "../task-profile.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
@@ -70,6 +77,7 @@ function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
   skillFilter?: string[],
+  taskProfile?: TaskProfileId,
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
   let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
@@ -85,6 +93,19 @@ function filterSkillEntries(
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
+    return filtered;
+  }
+  if (taskProfile) {
+    const alwaysSkillNames = new Set(
+      filtered.filter((entry) => entry.metadata?.always === true).map((entry) => entry.skill.name),
+    );
+    const filteredSkills = filterSkillsForTaskProfile({
+      skills: filtered.map((entry) => entry.skill),
+      taskProfile,
+      alwaysSkillNames,
+    });
+    const allowedNames = new Set(filteredSkills.map((skill) => skill.name));
+    filtered = filtered.filter((entry) => allowedNames.has(entry.skill.name));
   }
   return filtered;
 }
@@ -624,6 +645,7 @@ export function buildWorkspaceSkillSnapshot(
       name: entry.skill.name,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
+      always: entry.metadata?.always === true,
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
     resolvedSkills,
@@ -645,6 +667,7 @@ type WorkspaceSkillBuildOptions = {
   entries?: SkillEntry[];
   /** If provided, only include skills with these names */
   skillFilter?: string[];
+  taskProfile?: TaskProfileId;
   eligibility?: SkillEligibilityContext;
 };
 
@@ -655,12 +678,14 @@ function resolveWorkspaceSkillPromptState(
   eligible: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
+  remoteNote?: string;
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
     opts?.skillFilter,
+    opts?.taskProfile,
     opts?.eligibility,
   );
   const promptEntries = eligible.filter(
@@ -689,7 +714,7 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  return { eligible, prompt, resolvedSkills, remoteNote };
 }
 
 export function resolveSkillsPromptForRun(params: {
@@ -697,19 +722,111 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  taskProfile?: TaskProfileId;
+  promptText?: string;
+  dynamicSkillPruningReportRef?: { current?: SessionSystemPromptReport["skillPruning"] };
 }): string {
+  const snapshotResolvedSkills = params.skillsSnapshot?.resolvedSkills;
+  const explicitSkillFilter = params.skillsSnapshot?.skillFilter !== undefined;
+  if (snapshotResolvedSkills && params.taskProfile) {
+    const alwaysSkillNames = new Set(
+      (params.skillsSnapshot?.skills ?? [])
+        .filter((skill) => skill.always === true)
+        .map((skill) => skill.name),
+    );
+    const filteredSkills = filterSkillsForTaskProfile({
+      skills: snapshotResolvedSkills,
+      taskProfile: params.taskProfile,
+      alwaysSkillNames,
+    });
+    const dynamicallyPruned =
+      explicitSkillFilter || !params.promptText
+        ? {
+            skills: filteredSkills,
+            report: buildEmptyDynamicSkillPruningReport(),
+          }
+        : pruneSkillsForPrompt({
+            skills: filteredSkills,
+            taskProfile: params.taskProfile,
+            promptText: params.promptText,
+            alwaysSkillNames,
+          });
+    if (params.dynamicSkillPruningReportRef) {
+      params.dynamicSkillPruningReportRef.current = dynamicallyPruned.report;
+    }
+    const prompt = buildPromptFromResolvedSkills(dynamicallyPruned.skills, params.config);
+    return prompt.trim() ? prompt : "";
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
+    if (params.dynamicSkillPruningReportRef) {
+      params.dynamicSkillPruningReportRef.current = buildEmptyDynamicSkillPruningReport();
+    }
     return snapshotPrompt;
   }
   if (params.entries && params.entries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
-      entries: params.entries,
-      config: params.config,
+    const { eligible, resolvedSkills, remoteNote } = resolveWorkspaceSkillPromptState(
+      params.workspaceDir,
+      {
+        entries: params.entries,
+        config: params.config,
+        taskProfile: params.taskProfile,
+      },
+    );
+    const alwaysSkillNames = new Set(
+      eligible.filter((entry) => entry.metadata?.always === true).map((entry) => entry.skill.name),
+    );
+    const dynamicallyPruned =
+      explicitSkillFilter || !params.promptText
+        ? {
+            skills: resolvedSkills,
+            report: buildEmptyDynamicSkillPruningReport(),
+          }
+        : pruneSkillsForPrompt({
+            skills: resolvedSkills,
+            taskProfile: params.taskProfile,
+            promptText: params.promptText,
+            alwaysSkillNames,
+          });
+    if (params.dynamicSkillPruningReportRef) {
+      params.dynamicSkillPruningReportRef.current = dynamicallyPruned.report;
+    }
+    const prompt = buildPromptFromResolvedSkills(dynamicallyPruned.skills, params.config, {
+      remoteNote,
     });
     return prompt.trim() ? prompt : "";
   }
+  if (params.dynamicSkillPruningReportRef) {
+    params.dynamicSkillPruningReportRef.current = buildEmptyDynamicSkillPruningReport();
+  }
   return "";
+}
+
+function buildPromptFromResolvedSkills(
+  skills: Skill[],
+  config?: OpenClawConfig,
+  opts?: { remoteNote?: string },
+): string {
+  if (skills.length === 0) {
+    return "";
+  }
+  const promptSkills = compactSkillPaths(skills);
+  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+    skills: promptSkills,
+    config,
+  });
+  const truncationNote = truncated
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${skills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    : compact
+      ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+      : "";
+  return [
+    opts?.remoteNote?.trim(),
+    truncationNote,
+    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function loadWorkspaceSkillEntries(
@@ -844,6 +961,7 @@ export function buildWorkspaceSkillCommandSpecs(
     skillEntries,
     opts?.config,
     opts?.skillFilter,
+    undefined,
     opts?.eligibility,
   );
   const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);

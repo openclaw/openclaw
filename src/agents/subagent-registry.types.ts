@@ -1,5 +1,6 @@
 import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
+import type { SubagentRolePreset } from "./subagent-capabilities.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
@@ -13,8 +14,11 @@ export type SubagentRunRecord = {
   task: string;
   cleanup: "delete" | "keep";
   label?: string;
+  rolePreset?: SubagentRolePreset;
   model?: string;
   workspaceDir?: string;
+  buildRunId?: string;
+  buildRunDir?: string;
   runTimeoutSeconds?: number;
   spawnMode?: SpawnSubagentMode;
   createdAt: number;

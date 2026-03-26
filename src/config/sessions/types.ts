@@ -80,6 +80,10 @@ export type SessionEntry = {
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
   spawnedWorkspaceDir?: string;
+  /** Build-run id inherited by spawned sessions for planner/builder/evaluator handoff. */
+  spawnedBuildRunId?: string;
+  /** Stable artifact root inherited by spawned sessions for build-loop artifacts. */
+  spawnedBuildRunDir?: string;
   /** Explicit parent session linkage for dashboard-created child sessions. */
   parentSessionKey?: string;
   /** True after a thread/topic session has been forked from its parent transcript once. */
@@ -90,6 +94,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Optional build-loop role preset assigned at spawn time for planner/builder/evaluator semantics. */
+  subagentRolePreset?: "planner" | "builder" | "evaluator";
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
@@ -182,6 +188,9 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  verifyReport?: SessionVerifyReport;
+  failureReport?: SessionFailureReport;
+  retryReport?: SessionRetryReport;
   acp?: SessionAcpMeta;
 };
 
@@ -330,11 +339,97 @@ export type GroupKeyResolution = {
 
 export type SessionSkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
+  skills: Array<{
+    name: string;
+    primaryEnv?: string;
+    requiredEnv?: string[];
+    always?: boolean;
+  }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];
   version?: number;
+};
+
+export type SessionVerifyReport = {
+  status: "passed" | "failed" | "skipped";
+  strategy: "command-tool";
+  generatedAt: number;
+  checksRun: number;
+  checksPassed: number;
+  checksFailed: number;
+  reason?: string;
+  entries: Array<{
+    toolName: string;
+    meta?: string;
+    command: string;
+    kind: "test" | "build" | "lint" | "check" | "command";
+    status: "passed" | "failed";
+    exitCode: number | null;
+    source: "tool-result";
+  }>;
+};
+
+export type SessionFailureReport = {
+  status: "none" | "failed";
+  generatedAt: number;
+  category:
+    | "none"
+    | "verification"
+    | "tool"
+    | "approval"
+    | "context"
+    | "timeout"
+    | "model"
+    | "aborted"
+    | "retry";
+  source: "none" | "verify-runner" | "tool-result" | "run-error" | "assistant-error";
+  code:
+    | "none"
+    | "verify_failed"
+    | "tool_error"
+    | "approval_error"
+    | "context_overflow"
+    | "compaction_failure"
+    | "role_ordering"
+    | "image_size"
+    | "retry_limit"
+    | "timeout"
+    | "assistant_error"
+    | "aborted";
+  summary: string;
+  message?: string;
+  toolName?: string;
+  toolMeta?: string;
+  runErrorKind?:
+    | "context_overflow"
+    | "compaction_failure"
+    | "role_ordering"
+    | "image_size"
+    | "retry_limit";
+  verifyChecksRun?: number;
+  verifyChecksFailed?: number;
+};
+
+export type SessionRetryReport = {
+  status: "unused" | "used" | "exhausted";
+  generatedAt: number;
+  maxAttempts: number;
+  attemptsUsed: number;
+  retriesUsed: number;
+  remainingRetries: number;
+  exhaustedReason?: "retry_limit";
+  entries: Array<{
+    attempt: number;
+    reason:
+      | "auth_refresh"
+      | "profile_rotation"
+      | "thinking_fallback"
+      | "overflow_retry"
+      | "overflow_compaction"
+      | "tool_result_truncation";
+    detail?: string;
+  }>;
 };
 
 export type SessionSystemPromptReport = {
@@ -360,10 +455,111 @@ export type SessionSystemPromptReport = {
     mode?: string;
     sandboxed?: boolean;
   };
+  taskProfile?: {
+    id: "coding" | "research" | "ops" | "assistant";
+    source:
+      | "explicit"
+      | "session-key"
+      | "workspace-dir"
+      | "prompt-text"
+      | "tool-surface"
+      | "default";
+    signal?: string;
+  };
+  workspacePolicyDiscovery?: {
+    totalDiscovered: number;
+    injectedCount: number;
+    candidateCount: number;
+    mergeOrder: string[];
+    conflictCount: number;
+    entries: Array<{
+      name: string;
+      path: string;
+      kind: "bootstrap" | "candidate";
+      autoInjected: boolean;
+      matchedBy: "bootstrap-name" | "policy-filename" | "policy-directory";
+      policyRole:
+        | "global-guidance"
+        | "repo-focus"
+        | "tool-guidance"
+        | "persona"
+        | "identity"
+        | "user-facts"
+        | "heartbeat"
+        | "bootstrap"
+        | "memory"
+        | "candidate";
+      mergePriority: number;
+      mergeTier: "primary" | "supporting" | "specialized" | "candidate";
+      source: "workspace-root" | "extra-bootstrap" | "policy-scan";
+      conflictSummary?: string;
+      conflictWith?: string[];
+    }>;
+  };
+  policySlicing?: {
+    totalSlicedChars: number;
+    slicedFileCount: number;
+    entries: Array<{
+      name: string;
+      path: string;
+      slicedChars: number;
+      reasons: string[];
+    }>;
+  };
+  toolPruning?: {
+    prunedCount: number;
+    prunedSummaryChars: number;
+    prunedSchemaChars: number;
+    entries: Array<{
+      name: string;
+      reason: string;
+      summaryChars: number;
+      schemaChars: number;
+    }>;
+  };
+  skillPruning?: {
+    prunedCount: number;
+    prunedBlockChars: number;
+    entries: Array<{
+      name: string;
+      reason: string;
+      blockChars: number;
+    }>;
+  };
+  delegationProfile?: {
+    role: "main" | "orchestrator" | "leaf";
+    rolePreset?: "planner" | "builder" | "evaluator";
+    promptMode?: "plan" | "build" | "evaluate";
+    toolBias?: "read-heavy" | "edit-exec" | "inspect-verify";
+    verificationPosture?: "acceptance-first" | "self-check-before-handoff" | "skeptical-review";
+    artifactWriteScope?: "planner-artifacts" | "builder-artifacts" | "evaluator-artifacts";
+    controlScope: "children" | "none";
+    depth: number;
+    canSpawn: boolean;
+    canControlChildren: boolean;
+    workspaceSource: "primary" | "inherited";
+    workspaceDir?: string;
+    buildRunId?: string;
+    buildRunDir?: string;
+    parentSessionKey?: string;
+    requesterSessionKey?: string;
+    task?: string;
+    label?: string;
+    delegationToolsAllowed: string[];
+    delegationToolsBlocked: string[];
+  };
   systemPrompt: {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+  };
+  promptBudget?: {
+    totalTrackedChars: number;
+    workspaceInjectedChars: number;
+    skillsPromptChars: number;
+    toolListChars: number;
+    otherSystemPromptChars: number;
+    toolSchemaChars: number;
   };
   injectedWorkspaceFiles: Array<{
     name: string;
@@ -372,6 +568,9 @@ export type SessionSystemPromptReport = {
     rawChars: number;
     injectedChars: number;
     truncated: boolean;
+    sliced?: boolean;
+    slicedChars?: number;
+    sliceReasons?: string[];
   }>;
   skills: {
     promptChars: number;

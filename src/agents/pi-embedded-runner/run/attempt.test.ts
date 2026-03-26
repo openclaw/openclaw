@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -306,6 +309,38 @@ describe("composeSystemPromptWithHookContext", () => {
 describe("resolvePromptModeForSession", () => {
   it("uses minimal mode for subagent sessions", () => {
     expect(resolvePromptModeForSession("agent:main:subagent:child")).toBe("minimal");
+  });
+
+  it("uses full mode for builder-preset subagent sessions when config is available", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-prompt-mode-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:builder": {
+            sessionId: "builder-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            subagentRolePreset: "builder",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      session: { store: storePath },
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+    } as OpenClawConfig;
+
+    expect(resolvePromptModeForSession("agent:main:subagent:builder", cfg)).toBe("full");
   });
 
   it("uses minimal mode for cron sessions", () => {

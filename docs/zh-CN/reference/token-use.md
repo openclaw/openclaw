@@ -43,7 +43,7 @@ OpenClaw 在每次运行时组装自己的系统提示词。它包括：
 - 压缩摘要和修剪产物
 - 提供商包装或安全头（不可见，但仍计数）
 
-有关实际分解（每个注入文件、工具、Skills 和系统提示词大小），使用 `/context list` 或 `/context detail`。参见[上下文](/concepts/context)。
+有关实际分解（每个注入文件、工具、Skills 和系统提示词大小），使用 `/context list` 或 `/context detail`。如果要看工作区级别的健康看板（任务画像分布、verify/failure/retry 信号和最近趋势），使用 `/context health`。参见[上下文](/concepts/context)。
 
 ## 如何查看当前 token 使用量
 

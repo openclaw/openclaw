@@ -64,6 +64,7 @@ vi.mock("./process/child-process-bridge.js", () => ({
 }));
 
 vi.mock("./version.js", () => ({
+  DISPLAY_VERSION: "9.9.9-test [frank-local]",
   VERSION: "9.9.9-test",
 }));
 
@@ -100,7 +101,7 @@ describe("entry root version fast path", () => {
     await import("./entry.js");
 
     await vi.waitFor(() => {
-      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
+      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test [frank-local] (abc1234)");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 
@@ -114,7 +115,7 @@ describe("entry root version fast path", () => {
     await import("./entry.js");
 
     await vi.waitFor(() => {
-      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
+      expect(logSpy).toHaveBeenCalledWith("OpenClaw 9.9.9-test [frank-local]");
       expect(exitSpy).toHaveBeenCalledWith(0);
     });
 

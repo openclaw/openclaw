@@ -85,7 +85,12 @@ export type SkillEligibilityContext = {
 
 export type SkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
+  skills: Array<{
+    name: string;
+    primaryEnv?: string;
+    requiredEnv?: string[];
+    always?: boolean;
+  }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
   resolvedSkills?: Skill[];

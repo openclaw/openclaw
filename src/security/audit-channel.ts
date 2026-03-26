@@ -324,6 +324,7 @@ export async function collectChannelSecurityFindings(params: {
           severity: "warn",
           title: `${input.label} DM config looks inconsistent`,
           detail: `"open" requires ${allowFromKey} to include "*".`,
+          remediation: `Either change ${policyPath} away from "open", or add "*" to ${allowFromKey} so the config matches the declared DM policy.`,
         });
       }
     }
