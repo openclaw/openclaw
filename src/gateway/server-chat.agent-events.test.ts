@@ -983,4 +983,85 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  // Thinking event routing tests
+  it("routes thinking events only to registered recipients via broadcastToConnIds", () => {
+    const { broadcast, broadcastToConnIds, thinkingEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-thinking",
+    });
+
+    registerAgentRunContext("run-thinking", { sessionKey: "session-thinking", verboseLevel: "on" });
+    thinkingEventRecipients.add("run-thinking", "conn-1");
+
+    handler({
+      runId: "run-thinking",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "reasoning..." },
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        runId: "run-thinking",
+        stream: "thinking",
+        data: { text: "reasoning..." },
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("does not send thinking events to nodeSendToSession", () => {
+    const { broadcastToConnIds, nodeSendToSession, thinkingEventRecipients, handler } =
+      createHarness({ resolveSessionKeyForRun: () => "session-thinking-node" });
+
+    registerAgentRunContext("run-thinking-node", {
+      sessionKey: "session-thinking-node",
+      verboseLevel: "on",
+    });
+    thinkingEventRecipients.add("run-thinking-node", "conn-1");
+
+    handler({
+      runId: "run-thinking-node",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "reasoning..." },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const nodeAgentCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeAgentCalls).toHaveLength(0);
+    resetAgentRunContextForTest();
+  });
+
+  it("suppresses thinking events when isControlUiVisible is false", () => {
+    const { broadcast, broadcastToConnIds, thinkingEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-thinking-hidden",
+    });
+
+    registerAgentRunContext("run-thinking-hidden", {
+      sessionKey: "session-thinking-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+    thinkingEventRecipients.add("run-thinking-hidden", "conn-1");
+
+    handler({
+      runId: "run-thinking-hidden",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "reasoning..." },
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    resetAgentRunContextForTest();
+  });
 });
