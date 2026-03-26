@@ -2,8 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
+import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
+import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -157,6 +162,25 @@ describe("runCliAgent with process supervisor", () => {
   });
 
   beforeEach(async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends = [
+      {
+        pluginId: "anthropic",
+        backend: buildAnthropicCliBackend(),
+        source: "test",
+      },
+      {
+        pluginId: "openai",
+        backend: buildOpenAICodexCliBackend(),
+        source: "test",
+      },
+      {
+        pluginId: "google",
+        backend: buildGoogleGeminiCliBackend(),
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
@@ -209,6 +233,94 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("keeps resuming the CLI across model changes and passes the new model flag", async () => {
+    mockSuccessfulCliRun();
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                args: ["exec", "--json"],
+                resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+                output: "text",
+                modelArg: "--model",
+                sessionMode: "existing",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      timeoutMs: 1_000,
+      runId: "run-model-switch",
+      cliSessionBinding: {
+        sessionId: "thread-123",
+        authProfileId: "openai:default",
+      },
+      authProfileId: "openai:default",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    expect(input.argv).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thread-123",
+      "--json",
+      "--model",
+      "gpt-5.4",
+      "hi",
+    ]);
+  });
+
+  it("starts a fresh CLI session when the auth profile changes", async () => {
+    mockSuccessfulCliRun();
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                args: ["exec", "--json"],
+                resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+                output: "text",
+                modelArg: "--model",
+                sessionMode: "existing",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      timeoutMs: 1_000,
+      runId: "run-auth-change",
+      cliSessionBinding: {
+        sessionId: "thread-123",
+        authProfileId: "openai:work",
+      },
+      authProfileId: "openai:personal",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[]; scopeKey?: string };
+    expect(input.argv).toEqual(["codex", "exec", "--json", "--model", "gpt-5.4", "hi"]);
+    expect(input.scopeKey).toBeUndefined();
   });
 
   it("sanitizes dangerous backend env overrides before spawn", async () => {

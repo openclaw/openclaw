@@ -65,7 +65,7 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "./bootstrap-budget.js";
 import { runCliAgent } from "./cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "./cli-session.js";
+import { clearCliSession, getCliSessionBinding, setCliSessionBinding } from "./cli-session.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./command/session-store.js";
@@ -82,7 +82,6 @@ import {
   isCliProvider,
   modelKey,
   normalizeModelRef,
-  normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -386,8 +385,12 @@ function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const authProfileId =
+    params.providerOverride === params.authProfileProvider
+      ? params.sessionEntry?.authProfileOverride
+      : undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {
-    const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
+    const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
       runCliAgent({
         sessionId: params.sessionId,
@@ -404,17 +407,20 @@ function runAgentAttempt(params: {
         runId: params.runId,
         extraSystemPrompt: params.opts.extraSystemPrompt,
         cliSessionId: nextCliSessionId,
+        cliSessionBinding:
+          nextCliSessionId === cliSessionBinding?.sessionId ? cliSessionBinding : undefined,
+        authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
         images: params.isFallbackRetry ? undefined : params.opts.images,
         streamParams: params.opts.streamParams,
       });
-    return runCliWithSession(cliSessionId).catch(async (err) => {
+    return runCliWithSession(cliSessionBinding?.sessionId).catch(async (err) => {
       // Handle CLI session expired error
       if (
         err instanceof FailoverError &&
         err.reason === "session_expired" &&
-        cliSessionId &&
+        cliSessionBinding?.sessionId &&
         params.sessionKey &&
         params.sessionStore &&
         params.storePath
@@ -427,15 +433,7 @@ function runAgentAttempt(params: {
         const entry = params.sessionStore[params.sessionKey];
         if (entry) {
           const updatedEntry = { ...entry };
-          if (params.providerOverride === "claude-cli") {
-            delete updatedEntry.claudeCliSessionId;
-          }
-          if (updatedEntry.cliSessionIds) {
-            const normalizedProvider = normalizeProviderId(params.providerOverride);
-            const newCliSessionIds = { ...updatedEntry.cliSessionIds };
-            delete newCliSessionIds[normalizedProvider];
-            updatedEntry.cliSessionIds = newCliSessionIds;
-          }
+          clearCliSession(updatedEntry, params.providerOverride);
           updatedEntry.updatedAt = Date.now();
 
           await persistSessionEntry({
@@ -453,7 +451,7 @@ function runAgentAttempt(params: {
         return runCliWithSession(undefined).then(async (result) => {
           // Update session store with new CLI session ID if available
           if (
-            result.meta.agentMeta?.sessionId &&
+            result.meta.agentMeta?.cliSessionBinding?.sessionId &&
             params.sessionKey &&
             params.sessionStore &&
             params.storePath
@@ -461,10 +459,10 @@ function runAgentAttempt(params: {
             const entry = params.sessionStore[params.sessionKey];
             if (entry) {
               const updatedEntry = { ...entry };
-              setCliSessionId(
+              setCliSessionBinding(
                 updatedEntry,
                 params.providerOverride,
-                result.meta.agentMeta.sessionId,
+                result.meta.agentMeta.cliSessionBinding,
               );
               updatedEntry.updatedAt = Date.now();
 
@@ -483,10 +481,6 @@ function runAgentAttempt(params: {
     });
   }
 
-  const authProfileId =
-    params.providerOverride === params.authProfileProvider
-      ? params.sessionEntry?.authProfileOverride
-      : undefined;
   return runEmbeddedPiAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1008,11 +1002,7 @@ async function agentCommandInternal(
       if (overrideModel) {
         const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-        if (
-          !isCliProvider(normalizedOverride.provider, cfg) &&
-          !allowAnyModel &&
-          !allowedModelKeys.has(key)
-        ) {
+        if (!allowAnyModel && !allowedModelKeys.has(key)) {
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -1035,11 +1025,7 @@ async function agentCommandInternal(
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
-      if (
-        isCliProvider(normalizedStored.provider, cfg) ||
-        allowAnyModel ||
-        allowedModelKeys.has(key)
-      ) {
+      if (allowAnyModel || allowedModelKeys.has(key)) {
         provider = normalizedStored.provider;
         model = normalizedStored.model;
       }
@@ -1057,11 +1043,7 @@ async function agentCommandInternal(
         throw new Error("Invalid model override.");
       }
       const explicitKey = modelKey(explicitRef.provider, explicitRef.model);
-      if (
-        !isCliProvider(explicitRef.provider, cfg) &&
-        !allowAnyModel &&
-        !allowedModelKeys.has(explicitKey)
-      ) {
+      if (!allowAnyModel && !allowedModelKeys.has(explicitKey)) {
         throw new Error(
           `Model override "${sanitizeForLog(explicitRef.provider)}/${sanitizeForLog(explicitRef.model)}" is not allowed for agent "${sessionAgentId}".`,
         );
