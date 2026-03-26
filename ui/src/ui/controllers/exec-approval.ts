@@ -19,6 +19,7 @@ export type ExecApprovalRequest = {
   pluginId?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
+  sourceChannel?: string | null;
 };
 
 export type ExecApprovalResolved = {
@@ -65,6 +66,8 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
     },
     createdAtMs,
     expiresAtMs,
+    sourceChannel:
+      typeof request.turnSourceChannel === "string" ? request.turnSourceChannel || null : null,
   };
 }
 
