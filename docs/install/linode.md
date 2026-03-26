@@ -234,11 +234,11 @@ ln -s /mnt/openclaw-data/workspace ~/.openclaw/workspace
 
 Instead of paying per-token for API-based models, run self-hosted LLMs on [Linode GPU instances](https://www.linode.com/products/gpu/):
 
-| GPU | VRAM | Price/mo |
-| --- | ---- | -------- |
-| NVIDIA RTX 4000 Ada | 20 GB | $350 |
-| NVIDIA Quadro RTX 6000 | 24 GB | $1,000 |
-| NVIDIA RTX PRO 6000 Blackwell | 96 GB | $1,665 |
+| GPU                           | VRAM  | Price/mo |
+| ----------------------------- | ----- | -------- |
+| NVIDIA RTX 4000 Ada           | 20 GB | $350     |
+| NVIDIA Quadro RTX 6000        | 24 GB | $1,000   |
+| NVIDIA RTX PRO 6000 Blackwell | 96 GB | $1,665   |
 
 This is a good option if you need data privacy (no API calls leaving your infrastructure) or want predictable costs at high usage volumes. Point OpenClaw at a local model server (e.g., Ollama, vLLM) running on the same instance.
 
