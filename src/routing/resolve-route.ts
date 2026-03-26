@@ -46,6 +46,8 @@ export type ResolvedAgentRoute = {
   mainSessionKey: string;
   /** Which session should receive inbound last-route updates. */
   lastRoutePolicy: "main" | "session";
+  /** Per-binding workspace override — lets the same agent use a different workspace for this binding. */
+  workspace?: string;
   /** Match description for debugging/logging. */
   matchedBy:
     | "binding.peer"
@@ -658,7 +660,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
-  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
+  const choose = (
+    agentId: string,
+    matchedBy: ResolvedAgentRoute["matchedBy"],
+    workspace?: string,
+  ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
@@ -672,7 +678,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       agentId: resolvedAgentId,
       mainKey: DEFAULT_MAIN_KEY,
     }).toLowerCase();
-    const route = {
+    const route: ResolvedAgentRoute = {
       agentId: resolvedAgentId,
       channel,
       accountId,
@@ -680,6 +686,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
       matchedBy,
+      ...(workspace ? { workspace } : {}),
     };
     if (routeCache && routeCacheKey) {
       routeCache.set(routeCacheKey, route);
@@ -796,7 +803,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       if (shouldLogDebug) {
         logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
       }
-      return choose(matched.binding.agentId, tier.matchedBy);
+      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.workspace);
     }
   }
 

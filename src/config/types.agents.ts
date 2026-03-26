@@ -40,6 +40,8 @@ export type AgentRouteBinding = {
   type?: "route";
   agentId: string;
   comment?: string;
+  /** Optional workspace override — lets the same agent use a different workspace for this binding. */
+  workspace?: string;
   match: AgentBindingMatch;
 };
 

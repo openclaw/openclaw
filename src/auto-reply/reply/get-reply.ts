@@ -44,6 +44,31 @@ function loadStageSandboxMediaRuntime() {
   return stageSandboxMediaRuntimePromise;
 }
 
+
+/**
+ * Resolve per-binding workspace override from route bindings.
+ *
+ * When a binding specifies a `workspace` field, the agent runs in that
+ * directory instead of its default workspace.  This enables a single generic
+ * agent to work in different workspaces (e.g., git worktrees) depending on
+ * which chat/peer it is responding to.
+ */
+function resolveBindingWorkspace(
+  cfg: OpenClawConfig,
+  agentId: string,
+  sessionKey?: string,
+): string | undefined {
+  if (!sessionKey) return undefined;
+  for (const binding of listRouteBindings(cfg)) {
+    if (!binding.workspace || binding.agentId !== agentId) continue;
+    const peer = binding.match?.peer;
+    if (peer?.id && sessionKey.includes(peer.id)) {
+      return binding.workspace;
+    }
+  }
+  return undefined;
+}
+
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
     if (!Array.isArray(list)) {
@@ -166,7 +191,8 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const bindingWorkspace = resolveBindingWorkspace(cfg, agentId, opts.sessionKey);
+  const workspaceDirRaw = bindingWorkspace ?? resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,

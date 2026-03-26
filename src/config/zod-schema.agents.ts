@@ -39,6 +39,7 @@ const RouteBindingSchema = z
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
+    workspace: z.string().optional(),
     match: BindingMatchSchema,
   })
   .strict();
