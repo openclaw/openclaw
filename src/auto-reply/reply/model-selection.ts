@@ -91,15 +91,54 @@ function collectImageModelKeys(
   // Resolve the image model's primary to get its provider for fallback resolution.
   // Providerless fallbacks should resolve against the image model's provider,
   // not the agent's default provider (to handle mixed-provider configs correctly).
-  let imageModelDefaultProvider = defaultProvider ?? "";
+  let imageModelDefaultProvider = "";
+  // Only derive imageModelDefaultProvider from imageModelPrimary if it has an explicit
+  // provider. If imageModelPrimary is providerless (no slash), leave imageModelDefaultProvider
+  // empty so the fallback block below can derive the correct provider from fallbacks.
+  // This fixes the case where imageModel: { fallbacks: ["openai/gpt-4o"] } with
+  // defaultProvider "anthropic" would incorrectly resolve "gpt-4o" as Anthropic.
   if (imageModelPrimary && aliasIndex && defaultProvider) {
-    const resolved = resolveModelRefFromString({
-      raw: imageModelPrimary.trim(),
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      imageModelDefaultProvider = resolved.ref.provider;
+    const primaryTrimmed = imageModelPrimary.trim();
+    const hasProvider = primaryTrimmed.includes("/");
+    if (hasProvider) {
+      const resolved = resolveModelRefFromString({
+        raw: primaryTrimmed,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        imageModelDefaultProvider = resolved.ref.provider;
+      }
+    }
+    // If providerless, leave imageModelDefaultProvider empty so fallback block derives from fallbacks.
+  }
+
+  // If no primary was configured but fallbacks exist with provider-qualified entries,
+  // derive imageModelDefaultProvider from the first such fallback so that
+  // providerless fallback keys resolve correctly (e.g., an agent configured with
+  // defaultProvider "anthropic" and imageModel: { fallbacks: ["openai/gpt-4o", "gpt-4.1"] }
+  // should resolve providerless "gpt-4o" as OpenAI, not Anthropic).
+  if (!imageModelPrimary && aliasIndex && !imageModelDefaultProvider) {
+    const fb =
+      typeof imageModelConfig === "string"
+        ? imageModelConfig
+        : Array.isArray(imageModelConfig.fallbacks)
+          ? imageModelConfig.fallbacks[0]
+          : undefined;
+    if (fb?.trim()) {
+      const slash = fb.indexOf("/");
+      if (slash > 0) {
+        imageModelDefaultProvider = fb.slice(0, slash).trim();
+      } else if (aliasIndex && defaultProvider) {
+        const resolved = resolveModelRefFromString({
+          raw: fb.trim(),
+          defaultProvider,
+          aliasIndex,
+        });
+        if (resolved) {
+          imageModelDefaultProvider = resolved.ref.provider;
+        }
+      }
     }
   }
 
