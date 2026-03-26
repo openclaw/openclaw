@@ -45,6 +45,8 @@ export type SlackChannelConfig = {
   skills?: string[];
   /** Optional system prompt for this channel. */
   systemPrompt?: string;
+  /** If true, suppress regular assistant text replies for this channel. */
+  suppressAssistantText?: boolean;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -199,6 +201,8 @@ export type SlackAccountConfig = {
   ackReaction?: string;
   /** Reaction emoji added while processing a reply (e.g. "hourglass_flowing_sand"). Removed when done. Useful as a typing indicator fallback when assistant mode is not enabled. */
   typingReaction?: string;
+  /** If true, suppress regular assistant text replies; only explicit message tool sends are delivered. Default: false. */
+  suppressAssistantText?: boolean;
 };
 
 export type SlackConfig = {

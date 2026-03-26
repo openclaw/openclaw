@@ -229,6 +229,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
   });
 
+  const suppressAssistantText =
+    prepared.channelConfig?.suppressAssistantText ?? account.config.suppressAssistantText ?? false;
+
   const slackStreaming = resolveSlackStreamingConfig({
     streaming: account.config.streaming,
     streamMode: account.config.streamMode,
@@ -253,10 +256,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
-    previewStreamingEnabled,
-    useStreaming,
-  });
+  const shouldUseDraftStream =
+    !suppressAssistantText &&
+    shouldInitializeSlackDraftStream({
+      previewStreamingEnabled,
+      useStreaming,
+    });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
@@ -333,6 +338,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
+      if (suppressAssistantText) {
+        logVerbose("slack: suppressed assistant text (suppressAssistantText=true)");
+        return;
+      }
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;

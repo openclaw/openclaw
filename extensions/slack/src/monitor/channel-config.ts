@@ -15,6 +15,7 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  suppressAssistantText?: boolean;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -27,6 +28,7 @@ export type SlackChannelConfigEntry = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  suppressAssistantText?: boolean;
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
@@ -145,6 +147,10 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const suppressAssistantText = firstDefined(
+    resolved.suppressAssistantText,
+    fallback?.suppressAssistantText,
+  );
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -152,6 +158,7 @@ export function resolveSlackChannelConfig(params: {
     users,
     skills,
     systemPrompt,
+    suppressAssistantText,
   };
   return applyChannelMatchMeta(result, match);
 }
