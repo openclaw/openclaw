@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MediaUnderstandingSkipReason } from "./errors.js";
 import {
   type ActiveMediaModel,
   buildProviderRegistry,
@@ -17,7 +18,11 @@ export async function runAudioTranscription(params: {
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
   localPathRoots?: readonly string[];
-}): Promise<{ transcript: string | undefined; attachments: MediaAttachment[] }> {
+}): Promise<{
+  transcript: string | undefined;
+  attachments: MediaAttachment[];
+  skippedReason?: MediaUnderstandingSkipReason;
+}> {
   const attachments = params.attachments ?? normalizeMediaAttachments(params.ctx);
   if (attachments.length === 0) {
     return { transcript: undefined, attachments };
@@ -43,7 +48,23 @@ export async function runAudioTranscription(params: {
     });
     const output = result.outputs.find((entry) => entry.kind === "audio.transcription");
     const transcript = output?.text?.trim();
-    return { transcript: transcript || undefined, attachments };
+    const skippedReason = (Array.isArray(result.decision.attachments)
+      ? result.decision.attachments
+      : []
+    )
+      .flatMap((entry) => (Array.isArray(entry.attempts) ? entry.attempts : []))
+      .map((attempt) =>
+        typeof attempt?.reason === "string" ? attempt.reason.split(":")[0]?.trim() : undefined,
+      )
+      .find(
+        (reason): reason is MediaUnderstandingSkipReason =>
+          reason === "empty" ||
+          reason === "maxBytes" ||
+          reason === "timeout" ||
+          reason === "tooSmall" ||
+          reason === "unsupported",
+      );
+    return { transcript: transcript || undefined, attachments, skippedReason };
   } finally {
     await cache.cleanup();
   }
