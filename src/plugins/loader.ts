@@ -26,6 +26,7 @@ import {
   clearMemoryPluginState,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
+  getMemoryRuntime,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -100,6 +101,7 @@ type CachedPluginState = {
   registry: PluginRegistry;
   memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
   memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
+  memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -712,6 +714,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       restoreMemoryPluginState({
         promptBuilder: cached.memoryPromptBuilder,
         flushPlanResolver: cached.memoryFlushPlanResolver,
+        runtime: cached.memoryRuntime,
       });
       if (shouldActivate) {
         activatePluginRegistry(cached.registry, cacheKey);
@@ -1225,6 +1228,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
     const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
+    const previousMemoryRuntime = getMemoryRuntime();
 
     try {
       const result = register(api);
@@ -1241,6 +1245,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreMemoryPluginState({
           promptBuilder: previousMemoryPromptBuilder,
           flushPlanResolver: previousMemoryFlushPlanResolver,
+          runtime: previousMemoryRuntime,
         });
       }
       registry.plugins.push(record);
@@ -1249,6 +1254,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       restoreMemoryPluginState({
         promptBuilder: previousMemoryPromptBuilder,
         flushPlanResolver: previousMemoryFlushPlanResolver,
+        runtime: previousMemoryRuntime,
       });
       recordPluginError({
         logger,
@@ -1287,6 +1293,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry,
       memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
       memoryPromptBuilder: getMemoryPromptSectionBuilder(),
+      memoryRuntime: getMemoryRuntime(),
     });
   }
   if (shouldActivate) {
