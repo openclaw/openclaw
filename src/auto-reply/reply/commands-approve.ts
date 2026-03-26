@@ -73,6 +73,39 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
+function readErrorCode(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readApprovalNotFoundDetailsReason(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const reason = (value as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason.trim() ? reason : null;
+}
+
+function isApprovalNotFoundError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode = readErrorCode((err as { gatewayCode?: unknown }).gatewayCode);
+  if (gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND) {
+    return true;
+  }
+
+  const detailsReason = readApprovalNotFoundDetailsReason((err as { details?: unknown }).details);
+  if (
+    gatewayCode === ErrorCodes.INVALID_REQUEST &&
+    detailsReason === ErrorCodes.APPROVAL_NOT_FOUND
+  ) {
+    return true;
+  }
+
+  // Legacy server/client combinations may only include the message text.
+  return /unknown or expired approval id/i.test(err.message);
+}
+
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -152,11 +185,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     try {
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
-      const isNotFound =
-        err instanceof Error &&
-        "gatewayCode" in err &&
-        (err as { gatewayCode: string }).gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND;
-      if (isNotFound) {
+      if (isApprovalNotFoundError(err)) {
         try {
           await callApprovalMethod("plugin.approval.resolve");
         } catch (pluginErr) {

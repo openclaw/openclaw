@@ -531,10 +531,13 @@ describe("/approve command", () => {
     }
   });
 
-  function gatewayError(message: string, gatewayCode: string): Error {
-    const err = new Error(message);
+  function gatewayError(message: string, gatewayCode: string, opts?: { details?: unknown }): Error {
+    const err = new Error(message) as Error & { gatewayCode?: string; details?: unknown };
     err.name = "GatewayClientRequestError";
-    (err as Error & { gatewayCode: string }).gatewayCode = gatewayCode;
+    err.gatewayCode = gatewayCode;
+    if (opts && "details" in opts) {
+      err.details = opts.details;
+    }
     return err;
   }
 
@@ -564,6 +567,114 @@ describe("/approve command", () => {
         params: { id: "plugin-123", decision: "allow-once" },
       }),
     );
+  });
+
+  it("falls back to plugin.approval.resolve for INVALID_REQUEST with approval-not-found details", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(
+        gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "APPROVAL_NOT_FOUND" },
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "exec.approval.resolve" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("falls back to plugin.approval.resolve for legacy message-only not-found errors", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve plugin-123 allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock
+      .mockRejectedValueOnce(
+        gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "SOMETHING_ELSE" },
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "exec.approval.resolve" }),
+    );
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("supports old and new unknown-id gateway envelopes across sequential approvals", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const cases = [
+      {
+        id: "plugin-old-1",
+        err: gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+      },
+      {
+        id: "plugin-new-2",
+        err: gatewayError("unknown or expired approval id", "INVALID_REQUEST", {
+          details: { reason: "APPROVAL_NOT_FOUND" },
+        }),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      callGatewayMock.mockReset();
+      callGatewayMock.mockRejectedValueOnce(testCase.err).mockResolvedValueOnce({ ok: true });
+
+      const params = buildParams(`/approve ${testCase.id} allow-once`, cfg, { SenderId: "123" });
+      const result = await handleCommands(params);
+
+      expect(result.shouldContinue, testCase.id).toBe(false);
+      expect(result.reply?.text, testCase.id).toContain("Approval allow-once submitted");
+      expect(callGatewayMock, testCase.id).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          method: "exec.approval.resolve",
+          params: { id: testCase.id, decision: "allow-once" },
+        }),
+      );
+      expect(callGatewayMock, testCase.id).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          method: "plugin.approval.resolve",
+          params: { id: testCase.id, decision: "allow-once" },
+        }),
+      );
+    }
   });
 
   it("surfaces plugin approval error when both exec and plugin resolve fail", async () => {

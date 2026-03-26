@@ -475,20 +475,19 @@ The `requireApproval` field triggers native platform approval (Telegram buttons,
 ```typescript
 {
   requireApproval: {
-    id: "unique-approval-id",
     title: "Sensitive operation",
     description: "This tool call modifies production data",
     severity: "warning",       // "info" | "warning" | "critical"
     timeoutMs: 120000,         // default: 120s
     timeoutBehavior: "deny",   // "allow" | "deny" (default)
     onResolution: async (decision) => {
-      // Called after the user resolves: "allow-once", "allow-always", "deny", or "timeout"
+      // Called after the user resolves: "allow-once", "allow-always", "deny", "timeout", or "cancelled"
     },
   }
 }
 ```
 
-The `onResolution` callback is invoked with the user's decision string after they respond to the approval dialog. It runs in-process within the plugin (not sent to the gateway). Use it to persist decisions, update caches, or perform cleanup.
+The `onResolution` callback is invoked with the final decision string after the approval resolves, times out, or is cancelled. It runs in-process within the plugin (not sent to the gateway). Use it to persist decisions, update caches, or perform cleanup.
 
 The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
 

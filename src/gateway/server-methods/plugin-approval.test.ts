@@ -356,7 +356,11 @@ describe("createPluginApprovalHandlers", () => {
       expect(opts.respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({ message: expect.stringContaining("unknown or expired") }),
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("unknown or expired"),
+          details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
+        }),
       );
     });
 

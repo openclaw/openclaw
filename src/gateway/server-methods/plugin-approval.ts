@@ -15,6 +15,10 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const APPROVAL_NOT_FOUND_DETAILS = {
+  reason: ErrorCodes.APPROVAL_NOT_FOUND,
+} as const;
+
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder },
@@ -213,7 +217,9 @@ export function createPluginApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.APPROVAL_NOT_FOUND, "unknown or expired approval id"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
         );
         return;
       }
@@ -238,7 +244,9 @@ export function createPluginApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.APPROVAL_NOT_FOUND, "unknown or expired approval id"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
         );
         return;
       }

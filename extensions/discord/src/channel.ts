@@ -14,8 +14,12 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import {
@@ -28,6 +32,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
+import type { DiscordComponentMessageSpec } from "./components.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -88,6 +93,7 @@ async function loadDiscordProbeRuntime() {
 
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+const DISCORD_EXEC_APPROVAL_KEY = "execapproval";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
   channelKey: "discord",
@@ -114,6 +120,142 @@ function formatDiscordIntents(intents?: {
     `guildMembers=${intents.guildMembers ?? "unknown"}`,
     `presence=${intents.presence ?? "unknown"}`,
   ].join(" ");
+}
+
+function encodeCustomIdValue(value: string): string {
+  return encodeURIComponent(value);
+}
+
+function buildDiscordExecApprovalCustomId(
+  approvalId: string,
+  action: "allow-once" | "allow-always" | "deny",
+): string {
+  return [
+    `${DISCORD_EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`,
+    `action=${action}`,
+  ].join(";");
+}
+
+function formatDiscordApprovalPreview(value: string, maxChars: number): string {
+  const trimmed = value.trim();
+  const raw = trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}...` : trimmed;
+  return raw.replace(/`/g, "\u200b`");
+}
+
+function buildDiscordPluginPendingComponentSpec(params: {
+  request: PluginApprovalRequest;
+}): DiscordComponentMessageSpec {
+  const request = params.request.request;
+  const severity = request.severity ?? "warning";
+  const severityLabel =
+    severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning";
+  const accentColor =
+    severity === "critical" ? "#ED4245" : severity === "info" ? "#5865F2" : "#FAA61A";
+  const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
+  const metadataLines: string[] = [`- Severity: ${severityLabel}`];
+  if (request.toolName) {
+    metadataLines.push(`- Tool: ${request.toolName}`);
+  }
+  if (request.pluginId) {
+    metadataLines.push(`- Plugin: ${request.pluginId}`);
+  }
+  if (request.agentId) {
+    metadataLines.push(`- Agent: ${request.agentId}`);
+  }
+  return {
+    container: { accentColor },
+    blocks: [
+      { type: "text", text: "## Plugin Approval Required" },
+      { type: "text", text: "A plugin action needs your approval." },
+      { type: "separator", divider: true, spacing: "small" },
+      {
+        type: "text",
+        text: `### Title\n\`\`\`\n${formatDiscordApprovalPreview(request.title, 500)}\n\`\`\``,
+      },
+      {
+        type: "text",
+        text: `### Description\n${formatDiscordApprovalPreview(request.description, 1000)}`,
+      },
+      { type: "text", text: metadataLines.join("\n") },
+      {
+        type: "actions",
+        buttons: [
+          {
+            label: "Allow once",
+            style: "success",
+            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "allow-once"),
+          },
+          {
+            label: "Always allow",
+            style: "primary",
+            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "allow-always"),
+          },
+          {
+            label: "Deny",
+            style: "danger",
+            internalCustomId: buildDiscordExecApprovalCustomId(params.request.id, "deny"),
+          },
+        ],
+      },
+      { type: "separator", divider: false, spacing: "small" },
+      { type: "text", text: `-# Expires <t:${expiresAtSeconds}:R> · ID: ${params.request.id}` },
+    ],
+  };
+}
+
+function buildDiscordPluginResolvedComponentSpec(params: {
+  resolved: PluginApprovalResolved;
+}): DiscordComponentMessageSpec | undefined {
+  const request = params.resolved.request;
+  if (!request) {
+    return undefined;
+  }
+  const decisionLabel =
+    params.resolved.decision === "allow-once"
+      ? "Allowed (once)"
+      : params.resolved.decision === "allow-always"
+        ? "Allowed (always)"
+        : "Denied";
+  const accentColor =
+    params.resolved.decision === "deny"
+      ? "#ED4245"
+      : params.resolved.decision === "allow-always"
+        ? "#5865F2"
+        : "#57F287";
+  const metadataLines: string[] = [];
+  if (request.toolName) {
+    metadataLines.push(`- Tool: ${request.toolName}`);
+  }
+  if (request.pluginId) {
+    metadataLines.push(`- Plugin: ${request.pluginId}`);
+  }
+  if (request.agentId) {
+    metadataLines.push(`- Agent: ${request.agentId}`);
+  }
+  return {
+    container: { accentColor },
+    blocks: [
+      { type: "text", text: `## Plugin Approval: ${decisionLabel}` },
+      {
+        type: "text",
+        text: params.resolved.resolvedBy ? `Resolved by ${params.resolved.resolvedBy}` : "Resolved",
+      },
+      { type: "separator", divider: true, spacing: "small" },
+      {
+        type: "text",
+        text: `### Title\n\`\`\`\n${formatDiscordApprovalPreview(request.title, 500)}\n\`\`\``,
+      },
+      {
+        type: "text",
+        text: `### Description\n${formatDiscordApprovalPreview(request.description, 1000)}`,
+      },
+      ...(metadataLines.length > 0
+        ? [{ type: "text" as const, text: metadataLines.join("\n") }]
+        : []),
+      { type: "separator", divider: false, spacing: "small" },
+      { type: "text", text: `-# ID: ${params.resolved.id}` },
+    ],
+  };
 }
 
 const discordMessageActions: ChannelMessageActionAdapter = {
@@ -293,6 +435,32 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         shouldSuppressForwardingFallback: ({ cfg, target }) =>
           (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
           isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
+        buildPluginPendingPayload: ({ request, nowMs }) => ({
+          text: buildPluginApprovalRequestMessage(request, nowMs),
+          channelData: {
+            execApproval: {
+              approvalId: request.id,
+              approvalSlug: request.id.slice(0, 8),
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+            discord: {
+              components: buildDiscordPluginPendingComponentSpec({ request }),
+            },
+          },
+        }),
+        buildPluginResolvedPayload: ({ resolved }) => {
+          const componentSpec = buildDiscordPluginResolvedComponentSpec({ resolved });
+          return componentSpec
+            ? {
+                text: buildPluginApprovalResolvedMessage(resolved),
+                channelData: {
+                  discord: {
+                    components: componentSpec,
+                  },
+                },
+              }
+            : { text: buildPluginApprovalResolvedMessage(resolved) };
+        },
       },
       directory: createChannelDirectoryAdapter({
         listPeers: async (params) => listDiscordDirectoryPeersFromConfig(params),
