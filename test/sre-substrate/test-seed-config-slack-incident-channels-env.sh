@@ -12,6 +12,7 @@ SKILL_ROOT="$RUNTIME_REPO/skills/morpho-sre"
 mkdir -p "$SKILL_ROOT/config" "$SKILL_ROOT/references" "$SKILL_ROOT/evidence-manifests"
 for bundled_skill in \
   argocd-diff \
+  coding-agent \
   eks-troubleshoot \
   foundry-evm-debug \
   frontend-design \
@@ -23,7 +24,6 @@ for bundled_skill in \
   vercel \
   vercel-composition-patterns \
   vercel-react-best-practices \
-  vite \
   vitest \
   webapp-testing \
   web-design-guidelines \

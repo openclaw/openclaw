@@ -1,11 +1,11 @@
 ---
 name: nextjs-app-router-patterns
-description: Master Next.js 14+ App Router with Server Components, streaming, parallel routes, and advanced data fetching. Use when building Next.js applications, implementing SSR/SSG, or optimizing React Server Components.
+description: Master Next.js 15+ App Router with Server Components, streaming, parallel routes, and advanced data fetching. Use when building Next.js applications, implementing SSR/SSG, or optimizing React Server Components.
 ---
 
 # Next.js App Router Patterns
 
-Comprehensive patterns for Next.js 14+ App Router architecture, Server Components, and modern full-stack React development.
+Comprehensive patterns for Next.js 15+ App Router architecture, Server Components, and modern full-stack React development.
 
 ## When to Use This Skill
 
@@ -527,7 +527,7 @@ export async function updateProduct(id: string, data: ProductData) {
 
 ### Don'ts
 
-- **Don't pass serializable data** - Server → Client boundary limitations
+- **Don't pass non-serializable data** - Server → Client boundary only supports JSON-serializable values
 - **Don't use hooks in Server Components** - No useState, useEffect
 - **Don't fetch in Client Components** - Use Server Components or React Query
 - **Don't over-nest layouts** - Each layout adds to the component tree

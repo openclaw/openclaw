@@ -7,6 +7,8 @@ tags: advanced, hooks, useEffectEvent, refs, optimization
 
 ## useEffectEvent for Stable Callback Refs
 
+> **Note:** `useEffectEvent` is an experimental React API not yet shipped in stable React 19. Check React release notes for stable availability.
+
 Access latest values in callbacks without adding them to dependency arrays. Prevents effect re-runs while avoiding stale closures.
 
 **Incorrect (effect re-runs on every callback change):**

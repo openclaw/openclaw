@@ -21,6 +21,7 @@ setup_runtime_repo() {
   mkdir -p "$skill_root/config" "$skill_root/references" "$skill_root/evidence-manifests"
   for bundled_skill in \
     argocd-diff \
+    coding-agent \
     eks-troubleshoot \
     foundry-evm-debug \
     frontend-design \
@@ -32,7 +33,6 @@ setup_runtime_repo() {
     vercel \
     vercel-composition-patterns \
     vercel-react-best-practices \
-    vite \
     vitest \
     webapp-testing \
     web-design-guidelines \

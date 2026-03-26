@@ -9,6 +9,8 @@ tags: rendering, activity, visibility, state-preservation
 
 Use React's `<Activity>` to preserve state/DOM for expensive components that frequently toggle visibility.
 
+> **Note:** `<Activity>` is an experimental React API available only in canary builds. Check React release notes for stable availability.
+
 **Usage:**
 
 ```tsx
