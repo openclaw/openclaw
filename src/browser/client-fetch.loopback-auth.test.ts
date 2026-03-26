@@ -22,28 +22,29 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../../extensions/browser/src/config/config.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../extensions/browser/src/config/config.js")>();
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
   };
 });
 
-vi.mock("./control-service.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-service.js", () => ({
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
 
-vi.mock("./control-auth.js", () => ({
+vi.mock("../../extensions/browser/src/browser/control-auth.js", () => ({
   resolveBrowserControlAuth: mocks.resolveBrowserControlAuth,
 }));
 
-vi.mock("./bridge-auth-registry.js", () => ({
+vi.mock("../../extensions/browser/src/browser/bridge-auth-registry.js", () => ({
   getBridgeAuthForPort: mocks.getBridgeAuthForPort,
 }));
 
-vi.mock("./routes/dispatcher.js", () => ({
+vi.mock("../../extensions/browser/src/browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: vi.fn(() => ({
     dispatch: mocks.dispatch,
   })),
