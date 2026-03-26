@@ -38,17 +38,17 @@
     "read": {
       "emoji": "📖",
       "title": "Read",
-      "detailKeys": ["path"]
+      "detailKeys": ["path", "file_path", "filePath", "file"]
     },
     "write": {
       "emoji": "✍️",
       "title": "Write",
-      "detailKeys": ["path"]
+      "detailKeys": ["path", "file_path", "filePath", "file"]
     },
     "edit": {
       "emoji": "📝",
       "title": "Edit",
-      "detailKeys": ["path"]
+      "detailKeys": ["path", "file_path", "filePath", "file"]
     },
     "attach": {
       "emoji": "📎",
