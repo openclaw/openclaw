@@ -1,5 +1,8 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
+import type { PersistentMcpManager } from "../agents/persistent-mcp-manager.js";
+import { setPersistentMcpManager } from "../agents/pi-bundle-mcp-tools.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/pi-embedded-runner.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -31,6 +34,7 @@ export function createGatewayCloseHandler(params: {
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   browserControl: { stop: () => Promise<void> } | null;
+  persistentMcpManager: PersistentMcpManager | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
@@ -135,6 +139,11 @@ export function createGatewayCloseHandler(params: {
       await params.configReloader.stop().catch(() => {});
       if (params.browserControl) {
         await params.browserControl.stop().catch(() => {});
+      }
+      await disposeAllSessionMcpRuntimes().catch(() => {});
+      if (params.persistentMcpManager) {
+        await params.persistentMcpManager.dispose().catch(() => {});
+        setPersistentMcpManager(null);
       }
       await new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const servers =

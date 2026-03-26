@@ -1,0 +1,428 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import {
+  describeStdioMcpServerLaunchConfig,
+  resolveStdioMcpServerLaunchConfig,
+} from "./mcp-stdio.js";
+
+const SIGTERM_WAIT_MS = 800;
+const SIGKILL_WAIT_MS = 500;
+
+type PersistentMcpServerState = "initializing" | "ready" | "failed" | "disposed";
+
+type PersistentMcpPidLock = {
+  pid: number;
+  createdAt: string;
+  starttime?: number;
+  serverName: string;
+};
+
+type PersistentMcpServerHandle = {
+  serverName: string;
+  client: Client;
+  transport: StdioClientTransport;
+  pid: number | null;
+  detachStderr?: () => void;
+  state: PersistentMcpServerState;
+  lockPath: string;
+  /** In-flight _startServer promise, set while state === "initializing". */
+  startPromise: Promise<void> | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function attachStderrLogging(
+  serverName: string,
+  transport: StdioClientTransport,
+  log: { warn: (msg: string) => void },
+): (() => void) | undefined {
+  const stderr = transport.stderr;
+  if (!stderr || typeof (stderr as NodeJS.ReadableStream).on !== "function") {
+    return undefined;
+  }
+  const onData = (chunk: Buffer | string) => {
+    const message = String(chunk).trim();
+    if (!message) return;
+    for (const line of message.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        log.warn(`persistent-mcp:${serverName}: ${trimmed}`);
+      }
+    }
+  };
+  (stderr as NodeJS.ReadableStream).on("data", onData);
+  return () => {
+    if (typeof (stderr as NodeJS.ReadableStream).off === "function") {
+      (stderr as NodeJS.ReadableStream).off("data", onData);
+    }
+  };
+}
+
+async function killStaleProcess(pid: number, starttime: number | undefined): Promise<void> {
+  if (!isPidAlive(pid)) return;
+
+  // PID recycle guard: if starttime is not available (platform doesn't support it),
+  // skip the kill entirely to avoid terminating an unrelated process that reused the PID.
+  if (starttime === undefined) return;
+
+  const currentStarttime = getProcessStartTime(pid);
+  if (currentStarttime !== null && currentStarttime !== starttime) {
+    // Different process has taken this PID — don't kill it.
+    return;
+  }
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  await sleep(SIGTERM_WAIT_MS);
+  if (isPidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    await sleep(SIGKILL_WAIT_MS);
+  }
+}
+
+async function readLockFile(lockPath: string): Promise<PersistentMcpPidLock | null> {
+  try {
+    const content = await fs.readFile(lockPath, "utf8");
+    const parsed = JSON.parse(content) as unknown;
+    if (
+      isRecord(parsed) &&
+      typeof parsed.pid === "number" &&
+      typeof parsed.serverName === "string"
+    ) {
+      return parsed as PersistentMcpPidLock;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLockFile(lockPath: string, lock: PersistentMcpPidLock): Promise<void> {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  await fs.writeFile(lockPath, JSON.stringify(lock, null, 2), "utf8");
+}
+
+async function deleteLockFile(lockPath: string): Promise<void> {
+  await fs.unlink(lockPath).catch(() => {});
+}
+
+export class PersistentMcpManager {
+  private readonly cfg: OpenClawConfig | undefined;
+  private readonly log: { warn: (msg: string) => void };
+  private readonly stateDir: string;
+  private readonly handles = new Map<string, PersistentMcpServerHandle>();
+  private state: "initializing" | "ready" | "failed" | "disposed" = "failed";
+  private initPromise: Promise<void> | null = null;
+
+  constructor(params: {
+    cfg?: OpenClawConfig;
+    log: { warn: (msg: string) => void };
+    stateDir: string;
+  }) {
+    this.cfg = params.cfg;
+    this.log = params.log;
+    this.stateDir = params.stateDir;
+  }
+
+  /**
+   * Returns the names of all servers that have been configured as persistent.
+   */
+  getPersistentServerNames(): Set<string> {
+    const names = new Set<string>();
+    const servers = this.cfg?.mcp?.servers;
+    if (!servers) return names;
+    for (const [name, srv] of Object.entries(servers)) {
+      if (isRecord(srv) && srv.persistent === true) {
+        names.add(name);
+      }
+    }
+    return names;
+  }
+
+  /**
+   * Ensure all persistent MCP servers are connected. Idempotent.
+   * - If currently initializing: waits for the in-progress init.
+   * - If ready: returns immediately.
+   * - If failed or never started: triggers a fresh init attempt.
+   * - If disposed: returns without re-initializing.
+   */
+  /**
+   * Note: this method is guaranteed never to reject. Individual server failures are
+   * caught and logged inside `_doStartServer`; only a catastrophic unexpected error
+   * in `_doInit` itself could propagate, which is not expected in practice.
+   * The `.catch()` call in `server-startup.ts` and `try/catch` in
+   * `createPersistentConfiguredMcpProjection` are kept as defensive guards.
+   */
+  async ensureReady(): Promise<void> {
+    if (this.state === "disposed") return;
+    if (this.state === "ready") return;
+
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
+
+    this.state = "initializing";
+    this.initPromise = this._doInit().then(
+      () => {
+        this.initPromise = null;
+        // Guard: dispose() may have run while init was in flight.
+        if (this.state !== "disposed") this.state = "ready";
+      },
+      (err) => {
+        this.initPromise = null;
+        if (this.state !== "disposed") this.state = "failed";
+        this.log.warn(`persistent-mcp: initialization failed: ${String(err)}`);
+      },
+    );
+    await this.initPromise;
+  }
+
+  private async _doInit(): Promise<void> {
+    const servers = this.cfg?.mcp?.servers;
+    if (!servers) return;
+
+    for (const [serverName, rawServer] of Object.entries(servers)) {
+      if (!isRecord(rawServer) || rawServer.persistent !== true) continue;
+
+      const existing = this.handles.get(serverName);
+      if (existing && existing.state === "ready") continue;
+
+      await this._startServer(serverName, rawServer);
+    }
+  }
+
+  private _startServer(serverName: string, rawServer: unknown): Promise<void> {
+    // If a start is already in progress for this server, return the existing promise
+    // so concurrent callers await the same operation instead of double-spawning.
+    const existing = this.handles.get(serverName);
+    if (existing?.startPromise) {
+      return existing.startPromise;
+    }
+
+    // Create a dedup promise before the first await in _doStartServer so concurrent
+    // callers that race into this method before the handle is created will still
+    // share one start operation.
+    let resolveDedup!: () => void;
+    let rejectDedup!: (err: unknown) => void;
+    const dedup = new Promise<void>((res, rej) => {
+      resolveDedup = res;
+      rejectDedup = rej;
+    });
+
+    // Plant a sentinel handle immediately so that any concurrent _startServer /
+    // getReadyClient call sees startPromise and awaits it instead of spawning again.
+    const sentinel: PersistentMcpServerHandle = {
+      serverName,
+      client: null as unknown as Client,
+      transport: null as unknown as StdioClientTransport,
+      pid: null,
+      state: "initializing",
+      lockPath: "",
+      startPromise: dedup,
+      detachStderr: () => {},
+    };
+    this.handles.set(serverName, sentinel);
+
+    void this._doStartServer(serverName, rawServer, sentinel).then(resolveDedup, (err) => {
+      rejectDedup(err);
+    });
+
+    return dedup;
+  }
+
+  private async _doStartServer(
+    serverName: string,
+    rawServer: unknown,
+    sentinel: PersistentMcpServerHandle,
+  ): Promise<void> {
+    const launch = resolveStdioMcpServerLaunchConfig(rawServer);
+    if (!launch.ok) {
+      this.log.warn(`persistent-mcp: skipped server "${serverName}" because ${launch.reason}.`);
+      this.handles.delete(serverName);
+      return;
+    }
+    const launchConfig = launch.config;
+    // Sanitize serverName to prevent path traversal (e.g. "../foo" as a config key).
+    const safeName = path.basename(serverName).replace(/[^\w.-]/g, "_") || "_unknown";
+    const lockPath = path.join(this.stateDir, "mcp", `${safeName}.lock`);
+
+    // Clean up any stale process from a previous run.
+    const existingLock = await readLockFile(lockPath);
+    if (existingLock && existingLock.pid > 0) {
+      await killStaleProcess(existingLock.pid, existingLock.starttime);
+      // Only delete the lock once we can confirm the old process is gone.
+      // When starttime is unavailable (macOS/Windows), killStaleProcess skips
+      // the kill to avoid hitting a recycled PID — leave the lock intact so we
+      // don't spawn a duplicate alongside a potentially still-running process.
+      if (!isPidAlive(existingLock.pid)) {
+        await deleteLockFile(lockPath);
+      }
+    }
+
+    const transport = new StdioClientTransport({
+      command: launchConfig.command,
+      args: launchConfig.args,
+      env: launchConfig.env,
+      cwd: launchConfig.cwd,
+      stderr: "pipe",
+    });
+
+    const client = new Client({ name: "openclaw-persistent-mcp", version: "0.0.0" }, {});
+
+    // Replace the sentinel handle with the real one. startPromise carries over from
+    // the sentinel so concurrent callers that are awaiting it still get notified.
+    const handle: PersistentMcpServerHandle = {
+      serverName,
+      client,
+      transport,
+      pid: null,
+      state: "initializing",
+      lockPath,
+      startPromise: sentinel.startPromise,
+      detachStderr: attachStderrLogging(serverName, transport, this.log),
+    };
+    this.handles.set(serverName, handle);
+
+    // Register disconnect/error handlers BEFORE connect() so the SDK chains them
+    // correctly (SDK saves the pre-existing callbacks and calls them first).
+    transport.onclose = () => {
+      if (handle.state === "ready") {
+        handle.state = "failed";
+        this.log.warn(
+          `persistent-mcp: server "${serverName}" disconnected; will reconnect on next use`,
+        );
+        void deleteLockFile(lockPath);
+      }
+    };
+    transport.onerror = (err) => {
+      if (handle.state === "ready") {
+        handle.state = "failed";
+        this.log.warn(
+          `persistent-mcp: server "${serverName}" error: ${String(err)}; will reconnect on next use`,
+        );
+        void deleteLockFile(lockPath);
+        // Close the client and transport so the old subprocess is cleaned up
+        // before a lazy reconnect spawns a new one.
+        void handle.client.close().catch(() => {});
+        void handle.transport.close().catch(() => {});
+      }
+    };
+
+    try {
+      await client.connect(transport);
+
+      const pid = transport.pid ?? null;
+      handle.pid = pid;
+      handle.state = "ready";
+      // Clear startPromise so getReadyClient() uses the state check path after
+      // startup, not the "await in-flight start" path. Without this, a handle
+      // that transitions to "failed" (e.g. transport disconnect) would keep a
+      // settled startPromise and getReadyClient() would return null forever
+      // instead of triggering a lazy reconnect.
+      handle.startPromise = null;
+
+      if (pid !== null && pid > 0) {
+        const starttime = getProcessStartTime(pid) ?? undefined;
+        await writeLockFile(lockPath, {
+          pid,
+          createdAt: new Date().toISOString(),
+          starttime,
+          serverName,
+        });
+      }
+
+      this.log.warn(
+        `persistent-mcp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) pid=${pid ?? "unknown"}`,
+      );
+    } catch (err) {
+      handle.state = "failed";
+      handle.startPromise = null;
+      handle.detachStderr?.();
+      await client.close().catch(() => {});
+      await transport.close().catch(() => {});
+      this.handles.delete(serverName);
+      this.log.warn(
+        `persistent-mcp: failed to start "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}): ${String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Return a ready client for the given server name, or null if unavailable.
+   * If the handle exists but is failed, triggers a lazy reconnect.
+   */
+  async getReadyClient(serverName: string): Promise<Client | null> {
+    if (this.state === "disposed") return null;
+
+    const handle = this.handles.get(serverName);
+
+    if (handle?.state === "ready") return handle.client;
+
+    // A concurrent caller is already starting this server — await it.
+    if (handle?.startPromise) {
+      await handle.startPromise.catch(() => {});
+      const refreshed = this.handles.get(serverName);
+      if (refreshed?.state === "ready") return refreshed.client;
+      return null;
+    }
+
+    // Lazy reconnect: handle is missing (first spawn failed and was cleaned up)
+    // or exists but is in a failed state.
+    if (!handle || handle.state === "failed") {
+      const rawServer = this.cfg?.mcp?.servers?.[serverName];
+      if (rawServer) {
+        await this._startServer(serverName, rawServer);
+        const refreshed = this.handles.get(serverName);
+        if (refreshed?.state === "ready") return refreshed.client;
+      }
+    }
+
+    return null;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.state === "disposed") return;
+    this.state = "disposed";
+
+    // Wait for any in-progress init to settle before disposing.
+    if (this.initPromise) {
+      await this.initPromise.catch(() => {});
+    }
+
+    // Wait for any in-flight per-server startPromises so that _doStartServer
+    // cannot continue creating connections after we clear the handles map.
+    await Promise.allSettled(
+      Array.from(this.handles.values())
+        .filter((h) => h.startPromise)
+        .map((h) => h.startPromise!.catch(() => {})),
+    );
+
+    await Promise.allSettled(
+      Array.from(this.handles.values()).map(async (handle) => {
+        handle.detachStderr?.();
+        await handle.client.close().catch(() => {});
+        await handle.transport.close().catch(() => {});
+        await deleteLockFile(handle.lockPath);
+      }),
+    );
+    this.handles.clear();
+  }
+}

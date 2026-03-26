@@ -6,6 +6,7 @@ import {
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+  disposeSessionMcpRuntime: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));

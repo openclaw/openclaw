@@ -89,7 +89,7 @@ import {
   resolveThinkingDefault,
 } from "./model-selection.js";
 import { prepareSessionManagerForRun } from "./pi-embedded-runner/session-manager-init.js";
-import { runEmbeddedPiAgent } from "./pi-embedded.js";
+import { disposeSessionMcpRuntime, runEmbeddedPiAgent } from "./pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
 import { getSkillsSnapshotVersion } from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
@@ -651,6 +651,14 @@ async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+
+  // When the session rolls over (/new or /reset), dispose the old session's transient
+  // MCP subprocesses so they don't leak. Only the replaced session is cleaned up;
+  // other live sessions are unaffected.
+  if (isNewSession && sessionEntryRaw?.sessionId) {
+    disposeSessionMcpRuntime(sessionEntryRaw.sessionId);
+  }
+
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({

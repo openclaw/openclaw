@@ -32,25 +32,30 @@ function createMockUsage(input: number, output: number) {
 let streamCallCount = 0;
 let observedContexts: Array<Array<{ role?: string; content?: unknown }>> = [];
 
+const bundleMcpRuntimeFactory = async () => ({
+  tools: [
+    {
+      name: "bundle_probe",
+      label: "bundle_probe",
+      description: "Bundle MCP probe",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({
+        content: [{ type: "text", text: "FROM-BUNDLE" }],
+        details: {
+          mcpServer: "bundleProbe",
+          mcpTool: "bundle_probe",
+        },
+      }),
+    },
+  ],
+  dispose: async () => {},
+});
+
 vi.mock("./pi-bundle-mcp-tools.js", () => ({
-  createBundleMcpToolRuntime: async () => ({
-    tools: [
-      {
-        name: "bundle_probe",
-        label: "bundle_probe",
-        description: "Bundle MCP probe",
-        parameters: { type: "object", properties: {} },
-        execute: async () => ({
-          content: [{ type: "text", text: "FROM-BUNDLE" }],
-          details: {
-            mcpServer: "bundleProbe",
-            mcpTool: "bundle_probe",
-          },
-        }),
-      },
-    ],
-    dispose: async () => {},
-  }),
+  createBundleMcpToolRuntime: bundleMcpRuntimeFactory,
+  createEmbeddedBundleMcpRuntime: bundleMcpRuntimeFactory,
+  getPersistentMcpManager: () => null,
+  setPersistentMcpManager: () => {},
 }));
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {

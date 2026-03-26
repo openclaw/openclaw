@@ -306,6 +306,12 @@ export async function loadCompactHooksHarness(): Promise<{
       tools: [],
       dispose: vi.fn(async () => {}),
     })),
+    createEmbeddedBundleMcpRuntime: vi.fn(async () => ({
+      tools: [],
+      dispose: vi.fn(async () => {}),
+    })),
+    getPersistentMcpManager: vi.fn(() => null),
+    setPersistentMcpManager: vi.fn(),
   }));
 
   vi.doMock("../pi-bundle-lsp-runtime.js", () => ({

@@ -9,6 +9,8 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { PersistentMcpManager } from "../agents/persistent-mcp-manager.js";
+import { setPersistentMcpManager } from "../agents/pi-bundle-mcp-tools.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
@@ -153,6 +155,21 @@ export async function startGatewaySidecars(params: {
     params.logHooks.error(`failed to load hooks: ${String(err)}`);
   }
 
+  // Register the persistent MCP manager singleton BEFORE starting channels so that
+  // any inbound message handled immediately after channel startup already sees the
+  // manager and uses persistent clients instead of falling back to transient spawns.
+  const stateDir = resolveStateDir(process.env);
+  const persistentMcpManager = new PersistentMcpManager({
+    cfg: params.cfg,
+    log: params.log,
+    stateDir,
+  });
+  setPersistentMcpManager(persistentMcpManager);
+  // Eager warmup — failures are non-fatal; manager will retry lazily on first use.
+  persistentMcpManager.ensureReady().catch((err) => {
+    params.log.warn(`persistent-mcp: eager warmup failed: ${String(err)}`);
+  });
+
   // Launch configured channels so gateway replies via the surface the message came from.
   // Tests can opt out via OPENCLAW_SKIP_CHANNELS (or legacy OPENCLAW_SKIP_PROVIDERS).
   const skipChannels =
@@ -222,7 +239,7 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices };
+  return { browserControl, pluginServices, persistentMcpManager };
 }
 
 export const __testing = {

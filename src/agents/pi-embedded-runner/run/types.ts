@@ -5,6 +5,7 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
+import type { BundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
@@ -30,6 +31,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /** Pre-created MCP runtime to reuse across attempts (skips create/dispose per attempt). */
+  bundleMcpRuntime?: BundleMcpToolRuntime;
 };
 
 export type EmbeddedRunAttemptResult = {

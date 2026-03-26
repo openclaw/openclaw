@@ -43134,6 +43134,19 @@
       "hasChildren": false
     },
     {
+      "path": "mcp.servers.*.persistent",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "help": "When true, keeps the MCP server process alive at gateway level and shares it across all agent sessions. Only supported for stdio servers (requires command). Enables browser state, cookies, and login sessions to persist across conversations. Explicit opt-in — shared process state is visible to all sessions.",
+      "hasChildren": false
+    },
+    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
