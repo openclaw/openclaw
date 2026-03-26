@@ -1012,8 +1012,12 @@ describe("gateway server sessions", () => {
           sessionId: "sess-owned-child",
           updatedAt: Date.now(),
           spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/child-workspace",
           parentSessionKey: "agent:main:main",
+          forkedFromParent: true,
           spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
           elevatedLevel: "on",
           label: "owned child",
         },
@@ -1026,8 +1030,12 @@ describe("gateway server sessions", () => {
       key: string;
       entry: {
         spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
         parentSessionKey?: string;
+        forkedFromParent?: boolean;
         spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
         elevatedLevel?: string;
         label?: string;
       };
@@ -1035,8 +1043,12 @@ describe("gateway server sessions", () => {
 
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(reset.payload?.entry.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
     expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    expect(reset.payload?.entry.forkedFromParent).toBe(true);
     expect(reset.payload?.entry.spawnDepth).toBe(2);
+    expect(reset.payload?.entry.subagentRole).toBe("orchestrator");
+    expect(reset.payload?.entry.subagentControlScope).toBe("children");
     expect(reset.payload?.entry.elevatedLevel).toBe("on");
     expect(reset.payload?.entry.label).toBe("owned child");
 
@@ -1044,15 +1056,23 @@ describe("gateway server sessions", () => {
       string,
       {
         spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
         parentSessionKey?: string;
+        forkedFromParent?: boolean;
         spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
         elevatedLevel?: string;
         label?: string;
       }
     >;
     expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
     expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.forkedFromParent).toBe(true);
     expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);
+    expect(store["agent:main:subagent:child"]?.subagentRole).toBe("orchestrator");
+    expect(store["agent:main:subagent:child"]?.subagentControlScope).toBe("children");
     expect(store["agent:main:subagent:child"]?.elevatedLevel).toBe("on");
     expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
 
