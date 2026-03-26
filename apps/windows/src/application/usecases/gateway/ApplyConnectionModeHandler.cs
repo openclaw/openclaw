@@ -67,7 +67,8 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
                         ? target
                         : $"{identity}@{target}";
 
-                    var result = await _tunnel.ConnectAsync(tunnelEndpoint, LocalTunnelPort, LocalTunnelPort, ct);
+                    var remotePort = ResolveRemotePort(settings);
+                    var result = await _tunnel.ConnectAsync(tunnelEndpoint, LocalTunnelPort, remotePort, ct);
                     if (result.IsError)
                         // Non-fatal: coordinator will retry; tunnel may succeed after GAP-023
                         _logger.LogWarning("SSH tunnel connect failed: {Error}", result.FirstError.Description);
@@ -76,6 +77,20 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
         }
 
         return Result.Success;
+    }
+
+    private static int ResolveRemotePort(AppSettings settings)
+    {
+        var raw = settings.RemoteUrl?.Trim();
+        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
+        {
+            var portStr = url.GetComponents(UriComponents.Port, UriFormat.Unescaped);
+            if (!string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out var explicit0))
+                return explicit0;
+            // wss:// defaults to 443; ws:// defaults to LocalTunnelPort
+            return url.Scheme.ToLowerInvariant() == "wss" ? 443 : LocalTunnelPort;
+        }
+        return LocalTunnelPort;
     }
 
     // determines effective mode from AppSettings.

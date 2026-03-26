@@ -275,7 +275,7 @@ internal sealed class DevicePairingApprovalOrchestrator : IHostedService, IDevic
         var tcs = new TaskCompletionSource<PairingDecision>();
         var vm  = BuildViewModel(req);
 
-        _dispatcherQueue?.TryEnqueue(async () =>
+        var enqueued = _dispatcherQueue?.TryEnqueue(async () =>
         {
             try
             {
@@ -308,7 +308,11 @@ internal sealed class DevicePairingApprovalOrchestrator : IHostedService, IDevic
                 lock (_lock) { _activeDialog = null; }
                 tcs.TrySetResult(PairingDecision.Later);
             }
-        });
+        }) ?? false;
+
+        // If the dispatcher is unavailable or the queue is full, unblock the loop immediately.
+        if (!enqueued)
+            tcs.TrySetResult(PairingDecision.Later);
 
         return tcs.Task;
     }
