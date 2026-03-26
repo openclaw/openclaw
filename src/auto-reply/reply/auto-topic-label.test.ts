@@ -171,4 +171,56 @@ describe("generateTopicLabel", () => {
       cfg: {},
     });
   });
+
+  it("passes prompt as systemPrompt and omits temperature for codex simple completion", async () => {
+    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai-codex", model: "gpt-5.4" });
+    resolveModelAsync.mockResolvedValue({
+      model: { provider: "openai-codex", api: "openai-codex-responses" },
+      authStorage: {},
+      modelRegistry: {},
+    });
+    prepareModelForSimpleCompletion.mockImplementation(({ model }) => model);
+
+    await generateTopicLabel({
+      userMessage: "Tell me a joke",
+      prompt: "Generate a very short topic label.",
+      cfg: {},
+      agentId: "main",
+    });
+
+    expect(completeSimple).toHaveBeenCalledWith(
+      { provider: "openai-codex", api: "openai-codex-responses" },
+      {
+        systemPrompt: "Generate a very short topic label.",
+        messages: [
+          {
+            role: "user",
+            content: "Tell me a joke",
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: "resolved-key",
+        maxTokens: 100,
+        signal: expect.any(AbortSignal),
+      },
+    );
+  });
+
+  it("returns null when simple completion reports an error", async () => {
+    completeSimple.mockResolvedValue({
+      content: [],
+      stopReason: "error",
+      errorMessage: "boom",
+    });
+
+    await expect(
+      generateTopicLabel({
+        userMessage: "Need help",
+        prompt: "Generate a label",
+        cfg: {},
+      }),
+    ).resolves.toBeNull();
+  });
 });

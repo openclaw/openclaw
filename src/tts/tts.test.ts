@@ -487,7 +487,11 @@ describe("tts", () => {
       });
 
       const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
+      expect(callArgs?.[1]?.systemPrompt).toContain(
+        "You are an assistant that summarizes texts concisely while keeping the most important information.",
+      );
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
+      expect(callArgs?.[1]?.messages?.[0]?.content).toContain("<text_to_summarize>");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
       expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
@@ -534,6 +538,44 @@ describe("tts", () => {
       });
 
       expect(ensureCustomApiRegisteredForTest).toHaveBeenCalledWith("ollama", expect.any(Function));
+    });
+
+    it("passes summary instructions via systemPrompt and omits temperature", async () => {
+      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      vi.mocked(resolveModelAsyncForTest).mockResolvedValue({
+        ...createResolvedModel("openai-codex", "gpt-5.4", "openai-codex-responses"),
+      } as never);
+
+      await summarizeTextForTest({
+        text: "Long text to summarize",
+        targetLength: 500,
+        cfg: baseCfg,
+        config: baseConfig,
+        timeoutMs: 30_000,
+      });
+
+      expect(completeSimpleForTest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+        }),
+        {
+          systemPrompt:
+            "You are an assistant that summarizes texts concisely while keeping the most important information. Summarize the text to approximately 500 characters. Maintain the original tone and style. Reply only with the summary, without additional explanations.",
+          messages: [
+            {
+              role: "user",
+              content: "<text_to_summarize>\nLong text to summarize\n</text_to_summarize>",
+              timestamp: expect.any(Number),
+            },
+          ],
+        },
+        {
+          apiKey: "test-api-key",
+          maxTokens: 250,
+          signal: expect.any(AbortSignal),
+        },
+      );
     });
 
     it("validates targetLength bounds", async () => {

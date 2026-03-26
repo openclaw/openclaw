@@ -473,28 +473,34 @@ export async function summarizeText(params: {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      const summaryPrompt =
+        `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
+        `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
+        `Reply only with the summary, without additional explanations.`;
+      const completionOptions = {
+        apiKey,
+        maxTokens: Math.ceil(targetLength / 2),
+        signal: controller.signal,
+        ...(completionModel.api === "openai-codex-responses" ? {} : { temperature: 0.3 }),
+      };
       const res = await completeSimple(
         completionModel,
         {
+          systemPrompt: summaryPrompt,
           messages: [
             {
               role: "user",
-              content:
-                `You are an assistant that summarizes texts concisely while keeping the most important information. ` +
-                `Summarize the text to approximately ${targetLength} characters. Maintain the original tone and style. ` +
-                `Reply only with the summary, without additional explanations.\n\n` +
-                `<text_to_summarize>\n${text}\n</text_to_summarize>`,
+              content: `<text_to_summarize>\n${text}\n</text_to_summarize>`,
               timestamp: Date.now(),
             },
           ],
         },
-        {
-          apiKey,
-          maxTokens: Math.ceil(targetLength / 2),
-          temperature: 0.3,
-          signal: controller.signal,
-        },
+        completionOptions,
       );
+
+      if (res.stopReason === "error") {
+        throw new Error(res.errorMessage ?? "No summary returned");
+      }
 
       const summary = res.content
         .filter(isTextContentBlock)

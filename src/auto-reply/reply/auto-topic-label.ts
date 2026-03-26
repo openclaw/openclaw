@@ -64,24 +64,32 @@ export async function generateTopicLabel(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    const completionOptions = {
+      apiKey,
+      maxTokens: 100,
+      signal: controller.signal,
+      ...(completionModel.api === "openai-codex-responses" ? {} : { temperature: 0.3 }),
+    };
+
     const result = await completeSimple(
       completionModel,
       {
+        systemPrompt: prompt,
         messages: [
           {
             role: "user",
-            content: `${prompt}\n\n${userMessage}`,
+            content: userMessage,
             timestamp: Date.now(),
           },
         ],
       },
-      {
-        apiKey,
-        maxTokens: 100,
-        temperature: 0.3,
-        signal: controller.signal,
-      },
+      completionOptions,
     );
+
+    if (result.stopReason === "error") {
+      logVerbose(`auto-topic-label: completion error: ${result.errorMessage ?? "unknown error"}`);
+      return null;
+    }
 
     const text = result.content
       .filter(isTextContentBlock)
