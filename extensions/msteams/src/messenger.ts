@@ -538,9 +538,7 @@ export async function sendMSTeamsMessages(params: {
           const remaining = messages.slice(idx);
           return {
             ids:
-              remaining.length > 0
-                ? await sendProactively(remaining, idx, threadActivityId)
-                : [],
+              remaining.length > 0 ? await sendProactively(remaining, idx, threadActivityId) : [],
             fellBack: true,
           };
         },
