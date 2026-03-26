@@ -124,5 +124,28 @@ describe("handshake auth helpers", () => {
         authMethod: "token",
       }),
     ).toBe(false);
+
+    // auth.mode=none: no shared secret or device token exists, but the gateway
+    // backend client on loopback should still skip pairing.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: true,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+
+    // auth.mode=none but remote: must not skip.
+    expect(
+      shouldSkipBackendSelfPairing({
+        connectParams,
+        isLocalClient: false,
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(false);
   });
 });

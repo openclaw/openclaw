@@ -75,13 +75,19 @@ export function shouldSkipBackendSelfPairing(params: {
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
+  // auth.mode=none: the gateway is explicitly configured with no auth, so there
+  // is no shared secret or device token to prove.  Requiring pairing in this
+  // configuration adds friction without security value — any client can already
+  // connect without credentials.  The isGatewayBackendClient + isLocalClient
+  // guards are sufficient.
+  const usesNoAuth = params.authMethod === "none";
   // `authMethod === "device-token"` only reaches this helper after the caller
   // has already accepted auth (`authOk === true`), so a separate
   // `deviceTokenAuthOk` flag would be redundant here.
   return (
     params.isLocalClient &&
     !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth || usesNoAuth)
   );
 }
 

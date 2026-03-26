@@ -116,6 +116,14 @@ export function evaluateMissingDeviceIdentity(params: {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }
+  // Loopback node-role sessions (internal services: cron, sessions_spawn, ACP
+  // tools) don't need device identity.  Device identity prevents MitM on
+  // network connections; loopback has no network attack surface.  Auth is
+  // already verified upstream — only the transport-level device-identity gate
+  // is relaxed.  Remote node connections are unchanged.
+  if (params.role === "node" && params.isLocalClient && params.authOk) {
+    return { kind: "allow" };
+  }
   if (roleCanSkipDeviceIdentity(params.role, params.sharedAuthOk)) {
     return { kind: "allow" };
   }
