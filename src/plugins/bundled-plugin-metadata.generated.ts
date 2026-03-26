@@ -299,6 +299,29 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "browser",
+    idHint: "browser-plugin",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/browser-plugin",
+    packageVersion: "2026.3.25",
+    packageDescription: "OpenClaw browser tool plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "browser",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      enabledByDefault: true,
+    },
+  },
+  {
     dirName: "byteplus",
     idHint: "byteplus",
     source: {

@@ -84,7 +84,6 @@ import {
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 import { NodeRegistry } from "./node-registry.js";
-import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import {
   createAgentEventHandler,
@@ -163,7 +162,6 @@ const logCanvas = log.child("canvas");
 const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
-const logBrowser = log.child("browser");
 
 let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | null = null;
 
@@ -742,7 +740,6 @@ export async function startGatewayServer(
   };
   let stopGatewayUpdateCheck = () => {};
   let tailscaleCleanup: (() => Promise<void>) | null = null;
-  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
   let skillsChangeUnsub = () => {};
@@ -787,7 +784,6 @@ export async function startGatewayServer(
       chatRunState,
       clients,
       configReloader,
-      browserControl,
       wss,
       httpServer,
       httpServers,
@@ -1262,7 +1258,7 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
       }
-      ({ browserControl, pluginServices } = await startGatewaySidecars({
+      ({ pluginServices } = await startGatewaySidecars({
         cfg: cfgAtStart,
         pluginRegistry,
         defaultWorkspaceDir,
@@ -1271,7 +1267,6 @@ export async function startGatewayServer(
         log,
         logHooks,
         logChannels,
-        logBrowser,
       }));
     }
 
@@ -1296,7 +1291,6 @@ export async function startGatewayServer(
               hookClientIpConfig,
               heartbeatRunner,
               cronState,
-              browserControl,
               channelHealthMonitor,
             }),
             setState: (nextState) => {
@@ -1306,13 +1300,11 @@ export async function startGatewayServer(
               cronState = nextState.cronState;
               cron = cronState.cron;
               cronStorePath = cronState.storePath;
-              browserControl = nextState.browserControl;
               channelHealthMonitor = nextState.channelHealthMonitor;
             },
             startChannel,
             stopChannel,
             logHooks,
-            logBrowser,
             logChannels,
             logCron,
             logReload,
@@ -1397,7 +1389,6 @@ export async function startGatewayServer(
     chatRunState,
     clients,
     configReloader,
-    browserControl,
     wss,
     httpServer,
     httpServers,
