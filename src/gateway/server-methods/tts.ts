@@ -5,8 +5,6 @@ import {
   normalizeSpeechProviderId,
 } from "../../tts/provider-registry.js";
 import {
-  OPENAI_TTS_MODELS,
-  OPENAI_TTS_VOICES,
   getTtsProvider,
   isTtsEnabled,
   isTtsProviderConfigured,
@@ -138,14 +136,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
           id: provider.id,
           name: provider.label,
           configured: provider.isConfigured({ cfg, config }),
-          models:
-            provider.id === "openai" && provider.models == null
-              ? [...OPENAI_TTS_MODELS]
-              : [...(provider.models ?? [])],
-          voices:
-            provider.id === "openai" && provider.voices == null
-              ? [...OPENAI_TTS_VOICES]
-              : [...(provider.voices ?? [])],
+          models: [...(provider.models ?? [])],
+          voices: [...(provider.voices ?? [])],
         })),
         active: getTtsProvider(config, prefsPath),
       });
