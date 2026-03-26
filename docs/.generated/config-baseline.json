@@ -15534,6 +15534,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.feishu.accounts.*.cardHeader",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.feishu.accounts.*.chunkMode",
       "kind": "channel",
       "type": "string",
@@ -16482,6 +16492,16 @@
       "path": "channels.feishu.capabilities.*",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.feishu.cardHeader",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
