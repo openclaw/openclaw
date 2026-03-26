@@ -15,7 +15,7 @@ const hoisted = vi.hoisted(() => {
   const sendWebhookMessageDiscord = vi.fn(async (_text: string, _opts?: unknown) => ({}));
   const restGet = vi.fn(async (..._args: unknown[]) => ({
     id: "thread-1",
-    type: 11,
+    type: ChannelType.PublicThread,
     parent_id: "parent-1",
   }));
   const restPost = vi.fn(async (..._args: unknown[]) => ({
@@ -79,7 +79,7 @@ describe("thread binding lifecycle", () => {
     hoisted.sendWebhookMessageDiscord.mockReset().mockResolvedValue({});
     hoisted.restGet.mockReset().mockResolvedValue({
       id: "thread-1",
-      type: 11,
+      type: ChannelType.PublicThread,
       parent_id: "parent-1",
     });
     hoisted.restPost.mockReset().mockResolvedValue({

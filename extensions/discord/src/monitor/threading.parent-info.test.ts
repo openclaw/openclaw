@@ -3,6 +3,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetDiscordChannelInfoCacheForTest } from "./message-utils.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
+// Ensure ChannelType is defined for the mock environment
+vi.mock("@buape/carbon", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@buape/carbon")>();
+  return {
+    ...actual,
+    ChannelType: {
+      ...actual?.ChannelType,
+      GuildText: 0,
+      GuildForum: 15,
+      GuildMedia: 16,
+      GuildVoice: 2,
+      GuildStageVoice: 13,
+      PublicThread: 11,
+      PrivateThread: 12,
+      AnnouncementThread: 10,
+      DM: 1,
+      GroupDM: 3,
+    },
+  };
+});
+
 describe("resolveDiscordThreadParentInfo", () => {
   beforeEach(() => {
     __resetDiscordChannelInfoCacheForTest();

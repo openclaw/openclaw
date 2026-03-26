@@ -26,11 +26,12 @@ describe("buildNodeShellCommand", () => {
     ]);
   });
 
-  it("uses /bin/sh for non-windows and missing platform values", () => {
-    expect(buildNodeShellCommand("echo hi", "darwin")).toEqual(["/bin/sh", "-lc", "echo hi"]);
-    expect(buildNodeShellCommand("echo hi", "linux")).toEqual(["/bin/sh", "-lc", "echo hi"]);
-    expect(buildNodeShellCommand("echo hi")).toEqual(["/bin/sh", "-lc", "echo hi"]);
-    expect(buildNodeShellCommand("echo hi", null)).toEqual(["/bin/sh", "-lc", "echo hi"]);
-    expect(buildNodeShellCommand("echo hi", "   ")).toEqual(["/bin/sh", "-lc", "echo hi"]);
+  it("uses current shell for non-windows and missing platform values", () => {
+    const shell = process.env.SHELL || "/bin/sh";
+    expect(buildNodeShellCommand("echo hi", "darwin")).toEqual([shell, "-lc", "echo hi"]);
+    expect(buildNodeShellCommand("echo hi", "linux")).toEqual([shell, "-lc", "echo hi"]);
+    expect(buildNodeShellCommand("echo hi")).toEqual([shell, "-lc", "echo hi"]);
+    expect(buildNodeShellCommand("echo hi", null)).toEqual([shell, "-lc", "echo hi"]);
+    expect(buildNodeShellCommand("echo hi", "   ")).toEqual([shell, "-lc", "echo hi"]);
   });
 });
