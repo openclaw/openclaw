@@ -132,6 +132,7 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
 | `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
 | `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
+| `OPENCLAW_INSTALL_CODEX_CLI`   | Install OpenAI Codex CLI during local image builds               |
 | `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
 | `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
@@ -273,12 +274,13 @@ See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/mai
 
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
     2. **Bake system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"`
-    3. **Install Playwright browsers**:
+    3. **Install Codex CLI in the image**: `export OPENCLAW_INSTALL_CODEX_CLI=1`
+    4. **Install Playwright browsers**:
        ```bash
        docker compose run --rm openclaw-cli \
          node /app/node_modules/playwright-core/cli.js install chromium
        ```
-    4. **Persist browser downloads**: set
+    5. **Persist browser downloads**: set
        `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` and use
        `OPENCLAW_HOME_VOLUME` or `OPENCLAW_EXTRA_MOUNTS`.
 

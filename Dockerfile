@@ -231,6 +231,14 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Optionally install the OpenAI Codex CLI for terminal-backed coding workflows.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_CODEX_CLI=1 ...
+# Uses the official npm package published by OpenAI.
+ARG OPENCLAW_INSTALL_CODEX_CLI=""
+RUN if [ -n "$OPENCLAW_INSTALL_CODEX_CLI" ]; then \
+      npm install -g @openai/codex; \
+    fi
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
