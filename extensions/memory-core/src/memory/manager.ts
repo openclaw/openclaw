@@ -349,7 +349,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!cleaned) {
       return [];
     }
-    await this.ensureProviderInitialized();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
