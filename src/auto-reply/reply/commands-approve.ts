@@ -1,5 +1,4 @@
 import {
-  getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../../extensions/telegram/api.js";
@@ -153,18 +152,9 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     }
 
     // Keep plugin-ID routing independent from exec approval client enablement so
-    // forwarded plugin approvals remain resolvable, but still honor explicit
-    // Telegram approver policy when it is configured.
-    const hasTelegramApproverPolicy =
-      getTelegramExecApprovalApprovers({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-      }).length > 0;
-    if (
-      isPluginId &&
-      hasTelegramApproverPolicy &&
-      !isTelegramExecApprovalApprover(telegramApproverContext)
-    ) {
+    // forwarded plugin approvals remain resolvable, but still require explicit
+    // Telegram approver membership for security parity.
+    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
       return {
         shouldContinue: false,
         reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },

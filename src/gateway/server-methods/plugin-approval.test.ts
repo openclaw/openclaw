@@ -385,7 +385,7 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("supports prefix matching for id", async () => {
+    it("requires exact id and rejects prefixes", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000, "abcdef-1234");
       void manager.register(record, 60_000);
@@ -395,7 +395,37 @@ describe("createPluginApprovalHandlers", () => {
         decision: "allow-always",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("unknown or expired"),
+          details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
+        }),
+      );
+    });
+
+    it("does not leak candidate ids when prefixes are ambiguous", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const recordA = manager.create({ title: "A", description: "D" }, 60_000, "plugin:abc-1111");
+      const recordB = manager.create({ title: "B", description: "D" }, 60_000, "plugin:abc-2222");
+      void manager.register(recordA, 60_000);
+      void manager.register(recordB, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: "plugin:abc",
+        decision: "deny",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "unknown or expired approval id",
+        }),
+      );
     });
   });
 });

@@ -53,6 +53,19 @@ function mergeParamsWithApprovalOverrides(
   return originalParams;
 }
 
+function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (err === signal.reason) {
+    return true;
+  }
+  if (err instanceof Error && err.name === "AbortError") {
+    return true;
+  }
+  return false;
+}
+
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
     state.toolLoopWarningBuckets = new Map();
@@ -313,12 +326,18 @@ export async function runBeforeToolCallHook(args: {
         }
         return { blocked: true, reason: "Approval timed out" };
       } catch (err) {
-        // Gateway error or abort signal — fall back to soft block
         safeOnResolution(PluginApprovalResolutions.CANCELLED);
+        if (isAbortSignalCancellation(err, args.signal)) {
+          log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
+          return {
+            blocked: true,
+            reason: "Approval cancelled (run aborted)",
+          };
+        }
         log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
         return {
           blocked: true,
-          reason: approval.description || "Plugin approval required (gateway unavailable)",
+          reason: "Plugin approval required (gateway unavailable)",
         };
       }
     }

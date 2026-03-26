@@ -484,7 +484,7 @@ describe("/approve command", () => {
     }
   });
 
-  it("routes Telegram plugin-prefixed IDs even when Telegram exec approvals are disabled", async () => {
+  it("rejects Telegram plugin-prefixed IDs when no approver policy is configured", async () => {
     const cfg = createTelegramApproveCfg(null);
     const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
       Provider: "telegram",
@@ -492,18 +492,10 @@ describe("/approve command", () => {
       SenderId: "123",
     });
 
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
-
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Approval allow-once submitted");
-    expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "plugin.approval.resolve",
-        params: { id: "plugin:abc123", decision: "allow-once" },
-      }),
-    );
+    expect(result.reply?.text).toContain("not authorized to approve plugin requests");
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
   });
 
   it("enforces Telegram approver policy for plugin-prefixed IDs when configured", async () => {

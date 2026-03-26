@@ -350,12 +350,18 @@ describe("before_tool_call requireApproval handling", () => {
     // The vi.mock for hook-runner-global doesn't propagate to pi-tools.before-tool-call.ts
     // because the setup file transitively loads the module before the mock is applied (CJS cache).
     // Bypass by directly setting the global singleton that getGlobalHookRunner() reads from.
-    const hookRunnerGlobalState = (globalThis as Record<symbol, { hookRunner: unknown }>)[
-      Symbol.for("openclaw.plugins.hook-runner-global-state")
-    ];
-    if (hookRunnerGlobalState) {
-      hookRunnerGlobalState.hookRunner = hookRunner;
+    const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+    const hookRunnerGlobalState = globalThis as Record<
+      symbol,
+      { hookRunner: unknown; registry?: unknown } | undefined
+    >;
+    if (!hookRunnerGlobalState[hookRunnerGlobalStateKey]) {
+      hookRunnerGlobalState[hookRunnerGlobalStateKey] = {
+        hookRunner: null,
+        registry: null,
+      };
     }
+    hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
     // Clear gateway mock state between tests to prevent call-count leaks.
     const { callGatewayTool } = await import("./tools/gateway.js");
     vi.mocked(callGatewayTool).mockReset();
@@ -520,7 +526,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(true);
-    expect(result).toHaveProperty("reason", "Gateway is unavailable");
+    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
   });
 
   it("blocks when gateway returns no id", async () => {
@@ -603,6 +609,7 @@ describe("before_tool_call requireApproval handling", () => {
     });
 
     expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
   });
 
@@ -768,12 +775,14 @@ describe("before_tool_call requireApproval handling", () => {
 
     mockCallGateway.mockRejectedValueOnce(new Error("gateway down"));
 
-    await runBeforeToolCallHook({
+    const result = await runBeforeToolCallHook({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Plugin approval required (gateway unavailable)");
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
 
@@ -799,13 +808,15 @@ describe("before_tool_call requireApproval handling", () => {
 
     setTimeout(() => controller.abort(new Error("run cancelled")), 10);
 
-    await runBeforeToolCallHook({
+    const result = await runBeforeToolCallHook({
       toolName: "bash",
       params: {},
       ctx: { agentId: "main", sessionKey: "main" },
       signal: controller.signal,
     });
 
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
     expect(onResolution).toHaveBeenCalledWith("cancelled");
   });
 

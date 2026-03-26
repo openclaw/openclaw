@@ -212,8 +212,9 @@ export function createPluginApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const resolvedId = manager.lookupPendingId(p.id);
-      if (resolvedId.kind === "none") {
+      const approvalId = p.id.trim();
+      const snapshot = manager.getSnapshot(approvalId);
+      if (!snapshot || snapshot.resolvedAtMs !== undefined) {
         respond(
           false,
           undefined,
@@ -223,21 +224,6 @@ export function createPluginApprovalHandlers(
         );
         return;
       }
-      if (resolvedId.kind === "ambiguous") {
-        const candidates = resolvedId.ids.slice(0, 3).join(", ");
-        const remainder = resolvedId.ids.length > 3 ? ` (+${resolvedId.ids.length - 3} more)` : "";
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `ambiguous approval id prefix; matches: ${candidates}${remainder}. Use the full id.`,
-          ),
-        );
-        return;
-      }
-      const approvalId = resolvedId.id;
-      const snapshot = manager.getSnapshot(approvalId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
