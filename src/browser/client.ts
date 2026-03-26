@@ -15,6 +15,8 @@ export type BrowserStatus = {
   driver?: "openclaw" | "existing-session";
   transport?: BrowserTransport;
   running: boolean;
+  tabCount?: number;
+  availabilityError?: string | null;
   cdpReady?: boolean;
   cdpHttp?: boolean;
   pid: number | null;
@@ -41,6 +43,7 @@ export type ProfileStatus = {
   driver: "openclaw" | "existing-session";
   running: boolean;
   tabCount: number;
+  availabilityError?: string | null;
   isDefault: boolean;
   isRemote: boolean;
   missingFromConfig?: boolean;

@@ -61,6 +61,7 @@ export type ProfileStatus = {
   driver: ResolvedBrowserProfile["driver"];
   running: boolean;
   tabCount: number;
+  availabilityError?: string | null;
   isDefault: boolean;
   isRemote: boolean;
   missingFromConfig?: boolean;

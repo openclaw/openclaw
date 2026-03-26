@@ -74,13 +74,36 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     try {
-      const [cdpHttp, cdpReady] = await Promise.all([
-        profileCtx.isHttpReachable(300),
-        profileCtx.isReachable(600),
-      ]);
-
       const profileState = current.profiles.get(profileCtx.profile.name);
       const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+      let cdpHttp = false;
+      let cdpReady = false;
+      let running = false;
+      let tabCount = 0;
+      let availabilityError: string | null = null;
+
+      if (capabilities.usesChromeMcp) {
+        try {
+          const tabs = await profileCtx.listTabs();
+          tabCount = tabs.filter((t) => t.type === "page").length;
+          // Existing-session lanes are only meaningfully "running" when the
+          // browser bridge can enumerate at least one page tab. Reporting
+          // running=true earlier causes false confidence during attach prompts
+          // or when Chrome is open but not yet exposing tabs.
+          running = tabCount > 0;
+          cdpHttp = running;
+          cdpReady = running;
+        } catch (err) {
+          availabilityError = err instanceof Error ? err.message : String(err);
+        }
+      } else {
+        [cdpHttp, cdpReady] = await Promise.all([
+          profileCtx.isHttpReachable(300),
+          profileCtx.isReachable(600),
+        ]);
+        running = cdpReady;
+      }
+
       let detectedBrowser: string | null = null;
       let detectedExecutablePath: string | null = null;
       let detectError: string | null = null;
@@ -100,7 +123,9 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         profile: profileCtx.profile.name,
         driver: profileCtx.profile.driver,
         transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
-        running: cdpReady,
+        running,
+        tabCount,
+        availabilityError,
         cdpReady,
         cdpHttp,
         pid: capabilities.usesChromeMcp

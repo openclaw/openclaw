@@ -55,7 +55,7 @@ describe("browser manage output", () => {
     mocks.runtimeExit.mockClear();
   });
 
-  it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
+  it("shows attach readiness details for existing-session status without fake CDP fields", async () => {
     mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
       req.path === "/"
         ? {
@@ -63,9 +63,11 @@ describe("browser manage output", () => {
             profile: "chrome-live",
             driver: "existing-session",
             transport: "chrome-mcp",
-            running: true,
-            cdpReady: true,
-            cdpHttp: true,
+            running: false,
+            tabCount: 0,
+            availabilityError: "attach failed",
+            cdpReady: false,
+            cdpHttp: false,
             pid: 4321,
             cdpPort: null,
             cdpUrl: null,
@@ -87,6 +89,9 @@ describe("browser manage output", () => {
 
     const output = mocks.runtimeLog.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("transport: chrome-mcp");
+    expect(output).toContain("running: false");
+    expect(output).toContain("tabs: 0");
+    expect(output).toContain("availabilityError: attach failed");
     expect(output).not.toContain("cdpPort:");
     expect(output).not.toContain("cdpUrl:");
   });

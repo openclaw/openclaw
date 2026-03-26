@@ -167,15 +167,32 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       const profileCtx = createProfileContext(opts, profile);
 
       if (capabilities.usesChromeMcp) {
+        let availabilityError: string | null = null;
         try {
-          running = await profileCtx.isReachable(300);
-          if (running) {
-            const tabs = await profileCtx.listTabs();
-            tabCount = tabs.filter((t) => t.type === "page").length;
-          }
-        } catch {
-          // Chrome MCP not available
+          const tabs = await profileCtx.listTabs();
+          tabCount = tabs.filter((t) => t.type === "page").length;
+          // Existing-session status should reflect actionable readiness, not
+          // just whether the Chrome MCP bridge answered a handshake.
+          running = tabCount > 0;
+        } catch (err) {
+          availabilityError = err instanceof Error ? err.message : String(err);
         }
+        result.push({
+          name,
+          transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
+          cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
+          cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
+          color: profile.color,
+          driver: profile.driver,
+          running,
+          tabCount,
+          availabilityError,
+          isDefault: name === current.resolved.defaultProfile,
+          isRemote: !profile.cdpIsLoopback,
+          missingFromConfig: !(name in current.resolved.profiles) || undefined,
+          reconcileReason: profileState?.reconcile?.reason ?? null,
+        });
+        continue;
       } else if (profileState?.running) {
         running = true;
         try {
@@ -211,6 +228,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         driver: profile.driver,
         running,
         tabCount,
+        availabilityError: null,
         isDefault: name === current.resolved.defaultProfile,
         isRemote: !profile.cdpIsLoopback,
         missingFromConfig: !(name in current.resolved.profiles) || undefined,
