@@ -46,6 +46,8 @@ export {
   type MentionTarget,
 } from "./src/mention.js";
 
+let fullRegistered = false;
+
 export default defineChannelPluginEntry({
   id: "feishu",
   name: "Feishu",
@@ -53,6 +55,8 @@ export default defineChannelPluginEntry({
   plugin: feishuPlugin,
   setRuntime: setFeishuRuntime,
   registerFull(api) {
+    if (fullRegistered) return;
+    fullRegistered = true;
     registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
