@@ -162,6 +162,13 @@ export class PersistentMcpManager {
    * - If failed or never started: triggers a fresh init attempt.
    * - If disposed: returns without re-initializing.
    */
+  /**
+   * Note: this method is guaranteed never to reject. Individual server failures are
+   * caught and logged inside `_doStartServer`; only a catastrophic unexpected error
+   * in `_doInit` itself could propagate, which is not expected in practice.
+   * The `.catch()` call in `server-startup.ts` and `try/catch` in
+   * `createPersistentConfiguredMcpProjection` are kept as defensive guards.
+   */
   async ensureReady(): Promise<void> {
     if (this.state === "disposed") return;
     if (this.state === "ready") return;
@@ -208,27 +215,46 @@ export class PersistentMcpManager {
       return existing.startPromise;
     }
 
-    const promise = this._doStartServer(serverName, rawServer);
-
-    // Store the promise on the handle as soon as it's created (handle is set inside _doStartServer
-    // synchronously before the first await, so we patch it right after).
-    // We use a wrapper that clears startPromise on settle.
-    const wrapped = promise.finally(() => {
-      const h = this.handles.get(serverName);
-      if (h) h.startPromise = null;
+    // Create a dedup promise before the first await in _doStartServer so concurrent
+    // callers that race into this method before the handle is created will still
+    // share one start operation.
+    let resolveDedup!: () => void;
+    let rejectDedup!: (err: unknown) => void;
+    const dedup = new Promise<void>((res, rej) => {
+      resolveDedup = res;
+      rejectDedup = rej;
     });
 
-    // Patch the handle if it was already created synchronously inside _doStartServer.
-    const h = this.handles.get(serverName);
-    if (h) h.startPromise = wrapped;
+    // Plant a sentinel handle immediately so that any concurrent _startServer /
+    // getReadyClient call sees startPromise and awaits it instead of spawning again.
+    const sentinel: PersistentMcpServerHandle = {
+      serverName,
+      client: null as unknown as Client,
+      transport: null as unknown as StdioClientTransport,
+      pid: null,
+      state: "initializing",
+      lockPath: "",
+      startPromise: dedup,
+      detachStderr: () => {},
+    };
+    this.handles.set(serverName, sentinel);
 
-    return wrapped;
+    void this._doStartServer(serverName, rawServer, sentinel).then(resolveDedup, (err) => {
+      rejectDedup(err);
+    });
+
+    return dedup;
   }
 
-  private async _doStartServer(serverName: string, rawServer: unknown): Promise<void> {
+  private async _doStartServer(
+    serverName: string,
+    rawServer: unknown,
+    sentinel: PersistentMcpServerHandle,
+  ): Promise<void> {
     const launch = resolveStdioMcpServerLaunchConfig(rawServer);
     if (!launch.ok) {
       this.log.warn(`persistent-mcp: skipped server "${serverName}" because ${launch.reason}.`);
+      this.handles.delete(serverName);
       return;
     }
     const launchConfig = launch.config;
@@ -251,6 +277,8 @@ export class PersistentMcpManager {
 
     const client = new Client({ name: "openclaw-persistent-mcp", version: "0.0.0" }, {});
 
+    // Replace the sentinel handle with the real one. startPromise carries over from
+    // the sentinel so concurrent callers that are awaiting it still get notified.
     const handle: PersistentMcpServerHandle = {
       serverName,
       client,
@@ -258,7 +286,7 @@ export class PersistentMcpManager {
       pid: null,
       state: "initializing",
       lockPath,
-      startPromise: null, // will be patched by _startServer wrapper
+      startPromise: sentinel.startPromise,
       detachStderr: attachStderrLogging(serverName, transport, this.log),
     };
     this.handles.set(serverName, handle);
