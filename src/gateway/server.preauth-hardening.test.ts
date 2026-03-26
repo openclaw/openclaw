@@ -1,5 +1,7 @@
+import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import { testState } from "./test-helpers.mocks.js";
 import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
 
 let cleanupEnv: Array<() => void> = [];
@@ -22,7 +24,9 @@ describe("gateway pre-auth hardening", () => {
       }
     });
 
-    const harness = await createGatewaySuiteHarness();
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "none" } },
+    });
     try {
       const ws = await harness.openWs();
       await readConnectChallengeNonce(ws);
@@ -70,6 +74,58 @@ describe("gateway pre-auth hardening", () => {
 
       const result = await closed;
       expect(result.code).toBe(1009);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects excess simultaneous unauthenticated sockets from the same client ip", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+    process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = previous;
+      }
+    });
+    const previousAuth = testState.gatewayAuth;
+    testState.gatewayAuth = { mode: "none" };
+    cleanupEnv.push(() => {
+      testState.gatewayAuth = previousAuth;
+    });
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const firstWs = await harness.openWs();
+      await readConnectChallengeNonce(firstWs);
+
+      const rejectedStatus = await new Promise<number>((resolve, reject) => {
+        const req = http.request({
+          host: "127.0.0.1",
+          port: harness.port,
+          path: "/",
+          headers: {
+            Connection: "Upgrade",
+            Upgrade: "websocket",
+            "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
+            "Sec-WebSocket-Version": "13",
+          },
+        });
+        req.once("upgrade", (_res, socket) => {
+          socket.destroy();
+          reject(new Error("expected websocket upgrade to be rejected"));
+        });
+        req.once("response", (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.once("error", reject);
+        req.end();
+      });
+      expect(rejectedStatus).toBe(503);
+
+      firstWs.close();
     } finally {
       await harness.close();
     }

@@ -6,6 +6,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
+import type { Socket } from "node:net";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
@@ -72,6 +73,7 @@ import {
   type PluginHttpRequestHandler,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
@@ -1008,11 +1010,20 @@ export function attachGatewayUpgradeHandler(opts: {
   wss: WebSocketServer;
   canvasHost: CanvasHostHandler | null;
   clients: Set<GatewayWsClient>;
+  preauthConnectionBudget: PreauthConnectionBudget;
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    preauthConnectionBudget,
+    resolvedAuth,
+    rateLimiter,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
@@ -1050,9 +1061,30 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req);
-      });
+      if (!preauthConnectionBudget.acquire((socket as Socket).remoteAddress)) {
+        const responseBody = "Too many unauthenticated sockets";
+        socket.write(
+          "HTTP/1.1 503 Service Unavailable\r\n" +
+            "Connection: close\r\n" +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            `Content-Length: ${Buffer.byteLength(responseBody, "utf8")}\r\n` +
+            "\r\n" +
+            responseBody,
+        );
+        socket.destroy();
+        return;
+      }
+      try {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          (
+            ws as unknown as import("ws").WebSocket & { __openclawPreauthRemoteAddr?: string }
+          ).__openclawPreauthRemoteAddr = (socket as Socket).remoteAddress;
+          wss.emit("connection", ws, req);
+        });
+      } catch {
+        preauthConnectionBudget.release((socket as Socket).remoteAddress);
+        throw new Error("gateway websocket upgrade failed");
+      }
     })().catch(() => {
       socket.destroy();
     });
