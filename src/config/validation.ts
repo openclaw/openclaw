@@ -514,6 +514,19 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // Cross-field: hooks.enabled requires hooks.token
+  if (config.hooks?.enabled === true) {
+    const token = config.hooks?.token?.trim();
+    if (!token) {
+      issues.push({
+        path: "hooks.token",
+        message:
+          "hooks.enabled is true but hooks.token is not set. " +
+          "Provide a token, e.g.: openclaw config.patch '{ hooks: { token: \"<your-secret>\" } }'",
+      });
+    }
+  }
+
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
