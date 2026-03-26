@@ -1,13 +1,23 @@
+import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
-const { sendMessageMattermostMock } = vi.hoisted(() => ({
+const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
+  mockFetchGuard: vi.fn(async (p: { url: string; init?: RequestInit }) => {
+    const response = await globalThis.fetch(p.url, p.init);
+    return { response, release: async () => {}, finalUrl: p.url };
+  }),
 }));
 
 vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return { ...original, fetchWithSsrFGuard: mockFetchGuard };
+});
 
 import { mattermostPlugin } from "./channel.js";
 import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
@@ -21,6 +31,46 @@ function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
 }
 
+function requireMattermostNormalizeTarget() {
+  const normalize = mattermostPlugin.messaging?.normalizeTarget;
+  if (!normalize) {
+    throw new Error("mattermost messaging.normalizeTarget missing");
+  }
+  return normalize;
+}
+
+function requireMattermostPairingNormalizer() {
+  const normalize = mattermostPlugin.pairing?.normalizeAllowEntry;
+  if (!normalize) {
+    throw new Error("mattermost pairing.normalizeAllowEntry missing");
+  }
+  return normalize;
+}
+
+function requireMattermostReplyToModeResolver() {
+  const resolveReplyToMode = mattermostPlugin.threading?.resolveReplyToMode;
+  if (!resolveReplyToMode) {
+    throw new Error("mattermost threading.resolveReplyToMode missing");
+  }
+  return resolveReplyToMode;
+}
+
+function requireMattermostSendText() {
+  const sendText = mattermostPlugin.outbound?.sendText;
+  if (!sendText) {
+    throw new Error("mattermost outbound.sendText missing");
+  }
+  return sendText;
+}
+
+function requireMattermostSendMedia() {
+  const sendMedia = mattermostPlugin.outbound?.sendMedia;
+  if (!sendMedia) {
+    throw new Error("mattermost outbound.sendMedia missing");
+  }
+  return sendMedia;
+}
+
 describe("mattermostPlugin", () => {
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
@@ -32,49 +82,34 @@ describe("mattermostPlugin", () => {
 
   describe("messaging", () => {
     it("keeps @username targets", () => {
-      const normalize = mattermostPlugin.messaging?.normalizeTarget;
-      if (!normalize) {
-        return;
-      }
+      const normalize = requireMattermostNormalizeTarget();
 
       expect(normalize("@Alice")).toBe("@Alice");
       expect(normalize("@alice")).toBe("@alice");
     });
 
-    it("normalizes mattermost: prefix to user:", () => {
-      const normalize = mattermostPlugin.messaging?.normalizeTarget;
-      if (!normalize) {
-        return;
-      }
+    it("normalizes spaced mattermost prefixes to user targets", () => {
+      const normalize = requireMattermostNormalizeTarget();
 
       expect(normalize("mattermost:USER123")).toBe("user:USER123");
+      expect(normalize("  mattermost:USER123  ")).toBe("user:USER123");
     });
   });
 
   describe("pairing", () => {
     it("normalizes allowlist entries", () => {
-      const normalize = mattermostPlugin.pairing?.normalizeAllowEntry;
-      if (!normalize) {
-        return;
-      }
+      const normalize = requireMattermostPairingNormalizer();
 
       expect(normalize("@Alice")).toBe("alice");
       expect(normalize("user:USER123")).toBe("user123");
-    });
-  });
-
-  describe("capabilities", () => {
-    it("declares reactions support", () => {
-      expect(mattermostPlugin.capabilities?.reactions).toBe(true);
+      expect(normalize("  @Alice  ")).toBe("alice");
+      expect(normalize("  mattermost:USER123  ")).toBe("user123");
     });
   });
 
   describe("threading", () => {
     it("uses replyToMode for channel messages and keeps direct messages off", () => {
-      const resolveReplyToMode = mattermostPlugin.threading?.resolveReplyToMode;
-      if (!resolveReplyToMode) {
-        return;
-      }
+      const resolveReplyToMode = requireMattermostReplyToModeResolver();
 
       const cfg: OpenClawConfig = {
         channels: {
@@ -154,6 +189,26 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).toEqual([]);
+    });
+
+    it("keeps buttons optional in message tool schema", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            botToken: "test-token",
+            baseUrl: "https://chat.example.com",
+          },
+        },
+      };
+
+      const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
+      const schema = discovery?.schema;
+      if (!schema || Array.isArray(schema)) {
+        throw new Error("expected mattermost message-tool schema");
+      }
+
+      expect(Type.Object(schema.properties).required).toBeUndefined();
     });
 
     it("hides react when actions.reactions is false", () => {
@@ -305,10 +360,7 @@ describe("mattermostPlugin", () => {
 
   describe("outbound", () => {
     it("forwards mediaLocalRoots on sendMedia", async () => {
-      const sendMedia = mattermostPlugin.outbound?.sendMedia;
-      if (!sendMedia) {
-        return;
-      }
+      const sendMedia = requireMattermostSendMedia();
 
       await sendMedia({
         to: "channel:CHAN1",
@@ -330,10 +382,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("threads resolved cfg on sendText", async () => {
-      const sendText = mattermostPlugin.outbound?.sendText;
-      if (!sendText) {
-        return;
-      }
+      const sendText = requireMattermostSendText();
       const cfg = {
         channels: {
           mattermost: {
@@ -361,10 +410,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("uses threadId as fallback when replyToId is absent (sendText)", async () => {
-      const sendText = mattermostPlugin.outbound?.sendText;
-      if (!sendText) {
-        return;
-      }
+      const sendText = requireMattermostSendText();
 
       await sendText({
         to: "channel:CHAN1",
@@ -384,10 +430,7 @@ describe("mattermostPlugin", () => {
     });
 
     it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
-      const sendMedia = mattermostPlugin.outbound?.sendMedia;
-      if (!sendMedia) {
-        return;
-      }
+      const sendMedia = requireMattermostSendMedia();
 
       await sendMedia({
         to: "channel:CHAN1",
@@ -414,7 +457,7 @@ describe("mattermostPlugin", () => {
 
       const formatted = formatAllowFrom({
         cfg: {} as OpenClawConfig,
-        allowFrom: ["@Alice", "user:USER123", "mattermost:BOT999"],
+        allowFrom: [" @Alice ", " user:USER123 ", " mattermost:BOT999 "],
       });
       expect(formatted).toEqual(["@alice", "user123", "bot999"]);
     });

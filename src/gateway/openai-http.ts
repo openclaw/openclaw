@@ -27,7 +27,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext } from "./http-utils.js";
+import { resolveGatewayRequestContext, resolveOpenAiCompatModelOverride } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
@@ -102,6 +102,7 @@ function writeSse(res: ServerResponse, data: unknown) {
 
 function buildAgentCommandInput(params: {
   prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
+  modelOverride?: string;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -110,6 +111,7 @@ function buildAgentCommandInput(params: {
     message: params.prompt.message,
     extraSystemPrompt: params.prompt.extraSystemPrompt,
     images: params.prompt.images,
+    model: params.modelOverride,
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
@@ -432,7 +434,7 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
+  const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -440,6 +442,17 @@ export async function handleOpenAiHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: true,
   });
+  const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
+    req,
+    agentId,
+    model,
+  });
+  if (modelError) {
+    sendJson(res, 400, {
+      error: { message: modelError, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
   const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
   let images: ImageContent[] = [];
@@ -474,6 +487,7 @@ export async function handleOpenAiHttpRequest(
       extraSystemPrompt: prompt.extraSystemPrompt,
       images: images.length > 0 ? images : undefined,
     },
+    modelOverride,
     sessionKey,
     runId,
     messageChannel,

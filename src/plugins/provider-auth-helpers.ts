@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
+import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -12,7 +13,7 @@ import {
   type SecretInput,
   type SecretRef,
 } from "../config/types.secrets.js";
-import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -26,6 +27,8 @@ export type ApiKeyStorageOptions = {
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;
+  profileName?: string;
+  displayName?: string;
 };
 
 function buildEnvSecretRef(id: string): SecretRef {
@@ -41,7 +44,7 @@ function parseEnvSecretRef(value: string): SecretRef | null {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = PROVIDER_ENV_VARS[provider];
+  const envVars = getProviderEnvVars(provider);
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(
@@ -107,6 +110,7 @@ export function applyAuthProfileConfig(
     provider: string;
     mode: "api_key" | "oauth" | "token";
     email?: string;
+    displayName?: string;
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
@@ -117,6 +121,7 @@ export function applyAuthProfileConfig(
       provider: params.provider,
       mode: params.mode,
       ...(params.email ? { email: params.email } : {}),
+      ...(params.displayName ? { displayName: params.displayName } : {}),
     },
   };
 
@@ -222,7 +227,10 @@ export async function writeOAuthCredentials(
 ): Promise<string> {
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
-  const profileId = `${provider}:${email}`;
+  const profileId = buildAuthProfileId({
+    providerId: provider,
+    profileName: options?.profileName ?? email,
+  });
   const resolvedAgentDir = path.resolve(resolveAuthAgentDir(agentDir));
   const targetAgentDirs = options?.syncSiblingAgents
     ? resolveSiblingAgentDirs(resolvedAgentDir)
@@ -232,6 +240,7 @@ export async function writeOAuthCredentials(
     type: "oauth" as const,
     provider,
     ...creds,
+    ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
   upsertAuthProfile({

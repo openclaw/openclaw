@@ -52,7 +52,7 @@ export function registerNodesPushCommand(nodes: Command) {
 
           const result = await callGatewayCli("push.test", opts, params);
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
+            defaultRuntime.writeJson(result);
             return;
           }
 

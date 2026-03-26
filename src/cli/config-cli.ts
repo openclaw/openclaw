@@ -7,6 +7,7 @@ import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-f
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -18,7 +19,7 @@ import {
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -51,6 +52,7 @@ import {
   type ConfigSetOptions,
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type PathSegment = string;
 type ConfigSetParseOpts = {
@@ -1072,7 +1074,7 @@ export async function runConfigSet(opts: {
         );
       }
       if (opts.cliOptions.json) {
-        runtime.log(JSON.stringify(dryRunResult, null, 2));
+        writeRuntimeJson(runtime, dryRunResult);
       } else {
         if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
           runtime.log(
@@ -1120,7 +1122,7 @@ export async function runConfigSet(opts: {
       opts.cliOptions.json &&
       err instanceof ConfigSetDryRunValidationError
     ) {
-      runtime.log(JSON.stringify(err.result, null, 2));
+      writeRuntimeJson(runtime, err.result);
       runtime.exit(1);
       return;
     }
@@ -1142,7 +1144,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       return;
     }
     if (opts.json) {
-      runtime.log(JSON.stringify(res.value ?? null, null, 2));
+      writeRuntimeJson(runtime, res.value ?? null);
       return;
     }
     if (
@@ -1153,7 +1155,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.log(String(res.value));
       return;
     }
-    runtime.log(JSON.stringify(res.value ?? null, null, 2));
+    writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -1194,6 +1196,30 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   }
 }
 
+async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
+  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+
+  schema.properties = {
+    $schema: { type: "string" },
+    ...schema.properties,
+  };
+
+  return schema;
+}
+
+export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
+  } catch (err) {
+    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -1205,7 +1231,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
 
     if (!snapshot.exists) {
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, error: "file not found" }));
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
       }
@@ -1217,7 +1243,7 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       const issues = normalizeConfigIssues(snapshot.issues);
 
       if (opts.json) {
-        runtime.log(JSON.stringify({ valid: false, path: outputPath, issues }, null, 2));
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
         runtime.error(danger(`Config invalid at ${shortPath}:`));
         for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
@@ -1231,13 +1257,13 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
     }
 
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: true, path: outputPath }));
+      writeRuntimeJson(runtime, { valid: true, path: outputPath }, 0);
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
     }
   } catch (err) {
     if (opts.json) {
-      runtime.log(JSON.stringify({ valid: false, path: outputPath, error: String(err) }));
+      writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
     } else {
       runtime.error(danger(`Config validation error: ${String(err)}`));
     }
@@ -1249,7 +1275,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/unset/file/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText(
       "after",
@@ -1276,8 +1302,7 @@ export function registerConfigCli(program: Command) {
       await runConfigGet({ path, json: Boolean(opts.json) });
     });
 
-  cmd
-    .command("set")
+  setCommandJsonMode(cmd.command("set"), "parse-only")
     .description(CONFIG_SET_DESCRIPTION)
     .argument("[path]", "Config path (dot or bracket notation)")
     .argument("[value]", "Value (JSON/JSON5 or raw string)")
@@ -1368,6 +1393,13 @@ export function registerConfigCli(program: Command) {
     .description("Print the active config file path")
     .action(async () => {
       await runConfigFile({});
+    });
+
+  cmd
+    .command("schema")
+    .description("Print the JSON schema for openclaw.json")
+    .action(async () => {
+      await runConfigSchema({});
     });
 
   cmd

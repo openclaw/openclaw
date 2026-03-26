@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../runtime-api.js";
+import { createAsyncLock } from "../async-lock.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
 import { LogService } from "../sdk/logger.js";
@@ -27,23 +28,6 @@ export type MatrixInboundEventDeduper = {
   flush: () => Promise<void>;
   stop: () => Promise<void>;
 };
-
-function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
-}
 
 function normalizeEventPart(value: string): string {
   return value.trim();

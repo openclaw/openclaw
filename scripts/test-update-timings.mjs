@@ -1,101 +1,32 @@
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { loadVitestReportFromArgs, parseVitestReportArgs } from "./lib/vitest-report-cli-utils.mjs";
+import {
+  collectVitestFileDurations,
+  normalizeTrackedRepoPath,
+  writeJsonFile,
+} from "./test-report-utils.mjs";
 import { unitTimingManifestPath } from "./test-runner-manifest.mjs";
 
 function parseArgs(argv) {
-  const args = {
-    config: "vitest.unit.config.ts",
-    out: unitTimingManifestPath,
-    reportPath: "",
-    limit: 256,
-    defaultDurationMs: 250,
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[i + 1] ?? args.config;
-      i += 1;
-      continue;
-    }
-    if (arg === "--out") {
-      args.out = argv[i + 1] ?? args.out;
-      i += 1;
-      continue;
-    }
-    if (arg === "--report") {
-      args.reportPath = argv[i + 1] ?? "";
-      i += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.limit = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--default-duration-ms") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.defaultDurationMs = parsed;
-      }
-      i += 1;
-      continue;
-    }
-  }
-  return args;
+  return parseFlagArgs(
+    argv,
+    {
+      ...parseVitestReportArgs(argv, {
+        config: "vitest.unit.config.ts",
+        limit: 256,
+        reportPath: "",
+      }),
+      out: unitTimingManifestPath,
+      defaultDurationMs: 250,
+    },
+    [stringFlag("--out", "out"), intFlag("--default-duration-ms", "defaultDurationMs", { min: 1 })],
+  );
 }
-
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
-const repoRoot = path.resolve(process.cwd());
-const normalizeTrackedRepoPath = (value) => {
-  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
-  const repoRelative = path.isAbsolute(normalizedValue)
-    ? path.relative(repoRoot, path.resolve(normalizedValue))
-    : normalizedValue;
-  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
-    return normalizeRepoPath(normalizedValue);
-  }
-  return normalizeRepoPath(repoRelative);
-};
 
 const opts = parseArgs(process.argv.slice(2));
-const reportPath =
-  opts.reportPath || path.join(os.tmpdir(), `openclaw-vitest-timings-${Date.now()}.json`);
-
-if (!(opts.reportPath && fs.existsSync(reportPath))) {
-  const run = spawnSync(
-    "pnpm",
-    ["vitest", "run", "--config", opts.config, "--reporter=json", "--outputFile", reportPath],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
-
-  if (run.status !== 0) {
-    process.exit(run.status ?? 1);
-  }
-}
-
-const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+const report = loadVitestReportFromArgs(opts, "openclaw-vitest-timings");
 const files = Object.fromEntries(
-  (report.testResults ?? [])
-    .map((result) => {
-      const file = typeof result.name === "string" ? normalizeTrackedRepoPath(result.name) : "";
-      const start = typeof result.startTime === "number" ? result.startTime : 0;
-      const end = typeof result.endTime === "number" ? result.endTime : 0;
-      const testCount = Array.isArray(result.assertionResults) ? result.assertionResults.length : 0;
-      return {
-        file,
-        durationMs: Math.max(0, end - start),
-        testCount,
-      };
-    })
-    .filter((entry) => entry.file.length > 0 && entry.durationMs > 0)
+  collectVitestFileDurations(report, normalizeTrackedRepoPath)
     .toSorted((a, b) => b.durationMs - a.durationMs)
     .slice(0, opts.limit)
     .map((entry) => [
@@ -114,7 +45,7 @@ const output = {
   files,
 };
 
-fs.writeFileSync(opts.out, `${JSON.stringify(output, null, 2)}\n`);
+writeJsonFile(opts.out, output);
 console.log(
   `[test-update-timings] wrote ${String(Object.keys(files).length)} timings to ${opts.out}`,
 );

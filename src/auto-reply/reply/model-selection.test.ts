@@ -1,6 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
+import { loadModelCatalog } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createModelSelectionState } from "./model-selection.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
@@ -14,7 +17,137 @@ vi.mock("../../agents/model-catalog.js", () => ({
   ]),
 }));
 
-const makeEntry = (overrides: Record<string, unknown> = {}) => ({
+afterEach(() => {
+  MODEL_CONTEXT_TOKEN_CACHE.clear();
+});
+
+const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
+  id: "gpt-5.4",
+  name: "GPT-5.4",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 16_384,
+  ...overrides,
+});
+
+describe("createModelSelectionState catalog loading", () => {
+  it("skips full catalog loading for ordinary allowlist-backed turns", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel()],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.allowedModelKeys.has("openai-codex/gpt-5.4")).toBe(true);
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("prefers per-agent thinkingDefault over model and global defaults", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            thinkingDefault: "minimal",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentId: "alpha",
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai-codex",
+      defaultModel: "gpt-5.4",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("minimal");
+  });
+
+  it("loads the full catalog for explicit model directives", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: true,
+    });
+
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+});
+
+describe("resolveContextTokens", () => {
+  it("prefers provider-qualified cache keys over bare model ids", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
+    expect(result).toBe(1_000_000);
+  });
+});
+
+const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
   ...overrides,
@@ -301,8 +434,44 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.provider).toBe("xai");
-    expect(state.model).toBe("grok-4.20-reasoning");
+    expect(state.model).toBe("grok-4.20-beta-latest-reasoning");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("clears disallowed model overrides and falls back to the default", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4o" },
+          models: {
+            "openai/gpt-4o": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4o-mini",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
+    });
+
+    expect(state.resetModelOverride).toBe(true);
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 });
 

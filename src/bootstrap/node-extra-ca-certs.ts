@@ -6,7 +6,7 @@ export const LINUX_CA_BUNDLE_PATHS = [
   "/etc/ssl/ca-bundle.pem",
 ] as const;
 
-type EnvMap = Record<string, string | undefined>;
+export type EnvMap = Record<string, string | undefined>;
 type AccessSyncFn = (path: string, mode?: number) => void;
 
 export function resolveLinuxSystemCaBundle(
@@ -32,7 +32,7 @@ export function resolveLinuxSystemCaBundle(
   return undefined;
 }
 
-export function isNvmNode(
+export function isNodeVersionManagerRuntime(
   env: EnvMap = process.env as EnvMap,
   execPath: string = process.execPath,
 ): boolean {
@@ -57,7 +57,7 @@ export function resolveAutoNodeExtraCaCerts(
 
   const platform = params.platform ?? process.platform;
   const execPath = params.execPath ?? process.execPath;
-  if (platform !== "linux" || !isNvmNode(env, execPath)) {
+  if (platform !== "linux" || !isNodeVersionManagerRuntime(env, execPath)) {
     return undefined;
   }
 

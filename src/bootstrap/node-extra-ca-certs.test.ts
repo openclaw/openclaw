@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  isNvmNode,
+  isNodeVersionManagerRuntime,
   LINUX_CA_BUNDLE_PATHS,
   resolveAutoNodeExtraCaCerts,
   resolveLinuxSystemCaBundle,
@@ -34,17 +34,19 @@ describe("resolveLinuxSystemCaBundle", () => {
   });
 });
 
-describe("isNvmNode", () => {
+describe("isNodeVersionManagerRuntime", () => {
   it("detects nvm via NVM_DIR", () => {
-    expect(isNvmNode({ NVM_DIR: "/home/test/.nvm" }, "/usr/bin/node")).toBe(true);
+    expect(isNodeVersionManagerRuntime({ NVM_DIR: "/home/test/.nvm" }, "/usr/bin/node")).toBe(true);
   });
 
   it("detects nvm via execPath", () => {
-    expect(isNvmNode({}, "/home/test/.nvm/versions/node/v22/bin/node")).toBe(true);
+    expect(isNodeVersionManagerRuntime({}, "/home/test/.nvm/versions/node/v22/bin/node")).toBe(
+      true,
+    );
   });
 
   it("returns false for non-nvm node paths", () => {
-    expect(isNvmNode({}, "/usr/bin/node")).toBe(false);
+    expect(isNodeVersionManagerRuntime({}, "/usr/bin/node")).toBe(false);
   });
 });
 
