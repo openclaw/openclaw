@@ -31,6 +31,7 @@ import {
   Zap,
   Terminal,
   Wand2,
+  Repeat,
 } from "lucide-react";
 import * as React from "react";
 import { useState, useEffect } from "react";
@@ -96,6 +97,12 @@ const navData = {
       url: "/cron",
       icon: Timer,
       subtitle: "Scheduled agent runs",
+    },
+    {
+      title: "Routines",
+      url: "/routines",
+      icon: Repeat,
+      subtitle: "Recurring workflow definitions",
     },
     {
       title: "Heartbeat",

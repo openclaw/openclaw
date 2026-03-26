@@ -104,6 +104,12 @@ const ActivityPage = lazy(() =>
 const BudgetsPage = lazy(() =>
   import("@/pages/orchestration/budgets").then((m) => ({ default: m.BudgetsPage })),
 );
+const RoutinesPage = lazy(() =>
+  import("@/pages/routines").then((m) => ({ default: m.RoutinesPage })),
+);
+const RoutineDetailPage = lazy(() =>
+  import("@/pages/routine-detail").then((m) => ({ default: m.RoutineDetailPage })),
+);
 const PluginsPage = lazy(() =>
   import("@/pages/plugins").then((m) => ({ default: m.PluginsPage })),
 );
@@ -472,6 +478,23 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <BudgetsPage />
+                </Suspense>
+              }
+            />
+            {/* Routines */}
+            <Route
+              path="/routines"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <RoutinesPage />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/routines/:routineId"
+              element={
+                <Suspense fallback={<PageLoader />}>
+                  <RoutineDetailPage />
                 </Suspense>
               }
             />
