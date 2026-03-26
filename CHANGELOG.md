@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded replies: surface mid-turn 429 and overload failures when embedded runs end without a user-visible reply, while preserving successful media-only replies that still use legacy `mediaUrl`. (#50930) Thanks @infichen.
 - Agents/compaction: trigger timeout recovery compaction before retrying high-context LLM timeouts so embedded runs stop repeating oversized requests. (#46417) thanks @joeykrug.
 - Microsoft Teams/config: accept the existing `welcomeCard`, `groupWelcomeCard`, `promptStarters`, and feedback/reflection keys in strict config validation so already-supported Teams runtime settings stop failing schema checks. (#54679) Thanks @gumclaw.
+- Agents/status: use provider-aware context window lookup for fresh Anthropic 4.6 model overrides so `/status` shows the correct 1.0m window instead of an underreported shared-cache minimum. (#54796) Thanks @neeravmakwana.
 
 ## 2026.3.24
 
