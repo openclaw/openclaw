@@ -840,6 +840,7 @@ export const SlackChannelSchema = z
     users: z.array(z.union([z.string(), z.number()])).optional(),
     skills: z.array(z.string()).optional(),
     systemPrompt: z.string().optional(),
+    suppressAssistantText: z.boolean().optional(),
   })
   .strict();
 
@@ -928,6 +929,7 @@ export const SlackAccountSchema = z
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
+    suppressAssistantText: z.boolean().optional(),
   })
   .strict()
   .superRefine((value) => {
