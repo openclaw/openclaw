@@ -705,6 +705,76 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("falls back to the generic image runtime when openrouter has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubOpenAiCompletionsOkFetch("ok openrouter");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+            imageModel: { primary: "openrouter/google/gemini-2.5-flash-lite" },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              api: "openai-completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "openrouter-test",
+              models: [makeModelDefinition("google/gemini-2.5-flash-lite", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok openrouter" })]),
+      );
+    });
+  });
+
+  it("falls back to the generic image runtime when minimax-portal has no media provider registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "minimax-portal:default": {
+            type: "oauth",
+            provider: "minimax-portal",
+            access: "oauth-test",
+            refresh: "refresh-test",
+            expires: Date.now() + 60_000,
+          },
+        },
+      });
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "minimax-portal/MiniMax-M2.7" },
+            imageModel: { primary: "minimax-portal/MiniMax-VL-01" },
+          },
+        },
+        plugins: {
+          entries: {
+            minimax: { enabled: true },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
