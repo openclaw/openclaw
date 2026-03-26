@@ -122,9 +122,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const connId = randomUUID();
     const remoteAddr = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket
       ?.remoteAddress;
-    const preauthRemoteAddr =
-      (socket as WebSocket & { __openclawPreauthRemoteAddr?: string })
-        .__openclawPreauthRemoteAddr ?? remoteAddr;
+    const preauthBudgetKey = (
+      socket as WebSocket & {
+        __openclawPreauthBudgetClaimed?: boolean;
+        __openclawPreauthBudgetKey?: string;
+      }
+    ).__openclawPreauthBudgetKey;
+    (
+      socket as WebSocket & {
+        __openclawPreauthBudgetClaimed?: boolean;
+      }
+    ).__openclawPreauthBudgetClaimed = true;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
@@ -167,7 +175,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       holdsPreauthBudget = false;
-      preauthConnectionBudget.release(preauthRemoteAddr);
+      preauthConnectionBudget.release(preauthBudgetKey);
     };
 
     const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {

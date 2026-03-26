@@ -6,7 +6,6 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import type { Socket } from "node:net";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { handleSlackHttpRequest } from "../../extensions/slack/api.js";
@@ -1026,6 +1025,9 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      const configSnapshot = loadConfig();
+      const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });
@@ -1038,9 +1040,6 @@ export function attachGatewayUpgradeHandler(opts: {
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {
-          const configSnapshot = loadConfig();
-          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
@@ -1061,7 +1060,8 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
-      if (!preauthConnectionBudget.acquire((socket as Socket).remoteAddress)) {
+      const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
         const responseBody = "Too many unauthenticated sockets";
         socket.write(
           "HTTP/1.1 503 Service Unavailable\r\n" +
@@ -1080,17 +1080,29 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
         budgetTransferred = true;
-        preauthConnectionBudget.release((socket as Socket).remoteAddress);
+        preauthConnectionBudget.release(preauthBudgetKey);
       };
       socket.once("close", releaseUpgradeBudget);
       try {
         wss.handleUpgrade(req, socket, head, (ws) => {
-          budgetTransferred = true;
-          socket.off("close", releaseUpgradeBudget);
           (
-            ws as unknown as import("ws").WebSocket & { __openclawPreauthRemoteAddr?: string }
-          ).__openclawPreauthRemoteAddr = (socket as Socket).remoteAddress;
+            ws as unknown as import("ws").WebSocket & {
+              __openclawPreauthBudgetClaimed?: boolean;
+              __openclawPreauthBudgetKey?: string;
+            }
+          ).__openclawPreauthBudgetKey = preauthBudgetKey;
           wss.emit("connection", ws, req);
+          const budgetClaimed = Boolean(
+            (
+              ws as unknown as import("ws").WebSocket & {
+                __openclawPreauthBudgetClaimed?: boolean;
+              }
+            ).__openclawPreauthBudgetClaimed,
+          );
+          if (budgetClaimed) {
+            budgetTransferred = true;
+            socket.off("close", releaseUpgradeBudget);
+          }
         });
       } catch {
         socket.off("close", releaseUpgradeBudget);

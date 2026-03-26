@@ -1,5 +1,3 @@
-import { resolveClientIp } from "../net.js";
-
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
 
 export function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {
@@ -17,8 +15,8 @@ export function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = pr
 }
 
 export type PreauthConnectionBudget = {
-  acquire(remoteAddr: string | undefined): boolean;
-  release(remoteAddr: string | undefined): void;
+  acquire(clientIp: string | undefined): boolean;
+  release(clientIp: string | undefined): void;
 };
 
 export function createPreauthConnectionBudget(
@@ -26,13 +24,9 @@ export function createPreauthConnectionBudget(
 ): PreauthConnectionBudget {
   const counts = new Map<string, number>();
 
-  const normalizeIp = (remoteAddr: string | undefined): string | undefined => {
-    return resolveClientIp({ remoteAddr });
-  };
-
   return {
-    acquire(remoteAddr) {
-      const ip = normalizeIp(remoteAddr);
+    acquire(clientIp) {
+      const ip = clientIp?.trim();
       if (!ip) {
         // Fail open when the socket has no usable client IP. Direct sockets
         // normally populate remoteAddress, and falling closed here would risk
@@ -46,8 +40,8 @@ export function createPreauthConnectionBudget(
       counts.set(ip, next);
       return true;
     },
-    release(remoteAddr) {
-      const ip = normalizeIp(remoteAddr);
+    release(clientIp) {
+      const ip = clientIp?.trim();
       if (!ip) {
         return;
       }
