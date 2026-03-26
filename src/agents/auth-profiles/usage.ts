@@ -325,15 +325,20 @@ export function calculateAuthProfileCooldownMs(
 ): number {
   const normalized = Math.max(1, errorCount);
 
-  // Use configurable base/max or defaults (1m base, 1h max)
-  const baseMs = Math.max(1000, params?.baseMs ?? 60_000);
-  const maxMs = Math.max(baseMs, params?.maxMs ?? 3600_000);
+  // 3-step linear backoff with configurable base/max (defaults: 30s base, 5m max)
+  const baseMs = Math.max(30_000, params?.baseMs ?? 30_000);
+  const maxMs = Math.max(baseMs, params?.maxMs ?? 5_000_000);
 
-  // Exponential backoff: base * 5^(n-1), capped at 10 iterations
-  const exponent = Math.min(normalized - 1, 10);
-  const raw = baseMs * 5 ** exponent;
-
-  return Math.min(maxMs, raw);
+  // Step 1 (errorCount 1): Return baseMs (default 30s)
+  if (normalized === 1) {
+    return baseMs;
+  }
+  // Step 2 (errorCount 2): Return min(maxMs, baseMs * 2)
+  if (normalized === 2) {
+    return Math.min(maxMs, baseMs * 2);
+  }
+  // Step 3 (errorCount 3+): Return maxMs (default 5m)
+  return maxMs;
 }
 
 type ResolvedAuthCooldownConfig = {
@@ -529,10 +534,6 @@ function computeNextProfileUsageStats(params: {
       recomputedUntil: params.now + backoffMs,
     });
 
-    const existingCooldownActive =
-      typeof params.existing.cooldownUntil === "number" &&
-      params.existing.cooldownUntil > params.now;
-
     // Determine the scope: Is this a specific model error or a general provider error?
     const isModelSpecificReason = params.reason === "rate_limit" || params.reason === "overloaded";
 
@@ -543,22 +544,24 @@ function computeNextProfileUsageStats(params: {
       if (!isModelSpecificReason) {
         // If we hit a general error (like 500 Service Error), lock the whole profile
         updatedStats.cooldownModel = undefined;
-      } else if (
-        params.existing.cooldownModel &&
-        params.modelId &&
-        params.existing.cooldownModel !== params.modelId
-      ) {
-        // If Model A was cooling and now Model B fails, widen to profile-wide lockout
-        // (This prevents "whack-a-mole" retries across many models on one dying profile)
-        updatedStats.cooldownModel = undefined;
+      } else if (params.modelId) {
+        // Model-specific errors: scope to the model if not already scoped
+        if (!params.existing.cooldownModel) {
+          updatedStats.cooldownModel = params.modelId;
+        }
+        // If a different model fails during an active cooldown, widen to profile-wide lockout
+        // (prevents "whack-a-mole" retries across models on one dying profile)
+        if (params.existing.cooldownModel && params.existing.cooldownModel !== params.modelId) {
+          updatedStats.cooldownModel = undefined;
+        }
       } else {
-        // Keep existing scope (either specific model or already undefined)
+        // Keep existing scope (specific model or already undefined)
         updatedStats.cooldownModel = params.existing.cooldownModel;
       }
     } else {
       // New cooldown period starts now
       updatedStats.cooldownReason = params.reason;
-      updatedStats.cooldownModel = isModelSpecificReason ? params.modelId : undefined;
+      updatedStats.cooldownModel = isModelSpecificReason && params.modelId ? params.modelId : undefined;
     }
   }
 

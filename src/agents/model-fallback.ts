@@ -164,6 +164,10 @@ async function runFallbackCandidate<T>(params: {
   provider: string;
   model: string;
   options?: ModelFallbackRunOptions;
+  retryConfig?: {
+    rate_limit?: number;
+    overloaded?: number;
+  };
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const runFn = async () =>
@@ -178,9 +182,19 @@ async function runFallbackCandidate<T>(params: {
       minDelayMs: 2000,
       maxDelayMs: 30000,
       jitter: 0.1,
-      shouldRetry: (err) => {
+      shouldRetry: (err, attempt) => {
         const reason = resolveFailoverReasonFromError(err);
-        return reason === "rate_limit" || reason === "overloaded";
+        const retryConfig = params.retryConfig;
+        if (reason === "rate_limit") {
+          return attempt <= (1 + (retryConfig?.rate_limit ?? 1));
+        }
+        if (reason === "overloaded") {
+          return attempt <= (1 + (retryConfig?.overloaded ?? 1));
+        }
+        if (reason === "auth_failure") {
+          return attempt <= (1 + (retryConfig?.auth_failure ?? 0));
+        }
+        return reason === "rate_limit" || reason === "overloaded" || reason === "auth_failure";
       },
     });
 
@@ -208,12 +222,17 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  retryConfig?: {
+    rate_limit?: number;
+    overloaded?: number;
+  };
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
     options: params.options,
+    retryConfig: params.retryConfig,
   });
   if (runResult.ok) {
     return {
@@ -433,11 +452,36 @@ function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
 }
 
 function pruneProbeState(now: number): void {
+  // Lazy pruning: only prune if more than 1 second has passed since last prune
+  const TTL_PRUNE_MS = 1_000;
+  const lastPruned = (pruneProbeState as any).lastPruned ?? 0;
+  if (now - lastPruned < TTL_PRUNE_MS) {
+    return;
+  }
+  (pruneProbeState as any).lastPruned = now;
+
   for (const [key, ts] of lastProbeAttempt) {
     if (!Number.isFinite(ts) || ts <= 0 || now - ts > PROBE_STATE_TTL_MS) {
       lastProbeAttempt.delete(key);
     }
   }
+}
+
+// Cache for probe keys to avoid repeated string creation
+const probeKeyCache = new Map<string, string>();
+
+function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
+  const scope = String(agentDir ?? "").trim();
+  const base = scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
+
+  // Return cached key if available
+  if (probeKeyCache.has(base)) {
+    return probeKeyCache.get(base)!;
+  }
+
+  const key = base;
+  probeKeyCache.set(base, key);
+  return key;
 }
 
 function enforceProbeStateCap(): void {
@@ -468,8 +512,6 @@ function markProbeAttempt(now: number, throttleKey: string): void {
   lastProbeAttempt.set(throttleKey, now);
   enforceProbeStateCap();
 }
-
-function shouldProbePrimaryDuringCooldown(params: {
   isPrimary: boolean;
   hasFallbackCandidates: boolean;
   now: number;
@@ -492,6 +534,12 @@ function shouldProbePrimaryDuringCooldown(params: {
   });
   if (soonest === null || !Number.isFinite(soonest)) {
     return true;
+  }
+
+  // Don't probe if cooldown expires more than 2 minutes in the future
+  // (allows transient network blips to resolve naturally)
+  if (params.now < soonest - PROBE_MARGIN_MS) {
+    return false;
   }
 
   // Probe when cooldown already expired or within the configured margin.
@@ -754,6 +802,7 @@ export async function runWithModelFallback<T>(params: {
       ...candidate,
       attempts,
       options: runOptions,
+      retryConfig,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
@@ -793,6 +842,9 @@ export async function runWithModelFallback<T>(params: {
       // that may have a smaller context window and fail worse.
       const errMessage = err instanceof Error ? err.message : String(err);
       if (isLikelyContextOverflowError(errMessage)) {
+        log.warn(
+          `Context overflow detected on ${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)} — rethrowing without fallback`,
+        );
         throw err;
       }
       const normalized =
