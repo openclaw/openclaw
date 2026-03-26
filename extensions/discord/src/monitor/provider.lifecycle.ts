@@ -129,7 +129,18 @@ export async function runDiscordGatewayLifecycle(params: {
       return;
     }
     gateway.options.reconnect = { maxAttempts: 0 };
-    gateway.disconnect();
+    try {
+      gateway.disconnect();
+    } catch (err) {
+      // Suppress "Max reconnect attempts (0) reached" exception — this is expected
+      // when we intentionally set maxAttempts to 0 for a clean abort/restart.
+      // The gateway throws this as if it were a connection failure, but in this
+      // context it's an intentional shutdown triggered by the health monitor.
+      const message = String(err);
+      if (!message.includes("Max reconnect attempts")) {
+        throw err;
+      }
+    }
   };
 
   if (params.abortSignal?.aborted) {

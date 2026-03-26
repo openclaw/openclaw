@@ -606,4 +606,56 @@ describe("runDiscordGatewayLifecycle", () => {
     const connectedTrue = statusUpdates.find((s) => s.connected === true);
     expect(connectedTrue).toBeUndefined();
   });
+
+  it("suppresses 'Max reconnect attempts' exception during intentional abort", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: true,
+      options: { reconnect: { maxAttempts: 3 } },
+      disconnect: vi.fn(() => {
+        // Simulate the gateway throwing when maxAttempts is 0
+        throw new Error("Max reconnect attempts (0) reached after code 1005");
+      }),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    // Should not throw — the "Max reconnect attempts" error should be suppressed
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows non-reconnect exceptions during abort", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: true,
+      options: { reconnect: { maxAttempts: 3 } },
+      disconnect: vi.fn(() => {
+        throw new Error("Some other unexpected error");
+      }),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const abortController = new AbortController();
+    abortController.abort();
+
+    const { lifecycleParams } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    // Should throw — non-reconnect errors should not be suppressed
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
+      "Some other unexpected error",
+    );
+  });
 });
