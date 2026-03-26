@@ -120,14 +120,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
       if (useCard) {
         const cardHeaderEnabled = account.config?.cardHeader !== false;
-        const header = (identity && cardHeaderEnabled)
-          ? {
-              title: identity.emoji
-                ? `${identity.emoji} ${identity.name ?? ""}`.trim()
-                : (identity.name ?? ""),
-              template: "blue" as const,
-            }
-          : undefined;
+        const header =
+          identity && cardHeaderEnabled
+            ? {
+                title: identity.emoji
+                  ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+                  : (identity.name ?? ""),
+                template: "blue" as const,
+              }
+            : undefined;
         return await sendStructuredCardFeishu({
           cfg,
           to,

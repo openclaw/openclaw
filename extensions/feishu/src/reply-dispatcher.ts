@@ -416,7 +416,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           if (useCard) {
             const cardHeaderEnabled2 = account.config?.cardHeader !== false;
-            const cardHeader = cardHeaderEnabled2 ? resolveCardHeader(agentId, identity) : undefined;
+            const cardHeader = cardHeaderEnabled2
+              ? resolveCardHeader(agentId, identity)
+              : undefined;
             const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
             await sendChunkedTextReply({
               text,
