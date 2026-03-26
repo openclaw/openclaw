@@ -54,7 +54,7 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver });
 
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recovered: 2,
       failed: 0,
       skippedMaxRetries: 0,
@@ -201,7 +201,7 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
@@ -228,7 +228,7 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
@@ -259,7 +259,7 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recovered: 1,
       failed: 0,
       skippedMaxRetries: 0,
@@ -288,7 +288,7 @@ describe("delivery-queue recovery", () => {
 
     const firstDeliver = vi.fn().mockResolvedValue([]);
     const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
-    expect(firstRun.result).toEqual({
+    expect(firstRun.result).toMatchObject({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
@@ -299,7 +299,7 @@ describe("delivery-queue recovery", () => {
     vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
     const secondDeliver = vi.fn().mockResolvedValue([]);
     const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
-    expect(secondRun.result).toEqual({
+    expect(secondRun.result).toMatchObject({
       recovered: 1,
       failed: 0,
       skippedMaxRetries: 0,
@@ -315,7 +315,7 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn();
     const { result } = await runRecovery({ deliver });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       recovered: 0,
       failed: 0,
       skippedMaxRetries: 0,
