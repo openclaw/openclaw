@@ -8,6 +8,11 @@ import Speech
 actor TalkModeRuntime {
     static let shared = TalkModeRuntime()
 
+    enum PlaybackPlan: Equatable {
+        case elevenLabsThenSystemVoice(apiKey: String, voiceId: String)
+        case systemVoiceOnly
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -451,7 +456,8 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
-        if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+        switch Self.playbackPlan(apiKey: input.apiKey, voiceId: input.voiceId) {
+        case let .elevenLabsThenSystemVoice(apiKey, voiceId):
             do {
                 try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
             } catch {
@@ -465,7 +471,7 @@ actor TalkModeRuntime {
                     self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
                 }
             }
-        } else {
+        case .systemVoiceOnly:
             do {
                 try await self.playSystemVoice(input: input)
             } catch {
@@ -477,6 +483,13 @@ actor TalkModeRuntime {
             self.phase = .thinking
             await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
         }
+    }
+
+    static func playbackPlan(apiKey: String?, voiceId: String?) -> PlaybackPlan {
+        guard let apiKey, !apiKey.isEmpty, let voiceId else {
+            return .systemVoiceOnly
+        }
+        return .elevenLabsThenSystemVoice(apiKey: apiKey, voiceId: voiceId)
     }
 
     private struct TalkPlaybackInput {

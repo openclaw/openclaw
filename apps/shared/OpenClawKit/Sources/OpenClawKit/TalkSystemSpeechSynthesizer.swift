@@ -51,34 +51,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         }
         self.currentUtterance = utterance
 
-        // Estimate speech duration per language, then apply 3x safety margin.
-        // The watchdog is a hang guard — normal completion relies on didFinish.
-        //
-        // Speech rates based on Pellegrino et al. (2019) syllable-per-second data,
-        // adjusted for TTS synthesis (slower than natural speech):
-        // https://www.science.org/doi/10.1126/sciadv.aaw2594
-        //   Japanese: 7.84 SPS → ~0.20s/char (mixed kana/kanji avg ~1.5 mora/char)
-        //   Korean:   5.96 SPS → ~0.25s/char (1 char = 1 syllable)
-        //   Chinese:  5.18 SPS → ~0.28s/char (1 char = 1 syllable)
-        //   English:  6.19 SPS → ~0.08s/char (avg ~5 chars/syllable)
-        let resolvedLang = language ?? utterance.voice?.language ?? "en"
-        let perCharSeconds: Double
-        let minSeconds: Double
-        if resolvedLang.hasPrefix("ko") {
-            perCharSeconds = 0.25  // Korean: 1 syllable block per char
-            minSeconds = 10.0
-        } else if resolvedLang.hasPrefix("zh") {
-            perCharSeconds = 0.28  // Chinese: 1 syllable per hanzi, tonal = slightly slower
-            minSeconds = 10.0
-        } else if resolvedLang.hasPrefix("ja") {
-            perCharSeconds = 0.20  // Japanese: kana ~0.15s, kanji ~0.3s, blended avg
-            minSeconds = 10.0
-        } else {
-            perCharSeconds = 0.08  // Latin-script languages
-            minSeconds = 3.0
-        }
-        let estimatedSeconds = max(minSeconds, min(300.0, Double(trimmed.count) * perCharSeconds))
-        let watchdogTimeout = estimatedSeconds * 3.0
+        let watchdogTimeout = Self.watchdogTimeoutSeconds(text: trimmed, language: language ?? utterance.voice?.language)
         self.watchdog?.cancel()
         self.watchdog = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -108,6 +81,37 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         if self.currentToken != token {
             throw SpeakError.canceled
         }
+    }
+
+    static func watchdogTimeoutSeconds(text: String, language: String?) -> Double {
+        // Estimate speech duration per language, then apply 3x safety margin.
+        // The watchdog is a hang guard — normal completion relies on didFinish.
+        //
+        // Speech rates based on Pellegrino et al. (2019) syllable-per-second data,
+        // adjusted for TTS synthesis (slower than natural speech):
+        // https://www.science.org/doi/10.1126/sciadv.aaw2594
+        //   Japanese: 7.84 SPS -> ~0.20s/char (mixed kana/kanji avg ~1.5 mora/char)
+        //   Korean:   5.96 SPS -> ~0.25s/char (1 char = 1 syllable)
+        //   Chinese:  5.18 SPS -> ~0.28s/char (1 char = 1 syllable)
+        //   English:  6.19 SPS -> ~0.08s/char (avg ~5 chars/syllable)
+        let normalizedLanguage = language?.lowercased() ?? "en"
+        let perCharSeconds: Double
+        let minSeconds: Double
+        if normalizedLanguage.hasPrefix("ko") {
+            perCharSeconds = 0.25
+            minSeconds = 10.0
+        } else if normalizedLanguage.hasPrefix("zh") {
+            perCharSeconds = 0.28
+            minSeconds = 10.0
+        } else if normalizedLanguage.hasPrefix("ja") {
+            perCharSeconds = 0.20
+            minSeconds = 10.0
+        } else {
+            perCharSeconds = 0.08
+            minSeconds = 3.0
+        }
+        let estimatedSeconds = max(minSeconds, min(300.0, Double(text.count) * perCharSeconds))
+        return estimatedSeconds * 3.0
     }
 
     private func matchesCurrentUtterance(_ utteranceID: ObjectIdentifier) -> Bool {
