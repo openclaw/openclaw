@@ -55,26 +55,58 @@ const CanvasToolSchema = Type.Object({
   action: stringEnum(CANVAS_ACTIONS),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  node: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 120_000,
+      description: "Gateway call timeout in ms. Max: 120s.",
+    }),
+  ),
+  node: Type.Optional(Type.String({ description: "Target node name or ID." })),
   // present
-  target: Type.Optional(Type.String()),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
-  width: Type.Optional(Type.Number()),
-  height: Type.Optional(Type.Number()),
+  target: Type.Optional(
+    Type.String({ description: "Canvas target identifier for present action." }),
+  ),
+  x: Type.Optional(Type.Number({ description: "Canvas X position in points." })),
+  y: Type.Optional(Type.Number({ description: "Canvas Y position in points." })),
+  width: Type.Optional(Type.Number({ minimum: 1, description: "Canvas width in points." })),
+  height: Type.Optional(Type.Number({ minimum: 1, description: "Canvas height in points." })),
   // navigate
-  url: Type.Optional(Type.String()),
+  url: Type.Optional(Type.String({ description: "URL to navigate the canvas to." })),
   // eval
-  javaScript: Type.Optional(Type.String()),
+  javaScript: Type.Optional(
+    Type.String({ description: "JavaScript code to evaluate in the canvas context." }),
+  ),
   // snapshot
   outputFormat: optionalStringEnum(CANVAS_SNAPSHOT_FORMATS),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
+  maxWidth: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 7680,
+      description: "Max snapshot width in pixels.",
+    }),
+  ),
+  quality: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description: "Snapshot image quality (0-1).",
+    }),
+  ),
+  delayMs: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 30_000,
+      description: "Delay before snapshot capture in ms. Max: 30s.",
+    }),
+  ),
   // a2ui_push
-  jsonl: Type.Optional(Type.String()),
-  jsonlPath: Type.Optional(Type.String()),
+  jsonl: Type.Optional(Type.String({ description: "Inline JSONL payload for A2UI push." })),
+  jsonlPath: Type.Optional(
+    Type.String({
+      description: "File path to JSONL payload for A2UI push. Must be within allowed roots.",
+    }),
+  ),
 });
 
 export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
@@ -83,7 +115,7 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
     label: "Canvas",
     name: "canvas",
     description:
-      "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
+      "Control node canvases. Actions: present (show canvas), hide, navigate (load URL), eval (run JS), snapshot (capture rendered UI as image), a2ui_push (push A2UI JSONL), a2ui_reset. Snapshot images are capped by sanitization limits.",
     parameters: CanvasToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

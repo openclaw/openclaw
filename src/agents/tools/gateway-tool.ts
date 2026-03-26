@@ -46,21 +46,55 @@ const GATEWAY_ACTIONS = [
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   // restart
-  delayMs: Type.Optional(Type.Number()),
-  reason: Type.Optional(Type.String()),
+  delayMs: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 60_000,
+      description: "Delay before restart in ms. Max: 60s.",
+    }),
+  ),
+  reason: Type.Optional(Type.String({ description: "Human-readable reason for the restart." })),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 1_200_000,
+      description: "Gateway call timeout in ms. Default: 20 minutes for update.run.",
+    }),
+  ),
   // config.schema.lookup
-  path: Type.Optional(Type.String()),
+  path: Type.Optional(
+    Type.String({
+      description: 'Dot-separated config path for schema lookup (e.g. "tools.web.fetch").',
+    }),
+  ),
   // config.apply, config.patch
-  raw: Type.Optional(Type.String()),
-  baseHash: Type.Optional(Type.String()),
+  raw: Type.Optional(
+    Type.String({
+      description: "Full YAML config content for config.apply, or partial YAML for config.patch.",
+    }),
+  ),
+  baseHash: Type.Optional(
+    Type.String({ description: "Config snapshot hash for optimistic concurrency control." }),
+  ),
   // config.apply, config.patch, update.run
-  sessionKey: Type.Optional(Type.String()),
-  note: Type.Optional(Type.String()),
-  restartDelayMs: Type.Optional(Type.Number()),
+  sessionKey: Type.Optional(
+    Type.String({ description: "Session key to attribute the config change or update to." }),
+  ),
+  note: Type.Optional(
+    Type.String({
+      description: "Human-readable message delivered to the user after restart completes.",
+    }),
+  ),
+  restartDelayMs: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 60_000,
+      description: "Delay before post-config-change restart in ms. Max: 60s.",
+    }),
+  ),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.

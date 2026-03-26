@@ -107,49 +107,142 @@ const NodesToolSchema = Type.Object({
   action: stringEnum(NODES_TOOL_ACTIONS),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  node: Type.Optional(Type.String()),
-  requestId: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 120_000,
+      description: "Gateway call timeout in ms. Default: gateway-defined. Max: 120s.",
+    }),
+  ),
+  node: Type.Optional(Type.String({ description: "Node name or ID. Required for most actions." })),
+  requestId: Type.Optional(
+    Type.String({ description: "Pairing request ID for approve/reject actions." }),
+  ),
   // notify
-  title: Type.Optional(Type.String()),
-  body: Type.Optional(Type.String()),
-  sound: Type.Optional(Type.String()),
+  title: Type.Optional(Type.String({ description: "Notification title." })),
+  body: Type.Optional(Type.String({ description: "Notification body text." })),
+  sound: Type.Optional(Type.String({ description: "Notification sound name." })),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
   // camera_snap / camera_clip
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
-  deviceId: Type.Optional(Type.String()),
-  limit: Type.Optional(Type.Number()),
-  duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number({ maximum: 300_000 })),
+  maxWidth: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 7680,
+      description: "Max image width in pixels. Larger values increase response size.",
+    }),
+  ),
+  quality: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description: "Image quality (0-1). Lower values produce smaller files.",
+    }),
+  ),
+  delayMs: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 30_000,
+      description: "Delay before capture in ms. Max: 30s.",
+    }),
+  ),
+  deviceId: Type.Optional(
+    Type.String({ description: "Specific camera device ID from camera_list." }),
+  ),
+  limit: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 20,
+      description: "Max photos to return for photos_latest. Default: 1. Max: 20.",
+    }),
+  ),
+  duration: Type.Optional(
+    Type.String({ description: 'Human-readable duration string (e.g. "5s", "1m").' }),
+  ),
+  durationMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 300_000,
+      description: "Recording duration in ms. Max: 5 minutes (300000).",
+    }),
+  ),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
-  fps: Type.Optional(Type.Number()),
-  screenIndex: Type.Optional(Type.Number()),
-  outPath: Type.Optional(Type.String()),
+  fps: Type.Optional(
+    Type.Number({
+      minimum: 1,
+      maximum: 60,
+      description: "Frames per second for screen recording. Default: device-defined.",
+    }),
+  ),
+  screenIndex: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      description: "Screen index for multi-display nodes.",
+    }),
+  ),
+  outPath: Type.Optional(Type.String({ description: "Output file path for recordings." })),
   // location_get
-  maxAgeMs: Type.Optional(Type.Number()),
-  locationTimeoutMs: Type.Optional(Type.Number()),
+  maxAgeMs: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 600_000,
+      description: "Accept cached location if younger than N ms. Max: 10 minutes.",
+    }),
+  ),
+  locationTimeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 60_000,
+      description: "Location request timeout in ms. Max: 60s.",
+    }),
+  ),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
   // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
-  notificationKey: Type.Optional(Type.String()),
-  notificationReplyText: Type.Optional(Type.String()),
+  notificationKey: Type.Optional(
+    Type.String({ description: "Notification key for action/dismiss/reply." }),
+  ),
+  notificationReplyText: Type.Optional(
+    Type.String({ description: "Reply text for notification reply action." }),
+  ),
   // run
-  command: Type.Optional(Type.Array(Type.String())),
-  cwd: Type.Optional(Type.String()),
-  env: Type.Optional(Type.Array(Type.String())),
-  commandTimeoutMs: Type.Optional(Type.Number()),
-  invokeTimeoutMs: Type.Optional(Type.Number()),
+  command: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Command and arguments to execute on the node.",
+      maxItems: 100,
+    }),
+  ),
+  cwd: Type.Optional(Type.String({ description: "Working directory for command execution." })),
+  env: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Environment variables as KEY=VALUE pairs.",
+      maxItems: 50,
+    }),
+  ),
+  commandTimeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 600_000,
+      description: "Command execution timeout in ms. Max: 10 minutes.",
+    }),
+  ),
+  invokeTimeoutMs: Type.Optional(
+    Type.Number({
+      minimum: 1000,
+      maximum: 120_000,
+      description: "Invoke call timeout in ms. Max: 120s.",
+    }),
+  ),
   needsScreenRecording: Type.Optional(Type.Boolean()),
   // invoke
-  invokeCommand: Type.Optional(Type.String()),
-  invokeParamsJson: Type.Optional(Type.String()),
+  invokeCommand: Type.Optional(Type.String({ description: "Custom invoke command name." })),
+  invokeParamsJson: Type.Optional(
+    Type.String({ description: "JSON-encoded parameters for the invoke command." }),
+  ),
 });
 
 export function createNodesTool(options?: {
@@ -177,7 +270,7 @@ export function createNodesTool(options?: {
     name: "nodes",
     ownerOnly: true,
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/run/invoke).",
+      "Discover and control paired nodes. Actions: status (list nodes), describe (node details), pending/approve/reject (pairing), notify (send notification), camera_snap/camera_clip/camera_list (camera), photos_latest (recent photos), screen_record, location_get, notifications_list/notifications_action, device_status/device_info/device_permissions/device_health, run (execute command), invoke (custom command). Media responses are capped by image sanitization limits.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

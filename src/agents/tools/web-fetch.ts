@@ -58,8 +58,9 @@ const WebFetchSchema = Type.Object({
   ),
   maxChars: Type.Optional(
     Type.Number({
-      description: "Maximum characters to return (truncates when exceeded).",
+      description: "Maximum characters to return (truncates when exceeded). Default: 50000.",
       minimum: 100,
+      maximum: 200_000,
     }),
   ),
 });

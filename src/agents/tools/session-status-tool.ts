@@ -47,8 +47,17 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  model: Type.Optional(Type.String()),
+  sessionKey: Type.Optional(
+    Type.String({
+      description: "Session key to inspect. Default: current session.",
+    }),
+  ),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Model ID or alias to check availability/info for, without changing the session model.",
+    }),
+  ),
 });
 
 function resolveSessionEntry(params: {
