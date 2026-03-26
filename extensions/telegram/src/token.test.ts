@@ -236,6 +236,42 @@ describe("resolveTelegramToken", () => {
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
   });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created accountIds should inherit the channel-level token in
+  // single-bot setups (no accounts section).
+  it("falls through to channel-level token for binding-created accountId without accounts section", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
+    expect(res.token).toBe("channel-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  });
 });
 
 describe("telegram update offset store", () => {
