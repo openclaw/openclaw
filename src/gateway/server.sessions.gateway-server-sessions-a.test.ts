@@ -1043,6 +1043,10 @@ describe("gateway server sessions", () => {
           execAsk: "on-miss",
           execNode: "mac-mini",
           displayName: "Ops Child",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
+          claudeCliSessionId: "cli-session-123",
           deliveryContext: {
             channel: "discord",
             to: "discord:child",
@@ -1091,6 +1095,8 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
         deliveryContext?: {
           channel?: string;
           to?: string;
@@ -1134,6 +1140,10 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.execAsk).toBe("on-miss");
     expect(reset.payload?.entry.execNode).toBe("mac-mini");
     expect(reset.payload?.entry.displayName).toBe("Ops Child");
+    expect(reset.payload?.entry.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
     expect(reset.payload?.entry.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
@@ -1177,6 +1187,8 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
         deliveryContext?: {
           channel?: string;
           to?: string;
@@ -1218,6 +1230,10 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
     expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
     expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
+    expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
     expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
