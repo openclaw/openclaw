@@ -18,7 +18,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   {
     name: "configure",
     description: "Interactive configuration for credentials, channels, gateway, and agent defaults",
-    hasSubcommands: false,
+    hasSubcommands: true,
   },
   {
     name: "config",

@@ -71,7 +71,7 @@ const coreEntries: CoreCliEntry[] = [
         name: "configure",
         description:
           "Interactive configuration for credentials, channels, gateway, and agent defaults",
-        hasSubcommands: false,
+        hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {

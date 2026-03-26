@@ -87,6 +87,14 @@ export function createProviderApiKeyAuthMethod(
     label: params.label,
     hint: params.hint,
     kind: "api_key",
+    surface: {
+      kind: "api_key",
+      optionKey: params.optionKey,
+      flagName: params.flagName,
+      envVar: params.envVar,
+      ...(params.allowProfile === false ? { allowProfile: false } : {}),
+      ...(params.defaultModel ? { defaultModel: params.defaultModel } : {}),
+    },
     wizard: params.wizard,
     run: async (ctx) => {
       const opts = ctx.opts as Record<string, unknown> | undefined;

@@ -2,10 +2,12 @@ import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const configureCommandFromSectionsArgMock = vi.fn();
+const configureSurfaceCommandMock = vi.fn();
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(),
+  writeStdout: vi.fn(),
 };
 
 vi.mock("../../commands/configure.js", () => ({
@@ -13,11 +15,19 @@ vi.mock("../../commands/configure.js", () => ({
   configureCommandFromSectionsArg: configureCommandFromSectionsArgMock,
 }));
 
+vi.mock("../../commands/configure-surface.js", () => ({
+  configureSurfaceCommand: configureSurfaceCommandMock,
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-const mockedModuleIds = ["../../commands/configure.js", "../../runtime.js"];
+const mockedModuleIds = [
+  "../../commands/configure.js",
+  "../../commands/configure-surface.js",
+  "../../runtime.js",
+];
 
 let registerConfigureCommand: typeof import("./register.configure.js").registerConfigureCommand;
 
@@ -42,6 +52,7 @@ describe("registerConfigureCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configureCommandFromSectionsArgMock.mockResolvedValue(undefined);
+    configureSurfaceCommandMock.mockResolvedValue(undefined);
   });
 
   it("forwards repeated --section values", async () => {
@@ -57,5 +68,24 @@ describe("registerConfigureCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith("Error: configure failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("forwards configure surface options", async () => {
+    await runCli([
+      "configure",
+      "surface",
+      "--json-out",
+      "/tmp/surface.json",
+      "--section",
+      "channels",
+      "--installed-only",
+    ]);
+
+    expect(configureSurfaceCommandMock).toHaveBeenCalledWith({
+      jsonOut: "/tmp/surface.json",
+      section: ["channels"],
+      installedOnly: true,
+      runtime,
+    });
   });
 });
