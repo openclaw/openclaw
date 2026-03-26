@@ -746,6 +746,26 @@ const ProviderOptionsSchema = z
   .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
   .optional();
 
+const LITELLM_MEDIA_ROUTING_ALIAS_MODELS = new Set(["vision", "simple", "medium", "complex"]);
+
+function addLiteLLMMediaAliasIssue(params: {
+  value: { provider?: string; model?: string } | undefined;
+  ctx: z.RefinementCtx;
+  pathPrefix: Array<string | number>;
+}) {
+  const provider = params.value?.provider?.trim().toLowerCase();
+  const model = params.value?.model?.trim().toLowerCase();
+  if (provider !== "litellm" || !model || !LITELLM_MEDIA_ROUTING_ALIAS_MODELS.has(model)) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: [...params.pathPrefix, "model"],
+    message:
+      'LiteLLM routing aliases are not allowed in tools.media. Use a direct provider (for example openai/gpt-4o-mini) or a concrete LiteLLM model id instead of litellm/' + model + '.',
+  });
+}
+
 const MediaUnderstandingRuntimeFields = {
   prompt: z.string().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
@@ -804,6 +824,20 @@ export const ToolsMediaSchema = z
     video: ToolsMediaUnderstandingSchema.optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    for (const [idx, entry] of (value.models ?? []).entries()) {
+      addLiteLLMMediaAliasIssue({ value: entry, ctx, pathPrefix: ["models", idx] });
+    }
+    for (const capability of ["image", "audio", "video"] as const) {
+      for (const [idx, entry] of (value[capability]?.models ?? []).entries()) {
+        addLiteLLMMediaAliasIssue({
+          value: entry,
+          ctx,
+          pathPrefix: [capability, "models", idx],
+        });
+      }
+    }
+  })
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
