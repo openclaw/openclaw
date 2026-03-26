@@ -6,7 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🧩",
-        "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "cursor-agent"] },
+        "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "cursor-agent", "agent"] },
         "install":
           [
             {
@@ -207,7 +207,31 @@ bash pty:true workdir:~/project command:"opencode run 'Your task'"
 
 ## Cursor Agent CLI
 
-**Binary note:** on most setups the executable is `cursor-agent` (not `cursor`).
+**Binary note:** Cursor's official installer exposes `agent`. Some setups also provide or alias `cursor-agent`. In the examples below, use whichever binary exists locally.
+
+### Installation
+
+Official Cursor docs: <https://cursor.com/docs/cli/installation>
+
+```bash
+# macOS / Linux / WSL
+curl https://cursor.com/install -fsS | bash
+
+# Verify
+agent --version
+```
+
+Post-install PATH fix if needed:
+
+```bash
+# bash
+export PATH="$HOME/.local/bin:$PATH"
+
+# zsh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If your machine exposes `cursor-agent` instead of `agent`, substitute that name in the commands below.
 
 ### Quick Start
 
