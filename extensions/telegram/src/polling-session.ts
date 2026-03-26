@@ -296,8 +296,11 @@ export class TelegramPollingSession {
 
       const now = Date.now();
       const activeElapsed =
-        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null ? now - lastGetUpdatesStartedAt : 0;
-      const idleElapsed = inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
+        inFlightGetUpdates > 0 && lastGetUpdatesStartedAt != null
+          ? now - lastGetUpdatesStartedAt
+          : 0;
+      const idleElapsed =
+        inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
 
       if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
