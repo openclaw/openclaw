@@ -270,7 +270,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        const cardHeader = resolveCardHeader(agentId, identity);
+        const cardHeaderEnabled = account.config?.cardHeader !== false;
+        const cardHeader = cardHeaderEnabled ? resolveCardHeader(agentId, identity) : undefined;
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
@@ -414,7 +415,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (useCard) {
-            const cardHeader = resolveCardHeader(agentId, identity);
+            const cardHeaderEnabled2 = account.config?.cardHeader !== false;
+            const cardHeader = cardHeaderEnabled2 ? resolveCardHeader(agentId, identity) : undefined;
             const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
             await sendChunkedTextReply({
               text,
