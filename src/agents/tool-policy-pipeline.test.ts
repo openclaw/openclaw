@@ -108,8 +108,8 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["apply_patch"] },
-          label: "tools.profile (coding)",
+          policy: { allow: ["wat"] },
+          label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],
