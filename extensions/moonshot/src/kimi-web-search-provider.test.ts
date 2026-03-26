@@ -34,4 +34,58 @@ describe("kimi web search provider", () => {
       }),
     ).toEqual(["https://a.test", "https://b.test", "https://c.test"]);
   });
+
+  it("builds tool result content by echoing search_id from tool call arguments", () => {
+    // The Kimi $web_search builtin returns a search_id in the tool call arguments.
+    // buildKimiToolResultContent must pass it back unchanged so Kimi can resolve
+    // the cached search results on the next round.
+    const searchId = "abc123";
+    const result = __testing.buildKimiToolResultContent({
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          message: {
+            tool_calls: [
+              {
+                id: "t-web_search-1",
+                function: {
+                  name: "$web_search",
+                  arguments: JSON.stringify({ search_result: { search_id: searchId } }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(JSON.parse(result)).toEqual({ search_result: { search_id: searchId } });
+  });
+
+  it("falls back to search_results array when no search_id is present in tool call arguments", () => {
+    const result = __testing.buildKimiToolResultContent({
+      search_results: [
+        { title: "Page A", url: "https://a.test", content: "content A" },
+        { title: "Page B", url: "https://b.test", content: "content B" },
+      ],
+    });
+    expect(JSON.parse(result)).toEqual({
+      search_results: [
+        { title: "Page A", url: "https://a.test", content: "content A" },
+        { title: "Page B", url: "https://b.test", content: "content B" },
+      ],
+    });
+  });
+
+  it("falls back gracefully when tool call arguments are malformed JSON", () => {
+    const result = __testing.buildKimiToolResultContent({
+      choices: [
+        {
+          message: {
+            tool_calls: [{ function: { arguments: "not-valid-json" } }],
+          },
+        },
+      ],
+    });
+    expect(JSON.parse(result)).toEqual({ search_results: [] });
+  });
 });

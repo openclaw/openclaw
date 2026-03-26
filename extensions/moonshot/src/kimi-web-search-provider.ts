@@ -47,6 +47,12 @@ type KimiToolCall = {
   };
 };
 
+type KimiWebSearchArguments = {
+  search_result?: {
+    search_id?: string;
+  };
+};
+
 type KimiMessage = {
   role?: string;
   content?: string;
@@ -129,6 +135,27 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
 }
 
 function buildKimiToolResultContent(data: KimiSearchResponse): string {
+  // The Kimi $web_search builtin function embeds a search_id in the tool call
+  // arguments rather than populating `search_results` in the response body.
+  // We must echo the search_id back as-is so Kimi can resolve the cached
+  // search results on the next round.
+  for (const toolCall of data.choices?.[0]?.message?.tool_calls ?? []) {
+    const rawArguments = toolCall.function?.arguments;
+    if (!rawArguments) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(rawArguments) as KimiWebSearchArguments;
+      const searchId = parsed.search_result?.search_id;
+      if (searchId) {
+        return JSON.stringify({ search_result: { search_id: searchId } });
+      }
+    } catch {
+      // ignore malformed tool arguments
+    }
+  }
+  // Fallback: original behaviour for any future Kimi API variant that returns
+  // search_results directly in the response body.
   return JSON.stringify({
     search_results: (data.search_results ?? []).map((entry) => ({
       title: entry.title ?? "",
@@ -350,4 +377,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  buildKimiToolResultContent,
 } as const;
