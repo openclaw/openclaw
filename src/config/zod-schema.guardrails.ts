@@ -14,4 +14,8 @@ export const GuardrailsSchema = z
     provider: GuardrailProviderConfigSchema.optional(),
   })
   .strict()
+  .refine((val) => !val.enabled || val.provider?.use, {
+    message: "guardrails.provider.use is required when guardrails.enabled is true",
+    path: ["provider"],
+  })
   .optional();

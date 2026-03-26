@@ -1,7 +1,6 @@
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
-import { loadGuardrailProvider } from "../guardrails/index.js";
-import { configureGuardrails } from "../agents/pi-tools.before-tool-call.js";
+import { initGuardrailsFromConfig } from "../guardrails/init.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
@@ -29,51 +28,6 @@ type GatewayPluginBootstrapParams = {
   logDiagnostics?: boolean;
   beforePrimeRegistry?: (pluginRegistry: PluginRegistry) => void;
 };
-
-function installGuardrailsFromConfig(
-  cfg: ReturnType<typeof loadConfig>,
-  log: GatewayPluginBootstrapLog,
-): void {
-  const gc = cfg.guardrails;
-  if (!gc?.enabled || !gc.provider?.use) {
-    return;
-  }
-
-  const failClosed = gc.failClosed !== false;
-
-  if (failClosed) {
-    configureGuardrails(
-      {
-        name: "guardrails-pending",
-        async evaluate() {
-          return {
-            allow: false,
-            reasons: [{ code: "provider_loading", message: "guardrail provider is still loading" }],
-          };
-        },
-      },
-      true,
-    );
-  }
-
-  loadGuardrailProvider(gc.provider)
-    .then(async (provider) => {
-      configureGuardrails(provider, failClosed);
-      if (provider.healthCheck) {
-        const health = await provider.healthCheck();
-        if (!health.ok) {
-          log.warn(`[guardrails] provider health check failed: ${health.message}`);
-        }
-      }
-      log.info(`[guardrails] provider '${provider.name}' loaded (failClosed=${failClosed})`);
-    })
-    .catch((err) => {
-      log.error(`[guardrails] failed to load provider: ${err instanceof Error ? err.message : String(err)}`);
-      if (!failClosed) {
-        configureGuardrails(undefined);
-      }
-    });
-}
 
 function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
   setPluginSubagentOverridePolicies(cfg);
@@ -104,7 +58,7 @@ function logGatewayPluginDiagnostics(params: {
 
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   installGatewayPluginRuntimeEnvironment(params.cfg);
-  installGuardrailsFromConfig(params.cfg, params.log);
+  initGuardrailsFromConfig(params.cfg.guardrails, params.log);
   const loaded = loadGatewayPlugins({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,

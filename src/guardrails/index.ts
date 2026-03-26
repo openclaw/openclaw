@@ -7,6 +7,7 @@ export type {
   GuardrailProviderConfig,
 } from "./types.js";
 export { AllowlistProvider } from "./builtin.js";
+export { initGuardrailsFromConfig } from "./init.js";
 
 import path from "node:path";
 import { pathToFileURL } from "node:url";
