@@ -277,7 +277,11 @@ function buildPortalSessionKey(params: {
   });
 }
 
-function resolvePortalTargetAgent(remoteAgentId: string):
+function resolvePortalTargetAgent(
+  remoteAgentId: string,
+  preferredConversationView?: ControlPlaneConversationView,
+  preferredLocalAgentKey?: string,
+):
   | {
       cfg: ReturnType<typeof loadConfig>;
       agentId: string;
@@ -290,16 +294,52 @@ function resolvePortalTargetAgent(remoteAgentId: string):
   const runtimeState = loadControlPlaneRuntimeState();
   const normalizedRemoteAgentId = normalizeRemoteAgentId(remoteAgentId);
 
-  for (const entry of runtimeState.agents ?? []) {
-    if (normalizeRemoteAgentId(entry.remoteAgentId) !== normalizedRemoteAgentId) {
-      continue;
+  const matchingAgents = (runtimeState.agents ?? []).filter(
+    (entry) => normalizeRemoteAgentId(entry.remoteAgentId) === normalizedRemoteAgentId,
+  );
+
+  const preferredLocal = preferredLocalAgentKey ? normalizeAgentId(preferredLocalAgentKey) : "";
+  const agentsForRemote = preferredLocal
+    ? matchingAgents.filter((entry) => normalizeAgentId(entry.agentId) === preferredLocal)
+    : matchingAgents;
+
+  if (preferredLocal && matchingAgents.length > 0 && agentsForRemote.length === 0) {
+    return undefined;
+  }
+
+  const pickRuntimeAgent = (): ControlPlaneRuntimeAgent | undefined => {
+    const pool = agentsForRemote.length > 0 ? agentsForRemote : matchingAgents;
+    if (pool.length === 0) {
+      return undefined;
     }
+    if (pool.length === 1) {
+      return pool[0];
+    }
+    if (preferredConversationView) {
+      const byView = pool.find((entry) =>
+        (entry.sessionViews ?? buildSessionViews(entry.runtimeRole)).includes(
+          preferredConversationView,
+        ),
+      );
+      if (byView) {
+        return byView;
+      }
+    }
+    return pool[0];
+  };
+
+  const picked = pickRuntimeAgent();
+  if (picked) {
     return {
       cfg,
-      agentId: normalizeAgentId(entry.agentId),
+      agentId: normalizeAgentId(picked.agentId),
       runtimeState,
-      runtimeAgent: entry,
+      runtimeAgent: picked,
     };
+  }
+
+  if (preferredLocal) {
+    return undefined;
   }
 
   const directAgentId = normalizeAgentId(remoteAgentId);
@@ -613,6 +653,16 @@ function parseReleaseDescriptor(body: JsonObject): ReleaseDescriptor {
   const release = readOptionalObject(body, "release", "releaseBundle");
   const topLevelReleaseFiles = parseWorkspaceFilesFromValue(body.releaseFiles);
   const nestedReleaseFiles = parseWorkspaceFilesFromValue(release?.files);
+  const artifacts = release ? readOptionalObject(release, "artifacts") : undefined;
+  const artifactWorkspaceFiles = artifacts
+    ? parseWorkspaceFilesFromValue(artifacts.workspaceFiles)
+    : [];
+  const releaseFiles =
+    topLevelReleaseFiles.length > 0
+      ? topLevelReleaseFiles
+      : nestedReleaseFiles.length > 0
+        ? nestedReleaseFiles
+        : artifactWorkspaceFiles;
   return {
     releaseId:
       readOptionalString(body, "releaseId") ??
@@ -626,7 +676,7 @@ function parseReleaseDescriptor(body: JsonObject): ReleaseDescriptor {
     releaseManifest:
       readOptionalObject(body, "releaseManifest") ??
       (release ? readOptionalObject(release, "manifest") : undefined),
-    releaseFiles: topLevelReleaseFiles.length > 0 ? topLevelReleaseFiles : nestedReleaseFiles,
+    releaseFiles,
   };
 }
 
@@ -803,7 +853,7 @@ async function ensureLocalAgentProvisioned(body: JsonObject): Promise<{
   workspaceKey: string;
 }> {
   const requestedAgentId = normalizeAgentId(
-    readOptionalString(body, "agentId", "localAgentKey") || "",
+    readOptionalString(body, "agentId", "localAgentKey", "localAgentId") || "",
   );
   if (!requestedAgentId) {
     throw new Error("missing or invalid agentId");
@@ -896,14 +946,19 @@ function mergeSyncedRuntimeAgents(params: {
 }): ControlPlaneRuntimeAgent[] {
   const nextAgentId = normalizeAgentId(params.nextEntry.agentId);
   const nextRemoteAgentId = normalizeRemoteAgentId(params.nextEntry.remoteAgentId);
-  return [
-    ...params.currentAgents.filter(
-      (entry) =>
-        normalizeAgentId(entry.agentId) !== nextAgentId &&
-        normalizeRemoteAgentId(entry.remoteAgentId) !== nextRemoteAgentId,
-    ),
-    params.nextEntry,
-  ];
+  const nextRole = params.nextEntry.runtimeRole;
+
+  const occupiesSameSlot = (entry: ControlPlaneRuntimeAgent): boolean => {
+    if (normalizeRemoteAgentId(entry.remoteAgentId) !== nextRemoteAgentId) {
+      return false;
+    }
+    if (nextRole && entry.runtimeRole) {
+      return entry.runtimeRole === nextRole;
+    }
+    return normalizeAgentId(entry.agentId) === nextAgentId;
+  };
+
+  return [...params.currentAgents.filter((entry) => !occupiesSameSlot(entry)), params.nextEntry];
 }
 
 function resolvePrimaryRuntimeRemoteAgentId(params: {
@@ -973,8 +1028,10 @@ async function upsertRuntimeAgent(params: {
     existingEntry?.runtimeRole;
   const sessionViews = buildSessionViews(runtimeRole);
   const now = new Date().toISOString();
+  const releaseStage = readOptionalString(params.body, "releaseStage");
   const releaseStatus =
     release.releaseStatus ??
+    (releaseStage === "released" || releaseStage === "published" ? "released" : undefined) ??
     (params.deploymentSource === "release"
       ? "deployed"
       : runtimeRole === "training"
@@ -1399,16 +1456,24 @@ export async function handleControlPlaneHttpRequest(
       sendJson(res, 400, { error: "missing or invalid remoteAgentId" });
       return true;
     }
-    const resolvedTarget = resolvePortalTargetAgent(remoteAgentId);
+    const mode = normalizePortalMode(body.mode);
+    const conversationView = resolveConversationView(mode);
+    const preferredLocalAgentKey = readOptionalString(body, "localAgentKey", "agentId");
+    const resolvedTarget = resolvePortalTargetAgent(
+      remoteAgentId,
+      conversationView,
+      preferredLocalAgentKey,
+    );
     if (!resolvedTarget) {
       sendJson(res, 404, {
-        error: "remote agent is not synced to a local OpenClaw agent",
+        error: preferredLocalAgentKey
+          ? "remote agent is not synced to this localAgentKey on the runtime"
+          : "remote agent is not synced to a local OpenClaw agent",
         remoteAgentId,
+        ...(preferredLocalAgentKey ? { localAgentKey: preferredLocalAgentKey } : {}),
       });
       return true;
     }
-    const mode = normalizePortalMode(body.mode);
-    const conversationView = resolveConversationView(mode);
     const runtimeRole =
       resolvedTarget.runtimeAgent?.runtimeRole ?? resolvedTarget.runtimeState.runtimeRole;
     const sessionViews =
@@ -1463,6 +1528,9 @@ export async function handleControlPlaneHttpRequest(
       ok: true,
       remoteSessionId,
       remoteAgentId,
+      agentId: resolvedTarget.agentId,
+      localAgentKey: resolvedTarget.runtimeAgent?.localAgentKey ?? resolvedTarget.agentId,
+      workspaceKey: resolvedTarget.runtimeAgent?.workspaceKey,
       mode,
       conversationView,
       runtimeRole,
