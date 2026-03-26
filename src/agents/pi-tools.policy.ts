@@ -142,6 +142,7 @@ type ToolScopeContextVariant = {
   groupId?: string;
   directId?: string;
   directIdParent?: string;
+  requiresResolvedAccount?: boolean;
 };
 
 function resolveToolScopeContextFromSessionKey(
@@ -171,12 +172,14 @@ function resolveToolScopeContextFromSessionKey(
       accountId?: string;
       kind: string;
       scopeId: string;
+      requiresResolvedAccount?: boolean;
     }> = [];
     const pushCandidate = (candidate: {
       channel?: string;
       accountId?: string;
       kind: string;
       scopeId: string;
+      requiresResolvedAccount?: boolean;
     }) => {
       if (!kinds.has(candidate.kind) || !candidate.scopeId) {
         return;
@@ -218,6 +221,7 @@ function resolveToolScopeContextFromSessionKey(
         accountId: normalizeAccountId(body[1]),
         kind: body[2],
         scopeId: body.slice(3).join(":").trim(),
+        requiresResolvedAccount: true,
       });
     }
 
@@ -235,6 +239,7 @@ function resolveToolScopeContextFromSessionKey(
     accountId?: string;
     kind: string;
     scopeId: string;
+    requiresResolvedAccount?: boolean;
   }): ToolScopeContextVariant => {
     const baseCandidate = parsedBase.find(
       (entry) =>
@@ -257,6 +262,7 @@ function resolveToolScopeContextFromSessionKey(
         baseCandidate && baseCandidate.scopeId !== candidate.scopeId
           ? baseCandidate.scopeId
           : undefined,
+      requiresResolvedAccount: candidate.requiresResolvedAccount,
     };
   };
 
@@ -321,6 +327,7 @@ function resolveDirectToolPolicyFromConfig(params: {
   directId: string;
   directIdParent?: string;
   accountId?: string | null;
+  requiresResolvedAccount?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -343,7 +350,14 @@ function resolveDirectToolPolicyFromConfig(params: {
   const hasAccountScopedDms =
     accountEntry !== undefined && Object.prototype.hasOwnProperty.call(accountEntry, "dms");
   const scopePriority = hasAccountScopedDms ? 1 : 0;
-  const entries = hasAccountScopedDms ? accountEntry?.dms : channelConfig.dms;
+  // Account-derived candidates should not leak into top-level DM rules when the scoped
+  // account cannot be resolved.
+  const canFallbackToTopLevelDms = !params.requiresResolvedAccount || !params.accountId;
+  const entries = hasAccountScopedDms
+    ? accountEntry?.dms
+    : canFallbackToTopLevelDms
+      ? channelConfig.dms
+      : undefined;
   const directIdsToTry = [
     params.directId,
     ...(params.directIdParent && params.directIdParent !== params.directId
@@ -613,35 +627,58 @@ export function resolveGroupToolPolicy(params: {
     directId?: string;
     directIdParent?: string;
     accountId?: string | null;
+    requiresResolvedAccount?: boolean;
   }> = [
     {
       directId: sessionContext.directId,
       directIdParent: sessionContext.directIdParent,
       accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+      requiresResolvedAccount:
+        params.accountId !== undefined
+          ? true
+          : (sessionContext.requiresResolvedAccount ?? spawnedContext.requiresResolvedAccount),
     },
     {
       directId: sessionContext.alternate?.directId,
       directIdParent: sessionContext.alternate?.directIdParent,
       accountId:
         params.accountId ?? sessionContext.alternate?.accountId ?? spawnedContext.accountId,
+      requiresResolvedAccount:
+        params.accountId !== undefined
+          ? true
+          : (sessionContext.alternate?.requiresResolvedAccount ??
+            spawnedContext.requiresResolvedAccount),
     },
     {
       directId: spawnedContext.directId,
       directIdParent: spawnedContext.directIdParent,
       accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
+      requiresResolvedAccount:
+        params.accountId !== undefined
+          ? true
+          : (spawnedContext.requiresResolvedAccount ?? sessionContext.requiresResolvedAccount),
     },
     {
       directId: spawnedContext.alternate?.directId,
       directIdParent: spawnedContext.alternate?.directIdParent,
       accountId:
         params.accountId ?? spawnedContext.alternate?.accountId ?? sessionContext.accountId,
+      requiresResolvedAccount:
+        params.accountId !== undefined
+          ? true
+          : (spawnedContext.alternate?.requiresResolvedAccount ??
+            sessionContext.requiresResolvedAccount),
     },
   ];
   const directCandidates = rawDirectCandidates.filter(
     (
       candidate,
-    ): candidate is { directId: string; directIdParent?: string; accountId?: string | null } =>
-      typeof candidate.directId === "string" && candidate.directId.length > 0,
+    ): candidate is {
+      directId: string;
+      directIdParent?: string;
+      accountId?: string | null;
+      requiresResolvedAccount?: boolean;
+    } => typeof candidate.directId === "string" && candidate.directId.length > 0,
   );
 
   const resolveBestDirectPolicy = () => {
@@ -654,7 +691,7 @@ export function resolveGroupToolPolicy(params: {
     }
     const seenDirectCandidates = new Set<string>();
     for (const candidate of directCandidates) {
-      const key = `${candidate.accountId ?? ""}\n${candidate.directId}\n${candidate.directIdParent ?? ""}`;
+      const key = `${candidate.accountId ?? ""}\n${candidate.directId}\n${candidate.directIdParent ?? ""}\n${candidate.requiresResolvedAccount ? "1" : "0"}`;
       if (seenDirectCandidates.has(key)) {
         continue;
       }
@@ -665,6 +702,7 @@ export function resolveGroupToolPolicy(params: {
         directId: candidate.directId,
         directIdParent: candidate.directIdParent,
         accountId: candidate.accountId,
+        requiresResolvedAccount: candidate.requiresResolvedAccount,
         senderId: params.senderId,
         senderName: params.senderName,
         senderUsername: params.senderUsername,

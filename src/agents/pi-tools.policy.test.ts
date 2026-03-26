@@ -796,6 +796,53 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("does not let ambiguous account-derived direct probes read top-level dms when the account is absent", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+          },
+          dms: {
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:direct:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("does not fall back to top-level dms for account-scoped direct session keys when the account is absent", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          dms: {
+            "ou-owner": {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:ops:direct:ou-owner",
+      }),
+    ).toBeUndefined();
+  });
+
   it("checks alternate account-scoped group candidates before settling on wildcard group policy", () => {
     const cfg = {
       channels: {
