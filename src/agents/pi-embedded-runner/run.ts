@@ -1663,6 +1663,38 @@ export async function runEmbeddedPiAgent(
             logAssistantFailoverDecision("surface_error");
           }
 
+          // When the assistant returned an error that wasn't classified as a
+          // known failover reason (e.g. generic "Provider returned error" from
+          // OpenRouter) and fallback models are configured, throw a FailoverError
+          // so the outer model-fallback loop can try the next candidate instead
+          // of surfacing the error to the user.
+          if (
+            !aborted &&
+            !shouldRotate &&
+            fallbackConfigured &&
+            lastAssistant?.stopReason === "error" &&
+            lastAssistant.errorMessage
+          ) {
+            const message =
+              formatAssistantErrorText(lastAssistant, {
+                cfg: params.config,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                provider: activeErrorContext.provider,
+                model: activeErrorContext.model,
+              }) ||
+              lastAssistant.errorMessage.trim() ||
+              "LLM request failed.";
+            const status = resolveFailoverStatus(assistantFailoverReason ?? "unknown");
+            logAssistantFailoverDecision("fallback_model", { status });
+            throw new FailoverError(message, {
+              reason: assistantFailoverReason ?? "unknown",
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              profileId: lastProfileId,
+              status,
+            });
+          }
+
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,
             lastAssistantUsage: lastAssistant?.usage as UsageLike | undefined,
