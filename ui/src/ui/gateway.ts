@@ -341,7 +341,8 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-    const delay = this.backoffMs;
+    const jitter = Math.random() * 0.2 + 0.9; // 90% - 110% jitter
+    const delay = this.backoffMs * jitter;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
     window.setTimeout(() => this.connect(), delay);
   }

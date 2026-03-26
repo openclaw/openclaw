@@ -207,8 +207,14 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
-    let retryCommands = commandsToRegister;
-    const initialCommandCount = commandsToRegister.length;
+    // Strictly enforce Telegram's 100 command limit to prevent BOT_COMMANDS_TOO_MUCH
+    const cappedCommands = commandsToRegister.slice(0, TELEGRAM_MAX_COMMANDS);
+    if (cappedCommands.length < commandsToRegister.length) {
+      runtime.log?.(`telegram: command list too long (${commandsToRegister.length}); capping to ${TELEGRAM_MAX_COMMANDS}`);
+    }
+
+    let retryCommands = cappedCommands;
+    const initialCommandCount = cappedCommands.length;
     while (retryCommands.length > 0) {
       try {
         await withTelegramApiErrorLogging({
