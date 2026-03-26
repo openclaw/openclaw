@@ -21,12 +21,21 @@ setup_runtime_repo() {
   mkdir -p "$skill_root/config" "$skill_root/references" "$skill_root/evidence-manifests"
   for bundled_skill in \
     argocd-diff \
+    coding-agent \
     eks-troubleshoot \
     foundry-evm-debug \
+    frontend-design \
     grafana-metrics-best-practices \
     go-memory-profiling \
+    nextjs-app-router-patterns \
     terraform-ci-review \
+    typescript-advanced-types \
     vercel \
+    vercel-composition-patterns \
+    vercel-react-best-practices \
+    vitest \
+    webapp-testing \
+    web-design-guidelines \
     sre-incident-triage \
     sre-db-evidence \
     sre-api-wrappers \

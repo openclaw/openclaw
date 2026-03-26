@@ -12,6 +12,7 @@ SKILL_SOURCE_DIR="${OPENCLAW_SRE_SKILL_SOURCE_DIR:-${REPO_ROOT}/skills/morpho-sr
 SKILL_DEST_DIR="${STATE_DIR}/skills/morpho-sre"
 WORKSPACE_DIR="${STATE_DIR}/workspace"
 SRE_WORKSPACE_DIR="${STATE_DIR}/workspace-sre"
+FRONTEND_WORKSPACE_DIR="${STATE_DIR}/workspace-frontend"
 CRON_STORE_PATH="${STATE_DIR}/cron/jobs.json"
 OWNERSHIP_DEST="${OPENCLAW_SRE_INIT_REPO_OWNERSHIP_FILE:-${OPENCLAW_SRE_REPO_OWNERSHIP_FILE:-${STATE_DIR}/state/sre-index/repo-ownership.json}}"
 GRAPH_DIR="${OPENCLAW_SRE_INIT_GRAPH_DIR:-${OPENCLAW_SRE_GRAPH_DIR:-${STATE_DIR}/state/sre-graph}}"
@@ -441,6 +442,7 @@ mkdir -p \
   "$STATE_DIR/skills" \
   "$WORKSPACE_DIR" \
   "$SRE_WORKSPACE_DIR" \
+  "$FRONTEND_WORKSPACE_DIR" \
   "$GRAPH_DIR" \
   "$DOSSIERS_DIR" \
   "$INDEX_DIR" \
@@ -449,6 +451,7 @@ mkdir -p \
 bootstrap_auth_profiles
 ensure_workspace_memory_scaffold "$WORKSPACE_DIR"
 ensure_workspace_memory_scaffold "$SRE_WORKSPACE_DIR"
+ensure_workspace_memory_scaffold "$FRONTEND_WORKSPACE_DIR"
 
 copy_file "${SKILL_SOURCE_DIR}/config/openclaw.json" "$CONFIG_PATH"
 apply_model_env_override
@@ -462,6 +465,7 @@ mkdir -p "${SKILL_DEST_DIR}/scripts" "${SKILL_DEST_DIR}/references"
 copy_file "${SKILL_SOURCE_DIR}/SKILL.md" "${SKILL_DEST_DIR}/SKILL.md"
 copy_file "${SKILL_SOURCE_DIR}/HEARTBEAT.md" "${WORKSPACE_DIR}/HEARTBEAT.md"
 copy_file "${SKILL_SOURCE_DIR}/HEARTBEAT.md" "${SRE_WORKSPACE_DIR}/HEARTBEAT.md"
+copy_file "${SKILL_SOURCE_DIR}/HEARTBEAT.md" "${FRONTEND_WORKSPACE_DIR}/HEARTBEAT.md"
 
 if [ -f "${SKILL_SOURCE_DIR}/rca_hypothesis_ids.v1.json" ]; then
   copy_file "${SKILL_SOURCE_DIR}/rca_hypothesis_ids.v1.json" \
@@ -502,11 +506,15 @@ chmod_scripts_in_dir "${SKILL_DEST_DIR}/scripts"
 
 required_bundled_skills=(
   argocd-diff
+  coding-agent
   eks-troubleshoot
   foundry-evm-debug
+  frontend-design
   grafana-metrics-best-practices
   go-memory-profiling
+  nextjs-app-router-patterns
   terraform-ci-review
+  typescript-advanced-types
   sre-incident-triage
   sre-db-evidence
   sre-api-wrappers
@@ -515,6 +523,11 @@ required_bundled_skills=(
   sre-sentinel
   sre-verify
   vercel
+  vercel-composition-patterns
+  vercel-react-best-practices
+  vitest
+  webapp-testing
+  web-design-guidelines
 )
 
 for skill_name in "${required_bundled_skills[@]}"; do
