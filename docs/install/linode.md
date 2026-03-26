@@ -194,6 +194,68 @@ If you outgrow the Nanode, you can resize to a larger plan directly from the Clo
 
 ---
 
+## Going further with Linode
+
+### Object Storage for offsite backups ($5/mo)
+
+OpenClaw's built-in backup CLI produces tar.gz archives. Pair it with [Linode Object Storage](https://www.linode.com/products/object-storage/) (S3-compatible) for automated offsite backups:
+
+```bash
+# Install s3cmd
+apt install -y s3cmd
+
+# Configure with your Linode Object Storage credentials
+s3cmd --configure
+
+# Create a backup and upload
+openclaw backup create -o /tmp/openclaw-backup.tar.gz
+s3cmd put /tmp/openclaw-backup.tar.gz s3://your-bucket/openclaw/$(date +%F).tar.gz
+```
+
+Automate this with a cron job for daily offsite backups.
+
+### Block Storage for workspace expansion ($0.10/GB/mo)
+
+The Nanode's 25GB SSD can fill up with large agent workspaces. Attach a [Linode Block Storage](https://www.linode.com/products/block-storage/) volume for expandable persistent storage:
+
+```bash
+# After attaching a volume via Cloud Manager:
+mkfs.ext4 /dev/disk/by-id/scsi-0Linode_Volume_openclaw-data
+mkdir -p /mnt/openclaw-data
+mount /dev/disk/by-id/scsi-0Linode_Volume_openclaw-data /mnt/openclaw-data
+echo '/dev/disk/by-id/scsi-0Linode_Volume_openclaw-data /mnt/openclaw-data ext4 defaults 0 2' >> /etc/fstab
+
+# Move workspace to the volume
+mv ~/.openclaw/workspace /mnt/openclaw-data/workspace
+ln -s /mnt/openclaw-data/workspace ~/.openclaw/workspace
+```
+
+### GPU instances for local model inference
+
+Instead of paying per-token for API-based models, run self-hosted LLMs on [Linode GPU instances](https://www.linode.com/products/gpu/):
+
+| GPU | VRAM | Price/mo |
+| --- | ---- | -------- |
+| NVIDIA RTX 4000 Ada | 20 GB | $350 |
+| NVIDIA Quadro RTX 6000 | 24 GB | $1,000 |
+| NVIDIA RTX PRO 6000 Blackwell | 96 GB | $1,665 |
+
+This is a good option if you need data privacy (no API calls leaving your infrastructure) or want predictable costs at high usage volumes. Point OpenClaw at a local model server (e.g., Ollama, vLLM) running on the same instance.
+
+### LKE (Kubernetes) for production deployments
+
+OpenClaw ships [Kubernetes manifests](/install/kubernetes) out of the box. [Linode Kubernetes Engine (LKE)](https://www.linode.com/products/kubernetes/) gives you a managed control plane:
+
+- **Free base cluster** — pay only for worker nodes
+- **$60/mo HA control plane** — for production reliability
+- **NodeBalancers** ($10/mo) auto-provision as Kubernetes `LoadBalancer` services for TLS termination
+
+### VLANs for private networking (free)
+
+Running OpenClaw alongside other services (monitoring, databases, model servers)? [Linode VLANs](https://www.linode.com/products/vlan/) provide isolated Layer 2 networking between your instances at no extra cost.
+
+---
+
 ## Persistence
 
 All state lives in:
