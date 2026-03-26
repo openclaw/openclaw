@@ -23,10 +23,19 @@ setup_runtime_repo() {
     argocd-diff \
     eks-troubleshoot \
     foundry-evm-debug \
+    frontend-design \
     grafana-metrics-best-practices \
     go-memory-profiling \
+    nextjs-app-router-patterns \
     terraform-ci-review \
+    typescript-advanced-types \
     vercel \
+    vercel-composition-patterns \
+    vercel-react-best-practices \
+    vite \
+    vitest \
+    webapp-testing \
+    web-design-guidelines \
     sre-incident-triage \
     sre-db-evidence \
     sre-api-wrappers \

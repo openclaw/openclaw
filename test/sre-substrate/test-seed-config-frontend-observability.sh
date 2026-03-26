@@ -27,7 +27,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  ([.agents.list[] | select(((.skills // []) | index("vercel")) != null) | .id] | sort) == ["sre", "sre-verifier"]
+  ([.agents.list[] | select(((.skills // []) | index("vercel")) != null) | .id] | sort) == ["frontend-dev", "sre", "sre-verifier"]
 ' "$CONFIG" >/dev/null
 
 jq -e '
