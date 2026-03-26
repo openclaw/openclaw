@@ -1015,9 +1015,16 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     targetDurationMs: 12_000,
     targetFilesPerShard: 30,
     minShards: 1,
+    maxShards: 6,
+  });
+  const macosNodeShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
+    fileCount: context.catalog.allKnownUnitFiles.length,
+    targetDurationMs: 12_000,
+    targetFilesPerShard: 30,
+    minShards: 1,
     maxShards: 9,
   });
-  const macosNodeShardCount = windowsShardCount;
   const bunShardCount = resolveDynamicShardCount({
     estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
     fileCount: context.catalog.allKnownUnitFiles.length,
