@@ -1,7 +1,7 @@
 import type { TurnLatencyStageInfo } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -14,6 +14,14 @@ import {
 import { createSubsystemLogger } from "./subsystem.js";
 
 const diag = createSubsystemLogger("diagnostic");
+
+function shouldLogDiagnosticTimelineInfo(): boolean {
+  try {
+    return isDiagnosticsEnabled(loadConfig());
+  } catch {
+    return false;
+  }
+}
 
 const webhookStats = {
   received: 0,
@@ -651,14 +659,15 @@ export function logMessageFirstVisible(params: {
   kind: "tool" | "block" | "status" | "final";
   dispatchToFirstVisibleMs: number;
 }) {
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message first visible: channel=${params.channel} chatId=${params.chatId ?? "unknown"} messageId=${
-        params.messageId ?? "unknown"
-      } sessionId=${params.sessionId ?? "unknown"} sessionKey=${params.sessionKey ?? "unknown"} kind=${
-        params.kind
-      } dispatchToFirstVisible=${params.dispatchToFirstVisibleMs}ms`,
-    );
+  const payload = `message first visible: channel=${params.channel} chatId=${
+    params.chatId ?? "unknown"
+  } messageId=${params.messageId ?? "unknown"} sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+    params.sessionKey ?? "unknown"
+  } kind=${params.kind} dispatchToFirstVisible=${params.dispatchToFirstVisibleMs}ms`;
+  if (shouldLogDiagnosticTimelineInfo()) {
+    diag.info(payload);
+  } else if (diag.isEnabled("debug")) {
+    diag.debug(payload);
   }
   emitDiagnosticEvent({
     type: "message.first_visible",
@@ -722,12 +731,19 @@ export function logTurnLatencyStage(
     replyGeneration?: number;
   },
 ) {
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `turn latency stage: id=${params.turnLatencyId} stage=${params.stage} channel=${params.channel} sessionKey=${
-        params.sessionKey ?? "unknown"
-      } duration=${params.durationMs ?? 0}ms`,
-    );
+  const payload = `turn latency stage: id=${params.turnLatencyId} stage=${params.stage} channel=${
+    params.channel
+  } chatId=${params.chatId ?? "unknown"} messageId=${params.messageId ?? "unknown"} sessionId=${
+    params.sessionId ?? "unknown"
+  } sessionKey=${params.sessionKey ?? "unknown"} duration=${params.durationMs ?? 0}ms${
+    params.firstVisibleKind ? ` firstVisibleKind=${params.firstVisibleKind}` : ""
+  }${params.provider ? ` provider=${params.provider}` : ""}${
+    params.model ? ` model=${params.model}` : ""
+  }${params.backend ? ` backend=${params.backend}` : ""}`;
+  if (shouldLogDiagnosticTimelineInfo()) {
+    diag.info(payload);
+  } else if (diag.isEnabled("debug")) {
+    diag.debug(payload);
   }
   emitDiagnosticEvent({
     type: "turn.latency.stage",

@@ -26,6 +26,8 @@ const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
+  logMessageFirstVisible: vi.fn(),
+  logTurnLatencyStage: vi.fn(),
 }));
 const hookMocks = vi.hoisted(() => ({
   registry: {
@@ -145,6 +147,8 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
+  logMessageFirstVisible: diagnosticMocks.logMessageFirstVisible,
+  logTurnLatencyStage: diagnosticMocks.logTurnLatencyStage,
 }));
 vi.mock("../../config/sessions/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
@@ -320,6 +324,8 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
+    diagnosticMocks.logMessageFirstVisible.mockClear();
+    diagnosticMocks.logTurnLatencyStage.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runInboundClaim.mockClear();
@@ -411,6 +417,41 @@ describe("dispatchReplyFromConfig", () => {
         threadId: 123,
         isGroup: true,
         groupId: "telegram:999",
+      }),
+    );
+  });
+
+  it("threads dispatch latency callbacks into the reply resolver", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      MessageSid: "msg-1",
+      ChatId: "chat-1",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      opts?.onLatencyStage?.({ stage: "context_assembly_completed", durationMs: 23_000 });
+      return { text: "hi" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    const [, options] = replyResolver.mock.calls[0] ?? [];
+    expect(options?.onLatencyStage).toEqual(expect.any(Function));
+    expect(diagnosticMocks.logTurnLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "dispatch_started",
+        channel: "feishu",
+      }),
+    );
+    expect(diagnosticMocks.logTurnLatencyStage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "context_assembly_completed",
+        channel: "feishu",
+        durationMs: 23_000,
       }),
     );
   });

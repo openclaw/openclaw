@@ -12,8 +12,10 @@ import {
   resolveTelegramReactionLevel,
 } from "../../../../extensions/telegram/api.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import type { TurnLatencyStageInfo } from "../../../auto-reply/types.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { isDiagnosticsEnabled } from "../../../infra/diagnostic-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -63,7 +65,10 @@ import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+} from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
@@ -1663,6 +1668,7 @@ export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const contextAssemblyStartedAt = Date.now();
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.
@@ -1690,6 +1696,34 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   try {
+    const emitLatencyStage = (
+      stage: TurnLatencyStageInfo["stage"],
+      durationMs: number | undefined,
+    ) => {
+      if (durationMs === undefined || !Number.isFinite(durationMs)) {
+        return;
+      }
+      const roundedDurationMs = Math.max(0, Math.round(durationMs));
+      if (isDiagnosticsEnabled(params.config)) {
+        log.info(
+          `embedded latency stage: runId=${params.runId} sessionId=${params.sessionId} sessionKey=${
+            params.sessionKey ?? "unknown"
+          } stage=${stage} duration=${roundedDurationMs}ms provider=${params.provider} model=${params.modelId}${params.onLatencyStage ? "" : " callback=missing"}`,
+        );
+      }
+      if (!params.onLatencyStage) {
+        return;
+      }
+      params.onLatencyStage({
+        stage,
+        durationMs: roundedDurationMs,
+        provider: params.provider,
+        model: params.modelId,
+        backend: params.model.api,
+      });
+    };
+
+    const skillsEnvStartedAt = Date.now();
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
@@ -1711,8 +1745,10 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
     });
+    emitLatencyStage("context_skills_env_completed", Date.now() - skillsEnvStartedAt);
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
+    const bootstrapStartedAt = Date.now();
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
@@ -1740,6 +1776,7 @@ export async function runEmbeddedAttempt(
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
     });
+    emitLatencyStage("context_bootstrap_completed", Date.now() - bootstrapStartedAt);
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
@@ -1766,6 +1803,7 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const toolsStartedAt = Date.now();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -1830,16 +1868,29 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    emitLatencyStage("context_tools_completed", Date.now() - toolsStartedAt);
+    const bundleMcpStartedAt = Date.now();
     const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+      ? await getOrCreateSessionMcpRuntime({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
         })
       : undefined;
+    const bundleMcpTools = bundleMcpRuntime
+      ? (
+          await materializeBundleMcpToolsForRun({
+            runtime: bundleMcpRuntime,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ],
+          })
+        ).tools
+      : [];
+    emitLatencyStage("context_bundle_mcp_completed", Date.now() - bundleMcpStartedAt);
+    const bundleLspStartedAt = Date.now();
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -1847,15 +1898,12 @@ export async function runEmbeddedAttempt(
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
-            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+            ...bundleMcpTools.map((tool) => tool.name),
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    emitLatencyStage("context_bundle_lsp_completed", Date.now() - bundleLspStartedAt);
+    const effectiveTools = [...tools, ...bundleMcpTools, ...(bundleLspRuntime?.tools ?? [])];
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
@@ -1973,6 +2021,7 @@ export async function runEmbeddedAttempt(
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
 
+    const systemPromptStartedAt = Date.now();
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -2001,6 +2050,8 @@ export async function runEmbeddedAttempt(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
+    emitLatencyStage("context_system_prompt_completed", Date.now() - systemPromptStartedAt);
+    const systemPromptReportStartedAt = Date.now();
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -2029,8 +2080,13 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools: effectiveTools,
     });
+    emitLatencyStage(
+      "context_system_prompt_report_completed",
+      Date.now() - systemPromptReportStartedAt,
+    );
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
     let systemPromptText = systemPromptOverride();
+    emitLatencyStage("context_assembly_completed", Date.now() - contextAssemblyStartedAt);
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -2452,6 +2508,7 @@ export async function runEmbeddedAttempt(
         }
 
         if (params.contextEngine) {
+          const contextEngineAssembleStartedAt = Date.now();
           try {
             const assembled = await assembleAttemptContextEngine({
               contextEngine: params.contextEngine,
@@ -2482,6 +2539,11 @@ export async function runEmbeddedAttempt(
             log.warn(
               `context engine assemble failed, using pipeline messages: ${String(assembleErr)}`,
             );
+          } finally {
+            emitLatencyStage(
+              "context_engine_assemble_completed",
+              Date.now() - contextEngineAssembleStartedAt,
+            );
           }
         }
       } catch (err) {
@@ -2495,6 +2557,8 @@ export async function runEmbeddedAttempt(
       }
 
       let aborted = Boolean(params.abortSignal?.aborted);
+      let modelRequestStartedAt: number | undefined;
+      let didEmitModelFirstToken = false;
       let yieldAborted = false;
       let timedOut = false;
       let timedOutDuringCompaction = false;
@@ -2578,9 +2642,30 @@ export async function runEmbeddedAttempt(
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply: params.onPartialReply,
+        onPartialReply: async (payload) => {
+          if (
+            modelRequestStartedAt !== undefined &&
+            !didEmitModelFirstToken &&
+            ((typeof payload.text === "string" && payload.text.length > 0) ||
+              (Array.isArray(payload.mediaUrls) && payload.mediaUrls.length > 0))
+          ) {
+            didEmitModelFirstToken = true;
+            emitLatencyStage("model_first_token", Date.now() - modelRequestStartedAt);
+          }
+          await params.onPartialReply?.(payload);
+        },
         onAssistantMessageStart: params.onAssistantMessageStart,
-        onAgentEvent: params.onAgentEvent,
+        onAgentEvent: async (evt) => {
+          if (
+            modelRequestStartedAt !== undefined &&
+            !didEmitModelFirstToken &&
+            evt.stream === "assistant"
+          ) {
+            didEmitModelFirstToken = true;
+            emitLatencyStage("model_first_token", Date.now() - modelRequestStartedAt);
+          }
+          await Promise.resolve(params.onAgentEvent?.(evt));
+        },
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
@@ -2874,11 +2959,17 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
+          modelRequestStartedAt = Date.now();
+          didEmitModelFirstToken = false;
           if (imageResult.images.length > 0) {
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
+          emitLatencyStage(
+            "model_completion_completed",
+            modelRequestStartedAt !== undefined ? Date.now() - modelRequestStartedAt : undefined,
+          );
         } catch (err) {
           // Yield-triggered abort is intentional — treat as clean stop, not error.
           // Check the abort reason to distinguish from external aborts (timeout, user cancel)
@@ -3031,6 +3122,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             agentDir,
           });
+          const contextEngineFinalizeStartedAt = Date.now();
           await finalizeAttemptContextEngineTurn({
             contextEngine: params.contextEngine,
             promptError: Boolean(promptError),
@@ -3056,6 +3148,10 @@ export async function runEmbeddedAttempt(
             sessionManager,
             warn: (message) => log.warn(message),
           });
+          emitLatencyStage(
+            "context_engine_finalize_completed",
+            Date.now() - contextEngineFinalizeStartedAt,
+          );
         }
 
         cacheTrace?.recordStage("session:after", {
@@ -3202,7 +3298,6 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
       await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }
