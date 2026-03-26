@@ -215,10 +215,26 @@ function migrateLegacyTtsConfig(
   }
 }
 
+function ensureDefaultGroupEntry(section: Record<string, unknown>): {
+  groups: Record<string, unknown>;
+  entry: Record<string, unknown>;
+} {
+  const groups = getRecord(section.groups) ?? {};
+  const defaultKey = "*";
+  const entry = getRecord(groups[defaultKey]) ?? {};
+  return { groups, entry };
+}
+
 const MEMORY_SEARCH_RULE: LegacyConfigRule = {
   path: ["memorySearch"],
   message:
     "top-level memorySearch was moved; use agents.defaults.memorySearch instead (auto-migrated on load).",
+};
+
+const GROUP_MENTIONS_ONLY_RULE: LegacyConfigRule = {
+  path: ["channels", "telegram", "groupMentionsOnly"],
+  message:
+    'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead (auto-migrated on load).',
 };
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
@@ -305,6 +321,44 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
         `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
+    },
+  }),
+  defineLegacyConfigMigration({
+    // v2026.2.23 replaced channels.telegram.groupMentionsOnly with
+    // channels.telegram.groups."*".requireMention. Existing configs crash on
+    // startup because gateway auto-migration only runs for registered legacy
+    // keys, and this removed key previously fell through as an unknown field.
+    id: "channels.telegram.groupMentionsOnly->channels.telegram.groups.*.requireMention",
+    describe:
+      "Move channels.telegram.groupMentionsOnly to channels.telegram.groups.*.requireMention",
+    legacyRules: [GROUP_MENTIONS_ONLY_RULE],
+    apply: (raw, changes) => {
+      const channels = ensureRecord(raw, "channels");
+      const telegram = getRecord(channels.telegram);
+      if (!telegram || telegram.groupMentionsOnly === undefined) {
+        return;
+      }
+
+      const groupMentionsOnly = telegram.groupMentionsOnly;
+      const { groups, entry } = ensureDefaultGroupEntry(telegram);
+      const defaultKey = "*";
+
+      if (entry.requireMention === undefined) {
+        entry.requireMention = groupMentionsOnly;
+        groups[defaultKey] = entry;
+        telegram.groups = groups;
+        changes.push(
+          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
+        );
+      } else {
+        changes.push(
+          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
+        );
+      }
+
+      delete telegram.groupMentionsOnly;
+      channels.telegram = telegram;
+      raw.channels = channels;
     },
   }),
   defineLegacyConfigMigration({

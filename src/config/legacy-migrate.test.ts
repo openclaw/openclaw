@@ -77,6 +77,49 @@ describe("legacy migrate mention routing", () => {
     expect(res.changes).toEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("moves channels.telegram.groupMentionsOnly into groups.*.requireMention", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
+
+  it('keeps explicit channels.telegram.groups."*".requireMention when migrating groupMentionsOnly', () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        telegram: {
+          groupMentionsOnly: true,
+          groups: {
+            "*": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(
+      (res.config?.channels?.telegram as { groupMentionsOnly?: unknown } | undefined)
+        ?.groupMentionsOnly,
+    ).toBeUndefined();
+  });
 });
 
 describe("legacy migrate tts provider shape", () => {
