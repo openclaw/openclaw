@@ -659,7 +659,25 @@ function restoreRedactedValuesWithLookup(
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
-          result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+          // If this is a sensitive path and the incoming object is a partially-redacted
+          // SecretRef (id replaced with sentinel), restore the whole original value.
+          // This mirrors the redact side which uses redactSecretRefId for sensitive paths.
+          const objValue = value as Record<string, unknown>;
+          if (
+            hints[candidate]?.sensitive === true &&
+            isSecretRefShape(objValue) &&
+            objValue.id === REDACTED_SENTINEL
+          ) {
+            result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
+          } else {
+            result[key] = restoreRedactedValuesWithLookup(
+              value,
+              orig[key],
+              lookup,
+              candidate,
+              hints,
+            );
+          }
         }
         break;
       }

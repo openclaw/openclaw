@@ -7,6 +7,8 @@ export const redactSnapshotTestHints: ConfigUiHints = {
   "agents.list[].memorySearch.remote.apiKey": { sensitive: true },
   "broadcast.apiToken[]": { sensitive: true },
   "env.GROQ_API_KEY": { sensitive: true },
+  "channels.discord.token": { sensitive: true },
+  "channels.discord.accounts.*.token": { sensitive: true },
   "gateway.auth.password": { sensitive: true },
   "models.providers.*.apiKey": { sensitive: true },
   "models.providers.*.baseUrl": { sensitive: true },

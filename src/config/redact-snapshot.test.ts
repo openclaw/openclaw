@@ -347,6 +347,28 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
+  it("round-trips channels.discord.token as env-source SecretRef", () => {
+    // Regression: token.id was not restored because channels.discord.token.id
+    // doesn't match any sensitive pattern (token$ is end-anchored and .id suffix
+    // breaks it). The fix detects a partially-redacted SecretRef under a sensitive
+    // path and restores the whole original object.
+    const config = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config, null, 2));
+    const result = redactConfigSnapshot(snapshot, mainSchemaHints);
+    expect(result.raw).not.toContain("DISCORD_BOT_TOKEN");
+    const parsed = JSON5.parse(result.raw ?? "{}");
+    expect(parsed.channels?.discord?.token?.source).toBe("env");
+    expect(parsed.channels?.discord?.token?.id).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(parsed, snapshot.config, mainSchemaHints);
+    expect(restored).toEqual(snapshot.config);
+  });
+
   it("redacts parsed and resolved objects", () => {
     const snapshot = makeSnapshot({
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
