@@ -386,6 +386,24 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
   });
 
+  it("auto-enables minimax when minimax API key auth is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax:global": {
+              provider: "minimax",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+  });
+
   it("auto-enables acpx plugin when ACP is configured", () => {
     const result = applyPluginAutoEnable({
       config: {
