@@ -229,6 +229,57 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 }
 
 /**
+ * Validates memorySearch provider configuration.
+ * Checks that required fields are present for each provider type.
+ */
+function validateMemorySearchConfig(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const memorySearch = config.agents?.defaults?.memorySearch;
+
+  if (!memorySearch || typeof memorySearch !== "object") {
+    return [];
+  }
+
+  // Skip validation if memory backend is qmd - it handles embeddings internally
+  if (config.memory?.backend === "qmd") {
+    return [];
+  }
+
+  const provider = memorySearch.provider;
+  const remote = memorySearch.remote;
+
+  // Note: API key validation is done at runtime by resolveMemorySearchConfig
+  // which handles various auth methods (config, environment, auth store).
+  // Config-level validation only checks for obviously invalid configurations.
+
+  // Validate ollama provider - baseUrl is optional (uses default localhost)
+  if (provider === "ollama") {
+    // Check for explicitly empty baseUrl (which would cause runtime errors)
+    if (remote?.baseUrl !== undefined) {
+      const baseUrl = remote.baseUrl;
+      if (typeof baseUrl !== "string" || baseUrl.trim().length === 0) {
+        issues.push({
+          path: "agents.defaults.memorySearch",
+          message:
+            "memorySearch.provider=ollama requires a non-empty baseUrl when specified. " +
+            "Remove baseUrl to use the default http://localhost:11434",
+        });
+      }
+    }
+    // Model is optional - will use provider default
+  }
+
+  // For other providers (openai, gemini, voyage, mistral), we don't validate apiKey here
+  // because runtime credential resolution handles:
+  // - config-level apiKey
+  // - environment variables (OPENAI_API_KEY, etc.)
+  // - provider-level credentials from auth store
+  // Config-level validation would cause false negatives for valid configurations
+
+  return issues;
+}
+
+/**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
  */
@@ -272,6 +323,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const memorySearchIssues = validateMemorySearchConfig(validated.data as OpenClawConfig);
+  if (memorySearchIssues.length > 0) {
+    return { ok: false, issues: memorySearchIssues };
   }
   return {
     ok: true,

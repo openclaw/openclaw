@@ -213,6 +213,19 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("does not warn for explicit ollama provider without apiKey", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "ollama",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
   it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
@@ -290,6 +303,28 @@ describe("noteMemorySearchHealth", () => {
     const providerCalls = resolveApiKeyForProvider.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
     expect(providersChecked).toEqual(["openai", "google", "voyage", "mistral"]);
+  });
+
+  it("converts memorySearch config resolution errors into a doctor note", async () => {
+    resolveMemorySearchConfig.mockImplementation(() => {
+      throw new Error(
+        [
+          "memorySearch.provider=openai requires:",
+          "- remote.apiKey (or OPENAI_API_KEY)",
+          "Example configuration:",
+          'agents: { defaults: { memorySearch: { provider: "openai", model: "text-embedding-3-small", remote: { apiKey: "${OPENAI_API_KEY}" } } } }',
+        ].join("\n"),
+      );
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("memorySearch configuration is invalid.");
+    expect(message).toContain("memorySearch.provider=openai requires:");
+    expect(message).toContain("Verify: openclaw memory status --deep");
+    expect(message).toContain("Docs: https://docs.openclaw.ai/concepts/memory");
   });
 });
 

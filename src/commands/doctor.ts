@@ -33,7 +33,7 @@ import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-import { maybeRepairLegacyCronStore } from "./doctor-cron.js";
+import { maybeRepairLegacyCronStore, checkCronReliability } from "./doctor-cron.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 import {
@@ -226,6 +226,7 @@ export async function doctorCommand(
     options,
     prompter,
   });
+  await checkCronReliability({ cfg, options });
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);
