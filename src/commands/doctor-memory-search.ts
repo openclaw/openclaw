@@ -194,8 +194,8 @@ async function hasApiKeyForProvider(
   // Map embedding provider names to model-auth provider names
   const authProvider = provider === "gemini" ? "google" : provider;
   try {
-    await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
-    return true;
+    const result = await resolveApiKeyForProvider({ provider: authProvider, cfg, agentDir });
+    return result != null;
   } catch {
     return false;
   }
@@ -230,4 +230,202 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+/**
+ * Structured result of memorySearch configuration diagnostics.
+ */
+export type MemorySearchDiagnosticResult = {
+  valid: boolean;
+  provider?: string;
+  issues: Array<{
+    field: string;
+    message: string;
+    fix?: string;
+  }>;
+};
+
+/**
+ * Validates memorySearch configuration and returns structured diagnostic output.
+ *
+ * Checks:
+ * - provider is defined (not "auto")
+ * - required keys exist:
+ *   - openai: apiKey, model
+ *   - ollama: host, model
+ *
+ * @returns Structured diagnostic result with issues and fix suggestions
+ */
+export async function checkMemorySearch(
+  cfg: OpenClawConfig,
+): Promise<MemorySearchDiagnosticResult> {
+  const agentId = resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
+  const resolved = resolveMemorySearchConfig(cfg, agentId);
+
+  // Memory search is explicitly disabled
+  if (!resolved) {
+    return {
+      valid: true,
+      issues: [],
+    };
+  }
+
+  // QMD backend handles embeddings internally - skip validation
+  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+  if (backendConfig.backend === "qmd") {
+    return {
+      valid: true,
+      provider: resolved.provider,
+      issues: [],
+    };
+  }
+
+  const issues: MemorySearchDiagnosticResult["issues"] = [];
+
+  // Check if provider is "auto" - this is a valid runtime mode (auto-selects provider)
+  // Skip validation for "auto" as it relies on runtime resolution
+  if (resolved.provider === "auto") {
+    // "auto" is a valid mode - return valid as the runtime will handle resolution
+    return {
+      valid: true,
+      provider: resolved.provider,
+      issues: [],
+    };
+  }
+
+  // Validate based on provider type
+  if (resolved.provider === "openai") {
+    // Check for apiKey - check both config and environment variables
+    const hasApiKey =
+      hasConfiguredMemorySecretInput(resolved.remote?.apiKey) ||
+      (await hasApiKeyForProvider("openai", cfg, agentDir));
+    if (!hasApiKey) {
+      issues.push({
+        field: "remote.apiKey",
+        message: "openai provider requires apiKey to be configured",
+        fix: `Set OPENAI_API_KEY environment variable or configure via: ${formatCliCommand("openclaw configure --section model")}`,
+      });
+    }
+
+    // Note: model is optional - runtime has provider defaults
+  } else if (resolved.provider === "ollama") {
+    // Note: baseUrl is optional - runtime uses default http://127.0.0.1:11434 if not set
+    // Note: model is optional - runtime has provider defaults
+  }
+  // For other providers (local, gemini, voyage, mistral), the existing noteMemorySearchHealth
+  // function handles the validation
+
+  return {
+    valid: issues.length === 0,
+    provider: resolved.provider,
+    issues,
+  };
+}
+
+/**
+ * Generate example configuration snippet for memorySearch provider.
+ */
+function generateConfigSnippet(provider: string): string {
+  switch (provider) {
+    case "openai":
+      return `memorySearch:
+  provider: openai
+  model: text-embedding-3-small
+  remote:
+    apiKey: \${OPENAI_API_KEY}`;
+    case "ollama":
+      return `memorySearch:
+  provider: ollama
+  model: nomic-embed-text
+  remote:
+    baseUrl: http://localhost:11434`;
+    case "gemini":
+      return `memorySearch:
+  provider: gemini
+  model: embedding-001
+  remote:
+    apiKey: \${GEMINI_API_KEY}`;
+    case "voyage":
+      return `memorySearch:
+  provider: voyage
+  model: voyage-law-2
+  remote:
+    apiKey: \${VOYAGE_API_KEY}`;
+    case "mistral":
+      return `memorySearch:
+  provider: mistral
+  model: mistral-embed
+  remote:
+    apiKey: \${MISTRAL_API_KEY}`;
+    case "local":
+      return `memorySearch:
+  provider: local
+  local:
+    modelPath: /path/to/model.gguf`;
+    default:
+      return `memorySearch:
+  provider: openai
+  model: text-embedding-3-small`;
+  }
+}
+
+/**
+ * Display structured diagnostic output for memorySearch configuration.
+ *
+ * This function is called by `openclaw doctor` to provide clear, actionable
+ * feedback when memorySearch configuration is invalid.
+ *
+ * Output includes:
+ * - Error explanation
+ * - Missing fields
+ * - Suggested configuration snippet
+ * - Documentation link
+ */
+export async function noteMemorySearchDiagnostics(cfg: OpenClawConfig): Promise<void> {
+  const result = await checkMemorySearch(cfg);
+
+  // No issues - memory search is either disabled or properly configured
+  if (result.valid) {
+    return;
+  }
+
+  const lines: string[] = [];
+
+  // Header with provider info
+  lines.push(`[FAIL] memorySearch configuration invalid`);
+  lines.push(``);
+  lines.push(`Provider: ${result.provider}`);
+  lines.push(``);
+
+  // List missing fields
+  if (result.issues.length > 0) {
+    lines.push(`Missing or invalid fields:`);
+    for (const issue of result.issues) {
+      lines.push(`  - ${issue.field}: ${issue.message}`);
+    }
+    lines.push(``);
+  }
+
+  // Add fix suggestions from structured result
+  lines.push(`Suggested fix:`);
+  for (const issue of result.issues) {
+    if (issue.fix) {
+      lines.push(`  ${issue.fix}`);
+    }
+  }
+  lines.push(``);
+
+  // Add example configuration snippet
+  lines.push(`Example configuration:`);
+  lines.push(`\`\`\`yaml`);
+  lines.push(generateConfigSnippet(result.provider ?? "openai"));
+  lines.push(`\`\`\``);
+  lines.push(``);
+
+  // Add documentation link
+  lines.push(`Learn more: https://docs.openclaw.ai/configuration#memory-search`);
+
+  // Output using the note function
+  note(lines.join("\n"), "Memory search");
 }
