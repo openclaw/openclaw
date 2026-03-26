@@ -14,7 +14,10 @@ export { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { loadConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-export { getMemorySearchManager } from "../../extensions/memory-core/src/memory/index.js";
+export {
+  getMemorySearchManager,
+  MemoryIndexManager,
+} from "../../extensions/memory-core/src/memory/index.js";
 export { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 export { readAgentMemoryFile } from "../memory/read-file.js";
 export { resolveMemoryBackendConfig } from "../memory/backend-config.js";

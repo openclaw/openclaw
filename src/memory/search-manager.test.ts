@@ -102,7 +102,7 @@ vi.mock("../../extensions/memory-core/src/memory/qmd-manager.js", () => ({
   },
 }));
 
-vi.mock("./manager-runtime.js", () => ({
+vi.mock("../../extensions/memory-core/src/memory/manager-runtime.js", () => ({
   MemoryIndexManager: {
     get: mockMemoryIndexGet,
   },
