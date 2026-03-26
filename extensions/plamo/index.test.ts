@@ -94,43 +94,24 @@ describe("plamo provider plugin", () => {
 
     expect(catalog.provider.api).toBe("openai-completions");
     expect(catalog.provider.baseUrl).toBe("https://api.platform.preferredai.jp/v1");
-    expect(catalog.provider.models).toHaveLength(2);
-    expect(catalog.provider.models).toEqual(
-      expect.arrayContaining([
-        {
-          id: "plamo-2.2-prime",
-          name: "PLaMo 2.2 Prime",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32_768,
-          maxTokens: 4_096,
-          compat: {
-            maxTokensField: "max_tokens",
-            supportsDeveloperRole: false,
-            supportsReasoningEffort: false,
-            supportsStore: false,
-            supportsStrictMode: false,
-          },
+    expect(catalog.provider.models).toEqual([
+      {
+        id: "plamo-3.0-prime-beta",
+        name: "PLaMo 3.0 Prime Beta",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0.375, output: 1.5625, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65_536,
+        maxTokens: 20_000,
+        compat: {
+          maxTokensField: "max_tokens",
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+          supportsStore: false,
+          supportsStrictMode: false,
         },
-        {
-          id: "plamo-3.0-prime-beta",
-          name: "PLaMo 3.0 Prime Beta",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0.375, output: 1.5625, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 65_536,
-          maxTokens: 20_000,
-          compat: {
-            maxTokensField: "max_tokens",
-            supportsDeveloperRole: false,
-            supportsReasoningEffort: false,
-            supportsStore: false,
-            supportsStrictMode: false,
-          },
-        },
-      ]),
-    );
+      },
+    ]);
   });
 
   it("drops replayed assistant thinking blocks before sending follow-up turns", async () => {
@@ -374,94 +355,6 @@ describe("plamo provider plugin", () => {
     expect(
       (request.body.tools as Array<{ function?: { strict?: unknown } }> | undefined)?.[0]?.function,
     ).not.toHaveProperty("strict");
-  });
-
-  it("appends same-language guidance only for the legacy PLaMo 2.2 payload", async () => {
-    const { provider, catalog } = await loadPlamoCatalog();
-
-    let resolveRequest: ((value: { body: Record<string, unknown> }) => void) | null = null;
-    const requestSeen = new Promise<{
-      body: Record<string, unknown>;
-    }>((resolve) => {
-      resolveRequest = resolve;
-    });
-
-    const server = createServer((req, res) => {
-      const chunks: string[] = [];
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => chunks.push(chunk));
-      req.on("end", () => {
-        resolveRequest?.({
-          body: JSON.parse(chunks.join("")) as Record<string, unknown>,
-        });
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.write(
-          `data: ${JSON.stringify({
-            id: "chatcmpl-stream-test",
-            choices: [{ index: 0, delta: { content: "ok" } }],
-          })}\n\n`,
-        );
-        res.write(
-          `data: ${JSON.stringify({
-            id: "chatcmpl-stream-test",
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          })}\n\n`,
-        );
-        res.end("data: [DONE]\n\n");
-      });
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      server.close();
-      throw new Error("expected tcp server address");
-    }
-
-    const legacyModel = catalog.provider.models.find((model) => model.id === "plamo-2.2-prime");
-    if (!legacyModel) {
-      server.close();
-      throw new Error("expected legacy PLaMo model");
-    }
-
-    const wrapped = createWrappedPlamoStream(provider, { modelId: "plamo-2.2-prime" });
-    const stream = await wrapped(
-      {
-        ...legacyModel,
-        provider: "plamo",
-        api: "openai-completions",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-      } as never,
-      {
-        systemPrompt: "system prompt",
-        messages: [{ role: "user", content: "こんにちは" }],
-      } as never,
-      {
-        apiKey: "test-key",
-      } as never,
-    );
-
-    try {
-      for await (const _event of stream) {
-        // Drain the stream so the request completes.
-      }
-      await stream.result();
-    } finally {
-      server.close();
-    }
-
-    const request = await requestSeen;
-    expect(request.body.model).toBe("plamo-2.2-prime");
-    const systemContent = String(
-      (request.body.messages as Array<{ content?: unknown }> | undefined)?.[0]?.content ?? "",
-    );
-    expect(systemContent.startsWith("system prompt\n\nLanguage policy:")).toBe(true);
-    expect(systemContent).toContain(
-      "Reply in the same natural language as the user's latest message.",
-    );
-    expect(systemContent).toContain("If the latest user message is Japanese, reply in Japanese.");
   });
 
   it("reassembles fragmented native SSE chunks without truncating the final text", async () => {

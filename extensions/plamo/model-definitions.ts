@@ -1,15 +1,10 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
 
 export const PLAMO_BASE_URL = "https://api.platform.preferredai.jp/v1";
-export const PLAMO_LEGACY_MODEL_ID = "plamo-2.2-prime";
 export const PLAMO_DEFAULT_MODEL_ID = "plamo-3.0-prime-beta";
 export const PLAMO_DEFAULT_MODEL_REF = `plamo/${PLAMO_DEFAULT_MODEL_ID}`;
-export const PLAMO_LEGACY_CONTEXT_WINDOW = 32_768;
-export const PLAMO_LEGACY_MAX_TOKENS = 4_096;
 export const PLAMO_DEFAULT_CONTEXT_WINDOW = 65_536;
 export const PLAMO_DEFAULT_MAX_TOKENS = 20_000;
-export const PLAMO_LEGACY_PRICE_USD_PER_1M_INPUT = 0;
-export const PLAMO_LEGACY_PRICE_USD_PER_1M_OUTPUT = 0;
 export const PLAMO_PRICE_USD_PER_1M_INPUT = 0.375;
 export const PLAMO_PRICE_USD_PER_1M_OUTPUT = 1.5625;
 
@@ -43,23 +38,6 @@ const PLAMO_MODEL_CATALOG = [
     },
     contextWindow: PLAMO_DEFAULT_CONTEXT_WINDOW,
     maxTokens: PLAMO_DEFAULT_MAX_TOKENS,
-    compat: PLAMO_OPENAI_COMPAT,
-  },
-  {
-    id: PLAMO_LEGACY_MODEL_ID,
-    name: "PLaMo 2.2 Prime",
-    reasoning: false,
-    input: ["text"],
-    // Public API docs list the model limits but do not publish public per-token
-    // pricing for this model, so leave usage-cost estimation disabled for now.
-    cost: {
-      input: PLAMO_LEGACY_PRICE_USD_PER_1M_INPUT,
-      output: PLAMO_LEGACY_PRICE_USD_PER_1M_OUTPUT,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: PLAMO_LEGACY_CONTEXT_WINDOW,
-    maxTokens: PLAMO_LEGACY_MAX_TOKENS,
     compat: PLAMO_OPENAI_COMPAT,
   },
 ] as const satisfies readonly ModelDefinitionConfig[];

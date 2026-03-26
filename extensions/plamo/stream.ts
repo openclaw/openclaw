@@ -16,7 +16,6 @@ import {
   type Usage,
 } from "@mariozechner/pi-ai";
 import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
-import { PLAMO_LEGACY_MODEL_ID } from "./model-definitions.js";
 
 const PLAMO_BEGIN_TOOL_REQUEST = "<|plamo:begin_tool_request:plamo|>";
 const PLAMO_END_TOOL_REQUEST = "<|plamo:end_tool_request:plamo|>";
@@ -27,14 +26,6 @@ const PLAMO_END_TOOL_NAME = "<|plamo:end_tool_name:plamo|>";
 const PLAMO_BEGIN_TOOL_ARGUMENTS = "<|plamo:begin_tool_arguments:plamo|>";
 const PLAMO_END_TOOL_ARGUMENTS = "<|plamo:end_tool_arguments:plamo|>";
 const PLAMO_MSG = "<|plamo:msg|>";
-const PLAMO_LEGACY_RESPONSE_LANGUAGE_POLICY = [
-  "Language policy:",
-  "- Reply in the same natural language as the user's latest message.",
-  "- If the latest user message is Japanese, reply in Japanese.",
-  "- If it is English, reply in English.",
-  "- Switch languages only when the user explicitly asks you to.",
-  "- Keep code, commands, file paths, API names, and quoted text unchanged unless the user asks to translate them.",
-].join("\n");
 
 const PLAMO_TOOL_REQUEST_BLOCK_RE = new RegExp(
   `${escapeRegExp(PLAMO_BEGIN_TOOL_REQUEST)}(.*?)${escapeRegExp(PLAMO_END_TOOL_REQUEST)}`,
@@ -102,11 +93,6 @@ type OpenAIStyleChunk = {
   id?: unknown;
   usage?: OpenAIStyleUsage | null;
   choices?: OpenAIStyleChunkChoice[] | null;
-};
-
-type OpenAIStyleMessage = {
-  role?: unknown;
-  content?: unknown;
 };
 
 const DEFAULT_PLAMO_COMPAT: ResolvedPlamoCompat = {
@@ -392,99 +378,11 @@ function normalizePlamoStreamingPayload(
   return payload;
 }
 
-function shouldApplyLegacyLanguagePolicy(model: RuntimeModel): boolean {
-  return model.id === PLAMO_LEGACY_MODEL_ID;
-}
-
-function appendInstructionToText(content: string, instruction: string): string {
-  const trimmed = content.trimEnd();
-  return trimmed ? `${trimmed}\n\n${instruction}` : instruction;
-}
-
-function isMessageTextBlock(block: unknown): block is { text: string } & Record<string, unknown> {
-  return (
-    !!block && typeof block === "object" && typeof (block as { text?: unknown }).text === "string"
-  );
-}
-
-function hasInstructionInMessageContent(content: unknown, instruction: string): boolean {
-  if (typeof content === "string") {
-    return content.includes(instruction);
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((block) => isMessageTextBlock(block) && block.text.includes(instruction));
-}
-
-function appendInstructionToMessageContent(content: unknown, instruction: string): unknown {
-  if (content == null) {
-    return instruction;
-  }
-  if (hasInstructionInMessageContent(content, instruction)) {
-    return content;
-  }
-  if (typeof content === "string") {
-    return appendInstructionToText(content, instruction);
-  }
-  if (!Array.isArray(content)) {
-    return content;
-  }
-
-  const next = [...content];
-  for (let index = next.length - 1; index >= 0; index -= 1) {
-    const block = next[index];
-    if (!isMessageTextBlock(block)) {
-      continue;
-    }
-    next[index] = {
-      ...block,
-      text: appendInstructionToText(block.text, instruction),
-    };
-    return next;
-  }
-
-  next.push({ type: "text", text: instruction });
-  return next;
-}
-
-function applyLegacyLanguagePolicyToPayload(
-  payload: Record<string, unknown>,
-  model: RuntimeModel,
-): void {
-  if (!shouldApplyLegacyLanguagePolicy(model)) {
-    return;
-  }
-
-  const messages = payload.messages;
-  if (!Array.isArray(messages)) {
-    return;
-  }
-
-  for (const message of messages as OpenAIStyleMessage[]) {
-    if (message.role !== "system") {
-      continue;
-    }
-    message.content = appendInstructionToMessageContent(
-      message.content,
-      PLAMO_LEGACY_RESPONSE_LANGUAGE_POLICY,
-    );
-    return;
-  }
-
-  (messages as OpenAIStyleMessage[]).unshift({
-    role: "system",
-    content: PLAMO_LEGACY_RESPONSE_LANGUAGE_POLICY,
-  });
-}
-
 function finalizePlamoStreamingPayload(
   payload: Record<string, unknown>,
   model: RuntimeModel,
 ): Record<string, unknown> {
-  const normalized = normalizePlamoStreamingPayload(payload, model);
-  applyLegacyLanguagePolicyToPayload(normalized, model);
-  return normalized;
+  return normalizePlamoStreamingPayload(payload, model);
 }
 
 async function resolvePlamoStreamingPayload(
