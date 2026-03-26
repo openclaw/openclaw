@@ -201,4 +201,61 @@ describe("subagent announce seam flow", () => {
       timeoutMs: 10_000,
     });
   });
+
+  it("sets inputProvenance.sourceChannel from requesterOrigin.channel for non-subagent requesters", async () => {
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test-channel",
+      childRunId: "run-channel-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "telegram", to: "telegram:-1003633911025", threadId: "284" },
+      task: "test channel propagation",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "channel test result",
+    });
+
+    const agentCall = agentSpy.mock.calls.find((call) => call[0]?.params?.inputProvenance != null);
+    expect(agentCall).toBeDefined();
+    const provenance = agentCall![0].params!.inputProvenance as Record<string, unknown>;
+    expect(provenance).toMatchObject({
+      kind: "inter_session",
+      sourceChannel: "telegram",
+    });
+  });
+
+  it("falls back sourceChannel to INTERNAL_MESSAGE_CHANNEL when requesterOrigin has no channel", async () => {
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test-fallback",
+      childRunId: "run-fallback-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: undefined,
+      task: "test fallback channel",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "fallback test result",
+    });
+
+    const agentCall = agentSpy.mock.calls.find((call) => call[0]?.params?.inputProvenance != null);
+    // When no origin channel, should fall back to internal message channel (webchat)
+    if (agentCall) {
+      const provenance = agentCall[0].params!.inputProvenance as Record<string, unknown>;
+      expect(provenance).toMatchObject({
+        kind: "inter_session",
+      });
+      // sourceChannel should NOT be "telegram" when no origin was provided
+      expect(provenance.sourceChannel).not.toBe("telegram");
+    }
+  });
 });

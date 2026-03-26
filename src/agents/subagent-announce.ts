@@ -828,7 +828,10 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: item.sourceSessionKey,
-        sourceChannel: (!requesterIsSubagent ? origin?.channel : undefined) ?? item.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        sourceChannel:
+          (!requesterIsSubagent ? origin?.channel : undefined) ||
+          item.sourceChannel ||
+          INTERNAL_MESSAGE_CHANNEL,
         sourceTool: item.sourceTool ?? "subagent_announce",
       },
       idempotencyKey,
@@ -1024,7 +1027,10 @@ async function sendSubagentAnnounceDirectly(params: {
             inputProvenance: {
               kind: "inter_session",
               sourceSessionKey: params.sourceSessionKey,
-              sourceChannel: (shouldDeliverExternally ? directChannel : undefined) ?? params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+              sourceChannel:
+                (shouldDeliverExternally ? directChannel : undefined) ||
+                params.sourceChannel ||
+                INTERNAL_MESSAGE_CHANNEL,
               sourceTool: params.sourceTool ?? "subagent_announce",
             },
             idempotencyKey: params.directIdempotencyKey,
