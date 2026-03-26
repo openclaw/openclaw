@@ -96,6 +96,10 @@ const formatPluginCompatibilityNotice = vi.hoisted(() =>
   vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
 );
 
+function getWizardNoteCalls(note: WizardPrompter["note"]) {
+  return (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+}
+
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
 }));
@@ -398,7 +402,7 @@ describe("runSetupWizard", () => {
         prompter,
       );
 
-      const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      const calls = getWizardNoteCalls(note);
       expect(calls.length).toBeGreaterThan(0);
       expect(calls.some((call) => call?.[1] === "Web search")).toBe(true);
     } finally {
@@ -488,7 +492,7 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const calls = getWizardNoteCalls(note);
     expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
     expect(
       calls.some((call) => {
