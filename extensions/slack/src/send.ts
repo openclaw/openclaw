@@ -94,6 +94,24 @@ async function postSlackMessageBestEffort(params: {
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
 }) {
+  const logSlackReplyAttempt = (mode: string) => {
+    console.error(
+      `[slack-send] chat.postMessage attempt channel=${params.channelId} thread_ts=${params.threadTs ?? "-"} text_len=${params.text.length} blocks=${params.blocks?.length ?? 0} identity=${hasCustomIdentity(params.identity)} mode=${mode}`,
+    );
+  };
+  const logSlackReplySuccess = (
+    mode: string,
+    response: { ok?: boolean; ts?: string; error?: string },
+  ) => {
+    console.error(
+      `[slack-send] chat.postMessage result channel=${params.channelId} thread_ts=${params.threadTs ?? "-"} ok=${response.ok ?? true} ts=${response.ts ?? "-"} error=${response.error ?? "-"} mode=${mode}`,
+    );
+  };
+  const logSlackReplyError = (mode: string, err: unknown) => {
+    console.error(
+      `[slack-send] chat.postMessage error channel=${params.channelId} thread_ts=${params.threadTs ?? "-"} mode=${mode}: ${String(err)}`,
+    );
+  };
   const basePayload = {
     channel: params.channelId,
     text: params.text,
@@ -104,29 +122,42 @@ async function postSlackMessageBestEffort(params: {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     if (params.identity?.iconUrl) {
-      return await params.client.chat.postMessage({
+      logSlackReplyAttempt("icon_url");
+      const response = await params.client.chat.postMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_url: params.identity.iconUrl,
       });
+      logSlackReplySuccess("icon_url", response);
+      return response;
     }
     if (params.identity?.iconEmoji) {
-      return await params.client.chat.postMessage({
+      logSlackReplyAttempt("icon_emoji");
+      const response = await params.client.chat.postMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_emoji: params.identity.iconEmoji,
       });
+      logSlackReplySuccess("icon_emoji", response);
+      return response;
     }
-    return await params.client.chat.postMessage({
+    logSlackReplyAttempt("default");
+    const response = await params.client.chat.postMessage({
       ...basePayload,
       ...(params.identity?.username ? { username: params.identity.username } : {}),
     });
+    logSlackReplySuccess("default", response);
+    return response;
   } catch (err) {
+    logSlackReplyError("initial", err);
     if (!hasCustomIdentity(params.identity) || !isSlackCustomizeScopeError(err)) {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return params.client.chat.postMessage(basePayload);
+    logSlackReplyAttempt("retry-no-customize");
+    const response = await params.client.chat.postMessage(basePayload);
+    logSlackReplySuccess("retry-no-customize", response);
+    return response;
   }
 }
 

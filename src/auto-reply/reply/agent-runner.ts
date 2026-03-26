@@ -124,6 +124,19 @@ export async function runReplyAgent(params: {
     shouldInjectGroupIntro,
     typingMode,
   } = params;
+  const traceChannel = String(
+    sessionCtx.NativeChannelId ?? sessionCtx.To ?? sessionCtx.From ?? "unknown",
+  );
+  const traceTs = String(
+    sessionCtx.MessageSid ??
+      sessionCtx.MessageSidFull ??
+      sessionCtx.MessageSidFirst ??
+      sessionCtx.MessageSidLast ??
+      "-",
+  );
+  const trace = (message: string) => {
+    console.error(`[agent-runner] channel=${traceChannel} ts=${traceTs} ${message}`);
+  };
 
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
@@ -204,6 +217,7 @@ export async function runReplyAgent(params: {
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
+      trace("return steered-active-run");
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -216,6 +230,9 @@ export async function runReplyAgent(params: {
     shouldFollowup,
     queueMode: resolvedQueue.mode,
   });
+  trace(
+    `queue action=${activeRunQueueAction} isActive=${isActive} isHeartbeat=${isHeartbeat} shouldFollowup=${shouldFollowup} queueMode=${resolvedQueue.mode}`,
+  );
 
   const queuedRunFollowupTurn = createFollowupRunner({
     opts,
@@ -230,11 +247,13 @@ export async function runReplyAgent(params: {
   });
 
   if (activeRunQueueAction === "drop") {
+    trace("return queue-drop");
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
+    trace("return enqueue-followup");
     enqueueFollowupRun(
       queueKey,
       followupRun,
@@ -411,8 +430,12 @@ export async function runReplyAgent(params: {
       storePath,
       resolvedVerboseLevel,
     });
+    trace(`runOutcome kind=${runOutcome.kind}`);
 
     if (runOutcome.kind === "final") {
+      trace(
+        `return final-direct text_len=${runOutcome.payload.text?.length ?? 0} isError=${runOutcome.payload.isError === true}`,
+      );
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -450,6 +473,9 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    trace(
+      `runResult payloads=${payloadArray.length} meta_error=${runResult.meta?.error ? JSON.stringify(runResult.meta.error.message ?? runResult.meta.error.kind ?? "present") : "none"} tool_sent_texts=${runResult.messagingToolSentTexts?.length ?? 0} tool_sent_media=${runResult.messagingToolSentMediaUrls?.length ?? 0}`,
+    );
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -527,6 +553,7 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      trace("return empty-runResult-payloads");
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -554,8 +581,12 @@ export async function runReplyAgent(params: {
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+    trace(
+      `replyPayloads normalized=${replyPayloads.length} heartbeatStripped=${didLogHeartbeatStrip} blockStreaming=${blockStreamingEnabled}`,
+    );
 
     if (replyPayloads.length === 0) {
+      trace("return empty-replyPayloads");
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -765,6 +796,7 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
   } catch (error) {
+    trace(`throw ${error instanceof Error ? error.message : String(error)}`);
     // Keep the followup queue moving even when an unexpected exception escapes
     // the run path; the caller still receives the original error.
     finalizeWithFollowup(undefined, queueKey, runFollowupTurn);

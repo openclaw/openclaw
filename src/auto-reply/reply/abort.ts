@@ -294,6 +294,52 @@ export async function tryFastAbortFromMessage(params: {
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
+
+  // Also abort the running turn and clear queues for the current session
+  // (same as the targetKey path — without this, in-thread stop commands
+  // only set a memory flag but don't actually kill the running LLM call).
+  const sessionKey = ctx.SessionKey?.trim();
+  let aborted = false;
+  if (sessionKey) {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const { entry, key } = resolveSessionEntryForKey(store, sessionKey);
+    const sessionId = entry?.sessionId;
+    aborted = sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false;
+    const cleared = clearSessionQueues([sessionKey, sessionId]);
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      logVerbose(
+        `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+      );
+    }
+    if (entry && key) {
+      entry.abortedLastRun = true;
+      entry.updatedAt = Date.now();
+      store[key] = entry;
+      await updateSessionStore(storePath, (nextStore) => {
+        const nextEntry = nextStore[key] ?? entry;
+        if (!nextEntry) {
+          return;
+        }
+        nextEntry.abortedLastRun = true;
+        nextEntry.updatedAt = Date.now();
+        nextStore[key] = nextEntry;
+      });
+    }
+    // Also try ACP cancellation for the session
+    const acpManager = abortDeps.getAcpSessionManager();
+    const acpResolution = acpManager.resolveSession({ cfg, sessionKey });
+    if (acpResolution.kind !== "none") {
+      try {
+        await acpManager.cancelSession({ cfg, sessionKey, reason: "fast-abort" });
+      } catch (error) {
+        logVerbose(
+          `abort: ACP cancel failed for ${sessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
-  return { handled: true, aborted: false, stoppedSubagents: stopped };
+  return { handled: true, aborted, stoppedSubagents: stopped };
 }

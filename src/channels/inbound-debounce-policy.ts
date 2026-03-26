@@ -5,6 +5,7 @@ import {
   resolveInboundDebounceMs,
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";
+import { isAbortTrigger } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.js";
 
 export function shouldDebounceTextInbound(params: {
@@ -22,6 +23,10 @@ export function shouldDebounceTextInbound(params: {
   }
   const text = params.text?.trim() ?? "";
   if (!text) {
+    return false;
+  }
+  // Never debounce abort triggers — stop must be immediate
+  if (isAbortTrigger(text)) {
     return false;
   }
   return !hasControlCommand(text, params.cfg, params.commandOptions);

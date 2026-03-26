@@ -102,6 +102,22 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  const traceChannel = String(
+    params.sessionCtx.NativeChannelId ??
+      params.sessionCtx.To ??
+      params.sessionCtx.From ??
+      "unknown",
+  );
+  const traceTs = String(
+    params.sessionCtx.MessageSid ??
+      params.sessionCtx.MessageSidFull ??
+      params.sessionCtx.MessageSidFirst ??
+      params.sessionCtx.MessageSidLast ??
+      "-",
+  );
+  const trace = (message: string) => {
+    console.error(`[agent-exec] channel=${traceChannel} ts=${traceTs} ${message}`);
+  };
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
@@ -514,6 +530,9 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+      trace(
+        `fallback result provider=${fallbackProvider} model=${fallbackModel} payloads=${runResult.payloads?.length ?? 0} meta_error=${runResult.meta?.error ? JSON.stringify(runResult.meta.error.message ?? runResult.meta.error.kind ?? "present") : "none"}`,
+      );
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
         ? fallbackResult.attempts.map((attempt) => ({
             provider: String(attempt.provider ?? ""),
@@ -557,6 +576,7 @@ export async function runAgentTurnWithFallback(params: {
       break;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      trace(`catch ${message}`);
       const isBilling = isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
@@ -678,6 +698,9 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
+  trace(
+    `post-run finalEmbeddedError=${finalEmbeddedError ? JSON.stringify(finalEmbeddedError.message ?? finalEmbeddedError.kind ?? "present") : "none"} hasPayloadText=${hasPayloadText} payloads=${runResult?.payloads?.length ?? 0}`,
+  );
   if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
     return {
       kind: "final",

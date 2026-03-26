@@ -107,6 +107,9 @@ export function createSlackMessageHandler(params: {
       if (!last) {
         return;
       }
+      console.error(
+        `[slack-trace] debounce flush entries=${entries.length} source=${last.opts.source} channel=${last.message.channel} ts=${last.message.ts ?? "-"}`,
+      );
       const flushedKey = buildSlackDebounceKey(last.message, ctx.accountId);
       const topLevelConversationKey = buildTopLevelSlackConversationKey(
         last.message,
@@ -144,6 +147,9 @@ export function createSlackMessageHandler(params: {
       });
       const seenMessageKey = buildSeenMessageKey(last.message.channel, last.message.ts);
       if (!prepared) {
+        console.error(
+          `[slack-trace] debounce flush drop reason=prepare-null source=${last.opts.source} channel=${last.message.channel} ts=${last.message.ts ?? "-"}`,
+        );
         return;
       }
       if (seenMessageKey) {
@@ -154,6 +160,9 @@ export function createSlackMessageHandler(params: {
         } else if (last.opts.source === "message" && appMentionDispatchedKeys.has(seenMessageKey)) {
           appMentionDispatchedKeys.delete(seenMessageKey);
           appMentionRetryKeys.delete(seenMessageKey);
+          console.error(
+            `[slack-trace] debounce flush drop reason=message-suppressed-after-app-mention key=${seenMessageKey}`,
+          );
           return;
         }
         appMentionRetryKeys.delete(seenMessageKey);
@@ -166,6 +175,9 @@ export function createSlackMessageHandler(params: {
           prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
         }
       }
+      console.error(
+        `[slack-trace] debounce flush dispatch source=${last.opts.source} channel=${last.message.channel} ts=${last.message.ts ?? "-"}`,
+      );
       await dispatchPreparedSlackMessage(prepared);
     },
     onError: (err) => {
@@ -207,7 +219,13 @@ export function createSlackMessageHandler(params: {
   };
 
   return async (message, opts) => {
+    console.error(
+      `[slack-trace] handler enter source=${opts.source} channel=${message.channel} ts=${message.ts ?? "-"} thread_ts=${message.thread_ts ?? "-"} subtype=${message.subtype ?? "-"} wasMentionedOpt=${Boolean(opts.wasMentioned)} text=${JSON.stringify(message.text ?? "")}`,
+    );
     if (opts.source === "message" && message.type !== "message") {
+      console.error(
+        `[slack-trace] handler drop source=${opts.source} reason=non-message-type type=${message.type ?? "-"} channel=${message.channel} ts=${message.ts ?? "-"}`,
+      );
       return;
     }
     if (
@@ -216,30 +234,52 @@ export function createSlackMessageHandler(params: {
       message.subtype !== "file_share" &&
       message.subtype !== "bot_message"
     ) {
+      console.error(
+        `[slack-trace] handler drop source=${opts.source} reason=unsupported-subtype subtype=${message.subtype} channel=${message.channel} ts=${message.ts ?? "-"}`,
+      );
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
     const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
+    console.error(
+      `[slack-trace] handler seen-check source=${opts.source} key=${seenMessageKey ?? "-"} wasSeen=${wasSeen}`,
+    );
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
       // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous
       // app_mention is not dropped while message handling is still in-flight.
       rememberAppMentionRetryKey(seenMessageKey);
+      console.error(`[slack-trace] handler prime-app-mention-retry key=${seenMessageKey}`);
     }
     if (seenMessageKey && wasSeen) {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
+        console.error(
+          `[slack-trace] handler drop source=${opts.source} reason=duplicate-seen key=${seenMessageKey}`,
+        );
         return;
       }
+      console.error(
+        `[slack-trace] handler allow source=${opts.source} reason=consume-app-mention-retry key=${seenMessageKey}`,
+      );
     }
     trackEvent?.();
     const resolvedMessage = await threadTsResolver.resolve({ message, source: opts.source });
+    console.error(
+      `[slack-trace] handler resolved source=${opts.source} channel=${resolvedMessage.channel} ts=${resolvedMessage.ts ?? "-"} thread_ts=${resolvedMessage.thread_ts ?? "-"} parent_user_id=${resolvedMessage.parent_user_id ?? "-"}`,
+    );
     const debounceKey = buildSlackDebounceKey(resolvedMessage, ctx.accountId);
     const conversationKey = buildTopLevelSlackConversationKey(resolvedMessage, ctx.accountId);
     const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    console.error(
+      `[slack-trace] handler debounce source=${opts.source} canDebounce=${canDebounce} debounceKey=${debounceKey ?? "-"} conversationKey=${conversationKey ?? "-"} debounceMs=${debounceMs}`,
+    );
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {
+        console.error(
+          `[slack-trace] handler flush-pending conversationKey=${conversationKey} count=${pendingKeys.size}`,
+        );
         const keysToFlush = Array.from(pendingKeys);
         for (const pendingKey of keysToFlush) {
           await debouncer.flushKey(pendingKey);
@@ -250,7 +290,13 @@ export function createSlackMessageHandler(params: {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey) ?? new Set<string>();
       pendingKeys.add(debounceKey);
       pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
+      console.error(
+        `[slack-trace] handler remember-pending conversationKey=${conversationKey} debounceKey=${debounceKey} total=${pendingKeys.size}`,
+      );
     }
     await debouncer.enqueue({ message: resolvedMessage, opts });
+    console.error(
+      `[slack-trace] handler enqueued source=${opts.source} channel=${resolvedMessage.channel} ts=${resolvedMessage.ts ?? "-"} debounceKey=${debounceKey ?? "-"}`,
+    );
   };
 }

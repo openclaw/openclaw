@@ -27,6 +27,39 @@ import {
 } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
+export const SLACK_REQUIRED_BOT_SCOPES = [
+  "chat:write",
+  "channels:history",
+  "channels:read",
+  "groups:history",
+  "im:history",
+  "mpim:history",
+  "users:read",
+  "app_mentions:read",
+  "reactions:read",
+  "reactions:write",
+  "pins:read",
+  "pins:write",
+  "emoji:read",
+  "commands",
+  "files:read",
+  "files:write",
+] as const;
+
+export const SLACK_REQUIRED_BOT_EVENTS = [
+  "app_mention",
+  "message.channels",
+  "message.groups",
+  "message.im",
+  "message.mpim",
+  "reaction_added",
+  "reaction_removed",
+  "member_joined_channel",
+  "member_left_channel",
+  "channel_rename",
+  "pin_added",
+  "pin_removed",
+] as const;
 
 function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
@@ -54,43 +87,13 @@ function buildSlackManifest(botName: string) {
     },
     oauth_config: {
       scopes: {
-        bot: [
-          "chat:write",
-          "channels:history",
-          "channels:read",
-          "groups:history",
-          "im:history",
-          "mpim:history",
-          "users:read",
-          "app_mentions:read",
-          "reactions:read",
-          "reactions:write",
-          "pins:read",
-          "pins:write",
-          "emoji:read",
-          "commands",
-          "files:read",
-          "files:write",
-        ],
+        bot: [...SLACK_REQUIRED_BOT_SCOPES],
       },
     },
     settings: {
       socket_mode_enabled: true,
       event_subscriptions: {
-        bot_events: [
-          "app_mention",
-          "message.channels",
-          "message.groups",
-          "message.im",
-          "message.mpim",
-          "reaction_added",
-          "reaction_removed",
-          "member_joined_channel",
-          "member_left_channel",
-          "channel_rename",
-          "pin_added",
-          "pin_removed",
-        ],
+        bot_events: [...SLACK_REQUIRED_BOT_EVENTS],
       },
     },
   };

@@ -341,6 +341,9 @@ export async function prepareSlackMessage(params: {
     conversation,
   });
   if (!authorization) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=authorization-null channel=${message.channel} ts=${message.ts ?? "-"}`,
+    );
     return null;
   }
   const { senderId, allowFromLower } = authorization;
@@ -407,6 +410,10 @@ export async function prepareSlackMessage(params: {
   };
   const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
+  console.error(
+    `[slack-trace] prepare mention source=${opts.source} channel=${message.channel} ts=${message.ts ?? "-"} isDirect=${isDirectMessage} isRoom=${isRoom} isRoomish=${isRoomish} requireMention=${Boolean(isRoom ? (channelConfig?.requireMention ?? ctx.defaultRequireMention) : false)} opts.wasMentioned=${Boolean(opts.wasMentioned)} computed.wasMentioned=${wasMentioned} implicitMention=${implicitMention} hasAnyMention=${hasAnyMention} explicitlyMentioned=${explicitlyMentioned} canDetectMention=${Boolean(ctx.botUserId) || mentionRegexes.length > 0} botUserId=${ctx.botUserId ?? "-"} routeAgent=${route.agentId ?? "-"} text=${JSON.stringify(message.text ?? "")}`,
+  );
+
   const channelUserAuthorized = isRoom
     ? resolveSlackUserAllowed({
         allowList: channelConfig?.users,
@@ -416,6 +423,9 @@ export async function prepareSlackMessage(params: {
       })
     : true;
   if (isRoom && !channelUserAuthorized) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=channel-user-unauthorized channel=${message.channel} ts=${message.ts ?? "-"} sender=${senderId}`,
+    );
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
     return null;
   }
@@ -460,6 +470,9 @@ export async function prepareSlackMessage(params: {
   const commandAuthorized = commandGate.commandAuthorized;
 
   if (isRoomish && commandGate.shouldBlock) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=control-command-unauthorized channel=${message.channel} ts=${message.ts ?? "-"} sender=${senderId}`,
+    );
     logInboundDrop({
       log: logVerbose,
       channel: "slack",
@@ -487,7 +500,13 @@ export async function prepareSlackMessage(params: {
     commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  console.error(
+    `[slack-trace] prepare gate source=${opts.source} channel=${message.channel} ts=${message.ts ?? "-"} shouldRequireMention=${Boolean(shouldRequireMention)} shouldSkip=${mentionGate.shouldSkip} shouldBypassMention=${mentionGate.shouldBypassMention} effectiveWasMentioned=${effectiveWasMentioned} hasControlCommand=${hasControlCommandInMessage} commandAuthorized=${commandAuthorized} historyKey=${historyKey} sessionKey=${sessionKey}`,
+  );
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=no-mention channel=${message.channel} ts=${message.ts ?? "-"} text=${JSON.stringify(message.text ?? "")}`,
+    );
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
     const fallbackFile = message.files?.[0]?.name
@@ -529,6 +548,9 @@ export async function prepareSlackMessage(params: {
     mediaMaxBytes: ctx.mediaMaxBytes,
   });
   if (!resolvedMessageContent) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=no-message-content channel=${message.channel} ts=${message.ts ?? "-"}`,
+    );
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
@@ -777,12 +799,18 @@ export async function prepareSlackMessage(params: {
 
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) {
+    console.error(
+      `[slack-trace] prepare drop source=${opts.source} reason=no-reply-target channel=${message.channel} ts=${message.ts ?? "-"}`,
+    );
     return null;
   }
 
   if (shouldLogVerbose()) {
     logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
   }
+  console.error(
+    `[slack-trace] prepare success source=${opts.source} channel=${message.channel} ts=${message.ts ?? "-"} replyTarget=${replyTarget} sessionKey=${sessionKey} historyKey=${historyKey} isDirect=${isDirectMessage} isRoomish=${isRoomish}`,
+  );
 
   return {
     ctx,

@@ -41,6 +41,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -154,6 +155,11 @@ export async function dispatchReplyFromConfig(params: {
   replyResolver?: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  const traceChannel = String(ctx.NativeChannelId ?? ctx.To ?? ctx.From ?? "unknown");
+  const traceTs = String(ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast ?? "-");
+  const trace = (message: string) => {
+    console.error(`[dispatch-core] channel=${traceChannel} ts=${traceTs} ${message}`);
+  };
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
@@ -208,6 +214,7 @@ export async function dispatchReplyFromConfig(params: {
   };
 
   if (shouldSkipDuplicateInbound(ctx)) {
+    trace("return duplicate-inbound");
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
@@ -447,6 +454,7 @@ export async function dispatchReplyFromConfig(params: {
     const abortRuntime = await loadAbortRuntime();
     const fastAbort = await abortRuntime.tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
+      trace(`fast-abort handled stoppedSubagents=${String(fastAbort.stoppedSubagents ?? 0)}`);
       const payload = {
         text: abortRuntime.formatAbortReplyText(fastAbort.stoppedSubagents),
       } satisfies ReplyPayload;
@@ -499,6 +507,7 @@ export async function dispatchReplyFromConfig(params: {
       chatType: sessionStoreEntry.entry?.chatType,
     });
     if (sendPolicy === "deny" && !bypassAcpForCommand) {
+      trace("return send-policy-deny");
       logVerbose(
         `Send blocked by policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"}`,
       );
@@ -528,8 +537,12 @@ export async function dispatchReplyFromConfig(params: {
       markIdle,
     });
     if (acpDispatch) {
+      trace(
+        `return acp-dispatch queuedFinal=${acpDispatch.queuedFinal} final=${acpDispatch.counts.final ?? 0} block=${acpDispatch.counts.block ?? 0} tool=${acpDispatch.counts.tool ?? 0}`,
+      );
       return acpDispatch;
     }
+    trace("acp-dispatch none");
 
     // Track accumulated block text for TTS generation after streaming completes.
     // When block streaming succeeds, there's no final reply, so we need to generate
@@ -643,6 +656,12 @@ export async function dispatchReplyFromConfig(params: {
       },
       cfg,
     );
+    const replyResultSummary = Array.isArray(replyResult)
+      ? `array:${replyResult.length}`
+      : replyResult
+        ? "single"
+        : "empty";
+    trace(`replyResolver result=${replyResultSummary}`);
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.
@@ -667,11 +686,23 @@ export async function dispatchReplyFromConfig(params: {
         markIdle,
       });
       if (acpTailDispatch) {
+        trace(
+          `return acp-tail-dispatch queuedFinal=${acpTailDispatch.queuedFinal} final=${acpTailDispatch.counts.final ?? 0} block=${acpTailDispatch.counts.block ?? 0} tool=${acpTailDispatch.counts.tool ?? 0}`,
+        );
         return acpTailDispatch;
       }
+      trace("acp-tail-dispatch none");
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    trace(`replies normalized=${replies.length}`);
+    for (const [index, reply] of replies.entries()) {
+      const text = typeof reply.text === "string" ? reply.text : "";
+      const sendable = resolveSendableOutboundReplyParts(reply);
+      trace(
+        `reply[${index}] text_len=${text.length} trimmed_len=${sendable.trimmedText.length} hasMedia=${sendable.hasMedia} hasText=${sendable.hasText} isReasoning=${reply.isReasoning === true} isError=${reply.isError === true} silent=${isSilentReplyText(sendable.trimmedText, SILENT_REPLY_TOKEN)} preview=${JSON.stringify(sendable.trimmedText.slice(0, 120))}`,
+      );
+    }
 
     let queuedFinal = false;
     let routedFinalCount = 0;
@@ -679,6 +710,7 @@ export async function dispatchReplyFromConfig(params: {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (reply.isReasoning === true) {
+        trace("skip final delivery for reasoning reply");
         continue;
       }
       const ttsReply = await maybeApplyTtsToPayload({
@@ -703,16 +735,22 @@ export async function dispatchReplyFromConfig(params: {
           groupId,
         });
         if (!result.ok) {
+          trace(`route-reply final failed error=${result.error ?? "unknown"}`);
           logVerbose(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
         queuedFinal = result.ok || queuedFinal;
         if (result.ok) {
+          trace("route-reply final ok");
           routedFinalCount += 1;
         }
       } else {
-        queuedFinal = dispatcher.sendFinalReply(ttsReply) || queuedFinal;
+        const didQueue = dispatcher.sendFinalReply(ttsReply);
+        trace(
+          `dispatcher.sendFinalReply queued=${didQueue} text_len=${typeof ttsReply.text === "string" ? ttsReply.text.length : 0} media=${Boolean(ttsReply.mediaUrl)}`,
+        );
+        queuedFinal = didQueue || queuedFinal;
       }
     }
 
@@ -727,6 +765,7 @@ export async function dispatchReplyFromConfig(params: {
       accumulatedBlockText.trim()
     ) {
       try {
+        trace("attempt accumulated-block tts-only final");
         const ttsSyntheticReply = await maybeApplyTtsToPayload({
           payload: { text: accumulatedBlockText },
           cfg,
@@ -756,19 +795,23 @@ export async function dispatchReplyFromConfig(params: {
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
+              trace("route-reply tts-only ok");
               routedFinalCount += 1;
             }
             if (!result.ok) {
+              trace(`route-reply tts-only failed error=${result.error ?? "unknown"}`);
               logVerbose(
                 `dispatch-from-config: route-reply (tts-only) failed: ${result.error ?? "unknown error"}`,
               );
             }
           } else {
             const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
+            trace(`dispatcher.sendFinalReply tts-only queued=${didQueue}`);
             queuedFinal = didQueue || queuedFinal;
           }
         }
       } catch (err) {
+        trace(`accumulated-block tts failed err=${String(err)}`);
         logVerbose(
           `dispatch-from-config: accumulated block TTS failed: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -777,6 +820,9 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    trace(
+      `return normal queuedFinal=${queuedFinal} final=${counts.final ?? 0} block=${counts.block ?? 0} tool=${counts.tool ?? 0}`,
+    );
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
@@ -784,6 +830,7 @@ export async function dispatchReplyFromConfig(params: {
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    trace(`throw error=${String(err)}`);
     recordProcessed("error", { error: String(err) });
     markIdle("message_error");
     throw err;

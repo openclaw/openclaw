@@ -17,12 +17,19 @@ export function registerSlackMessageEvents(params: {
   const handleIncomingMessageEvent = async ({ event, body }: { event: unknown; body: unknown }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        console.error("[slack-trace] drop mismatched message event before handler");
         return;
       }
 
       const message = event as SlackMessageEvent;
+      console.error(
+        `[slack-trace] ingress source=message channel=${message.channel} ts=${message.ts ?? "-"} thread_ts=${message.thread_ts ?? "-"} subtype=${message.subtype ?? "-"} user=${message.user ?? "-"} bot_id=${message.bot_id ?? "-"} text=${JSON.stringify(message.text ?? "")}`,
+      );
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
+        console.error(
+          `[slack-trace] ingress source=message subtype-handler eventKind=${subtypeHandler.eventKind} channel=${message.channel} ts=${message.ts ?? "-"}`,
+        );
         const channelId = subtypeHandler.resolveChannelId(message);
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -60,15 +67,22 @@ export function registerSlackMessageEvents(params: {
   ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        console.error("[slack-trace] drop mismatched app_mention event before handler");
         return;
       }
 
       const mention = event as SlackAppMentionEvent;
+      console.error(
+        `[slack-trace] ingress source=app_mention channel=${mention.channel} ts=${mention.ts ?? "-"} thread_ts=${mention.thread_ts ?? "-"} user=${mention.user ?? "-"} text=${JSON.stringify(mention.text ?? "")}`,
+      );
 
       // Skip app_mention for DMs - they're already handled by message.im event
       // This prevents duplicate processing when both message and app_mention fire for DMs
       const channelType = normalizeSlackChannelType(mention.channel_type, mention.channel);
       if (channelType === "im" || channelType === "mpim") {
+        console.error(
+          `[slack-trace] drop source=app_mention reason=dm-or-mpim channel=${mention.channel} ts=${mention.ts ?? "-"}`,
+        );
         return;
       }
 

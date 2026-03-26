@@ -31,6 +31,8 @@ import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/ind
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
+import { fetchSlackScopes } from "../scopes.js";
+import { SLACK_REQUIRED_BOT_EVENTS, SLACK_REQUIRED_BOT_SCOPES } from "../shared.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -129,6 +131,29 @@ function parseApiAppIdFromAppToken(raw?: string) {
   }
   const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
   return match?.[1]?.toUpperCase();
+}
+
+async function diagnoseSlackPermissions(params: {
+  botToken: string;
+  runtime: RuntimeEnv;
+  accountId: string;
+}) {
+  const { botToken, runtime, accountId } = params;
+  const result = await fetchSlackScopes(botToken, 15_000);
+  if (!result.ok) {
+    runtime.error?.(
+      `[${accountId}] slack scope check failed: ${result.error ?? "unknown error"}. If the bot reacts but never replies, verify OAuth scopes and Event Subscriptions, especially bot event "${SLACK_REQUIRED_BOT_EVENTS[0]}".`,
+    );
+    return;
+  }
+  const current = new Set((result.scopes ?? []).map((scope) => scope.trim()).filter(Boolean));
+  const missing = SLACK_REQUIRED_BOT_SCOPES.filter((scope) => !current.has(scope));
+  if (missing.length === 0) {
+    return;
+  }
+  runtime.error?.(
+    `[${accountId}] slack bot token is missing required scopes: ${missing.join(", ")} (source=${result.source ?? "unknown"}). Socket mode may connect while inbound events still fail or replies degrade. Also verify Event Subscriptions include: ${SLACK_REQUIRED_BOT_EVENTS.join(", ")}.`,
+  );
 }
 
 function publishSlackConnectedStatus(setStatus?: (next: Record<string, unknown>) => void) {
@@ -315,6 +340,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
     );
   }
+
+  await diagnoseSlackPermissions({
+    botToken,
+    runtime,
+    accountId: account.accountId,
+  });
 
   const ctx = createSlackMonitorContext({
     cfg,

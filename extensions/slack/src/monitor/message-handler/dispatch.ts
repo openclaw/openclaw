@@ -83,6 +83,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+  console.error(
+    `[slack-trace] dispatch start channel=${message.channel} ts=${message.ts ?? "-"} replyTarget=${prepared.replyTarget} isDirect=${prepared.isDirectMessage} isRoomish=${prepared.isRoomish} replyToMode=${prepared.replyToMode} routeAgent=${route.agentId ?? "-"} sessionKey=${prepared.ctxPayload.SessionKey ?? "-"}`,
+  );
 
   // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
@@ -234,6 +237,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+    console.error(
+      `[slack-trace] dispatch deliverNormally channel=${message.channel} ts=${message.ts ?? "-"} replyThreadTs=${replyThreadTs ?? "-"} payloadHasMedia=${hasMedia(payload)}`,
+    );
     await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
@@ -250,6 +256,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       usedReplyThreadTs ??= replyThreadTs;
     }
     replyPlan.markSent();
+    console.error(
+      `[slack-trace] dispatch deliverNormally success channel=${message.channel} ts=${message.ts ?? "-"} replyThreadTs=${replyThreadTs ?? "-"}`,
+    );
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
@@ -441,31 +450,62 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }
         };
 
-  const { queuedFinal, counts } = await dispatchInboundMessage({
-    ctx: prepared.ctxPayload,
-    cfg,
-    dispatcher,
-    replyOptions: {
-      ...replyOptions,
-      skillFilter: prepared.channelConfig?.skills,
-      hasRepliedRef,
-      disableBlockStreaming: useStreaming
-        ? true
-        : typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
-      onModelSelected,
-      onPartialReply: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
+  const dispatchStartedAt = Date.now();
+  console.error(
+    `[slack-trace] dispatchInboundMessage enter channel=${message.channel} ts=${message.ts ?? "-"} sessionKey=${prepared.ctxPayload.SessionKey ?? "-"}`,
+  );
+  let queuedFinal: boolean;
+  let counts: { final?: number; block?: number };
+  try {
+    const result = await dispatchInboundMessage({
+      ctx: prepared.ctxPayload,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        ...replyOptions,
+        skillFilter: prepared.channelConfig?.skills,
+        hasRepliedRef,
+        disableBlockStreaming: useStreaming
+          ? true
+          : typeof account.config.blockStreaming === "boolean"
+            ? !account.config.blockStreaming
+            : undefined,
+        onModelSelected,
+        onPartialReply: useStreaming
           ? undefined
-          : async (payload) => {
-              updateDraftFromPartial(payload.text);
-            },
-      onAssistantMessageStart: onDraftBoundary,
-      onReasoningEnd: onDraftBoundary,
-    },
-  });
+          : !previewStreamingEnabled
+            ? undefined
+            : async (payload) => {
+                console.error(
+                  `[slack-trace] dispatchInboundMessage partial channel=${message.channel} ts=${message.ts ?? "-"} text_len=${payload.text?.length ?? 0}`,
+                );
+                updateDraftFromPartial(payload.text);
+              },
+        onAssistantMessageStart: async () => {
+          console.error(
+            `[slack-trace] dispatchInboundMessage assistant-start channel=${message.channel} ts=${message.ts ?? "-"}`,
+          );
+          await onDraftBoundary?.();
+        },
+        onReasoningEnd: async () => {
+          console.error(
+            `[slack-trace] dispatchInboundMessage reasoning-end channel=${message.channel} ts=${message.ts ?? "-"}`,
+          );
+          await onDraftBoundary?.();
+        },
+      },
+    });
+    queuedFinal = result.queuedFinal;
+    counts = result.counts;
+    console.error(
+      `[slack-trace] dispatchInboundMessage exit channel=${message.channel} ts=${message.ts ?? "-"} queuedFinal=${queuedFinal} finalCount=${counts.final ?? 0} blockCount=${counts.block ?? 0} elapsedMs=${Date.now() - dispatchStartedAt}`,
+    );
+  } catch (err) {
+    console.error(
+      `[slack-trace] dispatchInboundMessage error channel=${message.channel} ts=${message.ts ?? "-"} elapsedMs=${Date.now() - dispatchStartedAt}: ${String(err)}`,
+    );
+    throw err;
+  }
   await draftStream.flush();
   draftStream.stop();
   markDispatchIdle();

@@ -75,11 +75,28 @@ export function isAbortRequestText(text?: string, options?: CommandNormalizeOpti
     return false;
   }
   const normalizedLower = normalized.toLowerCase();
-  return (
+  // Check the full text first (original behavior)
+  if (
     normalizedLower === "/stop" ||
     normalizeAbortTriggerText(normalizedLower) === "/stop" ||
     isAbortTrigger(normalizedLower)
-  );
+  ) {
+    return true;
+  }
+  // Also check each line individually — debounce may merge duplicate
+  // events (message + app_mention) into "stop\nstop" which doesn't
+  // match any single trigger after normalization.
+  if (normalizedLower.includes("\n")) {
+    return normalizedLower.split("\n").some((line) => {
+      const trimmed = line.trim();
+      return (
+        trimmed === "/stop" ||
+        normalizeAbortTriggerText(trimmed) === "/stop" ||
+        isAbortTrigger(trimmed)
+      );
+    });
+  }
+  return false;
 }
 
 export function getAbortMemory(key: string): boolean | undefined {
