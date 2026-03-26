@@ -19,7 +19,7 @@ openclaw_ollama_host: ""
 
 openclaw_identity_name: "OpenClaw"
 openclaw_identity_theme: "AI operations assistant"
-openclaw_default_model: "openai/gpt-4o"
+openclaw_default_model: "openai/gpt-5.4-mini"
 openclaw_log_level: "info"
 openclaw_log_file: "/tmp/openclaw/openclaw.log"
 
