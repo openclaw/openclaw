@@ -137,18 +137,26 @@ function canonicalizeFallbacks(params: {
   imageModelRaw: string;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   agentDefaultProvider: string;
+  /** Pre-computed image model provider (avoids re-resolving imageModelRaw with wrong context) */
+  imageModelProvider?: string;
 }): string[] {
-  const { fallbacks, imageModelRaw, aliasIndex, agentDefaultProvider } = params;
+  const { fallbacks, imageModelRaw, aliasIndex, agentDefaultProvider, imageModelProvider } = params;
 
-  // Resolve the image model to get its provider
-  const imageModelResolved = resolveModelRefFromString({
-    raw: imageModelRaw.trim(),
-    defaultProvider: agentDefaultProvider,
-    aliasIndex,
-  });
-
-  // Use the image model's provider as the default for resolving fallbacks
-  const fallbackDefaultProvider = imageModelResolved?.ref.provider ?? agentDefaultProvider;
+  // Use the pre-computed imageModelProvider if available (avoids losing inferred provider context)
+  // Otherwise, resolve the image model to get its provider
+  let fallbackDefaultProvider: string;
+  if (imageModelProvider) {
+    // Use the pre-computed provider directly (already inferred from fallback chain or primary)
+    fallbackDefaultProvider = imageModelProvider;
+  } else {
+    // Fallback: resolve imageModelRaw to derive provider (may lose context for providerless primaries)
+    const imageModelResolved = resolveModelRefFromString({
+      raw: imageModelRaw.trim(),
+      defaultProvider: agentDefaultProvider,
+      aliasIndex,
+    });
+    fallbackDefaultProvider = imageModelResolved?.ref.provider ?? agentDefaultProvider;
+  }
 
   return fallbacks
     .map((fb) => {
@@ -1611,6 +1619,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 imageModelRaw: imageModelPrimary,
                 aliasIndex: imageFallbackAliasIndex,
                 agentDefaultProvider: defaultProvider,
+                imageModelProvider,
               });
             } else {
               imageModelFallbacks = [];
@@ -1637,6 +1646,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 imageModelRaw: imageModelPrimary,
                 aliasIndex: imageFallbackAliasIndex,
                 agentDefaultProvider: defaultProvider,
+                imageModelProvider,
               });
             } else {
               imageModelFallbacks = [];
@@ -1665,6 +1675,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               imageModelRaw: imageModelPrimary,
               aliasIndex: imageFallbackAliasIndex,
               agentDefaultProvider: defaultProvider,
+              imageModelProvider,
             });
           } else {
             imageModelFallbacks = [];
