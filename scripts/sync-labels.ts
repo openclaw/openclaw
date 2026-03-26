@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 type RepoLabel = {
   name: string;
   color?: string;
+  description?: string;
 };
 
 const COLOR_BY_PREFIX = new Map<string, string>([
@@ -15,6 +16,22 @@ const COLOR_BY_PREFIX = new Map<string, string>([
   ["cli", "f9d0c4"],
   ["gateway", "d4c5f9"],
   ["size", "fbca04"],
+]);
+
+const EXTRA_LABEL_METADATA = new Map<
+  string,
+  {
+    color: string;
+    description?: string;
+  }
+>([
+  [
+    "beta-blocker",
+    {
+      color: "D93F0B",
+      description: "Plugin beta-release blocker pending stable cutoff triage",
+    },
+  ],
 ]);
 
 const configPath = resolve(".github/labeler.yml");
@@ -44,12 +61,21 @@ if (!missing.length) {
 }
 
 for (const label of missing) {
-  const color = pickColor(label);
-  execFileSync(
-    "gh",
-    ["api", "-X", "POST", `repos/${repo}/labels`, "-f", `name=${label}`, "-f", `color=${color}`],
-    { stdio: "inherit" },
-  );
+  const metadata = resolveLabelMetadata(label);
+  const args = [
+    "api",
+    "-X",
+    "POST",
+    `repos/${repo}/labels`,
+    "-f",
+    `name=${label}`,
+    "-f",
+    `color=${metadata.color}`,
+  ];
+  if (metadata.description) {
+    args.push("-f", `description=${metadata.description}`);
+  }
+  execFileSync("gh", args, { stdio: "inherit" });
   console.log(`Created label: ${label}`);
 }
 
@@ -73,12 +99,13 @@ function extractLabelNames(contents: string): string[] {
   return labels;
 }
 
-function pickColor(label: string): string {
-  if (label === "beta-blocker") {
-    return "D93F0B";
+function resolveLabelMetadata(label: string): { color: string; description?: string } {
+  const extraMetadata = EXTRA_LABEL_METADATA.get(label);
+  if (extraMetadata) {
+    return extraMetadata;
   }
   const prefix = label.includes(":") ? label.split(":", 1)[0].trim() : label.trim();
-  return COLOR_BY_PREFIX.get(prefix) ?? "ededed";
+  return { color: COLOR_BY_PREFIX.get(prefix) ?? "ededed" };
 }
 
 function resolveRepo(): string {

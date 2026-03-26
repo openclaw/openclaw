@@ -220,8 +220,6 @@ jobs:
             }
 
             const labelName = "beta-blocker";
-            const labelColor = "D93F0B";
-            const labelDescription = "Plugin beta-release blocker pending stable cutoff triage";
             const matchesBetaBlocker = /\bbeta blocker\b/i.test(pullRequest.title ?? "");
 
             try {
@@ -234,13 +232,8 @@ jobs:
               if (error?.status !== 404) {
                 throw error;
               }
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName,
-                color: labelColor,
-                description: labelDescription,
-              });
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
             }
 
             const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
@@ -481,8 +474,6 @@ jobs:
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
             const betaBlockerLabel = "beta-blocker";
             const labelColor = "b76e79";
-            const betaBlockerLabelColor = "D93F0B";
-            const betaBlockerLabelDescription = "Plugin beta-release blocker pending stable cutoff triage";
             // const trustedLabel = "trusted-contributor";
             // const experiencedLabel = "experienced-contributor";
             // const trustedThreshold = 4;
@@ -512,24 +503,19 @@ jobs:
               }
             }
 
-            async function ensureBetaBlockerLabel() {
+            async function hasBetaBlockerLabel() {
               try {
                 await github.rest.issues.getLabel({
                   owner,
                   repo,
                   name: betaBlockerLabel,
                 });
+                return true;
               } catch (error) {
                 if (error?.status !== 404) {
                   throw error;
                 }
-                await github.rest.issues.createLabel({
-                  owner,
-                  repo,
-                  name: betaBlockerLabel,
-                  color: betaBlockerLabelColor,
-                  description: betaBlockerLabelDescription,
-                });
+                return false;
               }
             }
 
@@ -694,7 +680,7 @@ jobs:
             }
 
             await ensureSizeLabels();
-            await ensureBetaBlockerLabel();
+            const betaBlockerLabelExists = await hasBetaBlockerLabel();
 
             let page = 1;
             let processed = 0;
@@ -732,7 +718,9 @@ jobs:
 
                 await applySizeLabel(pullRequest, currentLabels, labelNames);
                 await applyContributorLabel(pullRequest, labelNames);
-                await applyBetaBlockerTitleLabel(pullRequest, labelNames);
+                if (betaBlockerLabelExists) {
+                  await applyBetaBlockerTitleLabel(pullRequest, labelNames);
+                }
 
                 processed += 1;
               }
@@ -845,8 +833,6 @@ jobs:
             }
 
             const labelName = "beta-blocker";
-            const labelColor = "D93F0B";
-            const labelDescription = "Plugin beta-release blocker pending stable cutoff triage";
             const matchesBetaBlocker = /^beta blocker:/i.test(issue.title ?? "");
 
             try {
@@ -859,13 +845,8 @@ jobs:
               if (error?.status !== 404) {
                 throw error;
               }
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName,
-                color: labelColor,
-                description: labelDescription,
-              });
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
             }
 
             const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {

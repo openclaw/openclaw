@@ -26,7 +26,10 @@ body:
     id: beta_blocker
     attributes:
       label: Beta release blocker
-      description: Choose `Yes` only if this blocks plugin compatibility during the current beta release window.
+      description: >
+        Choose `Yes` only if this blocks plugin compatibility during the current beta release window.
+        Selecting `Yes` does not apply the label automatically. You must also rename the issue title
+        to `Beta blocker: <plugin-name> - <summary>` for the automation to apply the `beta-blocker` label.
       options:
         - "No"
         - "Yes"
