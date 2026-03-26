@@ -357,14 +357,46 @@ export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store, match } = resolveGatewaySessionStoreLookup({
+  const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg,
     key: sessionKey.trim(),
     canonicalKey,
     agentId,
   });
-  const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
-  return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
+  const target = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: sessionKey.trim(),
+    store,
+  });
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = freshestMatch?.key !== canonicalKey ? freshestMatch?.key : undefined;
+  return { cfg, storePath, store, entry: freshestMatch?.entry, canonicalKey, legacyKey };
+}
+
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): { key: string; entry: SessionEntry } | undefined {
+  const matches = storeKeys
+    .map((key) => {
+      const entry = store[key];
+      return entry ? { key, entry } : undefined;
+    })
+    .filter((match): match is { key: string; entry: SessionEntry } => match !== undefined);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return [...matches].toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+}
+
+export function resolveFreshestSessionEntryFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): SessionEntry | undefined {
+  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
 /**

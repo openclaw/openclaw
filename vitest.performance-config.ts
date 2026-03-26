@@ -10,20 +10,37 @@ const isDisabled = (value: string | undefined): boolean => {
   return normalized === "0" || normalized === "false";
 };
 
-export function loadVitestExperimentalConfig(env: EnvMap = process.env): {
+const isWindowsEnv = (env: EnvMap, platform: NodeJS.Platform): boolean => {
+  if (platform === "win32") {
+    return true;
+  }
+  const runnerOs = env.RUNNER_OS?.trim().toLowerCase();
+  return runnerOs === "windows";
+};
+
+type VitestExperimentalConfig = {
   experimental?: {
     fsModuleCache?: true;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   };
-} {
+};
+
+export function loadVitestExperimentalConfig(
+  env: EnvMap = process.env,
+  platform: NodeJS.Platform = process.platform,
+): VitestExperimentalConfig {
   const experimental: {
     fsModuleCache?: true;
     importDurations?: { print: true };
     printImportBreakdown?: true;
   } = {};
+  const windowsEnv = isWindowsEnv(env, platform);
 
-  if (!isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
+  if (!windowsEnv && !isDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
+    experimental.fsModuleCache = true;
+  }
+  if (windowsEnv && isEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE)) {
     experimental.fsModuleCache = true;
   }
   if (isEnabled(env.OPENCLAW_VITEST_IMPORT_DURATIONS)) {

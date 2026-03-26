@@ -16,6 +16,7 @@ vi.mock("./loader.js", () => ({
 }));
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 
 function makeTool(name: string) {
   return {
@@ -98,6 +99,7 @@ describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
+    ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
