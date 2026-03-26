@@ -259,22 +259,8 @@
           "deny": ["gateway", "nodes", "browser", "canvas", "message", "cron"],
           "exec": {
             "host": "gateway",
-            "security": "allowlist",
-            "ask": "off",
-            "safeBins": [
-              "node",
-              "npm",
-              "npx",
-              "pnpm",
-              "python3",
-              "playwright",
-              "tsc",
-              "next",
-              "vitest",
-              "eslint",
-              "prettier",
-              "jq"
-            ]
+            "security": "full",
+            "ask": "off"
           }
         }
       }

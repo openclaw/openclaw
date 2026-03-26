@@ -56,12 +56,18 @@ const ComposerContext = createContext<ComposerContextValue | null>(null);
 **UI components consume the interface, not the implementation:**
 
 ```tsx
+function useComposerContext() {
+  const ctx = useContext(ComposerContext);
+  if (!ctx) throw new Error("useComposerContext must be used within a ComposerProvider");
+  return ctx;
+}
+
 function ComposerInput() {
   const {
     state,
     actions: { update },
     meta,
-  } = use(ComposerContext);
+  } = useComposerContext();
 
   // This component works with ANY provider that implements the interface
   return (

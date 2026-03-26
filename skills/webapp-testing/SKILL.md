@@ -23,7 +23,7 @@ User task → Is it static HTML?
     │         └─ Fails/Incomplete → Treat as dynamic (below)
     │
     └─ No (dynamic webapp) → Is the server already running?
-        ├─ No → Run: python scripts/with_server.py --help
+        ├─ No → Run: python3 scripts/with_server.py --help
         │        Then use the helper + write simplified Playwright script
         │
         └─ Yes → Reconnaissance-then-action:
@@ -40,16 +40,16 @@ To start a server, run `--help` first, then use the helper:
 **Single server:**
 
 ```bash
-python scripts/with_server.py --server "npm run dev" --port 5173 -- python your_automation.py
+python3 scripts/with_server.py --server "npm run dev" --port 5173 -- python3 your_automation.py
 ```
 
 **Multiple servers (e.g., backend + frontend):**
 
 ```bash
-python scripts/with_server.py \
-  --server "cd backend && python server.py" --port 3000 \
+python3 scripts/with_server.py \
+  --server "cd backend && python3 server.py" --port 3000 \
   --server "cd frontend && npm run dev" --port 5173 \
-  -- python your_automation.py
+  -- python3 your_automation.py
 ```
 
 To create an automation script, include only Playwright logic (servers are managed automatically):
