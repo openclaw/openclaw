@@ -7,6 +7,7 @@ import {
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+import { memoryRuntime } from "./src/runtime-provider.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
 export {
   buildMemoryFlushPlan,
@@ -24,6 +25,7 @@ export default definePluginEntry({
   register(api) {
     api.registerMemoryPromptSection(buildPromptSection);
     api.registerMemoryFlushPlan(buildMemoryFlushPlan);
+    api.registerMemoryRuntime(memoryRuntime);
 
     api.registerTool(
       (ctx) =>

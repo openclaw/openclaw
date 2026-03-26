@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySyncProgressUpdate,
+} from "../memory/types.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -20,9 +25,43 @@ export type MemoryFlushPlanResolver = (params: {
   nowMs?: number;
 }) => MemoryFlushPlan | null;
 
+export type RegisteredMemorySearchManager = {
+  status(): MemoryProviderStatus;
+  probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
+  probeVectorAvailability(): Promise<boolean>;
+  sync?(params?: {
+    reason?: string;
+    force?: boolean;
+    sessionFiles?: string[];
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }): Promise<void>;
+  close?(): Promise<void>;
+};
+
+export type MemoryRuntimeBackendConfig = {
+  backend: "builtin" | "qmd";
+  qmd?: object;
+};
+
+export type MemoryPluginRuntime = {
+  getMemorySearchManager(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    purpose?: "default" | "status";
+  }): Promise<{
+    manager: RegisteredMemorySearchManager | null;
+    error?: string;
+  }>;
+  resolveMemoryBackendConfig(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+  }): MemoryRuntimeBackendConfig;
+};
+
 type MemoryPluginState = {
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
+  runtime?: MemoryPluginRuntime;
 };
 
 const memoryPluginState: MemoryPluginState = {};
@@ -57,14 +96,24 @@ export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefine
   return memoryPluginState.flushPlanResolver;
 }
 
+export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
+  memoryPluginState.runtime = runtime;
+}
+
+export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
+  return memoryPluginState.runtime;
+}
+
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
   memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.flushPlanResolver = state.flushPlanResolver;
+  memoryPluginState.runtime = state.runtime;
 }
 
 export function clearMemoryPluginState(): void {
   memoryPluginState.promptBuilder = undefined;
   memoryPluginState.flushPlanResolver = undefined;
+  memoryPluginState.runtime = undefined;
 }
 
 export const _resetMemoryPluginState = clearMemoryPluginState;

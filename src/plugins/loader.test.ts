@@ -12,8 +12,10 @@ import { __testing, clearPluginLoaderCache, loadOpenClawPlugins } from "./loader
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import {
   buildMemoryPromptSection,
+  getMemoryRuntime,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
+  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { createEmptyPluginRegistry } from "./registry.js";
@@ -1064,6 +1066,15 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       systemPrompt: "active",
       relativePath: "memory/active.md",
     }));
+    const activeRuntime = {
+      async getMemorySearchManager() {
+        return { manager: null, error: "active" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    };
+    registerMemoryRuntime(activeRuntime);
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -1080,6 +1091,14 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
             systemPrompt: "snapshot",
             relativePath: "memory/snapshot.md",
           }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "snapshot" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "qmd", qmd: {} };
+            },
+          });
         },
       };`,
     });
@@ -1103,6 +1122,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       "active memory section",
     ]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/active.md");
+    expect(getMemoryRuntime()).toBe(activeRuntime);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
@@ -1123,6 +1143,14 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
             systemPrompt: "failed",
             relativePath: "memory/failed.md",
           }));
+          api.registerMemoryRuntime({
+            async getMemorySearchManager() {
+              return { manager: null, error: "failed" };
+            },
+            resolveMemoryBackendConfig() {
+              return { backend: "builtin" };
+            },
+          });
           throw new Error("memory register failed");
         },
       };`,
@@ -1144,6 +1172,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
   });
 
   it("throws when activate:false is used without cache:false", () => {
@@ -3415,14 +3444,24 @@ describe("clearPluginLoaderCache", () => {
       systemPrompt: "stale",
       relativePath: "memory/stale.md",
     }));
+    registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "stale memory section",
     ]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
+    expect(getMemoryRuntime()).toBeDefined();
 
     clearPluginLoaderCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
+    expect(getMemoryRuntime()).toBeUndefined();
   });
 });
