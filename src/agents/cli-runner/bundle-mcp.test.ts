@@ -51,6 +51,7 @@ describe("prepareCliBundleMcpConfig", () => {
         mcpServers?: Record<string, { args?: string[] }>;
       };
       expect(raw.mcpServers?.bundleProbe?.args).toEqual([await fs.realpath(serverPath)]);
+      expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
 
       await prepared.cleanup?.();
     } finally {
