@@ -111,9 +111,7 @@ let createDiscordNativeCommandForTesting: typeof createDiscordNativeCommand | un
 let runDiscordGatewayLifecycleForTesting: typeof runDiscordGatewayLifecycle | undefined;
 let createDiscordGatewayPluginForTesting: typeof createDiscordGatewayPlugin | undefined;
 let createDiscordGatewaySupervisorForTesting: typeof createDiscordGatewaySupervisor | undefined;
-let loadDiscordVoiceRuntimeForTesting:
-  | (() => Promise<DiscordVoiceRuntimeModule>)
-  | undefined;
+let loadDiscordVoiceRuntimeForTesting: (() => Promise<DiscordVoiceRuntimeModule>) | undefined;
 let loadDiscordProviderSessionRuntimeForTesting:
   | (() => Promise<DiscordProviderSessionRuntimeModule>)
   | undefined;
@@ -652,8 +650,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerSetting: discordCfg.commands?.native,
     globalSetting: cfg.commands?.native,
   });
-  const nativeSkillsEnabled = (resolveNativeSkillsEnabledForTesting ?? resolveNativeSkillsEnabled)(
-    {
+  const nativeSkillsEnabled = (resolveNativeSkillsEnabledForTesting ?? resolveNativeSkillsEnabled)({
     providerId: "discord",
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
@@ -949,13 +946,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
-    gatewaySupervisor = (createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor)(
-      {
+    gatewaySupervisor = (
+      createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor
+    )({
       client,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
       runtime,
-      },
-    );
+    });
 
     const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = gatewaySupervisor.emitter;

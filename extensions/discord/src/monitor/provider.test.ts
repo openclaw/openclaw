@@ -136,16 +136,16 @@ describe("monitorDiscordProvider", () => {
   beforeEach(() => {
     resetDiscordProviderMonitorMocks();
     providerTesting.setFetchDiscordApplicationId(async () => "app-1");
-    providerTesting.setCreateDiscordNativeCommand(
-      ((...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
+    providerTesting.setCreateDiscordNativeCommand(((
+      ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
         | ((...inner: infer P) => unknown)
         | undefined
         ? P
-        : never) =>
-        createDiscordNativeCommandMock(
-          ...(args as Parameters<typeof createDiscordNativeCommandMock>),
-        )) as NonNullable<Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0]>,
-    );
+        : never
+    ) =>
+      createDiscordNativeCommandMock(
+        ...(args as Parameters<typeof createDiscordNativeCommandMock>),
+      )) as NonNullable<Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0]>);
     providerTesting.setRunDiscordGatewayLifecycle((...args) =>
       monitorLifecycleMock(...(args as Parameters<typeof monitorLifecycleMock>)),
     );
@@ -186,14 +186,24 @@ describe("monitorDiscordProvider", () => {
         getPlugin: (name: string) => clientGetPluginMock(name),
       } as never;
     });
-    providerTesting.setGetPluginCommandSpecs((provider?: string) => getPluginCommandSpecsMock(provider));
-    providerTesting.setResolveDiscordAccount((...args) => resolveDiscordAccountMock(...args) as never);
-    providerTesting.setResolveNativeCommandsEnabled((...args) => resolveNativeCommandsEnabledMock(...args));
-    providerTesting.setResolveNativeSkillsEnabled((...args) => resolveNativeSkillsEnabledMock(...args));
+    providerTesting.setGetPluginCommandSpecs((provider?: string) =>
+      getPluginCommandSpecsMock(provider),
+    );
+    providerTesting.setResolveDiscordAccount(
+      (...args) => resolveDiscordAccountMock(...args) as never,
+    );
+    providerTesting.setResolveNativeCommandsEnabled((...args) =>
+      resolveNativeCommandsEnabledMock(...args),
+    );
+    providerTesting.setResolveNativeSkillsEnabled((...args) =>
+      resolveNativeSkillsEnabledMock(...args),
+    );
     providerTesting.setListNativeCommandSpecsForConfig((...args) =>
       listNativeCommandSpecsForConfigMock(...args),
     );
-    providerTesting.setListSkillCommandsForAgents((...args) => listSkillCommandsForAgentsMock(...args) as never);
+    providerTesting.setListSkillCommandsForAgents(
+      (...args) => listSkillCommandsForAgentsMock(...args) as never,
+    );
     providerTesting.setIsVerbose(() => isVerboseMock());
     providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
