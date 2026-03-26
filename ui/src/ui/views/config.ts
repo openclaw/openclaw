@@ -5,7 +5,6 @@ import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
-  countSensitiveConfigValues,
   humanize,
   isSensitiveConfigPath,
   pathKey,
@@ -1075,12 +1074,6 @@ export function renderConfig(props: ConfigProps) {
                 }
               `
                 : (() => {
-                    const sensitiveCount = countSensitiveConfigValues(
-                      props.formValue,
-                      [],
-                      props.uiHints,
-                    );
-                    const blurred = sensitiveCount > 0 && !cvs.rawRevealed;
                     return html`
                     ${
                       formUnsafe
@@ -1095,40 +1088,14 @@ export function renderConfig(props: ConfigProps) {
                     <div class="field config-raw-field">
                       <span style="display:flex;align-items:center;gap:8px;">
                         Raw config (JSON/JSON5)
-                        ${
-                          sensitiveCount > 0
-                            ? html`
-                              <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
-                              <button
-                                class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                title=${
-                                  blurred ? "Reveal sensitive values" : "Hide sensitive values"
-                                }
-                                aria-label="Toggle raw config redaction"
-                                aria-pressed=${!blurred}
-                                @click=${() => {
-                                  cvs.rawRevealed = !cvs.rawRevealed;
-                                  requestUpdate();
-                                }}
-                              >
-                                ${blurred ? icons.eyeOff : icons.eye}
-                              </button>
-                            `
-                            : nothing
-                        }
                       </span>
-                      <textarea
-                        class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
-                        .value=${blurred ? "" : props.raw}
-                        ?readonly=${blurred}
-                        @input=${(e: Event) => {
-                          if (blurred) {
-                            return;
-                          }
-                          props.onRawChange((e.target as HTMLTextAreaElement).value);
-                        }}
-                      ></textarea>
+              <textarea
+                placeholder="Raw config (JSON/JSON5)"
+                .value=${props.raw}
+                @input=${(e: Event) => {
+                  props.onRawChange((e.target as HTMLTextAreaElement).value);
+                }}
+              ></textarea>
                     </div>
                   `;
                   })()
