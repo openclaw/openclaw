@@ -26,6 +26,11 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveThinkingDefault,
     resolveAgentTimeoutMs,
     ensureAgentWorkspace,
+    abort(
+      _params: import("./types.js").AgentAbortParams,
+    ): Promise<import("./types.js").AgentAbortResult> {
+      throw new Error("Plugin runtime agent.abort is only available during a gateway request.");
+    },
   } satisfies Omit<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session"> &
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedPiAgent" | "session">>;
 
