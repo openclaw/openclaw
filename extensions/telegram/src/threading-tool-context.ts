@@ -10,7 +10,7 @@ export function buildTelegramThreadingToolContext(params: {
   accountId?: string | null;
   context: ChannelThreadingContext;
   hasRepliedRef?: { value: boolean };
-}): ChannelThreadingToolContext | undefined {
+}): ChannelThreadingToolContext {
   // Extract thread ID from MessageThreadId (forum topics only)
   const threadId = params.context.MessageThreadId;
 
@@ -18,7 +18,7 @@ export function buildTelegramThreadingToolContext(params: {
   // For DMs, use the raw chat ID directly.
   const toValue = params.context.To ?? "";
   const parsedTo = parseTelegramTarget(toValue);
-  const currentChannelId = parsedTo.chatId;
+  const currentChannelId = parsedTo.chatId || undefined;
 
   // Always return toolContext with currentChannelId and hasRepliedRef
   // Only include currentThreadTs for forum topics (when MessageThreadId exists)
