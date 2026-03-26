@@ -321,3 +321,9 @@ export async function installGaxiosFetchCompat(): Promise<void> {
     throw err;
   }
 }
+
+export const __testing = {
+  resetGaxiosFetchCompatForTests(): void {
+    installState = "not-installed";
+  },
+};

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runPreparedReply } from "./get-reply-run.js";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -89,10 +88,20 @@ vi.mock("./typing-mode.js", () => ({
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
-import { runReplyAgent } from "./agent-runner.runtime.js";
-import { routeReply } from "./route-reply.runtime.js";
-import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { resolveTypingMode } from "./typing-mode.js";
+let runPreparedReply: typeof import("./get-reply-run.js").runPreparedReply;
+let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
+let routeReply: typeof import("./route-reply.runtime.js").routeReply;
+let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
+let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+
+async function loadFreshGetReplyRunModuleForTest() {
+  vi.resetModules();
+  ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+  ({ routeReply } = await import("./route-reply.runtime.js"));
+  ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+  ({ resolveTypingMode } = await import("./typing-mode.js"));
+  ({ runPreparedReply } = await import("./get-reply-run.js"));
+}
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -124,10 +133,14 @@ function baseParams(
     sessionCfg: {},
     commandAuthorized: true,
     command: {
+      surface: "slack",
+      channel: "slack",
       isAuthorizedSender: true,
       abortKey: "session-key",
       ownerList: [],
       senderIsOwner: false,
+      rawBodyNormalized: "",
+      commandBodyNormalized: "",
     } as never,
     commandSource: "",
     allowTextCommands: true,
@@ -167,8 +180,9 @@ function baseParams(
 }
 
 describe("runPreparedReply media-only handling", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    await loadFreshGetReplyRunModuleForTest();
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -248,10 +262,13 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
         },
         command: {
+          surface: "webchat",
           isAuthorizedSender: true,
           abortKey: "session-key",
           ownerList: [],
           senderIsOwner: false,
+          rawBodyNormalized: "",
+          commandBodyNormalized: "",
           channel: "webchat",
           from: undefined,
           to: undefined,

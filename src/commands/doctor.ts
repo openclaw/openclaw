@@ -173,7 +173,7 @@ export async function doctorCommand(
             ? true
             : options.nonInteractive === true
               ? false
-              : await prompter.confirmRepair({
+              : await prompter.confirmAutoFix({
                   message: "Generate and configure a gateway token now?",
                   initialValue: true,
                 });

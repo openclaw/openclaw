@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -58,10 +58,13 @@ async function createWorkProfileWithConfig(params: {
 }
 
 describe("BrowserProfilesService", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ resolveBrowserConfig } = await import("./config.js"));
     ({ createBrowserProfilesService } = await import("./profiles-service.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
   });
 

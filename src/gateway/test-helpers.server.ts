@@ -79,6 +79,7 @@ const GATEWAY_TEST_ENV_KEYS = [
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
@@ -271,6 +272,19 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
+  tempControlUiRoot = path.join(tempHome, ".openclaw-test-control-ui");
+  await fs.rm(tempControlUiRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 25,
+  });
+  await fs.mkdir(tempControlUiRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(tempControlUiRoot, "index.html"),
+    "<!doctype html><title>openclaw-test-control-ui</title>\n",
+    "utf-8",
+  );
   setTestConfigRoot(tempConfigRoot);
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -341,6 +355,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
+  tempControlUiRoot = undefined;
   if (options.restoreEnv) {
     suiteConfigRootSeq = 0;
   }
@@ -468,6 +483,17 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  if (
+    resolvedOpts?.controlUiEnabled === true &&
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1" &&
+    tempControlUiRoot &&
+    typeof (testState.gatewayControlUi as { root?: unknown } | undefined)?.root !== "string"
+  ) {
+    testState.gatewayControlUi = {
+      ...testState.gatewayControlUi,
+      root: tempControlUiRoot,
+    };
+  }
   return await mod.startGatewayServer(port, resolvedOpts);
 }
 
@@ -814,7 +840,7 @@ export async function connectReq(
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
   const res = await connectReq(ws, opts);
-  expect(res.ok).toBe(true);
+  expect(res.ok, JSON.stringify(res)).toBe(true);
   expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
   return res.payload as { type: "hello-ok" };
 }
