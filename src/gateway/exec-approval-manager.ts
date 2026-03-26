@@ -5,7 +5,7 @@ import type {
 } from "../infra/exec-approvals.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
-const RESOLVED_ENTRY_GRACE_MS = 15_000;
+export const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
@@ -68,8 +68,11 @@ export class ExecApprovalManager {
         return existing.promise;
       }
       // Resolved entries are kept briefly for late waitDecision callers (grace window).
-      // Drop the stale entry so a new exec.approval.request can reuse the same id immediately.
-      this.pending.delete(record.id);
+      // Do not replace them: reusing the same id would break late awaitDecision (wrong promise),
+      // getSnapshot, and consumeAllowOnce for the prior resolution.
+      throw new Error(
+        "approval id still reserved for previous resolution (wait for grace window or use a new id)",
+      );
     }
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
     let rejectPromise: (err: Error) => void;

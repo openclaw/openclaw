@@ -130,6 +130,17 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (existingSnapshot && existingSnapshot.resolvedAtMs !== undefined) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "approval id still reserved for previous resolution (grace window)",
+          ),
+        );
+        return;
+      }
       const request = {
         command: sanitizeExecApprovalDisplayText(effectiveCommandText),
         commandPreview:
