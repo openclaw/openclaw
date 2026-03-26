@@ -5,7 +5,11 @@ import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId, restoreSecretRefId } from "./redact-snapshot.secret-ref.js";
+import {
+  isSecretRefShape,
+  redactSecretRefId,
+  restoreSecretRefId,
+} from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -674,7 +678,13 @@ function restoreRedactedValuesWithLookup(
               redactedSentinel: REDACTED_SENTINEL,
             });
           } else {
-            result[key] = restoreRedactedValuesWithLookup(value, orig[key], lookup, candidate, hints);
+            result[key] = restoreRedactedValuesWithLookup(
+              value,
+              orig[key],
+              lookup,
+              candidate,
+              hints,
+            );
           }
         }
         break;
