@@ -29,6 +29,9 @@ type ClaudeCliProjectEntry = {
   };
 };
 
+type ClaudeCliMessage = NonNullable<ClaudeCliProjectEntry["message"]>;
+type ClaudeCliUsage = ClaudeCliMessage["usage"];
+
 type TranscriptLikeMessage = Record<string, unknown>;
 
 function resolveHistoryHomeDir(homeDir?: string): string {
@@ -64,7 +67,7 @@ function resolveTimestampMs(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function resolveClaudeCliUsage(raw: ClaudeCliProjectEntry["message"]["usage"]) {
+function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
