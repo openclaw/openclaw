@@ -22,7 +22,7 @@ internal interface IVoiceWakeForwarder
 }
 
 /// <summary>
-/// Routes voice-recognized transcripts to the gateway agent, adding a voice origin prefix.
+/// Routes voice-recognised transcripts to the gateway agent, adding a voice origin prefix.
 /// </summary>
 internal sealed class VoiceWakeForwarder : IVoiceWakeForwarder
 {

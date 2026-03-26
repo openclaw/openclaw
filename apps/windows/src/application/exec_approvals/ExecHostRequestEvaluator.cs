@@ -19,7 +19,7 @@ internal sealed record ExecHostRequest
 // Wire-format error returned to the exec host.
 internal sealed record ExecHostError(string Code, string Message, string? Reason = null);
 
-// Validated, normalized form of an exec request after ValidateRequest succeeds.
+// Validated, normalised form of an exec request after ValidateRequest succeeds.
 internal sealed record ExecHostValidatedRequest(
     IReadOnlyList<string> Command,
     string DisplayCommand);

@@ -69,7 +69,7 @@ internal sealed class WizardCliException(string message) : Exception(message)
     internal static WizardCliException DecodeError(string msg)
         => new(msg);
     internal static readonly WizardCliException Cancelled
-        = new("Wizard canceled");
+        = new("Wizard cancelled");
 }
 
 internal static class WizardCommand
@@ -212,7 +212,7 @@ internal static class WizardCommand
 
                 if (status == "cancelled")
                 {
-                    Console.WriteLine("Wizard canceled.");
+                    Console.WriteLine("Wizard cancelled.");
                     return;
                 }
                 if (status == "error" || (nextResult.Done && nextResult.Error != null))

@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Windows 10 version 1903 (build 19041) or later
-- .NET 10 SDK
+- .NET 9 SDK
 - Windows App SDK 1.6+
 - Visual Studio 2022 17.8+ or VS Code with C# Dev Kit
 
@@ -74,11 +74,13 @@ Layer violations are enforced by `tests/architecture/LayerDependencyTests.cs` us
 3. Run `dotnet test` and confirm all tests pass
 4. Run the architecture tests and confirm zero violations
 5. Update `KNOWN_ISSUES.md` if introducing known limitations
-6. Open a PR describing your change
+6. Open a PR referencing issue #75
 
 ## Known Limitations
 
 See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the full list, including:
 
-- **Voice Wake**: Porcupine hotword detection is a stub — Talk Mode STT works
-- **Canvas eval**: `canvas.eval` executes arbitrary JS inside WebView2; sandboxing review recommended before production use
+- **SPIKE-002**: Ed25519 signing partial — NSec wiring deferred to M-2
+- **SPIKE-003**: mDNS gateway discovery is a stub — use manual URI entry
+- **SPIKE-004**: Porcupine voice wake is a stub — Talk Mode STT works
+- **OQ-002**: Canvas eval uses WebView2 virtual host (no Chrome Native Messaging sandbox)

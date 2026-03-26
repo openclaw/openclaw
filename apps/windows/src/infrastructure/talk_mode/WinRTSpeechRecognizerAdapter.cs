@@ -64,7 +64,7 @@ internal sealed class WinRTSpeechRecognizerAdapter : ISpeechRecognizer, IAsyncDi
 
         var myGeneration = _recognitionGeneration;
 
-        // Hypotheses carry no confidence in WinRT — pass 0f to match iOS partial behavior.
+        // Hypotheses carry no confidence in WinRT — pass 0f to match iOS partial behaviour.
         _recognizer!.HypothesisGenerated += async (_, args) =>
         {
             if (_recognitionGeneration != myGeneration) return;

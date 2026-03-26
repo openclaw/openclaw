@@ -213,7 +213,7 @@ internal sealed class WindowsGatewayProcessManager : IGatewayProcessManager, IHo
                 await AutoResolveConnectionModeAsync(port).ConfigureAwait(false);
 
                 // Monitor the attached gateway: if it exits, reset state and respawn.
-                // behavior even when we attached rather than started the process.
+                // behaviour even when we attached rather than started the process.
                 _ = MonitorAttachedGatewayAsync(port);
                 return true;
             }

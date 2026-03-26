@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <ApplicationIcon>Assets\openclaw.ico</ApplicationIcon>
+    <!-- TODO: restore once openclaw.ico is created -->
+    <!-- <ApplicationIcon>packaging\assets\openclaw.ico</ApplicationIcon> -->
     <AssemblyName>OpenClawWindows</AssemblyName>
     <RootNamespace>OpenClawWindows</RootNamespace>
     <Platforms>x64;ARM64</Platforms>

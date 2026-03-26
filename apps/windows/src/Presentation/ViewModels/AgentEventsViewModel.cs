@@ -18,7 +18,7 @@ internal sealed partial class AgentEventsViewModel : ObservableObject
     {
         _store = store;
         // GetForCurrentThread() throws COMException (REGDB_E_CLASSNOTREG) when WinRT COM is
-        // not initialized (unit-test context without Bootstrap). Treat that as "no dispatcher".
+        // not initialised (unit-test context without Bootstrap). Treat that as "no dispatcher".
         try { _dispatcher = DispatcherQueue.GetForCurrentThread(); }
         catch { _dispatcher = null; }
 

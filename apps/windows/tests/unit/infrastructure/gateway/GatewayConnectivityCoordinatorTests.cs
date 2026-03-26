@@ -9,7 +9,7 @@ using OpenClawWindows.Infrastructure.Gateway;
 
 namespace OpenClawWindows.Tests.Unit.Infrastructure.Gateway;
 
-// No macOS equivalent test — Windows-only tests based on GatewayConnectivityCoordinator.swift behavior.
+// No macOS equivalent test — Windows-only tests based on GatewayConnectivityCoordinator.swift behaviour.
 public sealed class GatewayConnectivityCoordinatorTests
 {
     private static readonly Uri DefaultUrl   = new("ws://127.0.0.1:18789");

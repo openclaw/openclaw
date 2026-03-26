@@ -105,7 +105,7 @@
         </Ellipse>
 
         <!-- ── Transcript display ─────────────────────────────────────────── -->
-        <!-- Shows recognized speech while listening — mirrors session transcript. -->
+        <!-- Shows recognised speech while listening — mirrors session transcript. -->
         <Border
             HorizontalAlignment="Stretch"
             VerticalAlignment="Bottom"

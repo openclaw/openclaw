@@ -14,7 +14,7 @@ internal sealed class GatewayTlsPinStore
         "OpenClaw", "tls_pins.json");
 
     private readonly SemaphoreSlim _lock = new(1, 1);
-    private Dictionary<string, string>? _pins;   // lazy-loaded; null until first access
+    private volatile Dictionary<string, string>? _pins;   // lazy-loaded; null until first access
 
     internal async Task<string?> LoadFingerprintAsync(string stableId, CancellationToken ct)
     {

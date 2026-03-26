@@ -15,7 +15,7 @@ namespace OpenClawWindows.Infrastructure.ExecApprovals;
 // Wire: 4-byte LE uint32 length prefix + UTF-8 JSON body (OQ-001).
 // Security model:
 //   type="request" → token equality check, then prompt handler
-//   type="exec"    → TTL 10 s + HMAC-SHA256(key=token, msg="{nonce}:{ts}:{requestJson}")
+//   type="exec"    → TTL 10 s + HMAC-SHA256(key=token, msg="{nonce}:{ts}:{requestJson}") + nonce cache
 //   peer identity  → RunAsClient impersonation (Windows equivalent of getpeereid)
 internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
 {
@@ -25,6 +25,11 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
     private const int TtlMs             = 10_000;
     private const int MaxFrameBytes     = 4 * 1024 * 1024; // 4 MB sanity guard (OQ-001)
     private const int DefaultExecTimeoutMs = 30_000;
+
+    // Nonce cache: prevents replay of exec frames within the TTL window.
+    // Entry: nonce → expiry timestamp (ms). Cleaned up on each exec request.
+    private readonly Dictionary<string, long> _usedNonces = new();
+    private readonly object _nonceLock = new();
 
     private static readonly JsonSerializerOptions CamelCase = new()
     {
@@ -221,8 +226,15 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
             return;
         }
 
-        // HMAC
+        // Nonce dedup — reject replays within the TTL window
         var nonce       = root.TryGetProperty("nonce",       out var np) ? np.GetString() ?? "" : "";
+        if (!TryConsumeNonce(nonce, nowMs))
+        {
+            await WriteExecErrorAsync(server, id, "INVALID_REQUEST", "nonce already used", "replay", ct);
+            return;
+        }
+
+        // HMAC — note: nonce already extracted above
         var receivedHmac = root.TryGetProperty("hmac",        out var hp) ? hp.GetString() ?? "" : "";
         var requestJson  = root.TryGetProperty("requestJson", out var rp) ? rp.GetString() ?? "" : "";
 
@@ -358,6 +370,26 @@ internal sealed class NamedPipeExecApprovalAdapter : IExecApprovalIpc
         catch
         {
             return false;
+        }
+    }
+
+    // Returns true and records the nonce if unseen; returns false if the nonce was already used.
+    // Expired entries (older than TtlMs) are pruned on each call to bound memory usage.
+    private bool TryConsumeNonce(string nonce, long nowMs)
+    {
+        if (string.IsNullOrEmpty(nonce)) return false;
+        lock (_nonceLock)
+        {
+            // Prune expired entries
+            var expired = _usedNonces
+                .Where(kv => nowMs - kv.Value > TtlMs)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var k in expired) _usedNonces.Remove(k);
+
+            if (_usedNonces.ContainsKey(nonce)) return false;
+            _usedNonces[nonce] = nowMs;
+            return true;
         }
     }
 

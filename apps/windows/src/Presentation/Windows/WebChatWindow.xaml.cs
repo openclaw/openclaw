@@ -376,7 +376,7 @@ internal sealed partial class WebChatWindow : Window
 
             _vm.AddImageBytes(bytes, $"pasted-{Guid.NewGuid():N}.png", "image/png");
         }
-        catch { /* best-effort */ }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"PasteClipboardBitmap failed: {ex.Message}"); }
     }
 
     // Reads image files from clipboard StorageItems, adds each as attachment.
@@ -392,7 +392,7 @@ internal sealed partial class WebChatWindow : Window
                 .Where(p => !string.IsNullOrEmpty(p));
             await _vm.AddFilesFromPathsAsync(paths);
         }
-        catch { /* best-effort */ }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"PasteClipboardStorageItems failed: {ex.Message}"); }
     }
 
     private static bool IsImageExtension(string ext) =>
@@ -425,7 +425,10 @@ internal sealed partial class WebChatWindow : Window
 
             await _vm.AddFilesFromPathsAsync(paths);
         }
-        catch { /* best-effort */ }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Grid_Drop failed: {ex.Message}");
+        }
     }
 
     // Typing indicator animation

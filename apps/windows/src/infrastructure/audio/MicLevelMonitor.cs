@@ -5,7 +5,7 @@ namespace OpenClawWindows.Infrastructure.Audio;
 
 /// <summary>
 /// Monitors the default microphone input level, computing exponentially-smoothed
-/// normalized dB and publishing it to subscribers.
+/// normalised dB and publishing it to subscribers.
 /// </summary>
 internal sealed class MicLevelMonitor : IObservable<double>, IDisposable
 {
@@ -33,7 +33,7 @@ internal sealed class MicLevelMonitor : IObservable<double>, IDisposable
     }
 
     /// <summary>
-    /// Starts audio capture and begins publishing normalized mic levels [0, 1] to subscribers.
+    /// Starts audio capture and begins publishing normalised mic levels [0, 1] to subscribers.
     /// Idempotent: if already running, returns immediately without re-starting capture.
     /// Throws <see cref="InvalidOperationException"/> when no usable audio input device is present.
     /// </summary>
@@ -130,8 +130,8 @@ internal sealed class MicLevelMonitor : IObservable<double>, IDisposable
             observer.OnNext(value);
     }
 
-    // Converts a PCM-16 LE byte buffer to a normalized mic level [0, 1].
-    // Int16 samples are normalized to float32 via / 32768f.
+    // Converts a PCM-16 LE byte buffer to a normalised mic level [0, 1].
+    // Int16 samples are normalised to float32 via / 32768f.
     internal static double NormalizedLevel(byte[] buffer)
     {
         var frameCount = buffer.Length / 2; // 16-bit samples = 2 bytes each
@@ -140,7 +140,7 @@ internal sealed class MicLevelMonitor : IObservable<double>, IDisposable
         float sum = 0f;
         for (int i = 0; i < frameCount; i++)
         {
-            float s = BitConverter.ToInt16(buffer, i * 2) / 32768f; // normalize to [-1, 1]
+            float s = BitConverter.ToInt16(buffer, i * 2) / 32768f; // normalise to [-1, 1]
             sum += s * s;
         }
 

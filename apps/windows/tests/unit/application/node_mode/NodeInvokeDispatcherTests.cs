@@ -4,7 +4,7 @@ using OpenClawWindows.Application.NodeMode;
 
 namespace OpenClawWindows.Tests.Unit.Application.NodeMode;
 
-// Mirrors macOS MacNodeRuntimeTests — verifies NodeInvokeDispatcher routing behavior.
+// Mirrors macOS MacNodeRuntimeTests — verifies NodeInvokeDispatcher routing behaviour.
 public sealed class NodeInvokeDispatcherTests
 {
     private readonly IMediator           _mediator   = Substitute.For<IMediator>();

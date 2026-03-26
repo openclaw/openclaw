@@ -22,8 +22,8 @@ internal sealed class DeepLinkHandler
     private readonly ISender                  _sender;
     private readonly ILogger<DeepLinkHandler> _log;
 
-    // 1-second throttle between confirmation prompts
-    private DateTime _lastPromptAt = DateTime.MinValue;
+    // 1-second throttle between confirmation prompts (Unix ms, Interlocked-safe)
+    private long _lastPromptAtMs;
 
     public DeepLinkHandler(
         IDeepLinkKeyStore        keyStore,
@@ -80,12 +80,13 @@ internal sealed class DeepLinkHandler
         if (!allowUnattended)
         {
             // Throttle — prevents prompt flooding from rapid external activations.
-            if (DateTime.UtcNow - _lastPromptAt < TimeSpan.FromSeconds(1))
+            var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (nowMs - Interlocked.Read(ref _lastPromptAtMs) < 1000)
             {
                 _log.LogDebug("Throttling deep link prompt");
                 return;
             }
-            _lastPromptAt = DateTime.UtcNow;
+            Interlocked.Exchange(ref _lastPromptAtMs, nowMs);
 
             if (message.Length > MaxUnkeyedConfirmChars)
             {

@@ -6,7 +6,7 @@ public sealed class MenuHostedItemTests
 {
     // ── applySizing logic (mirrors max(1, self.width)) ────────────────────────
     // Extracted as pure logic — WinUI3 UserControl ctor requires COM host,
-    // so sizing behavior is verified via the Math.Max invariant directly.
+    // so sizing behaviour is verified via the Math.Max invariant directly.
 
     [Theory]
     [InlineData(240.0, 240.0)]  // normal positive width — unchanged

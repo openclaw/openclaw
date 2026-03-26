@@ -1,5 +1,7 @@
 # Known Issues & Limitations
 
+> Windows port — as of 2026-03-19.
+
 ## Open SPIKEs
 
 | ID | Area | Description | Impact |

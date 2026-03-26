@@ -13,6 +13,8 @@
     Publisher="CN=OpenClaw"
     Version="1.0.1.0" />
 
+  <mp:PhoneIdentity PhoneProductId="00000000-0000-0000-0000-000000000000" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+
   <Properties>
     <DisplayName>OpenClaw</DisplayName>
     <PublisherDisplayName>OpenClaw</PublisherDisplayName>
@@ -67,10 +69,6 @@
     <rescap:Capability Name="runFullTrust"/>
     <!-- IScreenCapturePort — screen.record temporary files -->
     <uap:Capability Name="picturesLibrary"/>
-    <!-- WebSocket gateway connection -->
-    <Capability Name="internetClient"/>
-    <!-- Local gateway on LAN -->
-    <Capability Name="privateNetworkClientServer"/>
     <!-- ICameraPort — camera.snap, camera.clip, camera.list -->
     <DeviceCapability Name="webcam"/>
     <!-- ISpeechRecognitionPort + IWakeWordPort — TalkMode STT, VoiceWake -->

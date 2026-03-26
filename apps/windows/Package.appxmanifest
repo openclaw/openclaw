@@ -1,44 +1,24 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Package
-  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
-  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
-  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
-  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="mp uap uap5 desktop rescap">
-
-  <Identity
-    Name="ai.openclaw.windows"
-    Publisher="CN=OpenClaw"
-    Version="1.0.0.0" />
-
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="mp uap uap5 desktop rescap">
+  <Identity Name="ai.openclaw.windows" Publisher="CN=OpenClaw" Version="1.0.64.0" />
+  <mp:PhoneIdentity PhoneProductId="00000000-0000-0000-0000-000000000000" PhonePublisherId="00000000-0000-0000-0000-000000000000" />
   <Properties>
     <DisplayName>OpenClaw</DisplayName>
     <PublisherDisplayName>OpenClaw</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
-
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
-
   <Resources>
     <Resource Language="x-generate" />
   </Resources>
-
   <Applications>
     <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
-      <uap:VisualElements
-        DisplayName="OpenClaw"
-        Description="AI agent node — exposes device capabilities to AI agents"
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png">
+      <uap:VisualElements DisplayName="OpenClaw" Description="AI agent node â€” exposes device capabilities to AI agents" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
-
       <Extensions>
         <!-- Deep-link protocol handler: openclaw://agent?... and openclaw://gateway?...
              Equivalent to the CFBundleURLSchemes registration in Info.plist (macOS). -->
@@ -47,32 +27,25 @@
             <uap:DisplayName>OpenClaw</uap:DisplayName>
           </uap:Protocol>
         </uap:Extension>
-
-        <!-- Autostart: registers app as a startup task — managed via StartupTask WinRT API.
+        <!-- Autostart: registers app as a startup task â€” managed via StartupTask WinRT API.
              TaskId="OpenClaw" must match TaskSchedulerAdapter.TaskId.
-             Enabled="false" — the user is prompted on first call to RequestEnableAsync(). -->
+             Enabled="false" â€” the user is prompted on first call to RequestEnableAsync(). -->
         <desktop:Extension Category="windows.startupTask" Executable="OpenClawWindows.exe" EntryPoint="Windows.FullTrustApplication">
           <desktop:StartupTask TaskId="OpenClaw" Enabled="false" DisplayName="OpenClaw" />
         </desktop:Extension>
       </Extensions>
     </Application>
   </Applications>
-
   <Capabilities>
     <!-- Required by desktop:Extension (startupTask, FullTrustApplication) -->
     <rescap:Capability Name="runFullTrust" />
-    <!-- IScreenCapturePort — screen.record temporary files -->
+    <!-- IScreenCapturePort â€” screen.record temporary files -->
     <uap:Capability Name="picturesLibrary" />
-    <!-- WebSocket gateway connection -->
-    <Capability Name="internetClient" />
-    <!-- Local gateway on LAN -->
-    <Capability Name="privateNetworkClientServer" />
-    <!-- ICameraPort — camera.snap, camera.clip, camera.list -->
+    <!-- ICameraPort â€” camera.snap, camera.clip, camera.list -->
     <DeviceCapability Name="webcam" />
-    <!-- ISpeechRecognitionPort + IWakeWordPort — TalkMode STT, VoiceWake -->
+    <!-- ISpeechRecognitionPort + IWakeWordPort â€” TalkMode STT, VoiceWake -->
     <DeviceCapability Name="microphone" />
-    <!-- ILocationPort — location.get -->
+    <!-- ILocationPort â€” location.get -->
     <DeviceCapability Name="location" />
   </Capabilities>
-
 </Package>

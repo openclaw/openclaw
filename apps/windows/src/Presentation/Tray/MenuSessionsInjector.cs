@@ -22,7 +22,7 @@ internal sealed class MenuSessionsInjector
 
     private readonly ISender            _sender;
     private readonly IGatewayRpcChannel _rpc;
-    // serializes all cache mutations under lock.
+    // serialises all cache mutations under lock.
     private readonly SemaphoreSlim      _lock = new(1, 1);
 
     // Session cache

@@ -23,7 +23,7 @@ If Windows complains about the certificate, install the dev cert first:
 
 ```powershell
 # Install self-signed dev certificate (dev builds only)
-Import-Certificate -FilePath packaging\dev.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+Add-AppxPackage -Path cert.pfx -Certificate cert.pfx
 ```
 
 ## First Launch
@@ -44,7 +44,7 @@ Right-click tray icon → the **Sessions** section should list active sessions w
 ## Run from source (development)
 
 ```powershell
-# Requires: Visual Studio 2022 17.8+ or .NET 10 SDK + Windows App SDK workload
+# Requires: Visual Studio 2022 17.8+ or .NET 9 SDK + Windows App SDK workload
 
 git clone https://github.com/openclaw/openclaw
 cd openclaw/apps/windows

@@ -21,6 +21,11 @@ internal sealed class CanvasNavigateHandler : IRequestHandler<CanvasNavigateComm
     {
         Guard.Against.NullOrWhiteSpace(cmd.Url, nameof(cmd.Url));
 
+        // Only http/https allowed — prevents a compromised gateway from navigating to file:// paths.
+        if (!Uri.TryCreate(cmd.Url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != "http" && uri.Scheme != "https"))
+            return Error.Validation("INVALID_URL", $"Canvas navigation only allows http and https URLs (got '{uri?.Scheme ?? cmd.Url}')");
+
         _window.Navigate(cmd.Url);
         await _host.NavigateAsync(cmd.Url, ct);
         return Result.Success;

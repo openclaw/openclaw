@@ -207,6 +207,11 @@ internal sealed class JsonExecApprovalsRepository : IExecApprovalsRepository
             var decoded = JsonSerializer.Deserialize<ExecApprovalsFile>(raw, JsonOptions);
             if (decoded is null || decoded.Version != 1)
                 return new ExecApprovalsFile { Version = 1 };
+
+            // Decrypt token if DPAPI-encrypted; fall back to plaintext for migration.
+            if (decoded.Socket?.Token is { Length: > 0 } encToken)
+                decoded = decoded with { Socket = decoded.Socket with { Token = DecryptToken(encToken) } };
+
             return decoded;
         }
         catch (Exception ex)
@@ -221,7 +226,13 @@ internal sealed class JsonExecApprovalsRepository : IExecApprovalsRepository
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            var json = JsonSerializer.Serialize(file, JsonOptions);
+
+            // Encrypt token with DPAPI before persisting — token must never appear in plaintext on disk.
+            var fileToWrite = file.Socket?.Token is { Length: > 0 } plainToken
+                ? file with { Socket = file.Socket with { Token = EncryptToken(plainToken) } }
+                : file;
+
+            var json = JsonSerializer.Serialize(fileToWrite, JsonOptions);
             var tmp = FilePath + ".tmp";
             await File.WriteAllTextAsync(tmp, json, Encoding.UTF8, ct);
             // Atomic rename on NTFS (same volume)
@@ -231,6 +242,32 @@ internal sealed class JsonExecApprovalsRepository : IExecApprovalsRepository
         {
             _logger.LogError("exec approvals save failed: {Message}", ex.Message);
         }
+    }
+
+    // ── DPAPI token encryption ─────────────────────────────────────────────────
+
+    private const DataProtectionScope DpapiScope = DataProtectionScope.CurrentUser;
+    private static readonly byte[] TokenEntropy = "openclaw-exec-approvals-v1"u8.ToArray();
+
+    private static string DecryptToken(string value)
+    {
+        try
+        {
+            var blob = Convert.FromBase64String(value);
+            var plain = ProtectedData.Unprotect(blob, TokenEntropy, DpapiScope);
+            return Encoding.UTF8.GetString(plain);
+        }
+        catch (Exception ex) when (ex is FormatException or CryptographicException)
+        {
+            // Plaintext token predates DPAPI migration — use as-is; next save will encrypt it.
+            return value;
+        }
+    }
+
+    private static string EncryptToken(string value)
+    {
+        var plain = ProtectedData.Protect(Encoding.UTF8.GetBytes(value), TokenEntropy, DpapiScope);
+        return Convert.ToBase64String(plain);
     }
 
     private static ExecApprovalsFile NormalizeIncoming(ExecApprovalsFile file)

@@ -23,7 +23,7 @@ Add-AppxPackage -ForceApplicationShutdown OpenClawWindows_x64_PREVIOUS.msix
 
 ```powershell
 # Confirm the installed version
-Get-AppxPackage -Name "ai.openclaw.windows" | Select-Object Name, Version
+Get-AppxPackage -Name "OpenClawWindows" | Select-Object Name, Version
 ```
 
 The tray icon should reappear. Check **Settings → About** for the version number.
@@ -37,14 +37,14 @@ Settings are persisted to `%APPDATA%\OpenClaw\settings.json`. To revert:
 Copy-Item "$env:APPDATA\OpenClaw\settings.json" "$env:APPDATA\OpenClaw\settings.json.bak"
 
 # Restore from backup (if you made one before the upgrade)
-Copy-Item "$env:APPDATA\OpenClaw\settings.json.bak" "$env:APPDATA\OpenClaw\settings.json"
+Copy-Item "$env:APPDATA\OpenClaw\settings.json.backup" "$env:APPDATA\OpenClaw\settings.json"
 ```
 
 ## Full Uninstall
 
 ```powershell
 # Remove the package
-Get-AppxPackage -Name "ai.openclaw.windows" | Remove-AppxPackage
+Get-AppxPackage -Name "OpenClawWindows" | Remove-AppxPackage
 
 # Remove app data (optional — preserves logs for diagnostics)
 Remove-Item "$env:APPDATA\OpenClaw" -Recurse -Force

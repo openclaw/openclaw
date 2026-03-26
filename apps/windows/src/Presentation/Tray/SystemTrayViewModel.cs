@@ -470,7 +470,12 @@ internal sealed partial class SystemTrayViewModel : ObservableObject
             var sessionKey = await _chatManager.GetPreferredSessionKeyAsync(cts.Token);
             await _chatManager.ShowAsync(sessionKey);
         }
-        catch { /* best-effort */ }
+        catch (Exception ex)
+        {
+            await System.IO.File.WriteAllTextAsync(
+                @"C:\temp\openchat_error.txt",
+                $"{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}");
+        }
     }
 
     [RelayCommand]

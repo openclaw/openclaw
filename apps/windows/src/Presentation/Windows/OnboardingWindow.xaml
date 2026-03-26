@@ -23,7 +23,7 @@
             <!-- Back button -->
             <HyperlinkButton
                 Grid.Column="0"
-                Content="&#x2039; Back"
+                Content="‹  Back"
                 Command="{Binding GoBackCommand}"
                 HorizontalAlignment="Left" VerticalAlignment="Center"
                 Visibility="{Binding CanGoBack, Converter={StaticResource BoolToVisibilityConverter}}" />

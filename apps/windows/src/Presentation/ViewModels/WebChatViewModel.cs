@@ -658,7 +658,7 @@ internal sealed partial class WebChatViewModel : ObservableObject, IDisposable
             // Incremental reconciliation: only append new messages to avoid full rerender.
             void Apply()
             {
-                // Reuse existing Guids to minimize ItemsRepeater churn
+                // Reuse existing Guids to minimise ItemsRepeater churn
                 var rows = ReconcileMessageIds(Messages, rawRows);
 
                 if (Messages.Count == 0)

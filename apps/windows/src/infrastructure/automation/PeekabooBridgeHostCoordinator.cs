@@ -61,8 +61,8 @@ internal sealed class PeekabooBridgeHostCoordinator : IHostedService
             "PeekabooBridge host started at \\\\.\\pipe\\{PipeName} (stub — Peekaboo is macOS-only)",
             PipeName);
 
-        // Peekaboo automation framework is not available on Windows.
-        // The named pipe server is a lifecycle stub; no-op until a Windows port is available.
+        // Peekaboo automation framework (PeekabooAutomationKit, PeekabooBridge) is
+        // macOS-only; named pipe server is a lifecycle stub pending a Windows Peekaboo port.
         return Task.CompletedTask;
     }
 }

@@ -3,7 +3,7 @@ namespace OpenClawWindows.Tests.Unit.Presentation;
 public sealed class MenuHighlightedHostViewTests
 {
     // ── Sizing logic (mirrors max(1, targetWidth) from init + update) ─────────
-    // WinUI3 UserControl ctor requires COM host, so sizing behavior is verified
+    // WinUI3 UserControl ctor requires COM host, so sizing behaviour is verified
     // via the Math.Max invariant directly — same pattern as MenuHostedItemTests.
 
     [Theory]

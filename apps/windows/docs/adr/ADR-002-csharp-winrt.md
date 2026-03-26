@@ -5,7 +5,7 @@ Accepted
 
 ## Context
 
-OpenClaw requires a Windows native node app with 1:1 parity with the macOS Swift app. C# was selected as the preferred implementation language after evaluating available prototypes. Alternative: Rust/Tauri.
+Issue #75 requires a Windows native node app with 1:1 parity with the macOS Swift app. The maintainer (cgdusek) specified C# as the preferred implementation language after reviewing the shanselman C# prototype. Alternative: Rust/Tauri.
 
 ## Decision
 

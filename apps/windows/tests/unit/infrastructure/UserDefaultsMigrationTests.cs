@@ -16,7 +16,7 @@ public sealed class UserDefaultsMigrationTests
     [Fact]
     public void MigrateLegacyDefaults_IsIdempotent()
     {
-        // Multiple calls must remain safe — mirrors Swift UserDefaults nil-guard behavior.
+        // Multiple calls must remain safe — mirrors Swift UserDefaults nil-guard behaviour.
         var ex = Record.Exception(() =>
         {
             UserDefaultsMigration.MigrateLegacyDefaults();

@@ -19,7 +19,7 @@ internal static class MicRefreshSupport
         {
             DispatcherQueue? queue = null;
             try { queue = DispatcherQueue.GetForCurrentThread(); }
-            catch (Exception) { } // WinRT COM not initialized in test hosts — treat as null
+            catch (Exception) { } // WinRT COM not initialised in test hosts — treat as null
 
             if (queue is not null)
                 queue.TryEnqueue(() => triggerRefresh());

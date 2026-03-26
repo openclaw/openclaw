@@ -3,7 +3,7 @@ using OpenClawWindows.Domain.ExecApprovals;
 
 namespace OpenClawWindows.Application.ExecApprovals;
 
-// Validates and normalizes a system.run command argv before approval evaluation.
+// Validates and normalises a system.run command argv before approval evaluation.
 // ⚠️ SECURITY-CRITICAL: this is the anti-injection gate for shell multiplexers and env wrappers.
 internal static class ExecSystemRunCommandValidator
 {
@@ -59,7 +59,7 @@ internal static class ExecSystemRunCommandValidator
         if (normalizedRaw is not null && normalizedRaw != inferred && normalizedRaw != fullArgvDisplay)
             return new ValidationResult.Invalid("INVALID_REQUEST: rawCommand does not match command");
 
-        return new ValidationResult.Ok(new ResolvedCommand(fullArgvDisplay));
+        return new ValidationResult.Ok(new ResolvedCommand(inferred));
     }
 
     private static string? NormalizeRaw(string? rawCommand)

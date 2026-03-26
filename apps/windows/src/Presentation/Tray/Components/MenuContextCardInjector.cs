@@ -15,7 +15,7 @@ internal sealed class MenuContextCardInjector
     internal static readonly TimeSpan RefreshInterval  = TimeSpan.FromSeconds(15);
 
     private readonly ISender _sender;
-    // SemaphoreSlim(1,1) serializes all cache mutations.
+    // SemaphoreSlim(1,1) serialises all cache mutations.
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     private List<SessionRow> _cachedRows = [];

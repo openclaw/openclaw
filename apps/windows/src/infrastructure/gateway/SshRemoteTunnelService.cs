@@ -21,7 +21,7 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
     private readonly SemaphoreSlim _lock = new(1, 1);
     private Process? _sshProcess;
     private bool _isConnected;
-    private int _lastKnownPid; // PID of the last SSH tunnel we started or recognized
+    private int _lastKnownPid; // PID of the last SSH tunnel we started or recognised
 
     // IsConnected reflects live process state — if our process exited unexpectedly, the
     // property returns false immediately so the reconnect coordinator can restart the tunnel.
@@ -113,7 +113,7 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
         }
         catch (OperationCanceledException)
         {
-            return Error.Failure("SSH.CANCELLED", "Connect canceled.");
+            return Error.Failure("SSH.CANCELLED", "Connect cancelled.");
         }
         catch (Exception ex)
         {
@@ -172,7 +172,7 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
     // When expectedPid > 0 the listener must belong to that exact PID — prevents
     // silently inheriting an unrelated SSH forward (OQ-004 guard).
     // When expectedPid == 0 (first cold start, no known PID) any ssh process is accepted,
-    // preserving the crash-recovery reuse behavior.
+    // preserving the crash-recovery reuse behaviour.
     private static bool IsPortListeningBySshProcess(int port, int expectedPid)
     {
         if (!IsPortOccupied(port)) return false;

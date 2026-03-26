@@ -110,7 +110,7 @@ public static class DomainErrors
             Error.Validation("VW-001", $"Sensitivity {v} must be in [0.0..1.0]");
 
         public static Error EngineNotAvailable() =>
-            Error.Failure("VW-002", "Voice wake hotword detection is not yet available on this platform.");
+            Error.Failure("VW-002", "Porcupine wake word engine not available (SPIKE-004)");
     }
 
     public static class Settings

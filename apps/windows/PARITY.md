@@ -1,9 +1,10 @@
 # Feature Parity: macOS vs Windows — MVP scope
 
+> Verified against source code on 2026-03-19.
 > macOS ref: `openclaw/apps/macos/Sources/OpenClaw/`
 > Windows: `openclaw/apps/windows/src/`
 
-This document covers the **MVP surface** — what this Windows port delivers and defends.
+This document covers the **MVP surface** — what this PR delivers and defends.
 Partial/follow-up areas are listed separately at the bottom.
 
 ---
@@ -47,7 +48,7 @@ Partial/follow-up areas are listed separately at the bottom.
 | Hello-ok handshake | Extracts `sessionKey`, applies settings | Same: `ApplyHelloOk` stores session key, triggers health poll | Parity |
 | Health polling | `HealthStore` timer | `HealthPollingHostedService` — 3s until first snapshot, then 60s | Parity |
 | Reconnect | `GatewayConnectivityCoordinator` with retry | `GatewayReconnectCoordinatorHostedService` with Polly exponential backoff | Adapted |
-| Config hot-reload | `ConfigFileWatcher` (FSEvents) | `SettingsFileWatcher` (FileSystemWatcher). Fix: no longer triggers connection mode change on hot-reload | Adapted |
+| Config hot-reload | `ConfigFileWatcher` (FSEvents) | `SettingsFileWatcher` (FileSystemWatcher). BUG-007 fix: no longer triggers connection mode change on hot-reload | Adapted |
 | Push events | `GatewayPushSubscription` — `agent`, `health`, `exec`, `pairing`, `cron` | `IGatewayMessageRouter` dispatches to MediatR handlers | Adapted |
 | Channels polling | `ChannelsStore` timer | `ChannelsStatusPollingHostedService` | Parity |
 | Nodes polling | `NodesStore` timer | `NodesPollingHostedService` | Parity |

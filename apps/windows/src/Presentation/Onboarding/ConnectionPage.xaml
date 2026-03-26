@@ -34,7 +34,7 @@
                     Click="LocalChoiceButton_Click">
                     <Grid ColumnDefinitions="*,Auto">
                         <StackPanel Grid.Column="0">
-                            <TextBlock Text="This PC 🟢" FontWeight="SemiBold" />
+                            <TextBlock Text="This PC  🟢" FontWeight="SemiBold" />
                             <TextBlock Text="Gateway is running locally on this machine." FontSize="11" Opacity="0.6" />
                         </StackPanel>
                         <TextBlock

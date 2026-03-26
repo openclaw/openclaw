@@ -25,5 +25,5 @@ public sealed class BytesToBitmapConverter : IValueConverter
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, string language)
-        => throw new NotSupportedException("BytesToBitmapConverter is one-way only.");
+        => throw new NotImplementedException();
 }

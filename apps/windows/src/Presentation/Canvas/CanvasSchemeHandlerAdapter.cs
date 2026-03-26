@@ -13,6 +13,9 @@ namespace OpenClawWindows.Presentation.Canvas;
 /// </summary>
 internal sealed class CanvasSchemeHandlerAdapter
 {
+    // Tunables
+    private const int MaxFileSizeBytes = 10 * 1024 * 1024; // 10 MB guard against OOM
+
     private readonly string _root;
 
     // root is the canvas-host directory
@@ -107,6 +110,10 @@ internal sealed class CanvasSchemeHandlerAdapter
 
         try
         {
+            var info = new FileInfo(standardFile);
+            if (info.Length > MaxFileSizeBytes)
+                return Html("File too large", "Canvas: 413");
+
             var fileData = File.ReadAllBytes(standardFile);
             var ext = Path.GetExtension(standardFile).TrimStart('.');
             var mime = CanvasScheme.MimeType(ext);
