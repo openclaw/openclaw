@@ -144,6 +144,7 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   sender: { id: string; name?: string; tag?: string };
   chatType: "direct" | "group" | "thread" | "channel";
   conversationId?: string;
+  guildId?: string | null;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
   if (!commandsAllowFrom || typeof commandsAllowFrom !== "object") {
@@ -154,6 +155,16 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
     : commandsAllowFrom["*"];
   if (!Array.isArray(rawAllowList)) {
     return { configured: false, allowed: false } as const;
+  }
+  // Check guild-level entries (e.g. "guild:123456") before user matching.
+  const guildId = params.guildId?.trim();
+  if (guildId) {
+    for (const entry of rawAllowList) {
+      const text = String(entry).trim();
+      if (text.startsWith("guild:") && text.slice("guild:".length) === guildId) {
+        return { configured: true, allowed: true } as const;
+      }
+    }
   }
   const allowList = normalizeDiscordAllowList(rawAllowList.map(String), [
     "discord:",
@@ -325,6 +336,7 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
           ? "channel"
           : "group",
     conversationId: rawChannelId || undefined,
+    guildId: interaction.guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
@@ -706,6 +718,7 @@ async function dispatchDiscordCommandInteraction(params: {
           ? "channel"
           : "group",
     conversationId: rawChannelId || undefined,
+    guildId: interaction.guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
