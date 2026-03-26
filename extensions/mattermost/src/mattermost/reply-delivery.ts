@@ -11,6 +11,7 @@ type SendMattermostMessage = (
   to: string,
   text: string,
   opts: {
+    cfg?: OpenClawConfig;
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
@@ -49,12 +50,14 @@ export async function deliverMattermostReplyPayload(params: {
       params.core.channel.text.chunkMarkdownTextWithMode(value, params.textLimit, chunkMode),
     sendText: async (chunk) => {
       await params.sendMessage(params.to, chunk, {
+        cfg: params.cfg,
         accountId: params.accountId,
         replyToId: params.replyToId,
       });
     },
     sendMedia: async ({ mediaUrl, caption }) => {
       await params.sendMessage(params.to, caption ?? "", {
+        cfg: params.cfg,
         accountId: params.accountId,
         mediaUrl,
         mediaLocalRoots,
