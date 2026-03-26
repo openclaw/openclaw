@@ -7,8 +7,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
-type MemoryIndexManager = import("./index.js").MemoryIndexManager;
-type MemoryIndexModule = typeof import("./index.js");
+type MemoryIndexManager =
+  import("../../extensions/memory-core/src/memory/index.js").MemoryIndexManager;
+type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
 
 const embedBatch = vi.fn(async (_texts: string[]) => [] as number[][]);
 const embedQuery = vi.fn(async () => [0.5, 0.5, 0.5]);
@@ -121,7 +122,7 @@ describe("memory indexing with OpenAI batches", () => {
         }),
     }));
     await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager } = await import("./index.js"));
+    ({ getMemorySearchManager } = await import("../../extensions/memory-core/src/memory/index.js"));
 
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
     workspaceDir = path.join(fixtureRoot, "workspace");

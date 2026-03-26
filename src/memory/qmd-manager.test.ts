@@ -88,9 +88,9 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import { spawn as mockedSpawn } from "node:child_process";
+import { QmdMemoryManager } from "../../extensions/memory-core/src/memory/qmd-manager.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
-import { QmdMemoryManager } from "./qmd-manager.js";
 import { requireNodeSqlite } from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;

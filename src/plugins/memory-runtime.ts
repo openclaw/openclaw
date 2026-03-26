@@ -26,3 +26,8 @@ export async function getActiveMemorySearchManager(params: {
 export function resolveActiveMemoryBackendConfig(params: { cfg: OpenClawConfig; agentId: string }) {
   return ensureMemoryRuntime(params.cfg)?.resolveMemoryBackendConfig(params) ?? null;
 }
+
+export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Promise<void> {
+  const runtime = ensureMemoryRuntime(cfg);
+  await runtime?.closeAllMemorySearchManagers?.();
+}

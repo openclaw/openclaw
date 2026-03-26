@@ -56,6 +56,7 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  closeAllMemorySearchManagers?(): Promise<void>;
 };
 
 type MemoryPluginState = {

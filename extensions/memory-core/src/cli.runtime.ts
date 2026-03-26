@@ -6,7 +6,6 @@ import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
-  getMemorySearchManager,
   isRich,
   listMemoryFiles,
   loadConfig,
@@ -25,6 +24,7 @@ import {
   type OpenClawConfig,
 } from "./api.js";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
+import { getMemorySearchManager } from "./runtime-api.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];

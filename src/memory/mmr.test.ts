@@ -8,7 +8,7 @@ import {
   applyMMRToHybridResults,
   DEFAULT_MMR_CONFIG,
   type MMRItem,
-} from "./mmr.js";
+} from "../../extensions/memory-core/src/memory/mmr.js";
 
 describe("tokenize", () => {
   it("normalizes, filters, and deduplicates token sets", () => {
