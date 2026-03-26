@@ -311,12 +311,24 @@ export function registerNodesStatusCommands(nodes: Command) {
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
-          // Always fetch live node list to get current connection status
-          const liveNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          // Always fetch live node list to get current connection status.
+          // For the unfiltered listing path, fall back to pairing data if node.list RPC fails
+          // to preserve the previous resilience (paired nodes still come from node.pair.list).
+          let liveNodes: ReturnType<typeof parseNodeList> = [];
+          try {
+            liveNodes = parseNodeList(await callGatewayCli("node.list", opts, {}));
+          } catch (err) {
+            if (hasFilters) {
+              throw err;
+            }
+            liveNodes = [];
+          }
           const connectedById = new Map(liveNodes.map((node) => [node.nodeId, node]));
-          // Build a map of paired nodes from pairing data, merging with live data
+
+          // Merge connection status (live) into pairing entries.
+          // Important: when `pairingData` exists, spread it to preserve the original `paired` object
+          // shape in `--json` output (token/platform/version/permissions/...).
           const pairedById = new Map(paired.map((node) => [node.nodeId, node]));
-          // Combine: show all live nodes that are paired, or all paired nodes from pairing data
           const allPairedNodeIds = new Set([
             ...liveNodes.filter((n) => n.paired).map((n) => n.nodeId),
             ...paired.map((n) => n.nodeId),
@@ -325,17 +337,38 @@ export function registerNodesStatusCommands(nodes: Command) {
             .map((nodeId) => {
               const pairingData = pairedById.get(nodeId);
               const liveData = connectedById.get(nodeId);
+              const lastConnectedAtMs =
+                typeof pairingData?.lastConnectedAtMs === "number"
+                  ? pairingData.lastConnectedAtMs
+                  : typeof liveData?.connectedAtMs === "number"
+                    ? liveData.connectedAtMs
+                    : undefined;
+
+              const connected = liveData?.connected ?? false;
+
+              if (pairingData) {
+                return {
+                  ...pairingData,
+                  displayName: liveData?.displayName ?? pairingData.displayName,
+                  remoteIp: liveData?.remoteIp ?? pairingData.remoteIp,
+                  lastConnectedAtMs,
+                  connected,
+                };
+              }
+
+              // Pairing data missing (should be rare). Fall back to live node fields so
+              // `--json` still contains a useful paired entry for this nodeId.
               return {
                 nodeId,
-                displayName: liveData?.displayName ?? pairingData?.displayName,
-                remoteIp: liveData?.remoteIp ?? pairingData?.remoteIp,
-                lastConnectedAtMs:
-                  typeof pairingData?.lastConnectedAtMs === "number"
-                    ? pairingData.lastConnectedAtMs
-                    : typeof liveData?.connectedAtMs === "number"
-                      ? liveData.connectedAtMs
-                      : undefined,
-                connected: liveData?.connected ?? false,
+                displayName: liveData?.displayName,
+                platform: liveData?.platform,
+                version: liveData?.version,
+                coreVersion: liveData?.coreVersion,
+                uiVersion: liveData?.uiVersion,
+                remoteIp: liveData?.remoteIp,
+                permissions: liveData?.permissions,
+                lastConnectedAtMs,
+                connected,
               };
             })
             .filter((node) => {
