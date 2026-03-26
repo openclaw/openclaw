@@ -76,8 +76,6 @@ export function isLocalProvider(providerType: string): boolean {
     type === "lmstudio" ||
     type === "local" ||
     type.includes("openai-compatible") ||
-    type.includes("openai-responses") ||
-    type.includes("openai-completions") ||
     type.includes("self-hosted")
   );
 }
