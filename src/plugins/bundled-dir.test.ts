@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as openclawRoot from "../infra/openclaw-root.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 
 const tempDirs: string[] = [];
@@ -42,7 +43,12 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((opts) => {
+      if (opts.moduleUrl) {
+        return repoRoot;
+      }
+      return null;
+    });
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "dist-runtime", "extensions")),
@@ -58,7 +64,12 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((opts) => {
+      if (opts.moduleUrl) {
+        return repoRoot;
+      }
+      return null;
+    });
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "dist", "extensions")),
@@ -76,7 +87,12 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((opts) => {
+      if (opts.moduleUrl) {
+        return repoRoot;
+      }
+      return null;
+    });
     process.env.VITEST = "true";
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
@@ -97,11 +113,51 @@ describe("resolveBundledPluginsDir", () => {
       "utf8",
     );
 
-    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((opts) => {
+      if (opts.moduleUrl) {
+        return repoRoot;
+      }
+      return null;
+    });
     delete process.env.VITEST;
 
     expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
       fs.realpathSync(path.join(repoRoot, "extensions")),
+    );
+  });
+
+  it("does not let a cwd source checkout override an installed package root", () => {
+    const installedRoot = makeRepoRoot("openclaw-bundled-dir-installed-");
+    fs.mkdirSync(path.join(installedRoot, "dist", "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installedRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const sourceRoot = makeRepoRoot("openclaw-bundled-dir-source-");
+    fs.mkdirSync(path.join(sourceRoot, "extensions"), { recursive: true });
+    fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
+      "utf8",
+    );
+
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockImplementation((opts) => {
+      if (opts.moduleUrl) {
+        return installedRoot;
+      }
+      if (opts.cwd) {
+        return sourceRoot;
+      }
+      return null;
+    });
+    delete process.env.VITEST;
+
+    expect(fs.realpathSync(resolveBundledPluginsDir() ?? "")).toBe(
+      fs.realpathSync(path.join(installedRoot, "dist", "extensions")),
     );
   });
 });

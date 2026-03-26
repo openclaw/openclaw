@@ -12,6 +12,31 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
+function resolveExtensionsDirForPackageRoot(
+  packageRoot: string,
+  preferSourceCheckout: boolean,
+): string | undefined {
+  const sourceExtensionsDir = path.join(packageRoot, "extensions");
+  const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
+  if (
+    (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
+    fs.existsSync(sourceExtensionsDir)
+  ) {
+    return sourceExtensionsDir;
+  }
+  // Local source checkouts stage a runtime-complete bundled plugin tree under
+  // dist-runtime/. Prefer that over source extensions only when the paired
+  // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
+  const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
+  if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
+    return runtimeExtensionsDir;
+  }
+  if (fs.existsSync(builtExtensionsDir)) {
+    return builtExtensionsDir;
+  }
+  return undefined;
+}
+
 export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   if (override) {
@@ -21,30 +46,19 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   const preferSourceCheckout = Boolean(env.VITEST);
 
   try {
-    const packageRoots = [
-      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-    ].filter(
-      (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
-    );
-    for (const packageRoot of packageRoots) {
-      const sourceExtensionsDir = path.join(packageRoot, "extensions");
-      const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
-      if (
-        (preferSourceCheckout || isSourceCheckoutRoot(packageRoot)) &&
-        fs.existsSync(sourceExtensionsDir)
-      ) {
-        return sourceExtensionsDir;
+    const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    if (modulePackageRoot) {
+      const resolved = resolveExtensionsDirForPackageRoot(modulePackageRoot, preferSourceCheckout);
+      if (resolved) {
+        return resolved;
       }
-      // Local source checkouts stage a runtime-complete bundled plugin tree under
-      // dist-runtime/. Prefer that over source extensions only when the paired
-      // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
-      const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
-      if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
-        return runtimeExtensionsDir;
-      }
-      if (fs.existsSync(builtExtensionsDir)) {
-        return builtExtensionsDir;
+    }
+
+    const cwdPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+    if (cwdPackageRoot && cwdPackageRoot !== modulePackageRoot) {
+      const resolved = resolveExtensionsDirForPackageRoot(cwdPackageRoot, preferSourceCheckout);
+      if (resolved) {
+        return resolved;
       }
     }
   } catch {
