@@ -144,6 +144,16 @@ describe("timestamp prefix stripping", () => {
 Hello`;
     expect(stripInboundMetadata(input)).toBe("Hello");
   });
+
+  it("strips a timestamp prefix that remains after removing metadata blocks", () => {
+    const input = `Sender (untrusted metadata):
+\`\`\`json
+{"label":"OpenClaw UI"}
+\`\`\`
+
+[Thu 2026-03-12 07:00 UTC] what time is it?`;
+    expect(stripInboundMetadata(input)).toBe("what time is it?");
+  });
 });
 
 describe("extractInboundSenderLabel", () => {
