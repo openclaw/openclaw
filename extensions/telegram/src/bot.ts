@@ -186,7 +186,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const onShutdown = () => abortWith(shutdownSignal as AbortSignal);
       const method = extractTelegramApiMethod(input);
       const requestTimeoutMs =
-        method === "getupdates" ? TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS : undefined;
+        method === "getupdates" ? TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS : 30_000;
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
       let onRequestAbort: (() => void) | undefined;
       if (shutdownSignal?.aborted) {
