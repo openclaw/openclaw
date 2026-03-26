@@ -207,7 +207,7 @@ bash pty:true workdir:~/project command:"opencode run 'Your task'"
 
 ## Cursor Agent CLI
 
-**Binary note:** Cursor's official installer exposes `agent`. Some setups also provide or alias `cursor-agent`. In the examples below, use whichever binary exists locally.
+**Binary note:** Cursor's official installer exposes `agent`. Some setups also provide or alias `cursor-agent`, but the examples below use the official `agent` binary so fresh installs work out of the box.
 
 ### Installation
 
@@ -237,13 +237,13 @@ If your machine exposes `cursor-agent` instead of `agent`, substitute that name 
 
 ```bash
 # Auth check
-bash pty:true command:"cursor-agent status"
+bash pty:true command:"agent status"
 
 # One-shot headless run
-bash pty:true workdir:~/project command:"cursor-agent --trust --yolo --print --output-format text 'Implement retry logic for API calls'"
+bash pty:true workdir:~/project command:"agent --trust --yolo --print --output-format text 'Implement retry logic for API calls'"
 
 # Background run for longer tasks
-bash pty:true workdir:~/project background:true command:"cursor-agent --trust --yolo --print --output-format text 'Refactor auth module and summarize file-by-file changes'"
+bash pty:true workdir:~/project background:true command:"agent --trust --yolo --print --output-format text 'Refactor auth module and summarize file-by-file changes'"
 ```
 
 ### ⚡ Best Practices (learned the hard way)
@@ -287,13 +287,13 @@ REVIEW_DIR=$(mktemp -d)
 git clone https://github.com/user/repo.git "$REVIEW_DIR"
 cd "$REVIEW_DIR" && gh pr checkout 130
 
-bash pty:true workdir:"$REVIEW_DIR" command:"cursor-agent --trust --yolo --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
+bash pty:true workdir:"$REVIEW_DIR" command:"agent --trust --yolo --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
 ```
 
 ### Structured Output Example
 
 ```bash
-bash pty:true workdir:~/project command:"cursor-agent --trust --yolo --print --output-format text 'Create a migration plan for the auth module'"
+bash pty:true workdir:~/project command:"agent --trust --yolo --print --output-format text 'Create a migration plan for the auth module'"
 ```
 
 ---
