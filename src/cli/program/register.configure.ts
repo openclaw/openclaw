@@ -9,10 +9,38 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
+function extractSurfaceSectionsFromRawArgs(rawArgs: string[]): string[] {
+  const surfaceIndex = rawArgs.lastIndexOf("surface");
+  if (surfaceIndex === -1) {
+    return [];
+  }
+  const sections: string[] = [];
+  for (let index = surfaceIndex + 1; index < rawArgs.length; index += 1) {
+    const token = rawArgs[index];
+    if (token === "--section") {
+      const value = rawArgs[index + 1];
+      if (value && !value.startsWith("-")) {
+        sections.push(value);
+        index += 1;
+      }
+      continue;
+    }
+    if (token.startsWith("--section=")) {
+      const value = token.slice("--section=".length).trim();
+      if (value) {
+        sections.push(value);
+      }
+    }
+  }
+  return sections;
+}
+
 export function registerConfigureCommand(program: Command) {
+  const programWithRawArgs = program as Command & { rawArgs?: string[] };
   const configure = program
     .command("configure")
     .description("Interactive configuration for credentials, channels, gateway, and agent defaults")
+    .enablePositionalOptions()
     .addHelpText(
       "after",
       () =>
@@ -41,14 +69,8 @@ export function registerConfigureCommand(program: Command) {
       [] as string[],
     )
     .option("--installed-only", "Only export installed setup surfaces", false)
-    .action(async (opts, command) => {
-      const parentSection = command.parent?.opts()?.section;
-      const section =
-        Array.isArray(opts.section) && opts.section.length > 0
-          ? opts.section
-          : Array.isArray(parentSection)
-            ? parentSection
-            : [];
+    .action(async (opts) => {
+      const section = extractSurfaceSectionsFromRawArgs(programWithRawArgs.rawArgs ?? []);
       await runCommandWithRuntime(defaultRuntime, async () => {
         await configureSurfaceCommand({
           jsonOut: opts.jsonOut,

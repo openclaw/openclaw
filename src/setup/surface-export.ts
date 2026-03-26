@@ -103,7 +103,6 @@ function serializeChannelFields(plugin: ChannelPlugin): SetupSurfaceFieldDescrip
     label: input.message,
     ...(input.placeholder ? { placeholder: input.placeholder } : {}),
     ...(input.required ? { required: true } : {}),
-    ...(input.message ? { message: input.message } : {}),
     ...(input.helpTitle ? { helpTitle: input.helpTitle } : {}),
     ...(input.helpLines ? { helpLines: input.helpLines } : {}),
   }));
@@ -118,6 +117,7 @@ async function serializeInstalledChannel(params: {
 }): Promise<SetupSurfaceChannelEntry> {
   const { plugin, enabled, cfg } = params;
   const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
+  const configuredWithoutAdapter = isChannelConfigured(cfg, plugin.id);
   const status = adapter
     ? await adapter.getStatus({
         cfg,
@@ -125,10 +125,10 @@ async function serializeInstalledChannel(params: {
       })
     : {
         channel: plugin.id,
-        configured: isChannelConfigured(cfg, plugin.id),
+        configured: configuredWithoutAdapter,
         statusLines: [
           `${plugin.meta.label}: ${
-            isChannelConfigured(cfg, plugin.id)
+            configuredWithoutAdapter
               ? enabled
                 ? "configured"
                 : "configured (plugin disabled)"

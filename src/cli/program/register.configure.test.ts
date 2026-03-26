@@ -88,4 +88,22 @@ describe("registerConfigureCommand", () => {
       runtime,
     });
   });
+
+  it("does not inherit parent configure sections for surface export", async () => {
+    await runCli([
+      "configure",
+      "--section",
+      "gateway",
+      "surface",
+      "--json-out",
+      "/tmp/surface.json",
+    ]);
+
+    expect(configureSurfaceCommandMock).toHaveBeenCalledWith({
+      jsonOut: "/tmp/surface.json",
+      section: [],
+      installedOnly: false,
+      runtime,
+    });
+  });
 });
