@@ -10,8 +10,12 @@ enum HostEnvSecurityPolicy {
         "NODE_PATH",
         "PYTHONHOME",
         "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONWARNINGS",
+        "PYTHONBREAKPOINT",
         "PERL5LIB",
         "PERL5OPT",
+        "PERL_MB_OPT",
         "RUBYLIB",
         "RUBYOPT",
         "BASH_ENV",
@@ -24,17 +28,23 @@ enum HostEnvSecurityPolicy {
         "GCONV_PATH",
         "IFS",
         "SSLKEYLOGFILE",
+        "GLIBC_TUNABLES",
         "JAVA_TOOL_OPTIONS",
+        "JAVA_OPTIONS",
         "_JAVA_OPTIONS",
         "JDK_JAVA_OPTIONS",
-        "PYTHONBREAKPOINT",
         "DOTNET_STARTUP_HOOKS",
         "DOTNET_ADDITIONAL_DEPS",
-        "GLIBC_TUNABLES",
         "MAVEN_OPTS",
         "SBT_OPTS",
         "GRADLE_OPTS",
-        "ANT_OPTS"
+        "ANT_OPTS",
+        "LD_AUDIT",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "PROMPT_COMMAND",
+        "GOPATH",
+        "CARGO_HOME"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
@@ -55,7 +65,6 @@ enum HostEnvSecurityPolicy {
         "VISUAL",
         "FCEDIT",
         "SUDO_EDITOR",
-        "PROMPT_COMMAND",
         "HISTFILE",
         "PERL5DB",
         "PERL5DBCMD",
@@ -64,27 +73,15 @@ enum HostEnvSecurityPolicy {
         "PYTHONSTARTUP",
         "WGETRC",
         "CURL_HOME",
-        "CLASSPATH",
-        "CGO_CFLAGS",
-        "CGO_LDFLAGS",
-        "GOFLAGS",
-        "CORECLR_PROFILER_PATH",
-        "PHPRC",
-        "PHP_INI_SCAN_DIR",
-        "DENO_DIR",
-        "BUN_CONFIG_REGISTRY",
-        "LUA_PATH",
-        "LUA_CPATH",
-        "GEM_HOME",
-        "GEM_PATH",
-        "BUNDLE_GEMFILE",
-        "COMPOSER_HOME",
-        "XDG_CONFIG_HOME"
+        "BROWSER",
+        "SDKMAN_DIR",
+        "NVM_DIR"
     ]
 
     static let blockedOverridePrefixes: [String] = [
         "GIT_CONFIG_",
-        "NPM_CONFIG_"
+        "NPM_CONFIG_",
+        "OPENCLAW_"
     ]
 
     static let blockedPrefixes: [String] = [
