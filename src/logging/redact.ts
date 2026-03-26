@@ -1,4 +1,7 @@
+import { statSync } from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCustomRulesPath } from "../privacy/custom-rules.js";
+import { PrivacyDetector } from "../privacy/detector.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { replacePatternBounded } from "./redact-bounded.js";
@@ -105,21 +108,36 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
-function resolveConfigRedaction(): RedactOptions {
-  let cfg: OpenClawConfig["logging"] | undefined;
+type ResolvedConfig = {
+  redactOptions: RedactOptions;
+  privacyEnabled: boolean;
+  privacyRules: string | undefined;
+};
+
+function resolveConfigRedaction(): ResolvedConfig {
+  let loggingCfg: OpenClawConfig["logging"] | undefined;
+  let privacyCfg: OpenClawConfig["privacy"] | undefined;
   try {
     const loaded = requireConfig?.("../config/config.js") as
       | {
           loadConfig?: () => OpenClawConfig;
         }
       | undefined;
-    cfg = loaded?.loadConfig?.().logging;
+    const full = loaded?.loadConfig?.();
+    loggingCfg = full?.logging;
+    privacyCfg = full?.privacy;
   } catch {
-    cfg = undefined;
+    loggingCfg = undefined;
+    privacyCfg = undefined;
   }
   return {
-    mode: normalizeMode(cfg?.redactSensitive),
-    patterns: cfg?.redactPatterns,
+    redactOptions: {
+      mode: normalizeMode(loggingCfg?.redactSensitive),
+      patterns: loggingCfg?.redactPatterns,
+    },
+    // When privacy is not configured at all we treat it as enabled (safe default).
+    privacyEnabled: privacyCfg?.enabled !== false,
+    privacyRules: privacyCfg?.rules,
   };
 }
 
@@ -127,7 +145,7 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
+  const resolved = options ?? resolveConfigRedaction().redactOptions;
   if (normalizeMode(resolved.mode) === "off") {
     return text;
   }
@@ -140,12 +158,169 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
 
 export function redactToolDetail(detail: string): string {
   const resolved = resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) !== "tools") {
+  if (normalizeMode(resolved.redactOptions.mode) !== "tools") {
     return detail;
   }
-  return redactSensitiveText(detail, resolved);
+  return redactWithPrivacyFilter(
+    detail,
+    resolved.redactOptions,
+    resolved.privacyEnabled,
+    resolved.privacyRules,
+  );
 }
 
 export function getDefaultRedactPatterns(): string[] {
   return [...DEFAULT_REDACT_PATTERNS];
+}
+
+// Cache the last detector instance keyed by ruleset to avoid re-construction
+// on every log line while still respecting user-configured rules.
+let cachedDetector: PrivacyDetector | undefined;
+let cachedDetectorRules: string | undefined;
+
+function isBuiltInRuleset(rules: string): boolean {
+  return rules === "basic" || rules === "extended" || rules === "none";
+}
+
+function resolveDetectorRulesPath(rules: string): string {
+  if (isBuiltInRuleset(rules)) {
+    return rules;
+  }
+  return resolveCustomRulesPath(rules);
+}
+
+function resolveDetectorRulesKey(resolvedRules: string): string {
+  if (isBuiltInRuleset(resolvedRules)) {
+    return resolvedRules;
+  }
+  try {
+    const stat = statSync(resolvedRules);
+    return `${resolvedRules}:${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return resolvedRules;
+  }
+}
+
+function resolveDetectorCacheState(rules: string): { resolvedRules: string; key: string } {
+  const resolvedRules = resolveDetectorRulesPath(rules);
+  const key = resolveDetectorRulesKey(resolvedRules);
+  return { resolvedRules, key };
+}
+
+function getOrCreateCachedDetector(rules: string): PrivacyDetector {
+  const state = resolveDetectorCacheState(rules);
+  if (!cachedDetector || cachedDetectorRules !== state.key) {
+    cachedDetector = new PrivacyDetector(state.resolvedRules);
+    cachedDetectorRules = state.key;
+  }
+  return cachedDetector;
+}
+
+function clearDetectorCacheForTests(): void {
+  cachedDetector = undefined;
+  cachedDetectorRules = undefined;
+}
+
+export function __resetRedactDetectorCacheForTests(): void {
+  clearDetectorCacheForTests();
+}
+
+function getDetectorRulesOrThrow(rules: string): string {
+  if (rules === "basic" || rules === "extended" || rules === "none") {
+    return rules;
+  }
+  return resolveCustomRulesPath(rules);
+}
+
+type RedactionMatch = {
+  start: number;
+  end: number;
+  content: string;
+  riskLevel: "low" | "medium" | "high" | "critical";
+};
+
+/**
+ * Enhanced redaction that combines the existing pattern-based redaction
+ * with the privacy detection engine for broader coverage.
+ *
+ * Respects `privacy.enabled` — when false, only the pattern-based pass runs.
+ * Respects `privacy.rules` — uses the configured ruleset instead of always
+ * defaulting to "extended".
+ */
+export function redactWithPrivacyFilter(
+  text: string,
+  options?: RedactOptions,
+  privacyEnabled = true,
+  privacyRules: string | undefined = undefined,
+): string {
+  if (!text) {
+    return text;
+  }
+
+  // First pass: existing pattern-based redaction.
+  let result = redactSensitiveText(text, options);
+
+  // Second pass: privacy detector for additional coverage.
+  // Skip entirely when the user has opted out of privacy features.
+  if (!privacyEnabled) {
+    return result;
+  }
+
+  try {
+    const rules = getDetectorRulesOrThrow(privacyRules ?? "extended");
+    const detector = getOrCreateCachedDetector(rules);
+    const detected = detector.detect(result);
+    if (detected.hasPrivacyRisk) {
+      // Apply mask-style redaction (not replacement) for log output.
+      const selected = selectNonOverlappingMatches(detected.matches);
+      const sorted = [...selected].toSorted((a, b) => b.start - a.start);
+      for (const match of sorted) {
+        const masked = maskToken(match.content);
+        result = result.slice(0, match.start) + masked + result.slice(match.end);
+      }
+    }
+  } catch {
+    // Non-fatal: fall back to pattern-only redaction.
+  }
+
+  return result;
+}
+
+function selectNonOverlappingMatches(matches: RedactionMatch[]): RedactionMatch[] {
+  const sorted = [...matches].toSorted((a, b) => {
+    if (a.start !== b.start) {
+      return a.start - b.start;
+    }
+    const spanDiff = b.end - b.start - (a.end - a.start);
+    if (spanDiff !== 0) {
+      return spanDiff;
+    }
+    return riskRank(b.riskLevel) - riskRank(a.riskLevel);
+  });
+
+  const selected: RedactionMatch[] = [];
+  let lastEnd = -1;
+  for (const match of sorted) {
+    if (match.start < lastEnd) {
+      continue;
+    }
+    selected.push(match);
+    lastEnd = match.end;
+  }
+  return selected;
+}
+
+function riskRank(level: "low" | "medium" | "high" | "critical"): number {
+  switch (level) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
 }
