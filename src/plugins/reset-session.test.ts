@@ -200,6 +200,7 @@ function createRecord(): PluginRecord {
     toolNames: [],
     hookNames: [],
     channelIds: [],
+    cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
     mediaUnderstandingProviderIds: [],
