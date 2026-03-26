@@ -21,132 +21,637 @@ Call any linked connector via the `blink connector exec` CLI command.
 blink connector exec <provider> <endpoint> [GET|POST|PUT|PATCH|DELETE] [json-params]
 ```
 
+**IMPORTANT**: `<endpoint>` is a path RELATIVE to the provider's base URL (see table below).
+Do NOT include the API version prefix — it's already in the base URL.
+For example, Attio's base is `https://api.attio.com/v2/` so use `objects`, NOT `/v2/objects`.
+
 ## Check which connectors are linked
 ```bash
 blink connector status
 ```
 A missing provider means it's not linked — ask the user to connect it in the Agent Integrations tab.
 
-## Provider Keys
-| Service | PROVIDER key |
-|---------|-------------|
-| Notion | `notion` |
-| Slack | `slack` |
-| Discord | `discord` |
-| HubSpot | `hubspot` |
-| Airtable | `airtable` |
-| Microsoft Outlook | `microsoft_outlook` |
-| Microsoft Calendar | `microsoft_calendar` |
-| Microsoft OneDrive | `microsoft_onedrive` |
-| Microsoft Teams | `microsoft_teams` |
-| LinkedIn | `linkedin` |
-| Salesforce | `salesforce` |
-| Gmail | `google_gmail` |
-| Google Drive | `google_drive` |
-| Google Calendar | `google_calendar` |
-| Google Docs | `google_docs` |
-| Google Sheets | `google_sheets` |
-| Google Slides | `google_slides` |
-| GitHub | `github` |
-| Jira | `jira` |
-| Asana | `asana` |
-| Linear | `linear` |
-| Attio | `attio` |
-| Pipedrive | `pipedrive` |
-| Zoom | `zoom` |
-| Stripe | `stripe` |
-| Shopify | `shopify` |
-| Figma | `figma` |
-| Twitter | `twitter` |
-| Instagram | `instagram` |
-| TikTok | `tiktok` |
-| YouTube | `youtube` |
-| Loom | `loom` |
-| Mailchimp | `mailchimp` |
-| Typeform | `typeform` |
-| Calendly | `calendly` |
-| Etsy | `etsy` |
-| Vercel | `vercel` |
-| Reddit | `reddit` |
+## Provider Keys & Base URLs
+| Service | PROVIDER key | Base URL |
+|---------|-------------|----------|
+| Notion | `notion` | `https://api.notion.com/v1/` |
+| Slack | `slack` | `https://slack.com/api/` |
+| Discord | `discord` | `https://discord.com/api/v10/` |
+| HubSpot | `hubspot` | `https://api.hubapi.com/` |
+| Airtable | `airtable` | `https://api.airtable.com/v0/` |
+| Microsoft Outlook | `microsoft_outlook` | `https://graph.microsoft.com/v1.0/` |
+| Microsoft Calendar | `microsoft_calendar` | `https://graph.microsoft.com/v1.0/` |
+| Microsoft OneDrive | `microsoft_onedrive` | `https://graph.microsoft.com/v1.0/` |
+| Microsoft Teams | `microsoft_teams` | `https://graph.microsoft.com/v1.0/` |
+| LinkedIn | `linkedin` | `https://api.linkedin.com/v2/` |
+| Salesforce | `salesforce` | `https://{instance}.salesforce.com/` |
+| Gmail | `google_gmail` | `https://gmail.googleapis.com/gmail/v1/` |
+| Google Drive | `google_drive` | `https://www.googleapis.com/drive/v3/` |
+| Google Calendar | `google_calendar` | `https://www.googleapis.com/calendar/v3/` |
+| Google Docs | `google_docs` | `https://docs.googleapis.com/v1/` |
+| Google Sheets | `google_sheets` | `https://sheets.googleapis.com/v4/` |
+| Google Slides | `google_slides` | `https://slides.googleapis.com/v1/` |
+| GitHub | `github` | `https://api.github.com/` |
+| Jira | `jira` | `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/3/` |
+| Asana | `asana` | `https://app.asana.com/api/1.0/` |
+| Linear | `linear` | GraphQL: `https://api.linear.app/graphql` |
+| Attio | `attio` | `https://api.attio.com/v2/` |
+| Pipedrive | `pipedrive` | `https://{company}.pipedrive.com/api/v1/` |
+| Zoom | `zoom` | `https://api.zoom.us/v2/` |
+| Stripe | `stripe` | `https://api.stripe.com/v1/` |
+| Shopify | `shopify` | `https://{shop}.myshopify.com/admin/api/2024-10/` |
+| Figma | `figma` | `https://api.figma.com/v1/` |
+| Twitter | `twitter` | `https://api.twitter.com/2/` |
+| Instagram | `instagram` | `https://graph.instagram.com/v22.0/` |
+| TikTok | `tiktok` | `https://open.tiktokapis.com/v2/` |
+| YouTube | `youtube` | `https://www.googleapis.com/youtube/v3/` |
+| Loom | `loom` | `https://www.loom.com/v1/` |
+| Mailchimp | `mailchimp` | `https://{dc}.api.mailchimp.com/3.0/` |
+| Typeform | `typeform` | `https://api.typeform.com/` |
+| Calendly | `calendly` | `https://api.calendly.com/` |
+| ConvertKit | `convertkit` | `https://api.kit.com/v4/` |
+| Etsy | `etsy` | `https://openapi.etsy.com/v3/` |
+| Vercel | `vercel` | `https://api.vercel.com/` |
+| Reddit | `reddit` | `https://oauth.reddit.com/` |
+| ClickUp | `clickup` | `https://api.clickup.com/api/v2/` |
 
-## Examples
+## Examples by Provider
 
+### Notion
 ```bash
-# Notion — search everything
-blink connector exec notion /search POST '{"query": "meeting notes"}'
+# Search all pages and databases
+blink connector exec notion search POST '{"query":"meeting notes","page_size":10}'
 
-# Slack — post a message
-blink connector exec slack /chat.postMessage POST '{"channel":"#general","text":"Hello!"}'
+# List all databases
+blink connector exec notion databases GET
 
-# Discord — list guilds
-blink connector exec discord /users/@me/guilds GET
+# Query a database
+blink connector exec notion databases/DATABASE_ID/query POST '{"page_size":10}'
 
-# Google Calendar — list upcoming events
-blink connector exec google_calendar /calendars/primary/events GET '{"timeMin":"2026-03-15T00:00:00Z","maxResults":10,"singleEvents":true,"orderBy":"startTime"}'
+# Get a page
+blink connector exec notion pages/PAGE_ID GET
 
-# Gmail — list unread messages
-blink connector exec google_gmail /users/me/messages GET '{"labelIds":"INBOX","q":"is:unread","maxResults":10}'
+# Create a page in a database
+blink connector exec notion pages POST '{"parent":{"database_id":"DB_ID"},"properties":{"Name":{"title":[{"text":{"content":"New Page"}}]}}}'
+```
 
-# Google Drive — list files
-blink connector exec google_drive /files GET '{"pageSize":20,"fields":"files(id,name,modifiedTime)"}'
+### Slack
+```bash
+# Post a message
+blink connector exec slack chat.postMessage POST '{"channel":"#general","text":"Hello!"}'
 
-# Google Sheets — read a range
-blink connector exec google_sheets /spreadsheets/SPREADSHEET_ID/values/Sheet1!A1:Z100 GET
+# List channels
+blink connector exec slack conversations.list GET '{"limit":"20"}'
 
-# Google Docs — get document content
-blink connector exec google_docs /documents/DOCUMENT_ID GET
+# Get channel history
+blink connector exec slack conversations.history POST '{"channel":"C123456","limit":"10"}'
+```
 
-# Google Slides — get presentation
-blink connector exec google_slides /presentations/PRESENTATION_ID GET
+### Discord
+```bash
+# List guilds (servers)
+blink connector exec discord users/@me/guilds GET
 
-# HubSpot — search contacts
-blink connector exec hubspot /crm/v3/objects/contacts/search POST '{"filterGroups":[{"filters":[{"propertyName":"email","operator":"CONTAINS_TOKEN","value":"example.com"}]}],"limit":10}'
+# List channels in a guild
+blink connector exec discord guilds/GUILD_ID/channels GET
 
-# Airtable — list bases
-blink connector exec airtable /meta/bases GET
+# Send a message
+blink connector exec discord channels/CHANNEL_ID/messages POST '{"content":"Hello from Blink!"}'
+```
 
-# Airtable — list records in a table
-blink connector exec airtable /BASE_ID/TABLE_NAME GET '{"maxRecords":50}'
+### Google Calendar
+```bash
+# List upcoming events
+blink connector exec google_calendar calendars/primary/events GET '{"timeMin":"2026-03-15T00:00:00Z","maxResults":"10","singleEvents":"true","orderBy":"startTime"}'
 
-# Microsoft Outlook — list inbox
-blink connector exec microsoft_outlook /me/messages GET '{"$top":"20","$select":"subject,from,receivedDateTime,isRead","$orderby":"receivedDateTime desc"}'
+# Create an event
+blink connector exec google_calendar calendars/primary/events POST '{"summary":"Team Meeting","start":{"dateTime":"2026-04-01T10:00:00Z"},"end":{"dateTime":"2026-04-01T11:00:00Z"}}'
 
-# Microsoft Outlook — send email
-blink connector exec microsoft_outlook /me/sendMail POST '{"message":{"subject":"Hello","body":{"contentType":"Text","content":"Hi!"},"toRecipients":[{"emailAddress":{"address":"user@example.com"}}]}}'
+# List calendars
+blink connector exec google_calendar users/me/calendarList GET
+```
 
-# LinkedIn — get profile
+### Gmail
+```bash
+# List unread messages
+blink connector exec google_gmail users/me/messages GET '{"labelIds":"INBOX","q":"is:unread","maxResults":"10"}'
+
+# Get a specific message
+blink connector exec google_gmail users/me/messages/MESSAGE_ID GET '{"format":"full"}'
+
+# List labels
+blink connector exec google_gmail users/me/labels GET
+
+# Send an email (raw RFC822 base64url encoded)
+blink connector exec google_gmail users/me/messages/send POST '{"raw":"BASE64URL_ENCODED_EMAIL"}'
+```
+
+### Google Drive
+```bash
+# List files
+blink connector exec google_drive files GET '{"pageSize":"20","fields":"files(id,name,mimeType,modifiedTime)"}'
+
+# Search files
+blink connector exec google_drive files GET '{"q":"name contains '\''report'\''","pageSize":"10"}'
+
+# Get file metadata
+blink connector exec google_drive files/FILE_ID GET '{"fields":"id,name,mimeType,size,modifiedTime"}'
+```
+
+### Google Docs
+```bash
+# Get a document's content
+blink connector exec google_docs documents/DOCUMENT_ID GET
+
+# Create a new document
+blink connector exec google_docs documents POST '{"title":"My New Document"}'
+```
+
+### Google Sheets
+```bash
+# Create a spreadsheet
+blink connector exec google_sheets spreadsheets POST '{"properties":{"title":"My Spreadsheet"}}'
+
+# Read a range
+blink connector exec google_sheets spreadsheets/SPREADSHEET_ID/values/Sheet1!A1:Z100 GET
+
+# Write to a range
+blink connector exec google_sheets spreadsheets/SPREADSHEET_ID/values/Sheet1!A1:B2 PUT '{"values":[["Name","Score"],["Alice","95"]],"valueInputOption":"USER_ENTERED"}'
+
+# Get spreadsheet metadata
+blink connector exec google_sheets spreadsheets/SPREADSHEET_ID GET
+```
+
+### Google Slides
+```bash
+# Get a presentation
+blink connector exec google_slides presentations/PRESENTATION_ID GET
+
+# Create a presentation
+blink connector exec google_slides presentations POST '{"title":"My Presentation"}'
+```
+
+### YouTube
+```bash
+# List your channels
+blink connector exec youtube channels GET '{"part":"snippet,statistics","mine":"true"}'
+
+# Search videos
+blink connector exec youtube search GET '{"part":"snippet","q":"blink.new tutorial","type":"video","maxResults":"5"}'
+
+# List videos from a channel
+blink connector exec youtube search GET '{"part":"snippet","channelId":"CHANNEL_ID","type":"video","maxResults":"10"}'
+
+# Get video details
+blink connector exec youtube videos GET '{"part":"snippet,statistics","id":"VIDEO_ID"}'
+```
+
+### HubSpot
+```bash
+# Search contacts
+blink connector exec hubspot crm/v3/objects/contacts/search POST '{"filterGroups":[{"filters":[{"propertyName":"email","operator":"CONTAINS_TOKEN","value":"example.com"}]}],"limit":10}'
+
+# List contacts
+blink connector exec hubspot crm/v3/objects/contacts GET '{"limit":"10"}'
+
+# Create a contact
+blink connector exec hubspot crm/v3/objects/contacts POST '{"properties":{"email":"new@example.com","firstname":"John","lastname":"Doe"}}'
+
+# List deals
+blink connector exec hubspot crm/v3/objects/deals GET '{"limit":"10"}'
+```
+
+### Airtable
+```bash
+# List bases
+blink connector exec airtable meta/bases GET
+
+# List records in a table
+blink connector exec airtable BASE_ID/TABLE_NAME GET '{"maxRecords":"50"}'
+
+# Create a record
+blink connector exec airtable BASE_ID/TABLE_NAME POST '{"records":[{"fields":{"Name":"New Record","Status":"Active"}}]}'
+```
+
+### Microsoft Outlook
+```bash
+# List inbox
+blink connector exec microsoft_outlook me/messages GET '{"$top":"20","$select":"subject,from,receivedDateTime,isRead","$orderby":"receivedDateTime desc"}'
+
+# Send email
+blink connector exec microsoft_outlook me/sendMail POST '{"message":{"subject":"Hello","body":{"contentType":"Text","content":"Hi!"},"toRecipients":[{"emailAddress":{"address":"user@example.com"}}]}}'
+
+# Get a message
+blink connector exec microsoft_outlook me/messages/MESSAGE_ID GET
+```
+
+### Microsoft Calendar
+```bash
+# List events
+blink connector exec microsoft_calendar me/events GET '{"$top":"10","$orderby":"start/dateTime"}'
+
+# Create event
+blink connector exec microsoft_calendar me/events POST '{"subject":"Meeting","start":{"dateTime":"2026-04-01T10:00:00","timeZone":"UTC"},"end":{"dateTime":"2026-04-01T11:00:00","timeZone":"UTC"}}'
+```
+
+### Microsoft OneDrive
+```bash
+# List root files
+blink connector exec microsoft_onedrive me/drive/root/children GET
+
+# Search files
+blink connector exec microsoft_onedrive me/drive/root/search(q='report') GET
+```
+
+### Microsoft Teams
+```bash
+# List joined teams
+blink connector exec microsoft_teams me/joinedTeams GET
+
+# List channels in a team
+blink connector exec microsoft_teams teams/TEAM_ID/channels GET
+```
+
+### LinkedIn
+```bash
+# Get profile info (name, email, picture)
 blink connector exec linkedin userinfo GET
 
-# Salesforce — SOQL query
-blink connector exec salesforce /services/data/v62.0/query GET '{"q":"SELECT Id,Name,Email FROM Contact LIMIT 20"}'
+# Create a text post (replace PERSON_ID with sub from userinfo)
+blink connector exec linkedin ugcPosts POST '{"author":"urn:li:person:PERSON_ID","lifecycleState":"PUBLISHED","specificContent":{"com.linkedin.ugc.ShareContent":{"shareCommentary":{"text":"Posted via Blink!"},"shareMediaCategory":"NONE"}},"visibility":{"com.linkedin.ugc.MemberNetworkVisibility":"PUBLIC"}}'
 
-# GitHub — list repos
-blink connector exec github /user/repos GET
+# Like a post
+blink connector exec linkedin 'socialActions/urn%3Ali%3Ashare%3A123/likes' POST '{"actor":"urn:li:person:PERSON_ID"}'
+```
 
-# Jira — search issues
-blink connector exec jira /search GET '{"jql":"assignee=currentUser()","maxResults":20}'
+### Salesforce
+```bash
+# SOQL query
+blink connector exec salesforce services/data/v62.0/query GET '{"q":"SELECT Id,Name,Email FROM Contact LIMIT 20"}'
 
-# Linear — GraphQL query
+# List accounts
+blink connector exec salesforce services/data/v62.0/sobjects/Account GET
+
+# Get a specific record
+blink connector exec salesforce services/data/v62.0/sobjects/Contact/CONTACT_ID GET
+```
+
+### GitHub
+```bash
+# List repos
+blink connector exec github user/repos GET
+
+# Get repo details
+blink connector exec github repos/OWNER/REPO GET
+
+# List issues
+blink connector exec github repos/OWNER/REPO/issues GET '{"state":"open","per_page":"10"}'
+
+# Create an issue
+blink connector exec github repos/OWNER/REPO/issues POST '{"title":"Bug report","body":"Description here","labels":["bug"]}'
+
+# List pull requests
+blink connector exec github repos/OWNER/REPO/pulls GET '{"state":"open"}'
+```
+
+### Jira
+```bash
+# Get myself
+blink connector exec jira myself GET
+
+# Search issues (JQL)
+blink connector exec jira search GET '{"jql":"assignee=currentUser() ORDER BY updated DESC","maxResults":"20"}'
+
+# Get issue details
+blink connector exec jira issue/ISSUE_KEY GET
+
+# Create issue
+blink connector exec jira issue POST '{"fields":{"project":{"key":"PROJ"},"summary":"New Bug","issuetype":{"name":"Bug"},"description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Description"}]}]}}}'
+
+# List projects
+blink connector exec jira project GET
+```
+
+### Asana
+```bash
+# Get user info
+blink connector exec asana users/me GET
+
+# List workspaces
+blink connector exec asana workspaces GET
+
+# List projects in a workspace
+blink connector exec asana projects GET '{"workspace":"WORKSPACE_GID"}'
+
+# List tasks in a project
+blink connector exec asana tasks GET '{"project":"PROJECT_GID"}'
+
+# Create a task
+blink connector exec asana tasks POST '{"data":{"name":"New Task","projects":["PROJECT_GID"],"workspace":"WORKSPACE_GID"}}'
+```
+
+### Linear (GraphQL)
+```bash
+# Get viewer info
 blink connector exec linear '{ viewer { id name email teams { nodes { id name } } } }' POST
 
-# Stripe — list customers
-blink connector exec stripe /customers GET '{"limit":10}'
+# List issues
+blink connector exec linear '{ issues(first: 20) { nodes { id title state { name } assignee { name } } } }' POST
 
-# Zoom — list meetings
-blink connector exec zoom /users/me/meetings GET
+# Create an issue
+blink connector exec linear 'mutation { issueCreate(input: { title: "Bug fix", teamId: "TEAM_ID" }) { success issue { id identifier title } } }' POST
 
-# Reddit — search posts
-blink connector exec reddit /search GET '{"q":"OpenClaw","sort":"new","limit":10}'
+# Search issues
+blink connector exec linear '{ issueSearch(query: "bug", first: 10) { nodes { id title state { name } } } }' POST
+```
+
+### Attio
+```bash
+# List all objects (custom + standard)
+blink connector exec attio objects GET
+
+# List records for an object (e.g., People)
+blink connector exec attio objects/people/records/query POST '{"limit":20}'
+
+# Get a specific record
+blink connector exec attio objects/people/records/RECORD_ID GET
+
+# List all lists
+blink connector exec attio lists GET
+
+# Query list entries
+blink connector exec attio lists/LIST_ID/entries/query POST '{"limit":20}'
+
+# Search for records
+blink connector exec attio objects/people/records/query POST '{"filter":{"email_addresses":{"contains":"@example.com"}}}'
+
+# Create a record
+blink connector exec attio objects/people/records POST '{"data":{"values":{"name":[{"first_name":"John","last_name":"Doe"}],"email_addresses":["john@example.com"]}}}'
+
+# List notes
+blink connector exec attio notes GET '{"limit":"20"}'
+```
+
+### Pipedrive
+```bash
+# Get current user
+blink connector exec pipedrive users/me GET
+
+# List deals
+blink connector exec pipedrive deals GET '{"limit":"20","status":"open"}'
+
+# Get deal details
+blink connector exec pipedrive deals/DEAL_ID GET
+
+# Create a deal
+blink connector exec pipedrive deals POST '{"title":"New Deal","value":"5000","currency":"USD"}'
+
+# List persons (contacts)
+blink connector exec pipedrive persons GET '{"limit":"20"}'
+
+# Search
+blink connector exec pipedrive itemSearch GET '{"term":"Acme","item_types":"deal,person"}'
+
+# List activities
+blink connector exec pipedrive activities GET '{"limit":"20"}'
+```
+
+### Zoom
+```bash
+# List meetings
+blink connector exec zoom users/me/meetings GET
+
+# Get meeting details
+blink connector exec zoom meetings/MEETING_ID GET
+
+# Create a meeting
+blink connector exec zoom users/me/meetings POST '{"topic":"Team Sync","type":2,"start_time":"2026-04-01T10:00:00Z","duration":30}'
+
+# List recordings
+blink connector exec zoom users/me/recordings GET '{"from":"2026-03-01","to":"2026-03-31"}'
+```
+
+### Stripe
+```bash
+# List customers
+blink connector exec stripe customers GET '{"limit":"10"}'
+
+# Get customer
+blink connector exec stripe customers/CUSTOMER_ID GET
+
+# List charges
+blink connector exec stripe charges GET '{"limit":"10"}'
+
+# List subscriptions
+blink connector exec stripe subscriptions GET '{"limit":"10"}'
+
+# List invoices
+blink connector exec stripe invoices GET '{"limit":"10"}'
+```
+
+### Shopify
+```bash
+# List orders
+blink connector exec shopify orders.json GET '{"limit":"10"}'
+
+# List products
+blink connector exec shopify products.json GET '{"limit":"10"}'
+
+# Get a product
+blink connector exec shopify products/PRODUCT_ID.json GET
+
+# List customers
+blink connector exec shopify customers.json GET '{"limit":"10"}'
+```
+
+### Figma
+```bash
+# Get user info
+blink connector exec figma me GET
+
+# Get a file
+blink connector exec figma files/FILE_KEY GET
+
+# List team projects
+blink connector exec figma teams/TEAM_ID/projects GET
+
+# Get file comments
+blink connector exec figma files/FILE_KEY/comments GET
+```
+
+### Mailchimp
+```bash
+# Ping (health check)
+blink connector exec mailchimp ping GET
+
+# List audiences (lists)
+blink connector exec mailchimp lists GET '{"count":"10"}'
+
+# Get audience members
+blink connector exec mailchimp lists/LIST_ID/members GET '{"count":"20"}'
+
+# List campaigns
+blink connector exec mailchimp campaigns GET '{"count":"10"}'
+
+# Add subscriber to a list
+blink connector exec mailchimp lists/LIST_ID/members POST '{"email_address":"user@example.com","status":"subscribed"}'
+```
+
+### Calendly
+```bash
+# Get current user
+blink connector exec calendly users/me GET
+
+# List event types
+blink connector exec calendly event_types GET '{"user":"USER_URI"}'
+
+# List scheduled events
+blink connector exec calendly scheduled_events GET '{"user":"USER_URI","status":"active","count":"20"}'
+
+# Get event details
+blink connector exec calendly scheduled_events/EVENT_UUID GET
+```
+
+### Typeform
+```bash
+# List forms
+blink connector exec typeform forms GET '{"page_size":"10"}'
+
+# Get form details
+blink connector exec typeform forms/FORM_ID GET
+
+# List responses
+blink connector exec typeform forms/FORM_ID/responses GET '{"page_size":"10"}'
+```
+
+### ConvertKit (Kit)
+```bash
+# Get account info
+blink connector exec convertkit account GET
+
+# List subscribers
+blink connector exec convertkit subscribers GET '{"per_page":"20"}'
+
+# List tags
+blink connector exec convertkit tags GET
+
+# List forms
+blink connector exec convertkit forms GET
+
+# List sequences
+blink connector exec convertkit sequences GET
+```
+
+### Vercel
+```bash
+# Get user
+blink connector exec vercel v2/user GET
+
+# List projects
+blink connector exec vercel v9/projects GET '{"limit":"10"}'
+
+# List deployments
+blink connector exec vercel v6/deployments GET '{"limit":"10"}'
+
+# Get project
+blink connector exec vercel v9/projects/PROJECT_ID GET
+```
+
+### Reddit
+```bash
+# Get user identity
+blink connector exec reddit api/v1/me GET
+
+# Search posts
+blink connector exec reddit search GET '{"q":"OpenClaw","sort":"new","limit":"10"}'
+
+# Get subreddit posts
+blink connector exec reddit r/SUBREDDIT/hot GET '{"limit":"10"}'
+
+# Get user's subscriptions
+blink connector exec reddit subreddits/mine/subscriber GET '{"limit":"25"}'
+```
+
+### ClickUp
+```bash
+# List teams (workspaces)
+blink connector exec clickup team GET
+
+# List spaces in a team
+blink connector exec clickup team/TEAM_ID/space GET
+
+# List tasks in a list
+blink connector exec clickup list/LIST_ID/task GET
+
+# Create a task
+blink connector exec clickup list/LIST_ID/task POST '{"name":"New Task","description":"Details","priority":3}'
+```
+
+### Twitter (X)
+```bash
+# Get my user info
+blink connector exec twitter users/me GET '{"user.fields":"name,username,profile_image_url"}'
+
+# Search tweets
+blink connector exec twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
+
+# Post a tweet
+blink connector exec twitter tweets POST '{"text":"Hello from Blink!"}'
+```
+
+### Instagram
+```bash
+# Get user profile
+blink connector exec instagram me GET '{"fields":"id,username,media_count"}'
+
+# List media
+blink connector exec instagram me/media GET '{"fields":"id,caption,media_type,timestamp","limit":"10"}'
+```
+
+### TikTok
+```bash
+# Get user info
+blink connector exec tiktok user/info/ GET '{"fields":"display_name,follower_count,following_count"}'
+
+# List videos
+blink connector exec tiktok video/list/ POST '{"max_count":10}'
+```
+
+### Loom
+```bash
+# List videos
+blink connector exec loom videos GET '{"limit":"10"}'
+
+# Get video details
+blink connector exec loom videos/VIDEO_ID GET
+```
+
+### Etsy
+```bash
+# Get user info
+blink connector exec etsy application/users/me GET
+
+# List shops
+blink connector exec etsy application/users/me/shops GET
+
+# List shop listings
+blink connector exec etsy application/shops/SHOP_ID/listings GET '{"limit":"25"}'
 ```
 
 ## Scripting — capture output
 ```bash
 # Get a value from JSON response
-RESULT=$(blink connector exec github /user/repos GET --json)
+RESULT=$(blink connector exec github user/repos GET --json)
 echo "$RESULT" | python3 -c "import json,sys; repos=json.load(sys.stdin)['data']; [print(r['full_name']) for r in repos[:5]]"
 ```
 
 ## Multiple accounts
 ```bash
-blink connector exec github /user/repos GET --account acct_xxx
+blink connector exec github user/repos GET --account acct_xxx
+```
+
+## Auto-link a connector
+If a connector is connected to the workspace but not linked to this agent:
+```bash
+blink connector link <provider>
 ```
