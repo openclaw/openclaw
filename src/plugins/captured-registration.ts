@@ -5,7 +5,6 @@ import type {
   OpenClawPluginApi,
   ProviderPlugin,
   SpeechProviderPlugin,
-  VideoGenerationProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -15,7 +14,6 @@ export type CapturedPluginRegistration = {
   speechProviders: SpeechProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
-  videoGenerationProviders: VideoGenerationProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
   tools: AnyAgentTool[];
 };
@@ -25,7 +23,6 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
-  const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const tools: AnyAgentTool[] = [];
 
@@ -34,7 +31,6 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
     speechProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
-    videoGenerationProviders,
     webSearchProviders,
     tools,
     api: {
@@ -49,9 +45,6 @@ export function createCapturedPluginRegistration(): CapturedPluginRegistration {
       },
       registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
         imageGenerationProviders.push(provider);
-      },
-      registerVideoGenerationProvider(provider: VideoGenerationProviderPlugin) {
-        videoGenerationProviders.push(provider);
       },
       registerWebSearchProvider(provider: WebSearchProviderPlugin) {
         webSearchProviders.push(provider);
