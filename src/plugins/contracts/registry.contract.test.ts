@@ -130,6 +130,24 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebSearchPluginIds);
   });
 
+  it("keeps Kimi Coding onboarding grouped under Moonshot", () => {
+    const kimi = loadPluginManifestRegistry({}).plugins.find(
+      (plugin) => plugin.origin === "bundled" && plugin.id === "kimi",
+    );
+
+    expect(kimi?.providerAuthChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          choiceId: "kimi-code-api-key",
+          choiceLabel: "Kimi Code API key (subscription)",
+          groupId: "moonshot",
+          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupHint: "Kimi K2.5",
+        }),
+      ]),
+    );
+  });
+
   it("does not duplicate bundled image-generation provider ids", () => {
     const ids = imageGenerationProviderContractRegistry.map((entry) => entry.provider.id);
     expect(ids).toEqual([...new Set(ids)]);
