@@ -3,18 +3,16 @@
 #
 # One-time setup (from repo root): ./scripts/podman/setup.sh
 # Then:
-#   ./scripts/run-openclaw-podman.sh launch           # Start gateway
-#   ./scripts/run-openclaw-podman.sh launch setup      # Onboarding wizard
+#   ~/.local/bin/run-openclaw-podman.sh launch        # Start gateway
+#   ~/.local/bin/run-openclaw-podman.sh launch setup  # Onboarding wizard
 #
-# As the openclaw user (no repo needed):
-#   sudo -u openclaw /home/openclaw/run-openclaw-podman.sh
-#   sudo -u openclaw /home/openclaw/run-openclaw-podman.sh setup
+# Manage the running container from the host CLI:
+#   openclaw --container openclaw dashboard --no-open
+#   openclaw --container openclaw channels login
 #
 # Legacy: "setup-host" delegates to the Podman setup script
 
 set -euo pipefail
-
-OPENCLAW_USER="${OPENCLAW_PODMAN_USER:-openclaw}"
 
 resolve_user_home() {
   local user="$1"
@@ -31,11 +29,13 @@ resolve_user_home() {
   printf '%s' "$home"
 }
 
-OPENCLAW_HOME="$(resolve_user_home "$OPENCLAW_USER")"
-OPENCLAW_UID="$(id -u "$OPENCLAW_USER" 2>/dev/null || true)"
-LAUNCH_SCRIPT="$OPENCLAW_HOME/run-openclaw-podman.sh"
+EFFECTIVE_USER="$(id -un)"
+EFFECTIVE_HOME="${HOME:-}"
+if [[ -z "$EFFECTIVE_HOME" ]]; then
+  EFFECTIVE_HOME="$(resolve_user_home "$EFFECTIVE_USER")"
+fi
 
-# Legacy: setup-host → run the Podman setup script
+# Legacy: setup-host -> run the Podman setup script
 if [[ "${1:-}" == "setup-host" ]]; then
   shift
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,36 +51,32 @@ if [[ "${1:-}" == "setup-host" ]]; then
   exit 1
 fi
 
-# --- Step 2: launch (from repo: re-exec as openclaw in safe cwd; from openclaw home: run container) ---
 if [[ "${1:-}" == "launch" ]]; then
   shift
-  if [[ -n "${OPENCLAW_UID:-}" && "$(id -u)" -ne "$OPENCLAW_UID" ]]; then
-    # Exec as openclaw with cwd=/tmp so a nologin user never inherits an invalid cwd.
-    exec sudo -u "$OPENCLAW_USER" env HOME="$OPENCLAW_HOME" PATH="$PATH" TERM="${TERM:-}" \
-      bash -c 'cd /tmp && exec '"$LAUNCH_SCRIPT"' "$@"' _ "$@"
-  fi
-  # Already openclaw; fall through to container run (with remaining args, e.g. "setup")
 fi
 
-# --- Container run (script in openclaw home, run as openclaw) ---
-EFFECTIVE_HOME="${HOME:-}"
-if [[ -n "${OPENCLAW_UID:-}" && "$(id -u)" -eq "$OPENCLAW_UID" ]]; then
-  EFFECTIVE_HOME="$OPENCLAW_HOME"
-  export HOME="$OPENCLAW_HOME"
-fi
 if [[ -z "${EFFECTIVE_HOME:-}" ]]; then
-  EFFECTIVE_HOME="${OPENCLAW_HOME:-/tmp}"
+  EFFECTIVE_HOME="/tmp"
 fi
+
+CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
+ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
+if [[ -f "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE" 2>/dev/null || true
+  set +a
+fi
+
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
 ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
-OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-openclaw:local}"
+OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
 PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 
-# Safe cwd for podman (openclaw is nologin; avoid inherited cwd from sudo)
 cd "$EFFECTIVE_HOME" 2>/dev/null || cd /tmp 2>/dev/null || true
 
 RUN_SETUP=false
@@ -90,20 +86,10 @@ if [[ "${1:-}" == "setup" || "${1:-}" == "onboard" ]]; then
 fi
 
 mkdir -p "$CONFIG_DIR" "$WORKSPACE_DIR"
-# Subdirs the app may create at runtime (canvas, cron); create here so ownership is correct
 mkdir -p "$CONFIG_DIR/canvas" "$CONFIG_DIR/cron"
 chmod 700 "$CONFIG_DIR" "$WORKSPACE_DIR" 2>/dev/null || true
 
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$ENV_FILE" 2>/dev/null || true
-  set +a
-fi
-
 # Keep Podman default local-only unless explicitly overridden.
-# Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).
-# NOTE: must be evaluated after sourcing ENV_FILE so OPENCLAW_GATEWAY_BIND set in .env takes effect.
 GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-loopback}"
 
 upsert_env_var() {
@@ -153,11 +139,9 @@ if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   echo "Generated OPENCLAW_GATEWAY_TOKEN and wrote it to $ENV_FILE." >&2
 fi
 
-# The gateway refuses to start unless gateway.mode=local is set in config.
-# Keep this minimal; users can run the wizard later to configure channels/providers.
 CONFIG_JSON="$CONFIG_DIR/openclaw.json"
 if [[ ! -f "$CONFIG_JSON" ]]; then
-  echo '{ gateway: { mode: "local" } }' >"$CONFIG_JSON"
+  echo '{ "gateway": { "mode": "local" } }' >"$CONFIG_JSON"
   chmod 600 "$CONFIG_JSON" 2>/dev/null || true
   echo "Created $CONFIG_JSON (minimal gateway.mode=local)." >&2
 fi
@@ -187,8 +171,6 @@ fi
 ENV_FILE_ARGS=()
 [[ -f "$ENV_FILE" ]] && ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
 
-# On Linux with SELinux enforcing/permissive, add ,Z so Podman relabels the
-# bind-mounted directories and the container can access them.
 SELINUX_MOUNT_OPTS=""
 if [[ -z "${OPENCLAW_BIND_MOUNT_OPTIONS:-}" ]]; then
   if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && command -v getenforce >/dev/null 2>&1; then
@@ -198,7 +180,6 @@ if [[ -z "${OPENCLAW_BIND_MOUNT_OPTIONS:-}" ]]; then
     fi
   fi
 else
-  # Honour explicit override (e.g. OPENCLAW_BIND_MOUNT_OPTIONS=":Z" → strip leading colon for inline use).
   SELINUX_MOUNT_OPTS="${OPENCLAW_BIND_MOUNT_OPTIONS#:}"
   [[ -n "$SELINUX_MOUNT_OPTS" ]] && SELINUX_MOUNT_OPTS=",$SELINUX_MOUNT_OPTS"
 fi
@@ -231,5 +212,6 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789
 
 echo "Container $CONTAINER_NAME started. Dashboard: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
+echo "Host CLI: openclaw --container $CONTAINER_NAME dashboard --no-open"
 echo "Logs: podman logs -f $CONTAINER_NAME"
 echo "For auto-start/restarts, use: ./scripts/podman/setup.sh --quadlet (Quadlet + systemd user service)."
