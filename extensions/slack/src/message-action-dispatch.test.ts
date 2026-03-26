@@ -104,6 +104,22 @@ describe("handleSlackMessageAction", () => {
     );
   });
 
+  it("requires filePath, path, or media for upload-file", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "upload-file",
+          cfg: {},
+          params: {
+            to: "channel:C1",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+  });
+
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
 

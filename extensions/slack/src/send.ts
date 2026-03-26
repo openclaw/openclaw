@@ -244,7 +244,7 @@ async function uploadSlackFile(params: {
     localRoots: params.mediaLocalRoots,
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
-  const uploadTitle = params.uploadTitle ?? params.uploadFileName ?? fileName ?? "upload";
+  const uploadTitle = params.uploadTitle ?? uploadFileName;
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.

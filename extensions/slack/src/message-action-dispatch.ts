@@ -204,7 +204,10 @@ export async function handleSlackMessageAction(params: {
     const filePath =
       readStringParam(actionParams, "filePath", { trim: false }) ??
       readStringParam(actionParams, "path", { trim: false }) ??
-      readStringParam(actionParams, "media", { required: true, trim: false });
+      readStringParam(actionParams, "media", { trim: false });
+    if (!filePath) {
+      throw new Error("upload-file requires filePath, path, or media");
+    }
     const threadId =
       readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
     return await invoke(
