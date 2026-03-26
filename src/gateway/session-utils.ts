@@ -483,9 +483,12 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   });
   const primaryKey = target.canonicalKey;
   if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
+    const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+      params.store,
+      target.storeKeys,
+    );
+    if (freshestMatch) {
+      params.store[primaryKey] = freshestMatch.entry;
     }
   }
   pruneLegacyStoreKeys({
