@@ -15,6 +15,7 @@ import {
   ExecAllowlistMatcher,
   type ExecAllowlistConfig,
 } from "../exec-allowlist-matcher.js";
+import { ExecErrorEnhancer } from "../exec-error-enhancer.js";
 import {
   ErrorCodes,
   errorShape,
@@ -29,6 +30,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; allowlist?: ExecAllowlistConfig },
 ): GatewayRequestHandlers {
   const allowlistMatcher = new ExecAllowlistMatcher(opts?.allowlist);
+  const errorEnhancer = new ExecErrorEnhancer();
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -341,16 +343,33 @@ export function createExecApprovalHandlers(
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
+        const enhancedError = errorEnhancer.enhance(
+          snapshot?.request?.command || "unknown",
+          "Approval request expired or not found",
+          "APPROVAL_NOT_FOUND",
+        );
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          errorShape(ErrorCodes.INVALID_REQUEST, enhancedError.message),
         );
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        {
+          id: approvalId,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+          // Include error enhancement info if decision was denial
+          errorHint:
+            decision === "deny" && snapshot?.request
+              ? errorEnhancer.enhance(snapshot.request.command || "unknown", "Approval denied")
+                  .allowlistSuggestion
+              : undefined,
+        },
         { dropIfSlow: true },
       );
       void opts?.forwarder
