@@ -59,9 +59,7 @@ export function assertFirecrawlUrlAllowed(url: string): void {
     throw new SsrFBlockedError("Invalid URL supplied to Firecrawl");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new SsrFBlockedError(
-      `Blocked non-HTTP(S) protocol in Firecrawl URL: ${parsed.protocol}`,
-    );
+    throw new SsrFBlockedError(`Blocked non-HTTP(S) protocol in Firecrawl URL: ${parsed.protocol}`);
   }
   if (isBlockedHostnameOrIp(parsed.hostname)) {
     throw new SsrFBlockedError(
