@@ -105,6 +105,38 @@ describe("temporal decay", () => {
     expect(decayed[1]?.score).toBeCloseTo(0.75);
   });
 
+  it("treats case-variant evergreen topic paths as evergreen", async () => {
+    // MEMORY/notes.md should be treated as evergreen (no decay) even with
+    // uppercase directory name.
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "MEMORY/notes.md", score: 0.9, source: "memory" },
+        { path: "Memory/topics.md", score: 0.8, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Evergreen files should not decay — scores should remain unchanged.
+    expect(decayed[0]?.score).toBeCloseTo(0.9);
+    expect(decayed[1]?.score).toBeCloseTo(0.8);
+  });
+
+  it("decays dated files under case-variant memory directories", async () => {
+    // MEMORY/2025-01-01.md is a dated file and should decay, even though the
+    // directory name is uppercase.
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        { path: "MEMORY/2025-01-01.md", score: 0.95, source: "memory" },
+      ],
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    // Dated file is ~406 days old at NOW_MS — score should be heavily decayed.
+    expect(decayed[0]?.score).toBeLessThan(0.01);
+  });
+
   it("applies decay in hybrid merging before ranking", async () => {
     const merged = await mergeVectorResultsWithTemporalDecay([
       createVectorMemoryEntry({

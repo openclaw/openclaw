@@ -73,10 +73,11 @@ function isEvergreenMemoryPath(filePath: string): boolean {
   if (normalized === "MEMORY.md" || normalized === "memory.md") {
     return true;
   }
-  if (!normalized.startsWith("memory/")) {
+  const lowered = normalized.toLowerCase();
+  if (!lowered.startsWith("memory/")) {
     return false;
   }
-  return !DATED_MEMORY_PATH_RE.test(normalized);
+  return !DATED_MEMORY_PATH_RE.test(lowered);
 }
 
 async function extractTimestamp(params: {
