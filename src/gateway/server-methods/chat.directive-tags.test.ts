@@ -234,6 +234,7 @@ function createChatContext(): Pick<
   | "removeChatRun"
   | "dedupe"
   | "registerToolEventRecipient"
+  | "registerThinkingEventRecipient"
   | "logGateway"
 > {
   return {
@@ -247,6 +248,7 @@ function createChatContext(): Pick<
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
+    registerThinkingEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),

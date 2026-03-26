@@ -44,6 +44,7 @@ export type GatewayClientInfo = {
 
 export const GATEWAY_CLIENT_CAPS = {
   TOOL_EVENTS: "tool-events",
+  THINKING_EVENTS: "thinking-events",
 } as const;
 
 export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];

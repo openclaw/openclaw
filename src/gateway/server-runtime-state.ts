@@ -27,6 +27,7 @@ import {
 import {
   type ChatRunEntry,
   createChatRunState,
+  createThinkingEventRecipientRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
@@ -100,6 +101,7 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  thinkingEventRecipients: ReturnType<typeof createThinkingEventRecipientRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
   if (params.pinChannelRegistry !== false) {
@@ -235,6 +237,7 @@ export async function createGatewayRuntimeState(params: {
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const thinkingEventRecipients = createThinkingEventRecipientRegistry();
 
     return {
       canvasHost,
@@ -264,6 +267,7 @@ export async function createGatewayRuntimeState(params: {
       removeChatRun,
       chatAbortControllers,
       toolEventRecipients,
+      thinkingEventRecipients,
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
