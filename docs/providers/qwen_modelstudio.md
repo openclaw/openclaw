@@ -76,7 +76,7 @@ override with a custom `baseUrl` in config.
 - **Kimi K2.5** — Moonshot AI via Alibaba
 - **MiniMax-M2.5** — MiniMax via Alibaba
 
-Most models support image input. Context windows range from 200K to 1M tokens.
+Some models (qwen3.5-plus, kimi-k2.5) support image input. Context windows range from 200K to 1M tokens.
 
 ## Environment note
 
