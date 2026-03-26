@@ -48,6 +48,7 @@ type AcpDispatchDeliveryState = {
   blockCount: number;
   deliveredFinalReply: boolean;
   deliveredVisibleText: boolean;
+  failedVisibleTextDelivery: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -63,6 +64,7 @@ export type AcpDispatchDeliveryCoordinator = {
   getAccumulatedBlockText: () => string;
   hasDeliveredFinalReply: () => boolean;
   hasDeliveredVisibleText: () => boolean;
+  hasFailedVisibleTextDelivery: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -85,6 +87,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     blockCount: 0,
     deliveredFinalReply: false,
     deliveredVisibleText: false,
+    failedVisibleTextDelivery: false,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -180,6 +183,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
       }
 
+      const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+        channel: routedChannel,
+        kind,
+        text: ttsPayload.text,
+      });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -190,6 +198,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         cfg: params.cfg,
       });
       if (!result.ok) {
+        if (tracksVisibleText) {
+          state.failedVisibleTextDelivery = true;
+        }
         logVerbose(
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
         );
@@ -207,19 +218,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "final") {
         state.deliveredFinalReply = true;
       }
-      if (
-        shouldTreatDeliveredTextAsVisible({
-          channel: routedChannel,
-          kind,
-          text: ttsPayload.text,
-        })
-      ) {
+      if (tracksVisibleText) {
         state.deliveredVisibleText = true;
       }
       state.routedCounts[kind] += 1;
       return true;
     }
 
+    const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+      channel: directChannel,
+      kind,
+      text: ttsPayload.text,
+    });
     const delivered =
       kind === "tool"
         ? params.dispatcher.sendToolResult(ttsPayload)
@@ -229,15 +239,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }
-    if (
-      delivered &&
-      shouldTreatDeliveredTextAsVisible({
-        channel: directChannel,
-        kind,
-        text: ttsPayload.text,
-      })
-    ) {
+    if (delivered && tracksVisibleText) {
       state.deliveredVisibleText = true;
+    } else if (!delivered && tracksVisibleText) {
+      state.failedVisibleTextDelivery = true;
     }
     return delivered;
   };
@@ -249,6 +254,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedBlockText: () => state.accumulatedBlockText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
+    hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;

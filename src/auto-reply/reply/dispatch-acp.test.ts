@@ -551,6 +551,60 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("falls back to final text when a later telegram ACP block delivery fails", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "First chunk. " },
+      { text: "Second chunk." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+        },
+      },
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "First chunk. ", tag: "agent_message_chunk" });
+        await onEvent({ type: "text_delta", text: "Second chunk.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "First chunk. " }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Second chunk." }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First chunk. \nSecond chunk." }),
+    );
+    expect(result?.queuedFinal).toBe(true);
+  });
+
   it("does not add text fallback when final TTS already delivered audio", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
