@@ -283,6 +283,9 @@ export function registerCronAddCommand(cron: Command) {
                     if (to && threadId) {
                       return `${to}:topic:${threadId}`;
                     }
+                    if (threadId && !to) {
+                      throw new Error("--thread-id requires --to");
+                    }
                     return to || undefined;
                   })(),
                   accountId,

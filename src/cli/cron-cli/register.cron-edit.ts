@@ -293,6 +293,10 @@ export function registerCronEditCommand(cron: Command) {
                 delivery.to = `${to}:topic:${threadId}`;
               } else if (to) {
                 delivery.to = to;
+              } else if (threadId) {
+                throw new Error("--thread-id requires a delivery target (use --to or ensure the job has one)");
+              } else if (typeof opts.to === "string") {
+                delivery.to = undefined;
               }
             }
             if (typeof opts.account === "string") {
