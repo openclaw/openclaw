@@ -44,6 +44,51 @@ function buildDynamicOpenRouterModel(
   };
 }
 
+/**
+ * Injects the OpenRouter auto-router plugin into the request payload,
+ * constraining model selection to the provided allowlist.
+ *
+ * Config example:
+ * ```json
+ * {
+ *   "model": "openrouter/openrouter/auto",
+ *   "params": {
+ *     "autoRouter": { "allowedModels": ["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"] }
+ *   }
+ * }
+ * ```
+ */
+export function injectAutoRouterPlugin(
+  baseStreamFn: StreamFn | undefined,
+  allowedModels: string[],
+): StreamFn {
+  const underlying =
+    baseStreamFn ??
+    ((nextModel: { id?: unknown }) => {
+      throw new Error(
+        `OpenRouter auto-router wrapper requires an underlying streamFn for ${String(nextModel.id)}.`,
+      );
+    });
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return (underlying as StreamFn)(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const existing = Array.isArray((payload as Record<string, unknown>).plugins)
+            ? ((payload as Record<string, unknown>).plugins as unknown[])
+            : [];
+          (payload as Record<string, unknown>).plugins = [
+            ...existing,
+            { id: "auto-router", allowed_models: allowedModels },
+          ];
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
+  };
+}
+
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
   providerRouting?: Record<string, unknown>,
@@ -145,8 +190,24 @@ export default definePluginEntry({
         if (providerRouting) {
           streamFn = injectOpenRouterRouting(streamFn, providerRouting);
         }
+        let autoRouterAllowedModels: string[] = [];
+        const autoRouterConfig = ctx.extraParams?.autoRouter;
+        if (autoRouterConfig != null && typeof autoRouterConfig === "object") {
+          const rawAllowedModels = (autoRouterConfig as Record<string, unknown>).allowedModels;
+          if (Array.isArray(rawAllowedModels) && rawAllowedModels.length > 0) {
+            const validModels = rawAllowedModels.filter((m): m is string => typeof m === "string");
+            if (validModels.length > 0) {
+              autoRouterAllowedModels = validModels;
+              streamFn = injectAutoRouterPlugin(streamFn, validModels);
+            }
+          }
+        }
+        // Skip reasoning injection if the model ID itself is unsupported, or if the
+        // autoRouter allowlist contains x-ai models (proxy reasoning unsupported via OpenRouter).
         const skipReasoningInjection =
-          ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId);
+          ctx.modelId === "auto" ||
+          isProxyReasoningUnsupported(ctx.modelId) ||
+          autoRouterAllowedModels.some(isProxyReasoningUnsupported);
         const openRouterThinkingLevel = skipReasoningInjection ? undefined : ctx.thinkingLevel;
         streamFn = createOpenRouterWrapper(streamFn, openRouterThinkingLevel);
         streamFn = createOpenRouterSystemCacheWrapper(streamFn);
