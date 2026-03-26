@@ -616,4 +616,66 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
     const status = await getModelCapability(configDir, providerId, modelId);
     expect(status).toBe("react");
   });
+
+  it("should recognize 'toolUse' and 'functionCall' as native tool capability during snooping", async () => {
+    const providerId = `test-provider-variants-${Date.now()}`;
+    const modelId = "llama3-variant"; // heuristic will see llama3 and think it's native
+
+    // Mock a model that returns 'toolUse' instead of 'toolCall'
+    const toolUseStreamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      setTimeout(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolUse",
+                id: "call_123",
+                name: "get_weather",
+                arguments: { location: "Paris" },
+              },
+            ],
+            stopReason: "tool_use",
+            api: "test",
+            model: "test",
+            provider: "test",
+            usage: { input: 10, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 20 },
+            timestamp: Date.now(),
+          } as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+        });
+        stream.end();
+      }, 10);
+      return Promise.resolve(stream);
+    };
+
+    const configDir = resolveStateDir();
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(toolUseStreamFn, {
+      modelId,
+      providerId,
+      providerType: "ollama",
+      toolFallback: "auto",
+      configDir,
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: modelId, api: "test" } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { tools: [{ name: "get_weather", description: "test" }] } as any,
+      {},
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of stream) {
+      /* consume */
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const status = await getModelCapability(configDir, providerId, modelId);
+    expect(status).toBe("native");
+  });
 });

@@ -282,7 +282,12 @@ export function wrapStreamFnWithReActFallback(
               if (chunk.type === "done" && !firstChunkDoneReceived) {
                 firstChunkDoneReceived = true;
                 const content = chunk.message.content as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
-                if (content.some((p) => p.type === "toolCall")) {
+                if (
+                  content.some(
+                    (p) =>
+                      p.type === "toolCall" || p.type === "toolUse" || p.type === "functionCall",
+                  )
+                ) {
                   hasNativeToolCall = true;
                 }
                 const textOutput = content

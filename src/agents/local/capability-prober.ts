@@ -54,7 +54,11 @@ export async function runBackgroundCapabilityProbe(params: {
     for await (const chunk of stream) {
       if (chunk.type === "done") {
         const content = chunk.message.content as unknown as Array<{ type: string }>;
-        if (content.some((p) => p.type === "toolCall")) {
+        if (
+          content.some(
+            (p) => p.type === "toolCall" || p.type === "toolUse" || p.type === "functionCall",
+          )
+        ) {
           finalStatus = "native";
         } else {
           // If we got clear assistant content but no tool call, it's effectively a fallback model
