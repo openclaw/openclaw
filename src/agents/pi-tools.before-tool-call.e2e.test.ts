@@ -605,6 +605,50 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("allow-once");
   });
 
+  it("does not await onResolution before returning approval outcome", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+    const onResolution = vi.fn(() => new Promise<void>(() => {}));
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Non-blocking callback",
+        description: "Should not block tool execution",
+        onResolution,
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-r1-nonblocking", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({
+      id: "server-id-r1-nonblocking",
+      decision: "allow-once",
+    });
+
+    let timeoutId: NodeJS.Timeout | undefined;
+    try {
+      const result = await Promise.race([
+        runBeforeToolCallHook({
+          toolName: "bash",
+          params: {},
+          ctx: { agentId: "main", sessionKey: "main" },
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("runBeforeToolCallHook waited for onResolution")),
+            250,
+          );
+        }),
+      ]);
+
+      expect(result).toEqual({ blocked: false, params: {} });
+      expect(onResolution).toHaveBeenCalledWith("allow-once");
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
+  });
+
   it("calls onResolution with deny on denial", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);

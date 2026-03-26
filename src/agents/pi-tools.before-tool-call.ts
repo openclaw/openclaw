@@ -196,13 +196,17 @@ export async function runBeforeToolCallHook(args: {
 
     if (hookResult?.requireApproval) {
       const approval = hookResult.requireApproval;
-      const safeOnResolution = async (resolution: PluginApprovalResolution) => {
-        if (typeof approval.onResolution === "function") {
-          try {
-            await approval.onResolution(resolution);
-          } catch (err) {
+      const safeOnResolution = (resolution: PluginApprovalResolution): void => {
+        const onResolution = approval.onResolution;
+        if (typeof onResolution !== "function") {
+          return;
+        }
+        try {
+          void Promise.resolve(onResolution(resolution)).catch((err) => {
             log.warn(`plugin onResolution callback failed: ${String(err)}`);
-          }
+          });
+        } catch (err) {
+          log.warn(`plugin onResolution callback failed: ${String(err)}`);
         }
       };
       try {
@@ -232,7 +236,7 @@ export async function runBeforeToolCallHook(args: {
         );
         const id = requestResult?.id;
         if (!id) {
-          await safeOnResolution(PluginApprovalResolutions.CANCELLED);
+          safeOnResolution(PluginApprovalResolutions.CANCELLED);
           return {
             blocked: true,
             reason: approval.description || "Plugin approval request failed",
@@ -272,7 +276,7 @@ export async function runBeforeToolCallHook(args: {
           decision === PluginApprovalResolutions.DENY
             ? decision
             : PluginApprovalResolutions.TIMEOUT;
-        await safeOnResolution(resolution);
+        safeOnResolution(resolution);
         if (
           decision === PluginApprovalResolutions.ALLOW_ONCE ||
           decision === PluginApprovalResolutions.ALLOW_ALWAYS
@@ -295,7 +299,7 @@ export async function runBeforeToolCallHook(args: {
         return { blocked: true, reason: "Approval timed out" };
       } catch (err) {
         // Gateway error or abort signal — fall back to soft block
-        await safeOnResolution(PluginApprovalResolutions.CANCELLED);
+        safeOnResolution(PluginApprovalResolutions.CANCELLED);
         log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
         return {
           blocked: true,

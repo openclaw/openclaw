@@ -1989,7 +1989,10 @@ export type PluginHookBeforeToolCallResult = {
     timeoutBehavior?: "allow" | "deny";
     /** Set automatically by the hook runner — plugins should not set this. */
     pluginId?: string;
-    /** Callback invoked with the final outcome after the approval is resolved, times out, or is cancelled. */
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };
 };

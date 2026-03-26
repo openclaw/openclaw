@@ -7,9 +7,7 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import {
-  buildPluginApprovalRequestMessage,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -42,6 +40,7 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
+import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
