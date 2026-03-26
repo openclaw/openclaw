@@ -161,7 +161,12 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`BlueBubbles ${action} requires serverUrl and password.`);
       }
 
-      const resolved = await runtime.resolveChatGuidForTarget({ baseUrl, password, target });
+      const resolved = await runtime.resolveChatGuidForTarget({
+        baseUrl,
+        password,
+        target,
+        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+      });
       if (!resolved) {
         throw new Error(`BlueBubbles ${action} failed: chatGuid not found for target.`);
       }

@@ -84,6 +84,8 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+    allowPrivateNetwork: z.boolean().optional(),
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })

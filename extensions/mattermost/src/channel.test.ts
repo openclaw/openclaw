@@ -2,13 +2,22 @@ import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
-const { sendMessageMattermostMock } = vi.hoisted(() => ({
+const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
+  mockFetchGuard: vi.fn(async (p: { url: string; init?: RequestInit }) => {
+    const response = await globalThis.fetch(p.url, p.init);
+    return { response, release: async () => {}, finalUrl: p.url };
+  }),
 }));
 
 vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return { ...original, fetchWithSsrFGuard: mockFetchGuard };
+});
 
 import { mattermostPlugin } from "./channel.js";
 import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";

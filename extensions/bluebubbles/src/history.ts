@@ -83,11 +83,13 @@ export async function fetchBlueBubblesHistory(
 
   let baseUrl: string;
   let password: string;
+  let allowPrivateNetwork = false;
   try {
-    ({ baseUrl, password } = resolveAccount(opts));
+    ({ baseUrl, password, allowPrivateNetwork } = resolveAccount(opts));
   } catch {
     return { entries: [], resolved: false };
   }
+  const ssrfPolicy = allowPrivateNetwork ? { allowPrivateNetwork: true } : {};
 
   // Try different common API patterns for fetching messages
   const possiblePaths = [
@@ -103,6 +105,7 @@ export async function fetchBlueBubblesHistory(
         url,
         { method: "GET" },
         opts.timeoutMs ?? 10000,
+        ssrfPolicy,
       );
 
       if (!res.ok) {
