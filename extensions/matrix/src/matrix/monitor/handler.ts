@@ -552,7 +552,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         resolveAgentRoute: core.channel.routing.resolveAgentRoute,
       });
       const agentMentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, _route.agentId);
-      const selfDisplayName = await getMemberDisplayName(roomId, selfUserId).catch(() => undefined);
+      const selfDisplayName = content.formatted_body
+        ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
+        : undefined;
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
         userId: selfUserId,
