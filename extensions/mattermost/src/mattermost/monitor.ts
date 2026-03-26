@@ -1609,11 +1609,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               }
             } else {
               try {
+                const sendTurnSeq = currentTurnSeq;
                 await patchMattermostPost(blockStreamingClient, {
                   postId: streamMessageId,
                   message: text,
                 });
-                lastSentText = text;
+                // Only update lastSentText if still on the same turn to prevent
+                // stale edit completions from poisoning future ticks (ID=2991100644).
+                if (currentTurnSeq === sendTurnSeq) {
+                  lastSentText = text;
+                }
                 runtime.log?.(`stream-patch edited ${streamMessageId}`);
               } catch (err) {
                 logVerboseMessage(`mattermost stream-patch edit failed: ${String(err)}`);
