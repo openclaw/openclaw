@@ -2,9 +2,10 @@ import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-regi
 import type { loadConfig } from "../config/config.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { setGatewayAgentAbort, setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
+  createGatewayAgentAbort,
   createGatewaySubagentRuntime,
   loadGatewayPlugins,
   setPluginSubagentOverridePolicies,
@@ -31,6 +32,7 @@ type GatewayPluginBootstrapParams = {
 function installGatewayPluginRuntimeEnvironment(cfg: ReturnType<typeof loadConfig>) {
   setPluginSubagentOverridePolicies(cfg);
   setGatewaySubagentRuntime(createGatewaySubagentRuntime());
+  setGatewayAgentAbort(createGatewayAgentAbort());
 }
 
 function logGatewayPluginDiagnostics(params: {
