@@ -156,6 +156,46 @@ async function runCliAgentWithBackendConfig(params: {
   });
 }
 
+const EXISTING_CODEX_CONFIG = {
+  agents: {
+    defaults: {
+      cliBackends: {
+        "codex-cli": {
+          command: "codex",
+          args: ["exec", "--json"],
+          resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
+          output: "text",
+          modelArg: "--model",
+          sessionMode: "existing",
+        },
+      },
+    },
+  },
+} satisfies OpenClawConfig;
+
+async function runExistingCodexCliAgent(params: {
+  runId: string;
+  cliSessionBindingAuthProfileId: string;
+  authProfileId: string;
+}) {
+  await runCliAgent({
+    sessionId: "s1",
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/tmp",
+    config: EXISTING_CODEX_CONFIG,
+    prompt: "hi",
+    provider: "codex-cli",
+    model: "gpt-5.4",
+    timeoutMs: 1_000,
+    runId: params.runId,
+    cliSessionBinding: {
+      sessionId: "thread-123",
+      authProfileId: params.cliSessionBindingAuthProfileId,
+    },
+    authProfileId: params.authProfileId,
+  });
+}
+
 describe("runCliAgent with process supervisor", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -238,35 +278,9 @@ describe("runCliAgent with process supervisor", () => {
   it("keeps resuming the CLI across model changes and passes the new model flag", async () => {
     mockSuccessfulCliRun();
 
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                args: ["exec", "--json"],
-                resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
-                output: "text",
-                modelArg: "--model",
-                sessionMode: "existing",
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      timeoutMs: 1_000,
+    await runExistingCodexCliAgent({
       runId: "run-model-switch",
-      cliSessionBinding: {
-        sessionId: "thread-123",
-        authProfileId: "openai:default",
-      },
+      cliSessionBindingAuthProfileId: "openai:default",
       authProfileId: "openai:default",
     });
 
@@ -286,35 +300,9 @@ describe("runCliAgent with process supervisor", () => {
   it("starts a fresh CLI session when the auth profile changes", async () => {
     mockSuccessfulCliRun();
 
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                args: ["exec", "--json"],
-                resumeArgs: ["exec", "resume", "{sessionId}", "--json"],
-                output: "text",
-                modelArg: "--model",
-                sessionMode: "existing",
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      timeoutMs: 1_000,
+    await runExistingCodexCliAgent({
       runId: "run-auth-change",
-      cliSessionBinding: {
-        sessionId: "thread-123",
-        authProfileId: "openai:work",
-      },
+      cliSessionBindingAuthProfileId: "openai:work",
       authProfileId: "openai:personal",
     });
 
