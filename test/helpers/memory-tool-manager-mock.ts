@@ -46,7 +46,7 @@ vi.mock("../../src/memory/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
-vi.mock("../../src/agents/tools/memory-tool.runtime.js", () => ({
+vi.mock("../../extensions/memory-core/src/tools.runtime.js", () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {
