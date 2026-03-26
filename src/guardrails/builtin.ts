@@ -1,14 +1,20 @@
 import type { GuardrailProvider, GuardrailRequest, GuardrailDecision } from "./types.js";
 
+function toStringArray(value: string[] | string | undefined): string[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  return [value];
+}
+
 export class AllowlistProvider implements GuardrailProvider {
   name = "allowlist";
 
   private readonly allowed: Set<string> | null;
   private readonly denied: Set<string>;
 
-  constructor(config: { allowedTools?: string[]; deniedTools?: string[] } = {}) {
-    this.allowed = config.allowedTools ? new Set(config.allowedTools) : null;
-    this.denied = new Set(config.deniedTools ?? []);
+  constructor(config: { allowedTools?: string[] | string; deniedTools?: string[] | string } = {}) {
+    this.allowed = config.allowedTools ? new Set(toStringArray(config.allowedTools)) : null;
+    this.denied = new Set(toStringArray(config.deniedTools));
   }
 
   async evaluate(request: GuardrailRequest): Promise<GuardrailDecision> {

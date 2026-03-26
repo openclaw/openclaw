@@ -78,9 +78,10 @@ export async function evaluateGuardrail(
     }
     return { block: false };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // Propagate error message so agent/user can diagnose and fix config.
     if (failClosed) {
-      return { block: true, blockReason: `Guardrail provider error (fail-closed): ${message}` };
+      const message = err instanceof Error ? err.message : String(err);
+      return { block: true, blockReason: `Guardrail (${provider.name}): provider error (fail-closed): ${message}` };
     }
     return { block: false };
   }

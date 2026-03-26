@@ -46,6 +46,12 @@ describe("AllowlistProvider", () => {
     expect(decision.allow).toBe(true);
   });
 
+  it("coerces string deniedTools to array", async () => {
+    const provider = new AllowlistProvider({ deniedTools: "exec" as unknown as string[] });
+    const decision = await provider.evaluate(makeRequest("exec"));
+    expect(decision.allow).toBe(false);
+  });
+
   it("has correct name", () => {
     const provider = new AllowlistProvider();
     expect(provider.name).toBe("allowlist");

@@ -31,15 +31,18 @@ export function initGuardrailsFromConfig(guardrails: GuardrailsConfig | undefine
   }
 
   loadGuardrailProvider(guardrails.provider)
-    .then(async (provider) => {
+    .then((provider) => {
       configureGuardrails(provider, failClosed);
-      if (provider.healthCheck) {
-        const health = await provider.healthCheck();
-        if (!health.ok) {
-          log.warn(`[guardrails] provider health check failed: ${health.message}`);
-        }
-      }
       log.info(`[guardrails] provider '${provider.name}' loaded (failClosed=${failClosed})`);
+      if (provider.healthCheck) {
+        provider.healthCheck()
+          .then((health) => {
+            if (!health.ok) log.warn(`[guardrails] provider health check failed: ${health.message}`);
+          })
+          .catch((err) => {
+            log.warn(`[guardrails] provider health check error: ${err instanceof Error ? err.message : String(err)}`);
+          });
+      }
     })
     .catch((err) => {
       log.error(`[guardrails] failed to load provider: ${err instanceof Error ? err.message : String(err)}`);
