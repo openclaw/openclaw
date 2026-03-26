@@ -439,7 +439,7 @@ extension OnboardingView {
 
     private func remoteAuthPromptView(issue: RemoteGatewayAuthIssue) -> some View {
         let promptStyle = Self.remoteAuthPromptStyle(for: issue)
-        HStack(alignment: .top, spacing: 10) {
+        return HStack(alignment: .top, spacing: 10) {
             Image(systemName: promptStyle.systemImage)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(promptStyle.tint)

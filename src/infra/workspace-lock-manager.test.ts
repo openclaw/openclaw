@@ -30,7 +30,9 @@ async function expectedLockPath(targetPath: string, kind: "file" | "dir"): Promi
 
 describe("workspace lock manager", () => {
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-locks-"));
+    fixtureRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-locks-")),
+    );
   });
 
   afterAll(async () => {
