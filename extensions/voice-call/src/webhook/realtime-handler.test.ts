@@ -249,6 +249,33 @@ describe("RealtimeCallHandler", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // endCallInManager — terminal event emission
+  // ---------------------------------------------------------------------------
+
+  describe("endCallInManager", () => {
+    it("emits call.ended with the correct callId and providerCallId", () => {
+      const manager = makeManager();
+
+      const handler = new RealtimeCallHandler(baseRealtimeConfig, manager, makeProvider(), null);
+
+      (
+        handler as unknown as {
+          endCallInManager: (callSid: string, callId: string) => void;
+        }
+      ).endCallInManager("CA_test", "call-rt-1");
+
+      const lastCall = vi.mocked(manager.processEvent).mock.calls.at(-1)?.[0] as {
+        type: string;
+        callId: string;
+        providerCallId: string;
+      };
+      expect(lastCall.type).toBe("call.ended");
+      expect(lastCall.callId).toBe("call-rt-1");
+      expect(lastCall.providerCallId).toBe("CA_test");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Tool handler framework
   // ---------------------------------------------------------------------------
 

@@ -233,6 +233,17 @@ export class RealtimeCallHandler {
     // By the time any callback fires, bridge will be fully assigned.
     let bridge: OpenAIRealtimeVoiceBridge | null = null;
 
+    // Guard against double-emitting call.ended: the normal path fires via onClose,
+    // but on initial connection failure onClose is never reached (the OpenAI WS is
+    // already dead before intentionallyClosed is set), so we also call it from the
+    // connect() catch handler. The flag ensures exactly one call.ended per call.
+    let callEndEmitted = false;
+    const emitCallEnd = () => {
+      if (callEndEmitted) return;
+      callEndEmitted = true;
+      this.endCallInManager(callSid, callId);
+    };
+
     bridge = new OpenAIRealtimeVoiceBridge({
       apiKey,
       model: this.config.model,
@@ -312,12 +323,13 @@ export class RealtimeCallHandler {
       },
 
       onClose: () => {
-        this.endCallInManager(callSid, callId);
+        emitCallEnd();
       },
     });
 
     bridge.connect().catch((err: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", err);
+      emitCallEnd();
       ws.close(1011, "Failed to connect");
     });
 
