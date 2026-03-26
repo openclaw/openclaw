@@ -8,7 +8,7 @@ import {
   MINIMAX_TEXT_MODEL_ORDER,
 } from "openclaw/plugin-sdk/provider-models";
 
-const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_PORTAL_BASE_URL = "https://api.minimaxi.com/anthropic";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 204800;
 const MINIMAX_DEFAULT_MAX_TOKENS = 131072;
 const MINIMAX_API_COST = {
