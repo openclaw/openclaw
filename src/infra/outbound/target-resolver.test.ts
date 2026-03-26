@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
+  getActivePluginRegistry: vi.fn(() => ({ channels: [] })),
+  getActivePluginRegistryKey: vi.fn(() => "target-resolver-test"),
 }));
 
 beforeEach(async () => {
@@ -26,13 +28,19 @@ beforeEach(async () => {
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
+  mocks.getActivePluginRegistry.mockReset();
+  mocks.getActivePluginRegistryKey.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
+  mocks.getActivePluginRegistry.mockReturnValue({ channels: [] });
+  mocks.getActivePluginRegistryKey.mockReturnValue("target-resolver-test");
   vi.doMock("../../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
     normalizeChannelId: (value: string) => value,
   }));
   vi.doMock("../../plugins/runtime.js", () => ({
     getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
+    getActivePluginRegistry: () => mocks.getActivePluginRegistry(),
+    getActivePluginRegistryKey: () => mocks.getActivePluginRegistryKey(),
   }));
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
     await import("./target-resolver.js"));
@@ -215,6 +223,45 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     if (result.ok) {
       expect(result.target.to).toBe("channel:C123ABC");
       expect(result.target.display).toBeUndefined();
+    }
+  });
+
+  it("bootstraps the requested channel when the active registry is non-empty but missing it", async () => {
+    const entry: ChannelDirectoryEntry = { kind: "group", id: "123456789", name: "support" };
+    const plugin = {
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    };
+    mocks.getActivePluginRegistry.mockReturnValue({
+      channels: [{ plugin: { id: "discord" } }],
+    } as unknown as ReturnType<typeof mocks.getActivePluginRegistry>);
+    mocks.getChannelPlugin
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue(plugin)
+      .mockReturnValue(plugin)
+      .mockReturnValue(plugin);
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([entry]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "support",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.source).toBe("directory");
+      expect(result.target.to).toBe("123456789");
     }
   });
 
