@@ -1,7 +1,7 @@
 name: Setup Node environment
 description: >
-  Initialize submodules with retry, install Node 24 by default, pnpm, optionally Bun,
-  and optionally run pnpm install. Requires actions/checkout to run first.
+  Install Node 24 by default, pnpm, optionally Bun, and optionally run pnpm
+  install. Requires actions/checkout to run first.
 inputs:
   node-version:
     description: Node.js version to install.
@@ -34,20 +34,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Checkout submodules (retry)
-      shell: bash
-      run: |
-        set -euo pipefail
-        git submodule sync --recursive
-        for attempt in 1 2 3 4 5; do
-          if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-            exit 0
-          fi
-          echo "Submodule update failed (attempt $attempt/5). Retrying…"
-          sleep $((attempt * 10))
-        done
-        exit 1
-
     - name: Setup Node.js
       uses: actions/setup-node@v6
       with:

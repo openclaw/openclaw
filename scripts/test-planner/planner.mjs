@@ -22,6 +22,71 @@ const parseEnvNumber = (env, name, fallback) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+const parseBooleanLike = (value, fallback = false) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") {
+      return true;
+    }
+    if (normalized === "false" || normalized === "0" || normalized === "") {
+      return false;
+    }
+  }
+  return fallback;
+};
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const sumKnownManifestDurationsMs = (manifest) =>
+  Object.values(manifest.files ?? {}).reduce((totalMs, entry) => totalMs + entry.durationMs, 0);
+
+const resolveDynamicShardCount = ({
+  estimatedDurationMs,
+  fileCount,
+  targetDurationMs,
+  targetFilesPerShard,
+  minShards,
+  maxShards,
+}) => {
+  const durationDriven =
+    Number.isFinite(targetDurationMs) && targetDurationMs > 0
+      ? Math.ceil(estimatedDurationMs / targetDurationMs)
+      : 1;
+  const fileDriven =
+    Number.isFinite(targetFilesPerShard) && targetFilesPerShard > 0
+      ? Math.ceil(fileCount / targetFilesPerShard)
+      : 1;
+  return clamp(Math.max(minShards, durationDriven, fileDriven), minShards, maxShards);
+};
+
+const createShardMatrixEntries = ({ checkNamePrefix, runtime, task, command, shardCount }) =>
+  Array.from({ length: shardCount }, (_, index) => ({
+    check_name: `${checkNamePrefix}-${String(index + 1)}`,
+    runtime,
+    task,
+    command,
+    shard_index: index + 1,
+    shard_count: shardCount,
+  }));
+
+const parseChangedExtensionsMatrix = (value) => {
+  if (typeof value === "object" && value !== null && Array.isArray(value.include)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.include)) {
+        return parsed;
+      }
+    } catch {}
+  }
+  return { include: [] };
+};
+
 const normalizeSurfaces = (values = []) => [
   ...new Set(
     values
@@ -91,6 +156,31 @@ const createPlannerContext = (request, options = {}) => {
     unitMemoryHotspotManifest,
   };
 };
+
+const resolveCIManifestScope = (scope = {}, env = process.env) => ({
+  eventName: scope.eventName ?? env.GITHUB_EVENT_NAME ?? "pull_request",
+  docsOnly: parseBooleanLike(scope.docsOnly ?? env.OPENCLAW_CI_DOCS_ONLY, false),
+  docsChanged: parseBooleanLike(scope.docsChanged ?? env.OPENCLAW_CI_DOCS_CHANGED, false),
+  runNode: parseBooleanLike(scope.runNode ?? env.OPENCLAW_CI_RUN_NODE, true),
+  runMacos: parseBooleanLike(scope.runMacos ?? env.OPENCLAW_CI_RUN_MACOS, true),
+  runAndroid: parseBooleanLike(scope.runAndroid ?? env.OPENCLAW_CI_RUN_ANDROID, true),
+  runWindows: parseBooleanLike(scope.runWindows ?? env.OPENCLAW_CI_RUN_WINDOWS, true),
+  runSkillsPython: parseBooleanLike(
+    scope.runSkillsPython ?? env.OPENCLAW_CI_RUN_SKILLS_PYTHON,
+    true,
+  ),
+  hasChangedExtensions: parseBooleanLike(
+    scope.hasChangedExtensions ?? env.OPENCLAW_CI_HAS_CHANGED_EXTENSIONS,
+    false,
+  ),
+  changedExtensionsMatrix: parseChangedExtensionsMatrix(
+    scope.changedExtensionsMatrix ?? env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX,
+  ),
+  runChangedSmoke: parseBooleanLike(
+    scope.runChangedSmoke ?? env.OPENCLAW_CI_RUN_CHANGED_SMOKE,
+    true,
+  ),
+});
 
 const estimateEntryFilesDurationMs = (entry, files, context) => {
   const estimateDurationMs = resolveEntryTimingEstimator(entry, context);
@@ -853,6 +943,223 @@ const buildTopLevelSingleShardAssignments = (context, units) => {
   }
   return assignmentMap;
 };
+
+export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
+  const env = options.env ?? process.env;
+  const scope = resolveCIManifestScope(scopeInput, env);
+  const context = createPlannerContext({ mode: "ci", profile: null }, { ...options, env });
+  const isPullRequest = scope.eventName === "pull_request";
+  const isPush = scope.eventName === "push";
+  const nodeEligible = !scope.docsOnly && scope.runNode;
+  const macosEligible = !scope.docsOnly && isPullRequest && scope.runMacos;
+  const windowsEligible = !scope.docsOnly && scope.runWindows;
+  const androidEligible = !scope.docsOnly && scope.runAndroid;
+  const docsEligible = scope.docsChanged;
+  const skillsPythonEligible = !scope.docsOnly && (isPush || scope.runSkillsPython);
+  const extensionFastEligible = nodeEligible && scope.hasChangedExtensions;
+
+  const channelCandidateFiles = context.catalog.allKnownTestFiles.filter((file) =>
+    context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix)),
+  );
+  const unitShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
+    fileCount: context.catalog.allKnownUnitFiles.length,
+    targetDurationMs: 30_000,
+    targetFilesPerShard: 80,
+    minShards: 1,
+    maxShards: 4,
+  });
+  const channelShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.channelTimingManifest),
+    fileCount: channelCandidateFiles.length,
+    targetDurationMs: 90_000,
+    targetFilesPerShard: 150,
+    minShards: 1,
+    maxShards: 4,
+  });
+  const windowsShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
+    fileCount: context.catalog.allKnownUnitFiles.length,
+    targetDurationMs: 12_000,
+    targetFilesPerShard: 30,
+    minShards: 1,
+    maxShards: 9,
+  });
+  const macosNodeShardCount = windowsShardCount;
+  const bunShardCount = resolveDynamicShardCount({
+    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
+    fileCount: context.catalog.allKnownUnitFiles.length,
+    targetDurationMs: 30_000,
+    targetFilesPerShard: 80,
+    minShards: 1,
+    maxShards: 4,
+  });
+
+  const checksFastInclude = nodeEligible
+    ? [
+        {
+          check_name: "checks-fast-extensions",
+          runtime: "node",
+          task: "extensions",
+          command: "pnpm test:extensions",
+        },
+        {
+          check_name: "checks-fast-contracts-protocol",
+          runtime: "node",
+          task: "contracts-protocol",
+          command: "pnpm test:contracts\npnpm protocol:check",
+        },
+      ]
+    : [];
+  const checksInclude = nodeEligible
+    ? [
+        ...createShardMatrixEntries({
+          checkNamePrefix: "checks-node-test",
+          runtime: "node",
+          task: "test",
+          command: "pnpm test",
+          shardCount: unitShardCount,
+        }),
+        ...createShardMatrixEntries({
+          checkNamePrefix: "checks-node-channels",
+          runtime: "node",
+          task: "channels",
+          command: "pnpm test:channels",
+          shardCount: channelShardCount,
+        }),
+        ...(isPush
+          ? [
+              {
+                check_name: "checks-node-compat-node22",
+                runtime: "node",
+                task: "compat-node22",
+                node_version: "22.x",
+                cache_key_suffix: "node22",
+                command: [
+                  "pnpm build",
+                  "pnpm ui:build",
+                  "node openclaw.mjs --help",
+                  "node openclaw.mjs status --json --timeout 1",
+                  "pnpm test:build:singleton",
+                  "node scripts/stage-bundled-plugin-runtime-deps.mjs",
+                  "node --import tsx scripts/release-check.ts",
+                ].join("\n"),
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const checksWindowsInclude = windowsEligible
+    ? createShardMatrixEntries({
+        checkNamePrefix: "checks-windows-node-test",
+        runtime: "node",
+        task: "test",
+        command: "pnpm test",
+        shardCount: windowsShardCount,
+      })
+    : [];
+  const macosNodeInclude = macosEligible
+    ? createShardMatrixEntries({
+        checkNamePrefix: "macos-node",
+        runtime: "node",
+        task: "test",
+        command: "pnpm test",
+        shardCount: macosNodeShardCount,
+      })
+    : [];
+  const androidInclude = androidEligible
+    ? [
+        {
+          check_name: "android-test-play",
+          task: "test-play",
+          command: "./gradlew --no-daemon :app:testPlayDebugUnitTest",
+        },
+        {
+          check_name: "android-test-third-party",
+          task: "test-third-party",
+          command: "./gradlew --no-daemon :app:testThirdPartyDebugUnitTest",
+        },
+        {
+          check_name: "android-build-play",
+          task: "build-play",
+          command: "./gradlew --no-daemon :app:assemblePlayDebug",
+        },
+        {
+          check_name: "android-build-third-party",
+          task: "build-third-party",
+          command: "./gradlew --no-daemon :app:assembleThirdPartyDebug",
+        },
+      ]
+    : [];
+  const bunChecksInclude = createShardMatrixEntries({
+    checkNamePrefix: "bun-checks",
+    runtime: "bun",
+    task: "test",
+    command: "bunx vitest run --config vitest.unit.config.ts",
+    shardCount: bunShardCount,
+  });
+  const extensionFastInclude = extensionFastEligible
+    ? scope.changedExtensionsMatrix.include.map((entry) => ({
+        check_name: `extension-fast-${entry.extension}`,
+        extension: entry.extension,
+      }))
+    : [];
+
+  const jobs = {
+    buildArtifacts: { enabled: nodeEligible, needsDistArtifacts: false },
+    releaseCheck: { enabled: isPush && !scope.docsOnly && nodeEligible },
+    checksFast: { enabled: checksFastInclude.length > 0, matrix: { include: checksFastInclude } },
+    checks: { enabled: checksInclude.length > 0, matrix: { include: checksInclude } },
+    extensionFast: {
+      enabled: extensionFastInclude.length > 0,
+      matrix: { include: extensionFastInclude },
+    },
+    check: { enabled: !scope.docsOnly },
+    checkAdditional: { enabled: !scope.docsOnly },
+    buildSmoke: { enabled: nodeEligible },
+    checkDocs: { enabled: docsEligible },
+    skillsPython: { enabled: skillsPythonEligible },
+    checksWindows: {
+      enabled: checksWindowsInclude.length > 0,
+      matrix: { include: checksWindowsInclude },
+    },
+    macosNode: { enabled: macosNodeInclude.length > 0, matrix: { include: macosNodeInclude } },
+    macosSwift: { enabled: macosEligible },
+    android: { enabled: androidInclude.length > 0, matrix: { include: androidInclude } },
+    bunChecks: { enabled: bunChecksInclude.length > 0, matrix: { include: bunChecksInclude } },
+    installSmoke: { enabled: !scope.docsOnly && scope.runChangedSmoke },
+  };
+
+  return {
+    runtimeProfile: context.runtime.runtimeProfileName,
+    scope,
+    shardCounts: {
+      unit: unitShardCount,
+      channels: channelShardCount,
+      windows: windowsShardCount,
+      macosNode: macosNodeShardCount,
+      bun: bunShardCount,
+    },
+    jobs,
+    requiredCheckNames: [
+      ...checksFastInclude.map((entry) => entry.check_name),
+      ...checksInclude.map((entry) => entry.check_name),
+      ...checksWindowsInclude.map((entry) => entry.check_name),
+      ...macosNodeInclude.map((entry) => entry.check_name),
+      ...(macosEligible ? ["macos-swift"] : []),
+      ...androidInclude.map((entry) => entry.check_name),
+      ...extensionFastInclude.map((entry) => entry.check_name),
+      ...bunChecksInclude.map((entry) => entry.check_name),
+      "check",
+      "check-additional",
+      "build-smoke",
+      ...(docsEligible ? ["check-docs"] : []),
+      ...(skillsPythonEligible ? ["skills-python"] : []),
+      ...(nodeEligible ? ["build-artifacts"] : []),
+      ...(isPush && !scope.docsOnly && nodeEligible ? ["release-check"] : []),
+    ],
+  };
+}
 
 export const formatExecutionUnitSummary = (unit) =>
   `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) || "all")} maxWorkers=${String(
