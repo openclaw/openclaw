@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
@@ -80,8 +81,7 @@ export function createPluginApprovalHandlers(
 
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
-      const record = manager.create(request, timeoutMs, null);
-      record.id = `plugin:${record.id}`;
+      const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
 
       let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {

@@ -242,34 +242,49 @@ export async function runBeforeToolCallHook(args: {
             reason: approval.description || "Plugin approval request failed",
           };
         }
-        // Wait for the decision, but abort early if the agent run is cancelled
-        // so the user isn't blocked for the full approval timeout.
-        const waitPromise = callGatewayTool<{
-          id?: string;
-          decision?: string | null;
-        }>(
-          "plugin.approval.waitDecision",
-          // Buffer beyond the approval timeout so the gateway can clean up
-          // and respond before the client-side RPC timeout fires.
-          { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
-          { id },
+        const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
+          requestResult ?? {},
+          "decision",
         );
-        let waitResult: { id?: string; decision?: string | null } | undefined;
-        if (args.signal) {
-          const abortPromise = new Promise<never>((_, reject) => {
-            if (args.signal!.aborted) {
-              reject(args.signal!.reason);
-              return;
-            }
-            args.signal!.addEventListener("abort", () => reject(args.signal!.reason), {
-              once: true,
-            });
-          });
-          waitResult = await Promise.race([waitPromise, abortPromise]);
+        let decision: string | null | undefined;
+        if (hasImmediateDecision) {
+          decision = requestResult?.decision;
         } else {
-          waitResult = await waitPromise;
+          // Wait for the decision, but abort early if the agent run is cancelled
+          // so the user isn't blocked for the full approval timeout.
+          const waitPromise = callGatewayTool<{
+            id?: string;
+            decision?: string | null;
+          }>(
+            "plugin.approval.waitDecision",
+            // Buffer beyond the approval timeout so the gateway can clean up
+            // and respond before the client-side RPC timeout fires.
+            { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+            { id },
+          );
+          let waitResult: { id?: string; decision?: string | null } | undefined;
+          if (args.signal) {
+            let onAbort: (() => void) | undefined;
+            const abortPromise = new Promise<never>((_, reject) => {
+              if (args.signal!.aborted) {
+                reject(args.signal!.reason);
+                return;
+              }
+              onAbort = () => reject(args.signal!.reason);
+              args.signal!.addEventListener("abort", onAbort, { once: true });
+            });
+            try {
+              waitResult = await Promise.race([waitPromise, abortPromise]);
+            } finally {
+              if (onAbort) {
+                args.signal.removeEventListener("abort", onAbort);
+              }
+            }
+          } else {
+            waitResult = await waitPromise;
+          }
+          decision = waitResult?.decision;
         }
-        const decision = waitResult?.decision;
         const resolution: PluginApprovalResolution =
           decision === PluginApprovalResolutions.ALLOW_ONCE ||
           decision === PluginApprovalResolutions.ALLOW_ALWAYS ||

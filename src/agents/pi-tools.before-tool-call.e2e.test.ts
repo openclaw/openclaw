@@ -546,6 +546,32 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result).toHaveProperty("reason", "Registration returns no id");
   });
 
+  it("uses immediate decision from request response without calling waitDecision", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route",
+        description: "No approval route available",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-immediate", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Approval timed out");
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+    ]);
+  });
+
   it("unblocks immediately when abort signal fires during waitDecision", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);
@@ -578,6 +604,34 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes abort listener after waitDecision resolves", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Cleanup listener",
+        description: "Wait resolves quickly",
+      },
+    });
+
+    const controller = new AbortController();
+    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: {},
+      ctx: { agentId: "main", sessionKey: "main" },
+      signal: controller.signal,
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(removeListenerSpy.mock.calls.some(([type]) => type === "abort")).toBe(true);
   });
 
   it("calls onResolution with allow-once on approval", async () => {

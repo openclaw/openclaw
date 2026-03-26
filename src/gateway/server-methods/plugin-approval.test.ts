@@ -241,6 +241,27 @@ describe("createPluginApprovalHandlers", () => {
       expect(result?.id).toEqual(expect.stringMatching(/^plugin:/));
     });
 
+    it("passes plugin-prefixed IDs directly to manager.create", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const createSpy = vi.spyOn(manager, "create");
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "T", description: "D" },
+        {
+          context: {
+            broadcast: vi.fn(),
+            logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+            hasExecApprovalClients: () => false,
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      );
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(createSpy).toHaveBeenCalledTimes(1);
+      expect(createSpy.mock.calls[0]?.[2]).toEqual(expect.stringMatching(/^plugin:/));
+    });
+
     it("rejects plugin-provided id field", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", {
