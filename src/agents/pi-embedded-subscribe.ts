@@ -573,8 +573,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!state.streamReasoning) {
       return;
     }
-    const trimmed = text.trim();
-    if (!trimmed) {
+    if (!text) {
       return;
     }
     // Delta computation uses the RAW (unformatted) accumulated text to avoid
