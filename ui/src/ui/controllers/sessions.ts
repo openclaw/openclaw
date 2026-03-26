@@ -9,9 +9,16 @@ import {
 
 /**
  * Canonical fingerprint for `sessions.list` params when deciding whether `lastHash` is reusable.
- * Must stay aligned with `buildSessionsListParamsKey` in `src/gateway/sessions-list-result-cache.ts`
- * for filter fields (`label`, `spawnedBy`, `agentId`, `search`, `limit`); `activeMinutes` is included
- * here because it affects listing even when the gateway list-result cache is bypassed.
+ *
+ * ⚠️  MAINTENANCE INVARIANT — keep in sync with `buildSessionsListParamsKey` in
+ *    `src/gateway/sessions-list-result-cache.ts`.  If any new filter field is added to
+ *    `SessionsListParams` and used in the server-side params key, it MUST also be reflected
+ *    here.  Failing to do so will cause the client to send a stale `lastHash` for semantically
+ *    different queries, producing silently incorrect `{ unchanged: true }` responses.
+ *
+ * Fields currently tracked: `label`, `spawnedBy`, `agentId`, `search`, `limit`,
+ * `includeGlobal`, `includeUnknown`.  `activeMinutes` is additionally included here because it
+ * affects listing even when the gateway list-result cache is bypassed.
  */
 export function buildSessionsListLastHashParamsKey(body: Record<string, unknown>): string {
   const activeMinutes =

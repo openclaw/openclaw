@@ -924,6 +924,8 @@ function ensureListener() {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = startedAt;
           }
+          // Bump generation so caches that read timing/status fields are invalidated.
+          subagentRegistryGeneration += 1;
           persistSubagentRuns();
         }
         return;
@@ -1519,6 +1521,8 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       mutated = true;
     }
     if (mutated) {
+      // Bump generation so caches that read timing/status fields are invalidated.
+      subagentRegistryGeneration += 1;
       persistSubagentRuns();
     }
     await completeSubagentRun({

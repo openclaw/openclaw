@@ -102,6 +102,12 @@ export function isSessionsListResultCacheEligible(params: SessionsListParams): b
   return true;
 }
 
+/**
+ * ⚠️  MAINTENANCE INVARIANT — the set of fields serialized here MUST stay aligned with
+ *    `buildSessionsListLastHashParamsKey` in `ui/src/ui/controllers/sessions.ts`.
+ *    Adding a field here without mirroring it on the client will cause stale `lastHash`
+ *    values to be sent for semantically different queries.
+ */
 function buildSessionsListParamsKey(params: SessionsListParams): string {
   const limit =
     typeof params.limit === "number" && Number.isFinite(params.limit)
