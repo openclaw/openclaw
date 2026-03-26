@@ -443,8 +443,14 @@ internal sealed class GatewayRpcChannelAdapter : IGatewayRpcChannel, IGatewayMes
     public Task<byte[]> ConfigGetAsync(int? timeoutMs = null, CancellationToken ct = default)
         => RequestRawAsync("config.get", null, timeoutMs, ct);
 
-    public Task ConfigSetAsync(Dictionary<string, object?> root, CancellationToken ct = default)
-        => RequestRawAsync("config.set", root, null, ct);
+    public Task ConfigSetAsync(string rawJson, string? baseHash = null, CancellationToken ct = default)
+    {
+        // config.set requires { raw: string, baseHash?: string } — never pass a config object directly.
+        var parameters = new Dictionary<string, object?> { ["raw"] = rawJson };
+        if (baseHash is not null)
+            parameters["baseHash"] = baseHash;
+        return RequestRawAsync("config.set", parameters, null, ct);
+    }
 
     public Task ConfigPatchAsync(
         string id,

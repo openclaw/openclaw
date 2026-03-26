@@ -145,23 +145,36 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
 
     private async Task SaveToGatewayAsync(AppSettings settings, CancellationToken ct)
     {
-        // Lazy-fetch hash if missing
-        if (_lastHash is null && _connection.State == GatewayConnectionState.Connected)
+        // Windows app settings (connectionMode, remoteUrl, remoteTransport, etc.) have no
+        // counterparts in the OpenClaw config schema. Writing AppSettingsDto as config.set.raw
+        // would overwrite openclaw.json with mostly-default gateway config, corrupting live
+        // settings. Instead, round-trip the current gateway config document unchanged so
+        // the baseHash stays fresh. Windows-only fields are already saved locally by SaveLocalAsync.
+        try
+        {
+            var rawBytes = await _gateway.ConfigGetAsync(ConfigGetTimeoutMs, ct);
+            using var doc = JsonDocument.Parse(rawBytes);
+
+            if (doc.RootElement.TryGetProperty("hash", out var hashEl))
+                _lastHash = hashEl.GetString();
+
+            if (!doc.RootElement.TryGetProperty("config", out var configEl))
+                return;
+
+            var rawConfig = configEl.GetRawText();
+            var parameters = new Dictionary<string, object?> { ["raw"] = rawConfig };
+            if (_lastHash is not null)
+                parameters["baseHash"] = _lastHash;
+
+            await _gateway.RequestRawAsync("config.set", parameters, ConfigSetTimeoutMs, ct);
+
+            // Reload to refresh the cached hash
             _ = await TryLoadFromGatewayAsync(ct);
-
-        // Strip Windows-only credential fields — gateway schema does not accept them.
-        var dto = MapToDto(settings);
-        dto.RemoteToken    = string.Empty;
-        dto.RemotePassword = string.Empty;
-        var raw = JsonSerializer.Serialize(dto, JsonOptions);
-        var parameters = new Dictionary<string, object?> { ["raw"] = raw };
-        if (_lastHash is not null)
-            parameters["baseHash"] = _lastHash;
-
-        await _gateway.RequestRawAsync("config.set", parameters, ConfigSetTimeoutMs, ct);
-
-        // Reload to refresh the cached hash
-        _ = await TryLoadFromGatewayAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Gateway config round-trip failed during settings save");
+        }
     }
 
     private async Task<AppSettings> LoadLocalAsync(CancellationToken ct)

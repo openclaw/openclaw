@@ -27,7 +27,9 @@ public interface IGatewayRpcChannel
 
     // ── Config ─────────────────────────────────────────────────────────────────
     Task<byte[]> ConfigGetAsync(int? timeoutMs = null, CancellationToken ct = default);
-    Task ConfigSetAsync(Dictionary<string, object?> root, CancellationToken ct = default);
+    // rawJson: the OpenClaw config document serialized as JSON string (from config.get "config" field).
+    // baseHash: the hash received from config.get; required when the file already exists.
+    Task ConfigSetAsync(string rawJson, string? baseHash = null, CancellationToken ct = default);
     Task ConfigPatchAsync(string id, Dictionary<string, object?> patch, CancellationToken ct = default);
     // Returns "global" or "main"
     Task<string> MainSessionKeyAsync(int timeoutMs = 15000, CancellationToken ct = default);

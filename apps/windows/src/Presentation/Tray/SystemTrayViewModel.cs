@@ -758,17 +758,21 @@ internal sealed partial class SystemTrayViewModel : ObservableObject
     private async Task LoadBrowserControlAsync(CancellationToken ct = default)
     {
         // reads browser.enabled from the gateway config (ConfigStore.load()).
+        // config.get response: { hash, config: { browser: { enabled: bool }, ... } }
         try
         {
-            var raw    = await _rpc.ConfigGetAsync(ct: ct);
+            var raw = await _rpc.ConfigGetAsync(ct: ct);
             using var doc = JsonDocument.Parse(raw);
-            var enabled = doc.RootElement
-                .TryGetProperty("browser", out var browser)
+
+            if (!doc.RootElement.TryGetProperty("config", out var configEl))
+                return;
+
+            var enabled = configEl.TryGetProperty("browser", out var browser)
                 && browser.TryGetProperty("enabled", out var val)
                 && val.ValueKind == JsonValueKind.True;
 
             // Treat absent browser.enabled as true (macOS default).
-            BrowserControlEnabled = !doc.RootElement.TryGetProperty("browser", out _) || enabled;
+            BrowserControlEnabled = !configEl.TryGetProperty("browser", out _) || enabled;
         }
         catch { /* gateway offline — keep current value */ }
     }
@@ -776,20 +780,27 @@ internal sealed partial class SystemTrayViewModel : ObservableObject
     private async Task SaveBrowserControlAsync(bool enabled)
     {
         // patches browser.enabled in the gateway config via config.set RPC.
+        // config.get response: { hash, config: { browser: { enabled: bool }, ... } }
         try
         {
-            var raw  = await _rpc.ConfigGetAsync();
-            using var doc  = JsonDocument.Parse(raw);
-            var root = JsonSerializer.Deserialize<Dictionary<string, object?>>(raw)
-                       ?? new Dictionary<string, object?>();
+            var raw = await _rpc.ConfigGetAsync();
+            using var doc = JsonDocument.Parse(raw);
 
-            var browser = root.TryGetValue("browser", out var b) && b is Dictionary<string, object?> bd
+            var hash = doc.RootElement.TryGetProperty("hash", out var h) ? h.GetString() : null;
+
+            var configDict = doc.RootElement.TryGetProperty("config", out var configEl)
+                             && configEl.ValueKind == JsonValueKind.Object
+                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(configEl.GetRawText())
+                  ?? new Dictionary<string, object?>()
+                : new Dictionary<string, object?>();
+
+            var browser = configDict.TryGetValue("browser", out var b) && b is Dictionary<string, object?> bd
                 ? bd
                 : new Dictionary<string, object?>();
             browser["enabled"] = enabled;
-            root["browser"]    = browser;
+            configDict["browser"] = browser;
 
-            await _rpc.ConfigSetAsync(root);
+            await _rpc.ConfigSetAsync(JsonSerializer.Serialize(configDict), hash);
         }
         catch
         {
