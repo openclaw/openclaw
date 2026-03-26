@@ -71,13 +71,14 @@ function attachStderrLogging(
 async function killStaleProcess(pid: number, starttime: number | undefined): Promise<void> {
   if (!isPidAlive(pid)) return;
 
-  // PID recycle guard: if starttime is available and doesn't match, it's a different process.
-  if (starttime !== undefined) {
-    const currentStarttime = getProcessStartTime(pid);
-    if (currentStarttime !== null && currentStarttime !== starttime) {
-      // Different process has taken this PID — don't kill it.
-      return;
-    }
+  // PID recycle guard: if starttime is not available (platform doesn't support it),
+  // skip the kill entirely to avoid terminating an unrelated process that reused the PID.
+  if (starttime === undefined) return;
+
+  const currentStarttime = getProcessStartTime(pid);
+  if (currentStarttime !== null && currentStarttime !== starttime) {
+    // Different process has taken this PID — don't kill it.
+    return;
   }
 
   try {
@@ -385,6 +386,14 @@ export class PersistentMcpManager {
     if (this.initPromise) {
       await this.initPromise.catch(() => {});
     }
+
+    // Wait for any in-flight per-server startPromises so that _doStartServer
+    // cannot continue creating connections after we clear the handles map.
+    await Promise.allSettled(
+      Array.from(this.handles.values())
+        .filter((h) => h.startPromise)
+        .map((h) => h.startPromise!.catch(() => {})),
+    );
 
     await Promise.allSettled(
       Array.from(this.handles.values()).map(async (handle) => {

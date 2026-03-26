@@ -215,7 +215,6 @@ async function createPersistentConfiguredMcpProjection(params: {
       }
       reservedNames.add(normalizedName);
 
-      const capturedClient = client;
       tools.push({
         name: tool.name,
         label: tool.title ?? tool.name,
@@ -223,7 +222,21 @@ async function createPersistentConfiguredMcpProjection(params: {
           tool.description?.trim() || `Provided by persistent MCP server "${serverName}".`,
         parameters: normalizeMcpInputSchema(tool.inputSchema),
         execute: async (_toolCallId, input) => {
-          const result = (await capturedClient.callTool({
+          // Re-fetch the client at call time so that reconnects after a crash
+          // are transparent — the session runtime is long-lived but the underlying
+          // MCP connection may have been replaced by PersistentMcpManager.
+          const liveClient = await manager.getReadyClient(serverName);
+          if (!liveClient) {
+            return toAgentToolResult({
+              serverName,
+              toolName: tool.name,
+              result: {
+                content: [{ type: "text", text: `MCP server "${serverName}" is not available.` }],
+                isError: true,
+              } as CallToolResult,
+            });
+          }
+          const result = (await liveClient.callTool({
             name: tool.name,
             arguments: isRecord(input) ? input : {},
           })) as CallToolResult;
