@@ -67,6 +67,30 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("deserializes string tool_use input to object for Ollama", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_3", name: "exec", input: '{"command":"ls"}' }],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "ls" } } },
+    ]);
+  });
+
+  it("returns empty object for invalid JSON string arguments", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_4", name: "exec", arguments: "not-json" }],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([{ function: { name: "exec", arguments: {} } }]);
+  });
+
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);

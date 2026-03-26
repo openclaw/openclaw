@@ -249,7 +249,7 @@ function extractOllamaImages(content: unknown): string[] {
 function ensureArgsObject(value: unknown): Record<string, unknown> {
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
+      const parsed = parseJsonPreservingUnsafeIntegers(value);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
