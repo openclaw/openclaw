@@ -3,34 +3,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createPluginRegistry, type PluginRecord } from "../registry.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { buildAllPluginInspectReports } from "../status.js";
+import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
-
-function createPluginRecord(id: string, name: string): PluginRecord {
-  return {
-    id,
-    name,
-    source: `/virtual/${id}/index.ts`,
-    origin: "workspace",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    speechProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    webSearchProviderIds: [],
-    gatewayMethods: [],
-    cliCommands: [],
-    services: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  };
-}
 
 function registerTestPlugin(params: {
   registry: ReturnType<typeof createPluginRegistry>;
@@ -62,7 +36,11 @@ describe("plugin shape compatibility matrix", () => {
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord("lca-legacy", "LCA Legacy"),
+      record: createPluginRecord({
+        id: "lca-legacy",
+        name: "LCA Legacy",
+        source: "/virtual/lca-legacy/index.ts",
+      }),
       register(api) {
         api.on("before_agent_start", () => ({
           prependContext: "legacy",
@@ -73,7 +51,11 @@ describe("plugin shape compatibility matrix", () => {
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord("plain-provider", "Plain Provider"),
+      record: createPluginRecord({
+        id: "plain-provider",
+        name: "Plain Provider",
+        source: "/virtual/plain-provider/index.ts",
+      }),
       register(api) {
         api.registerProvider({
           id: "plain-provider",
@@ -86,7 +68,11 @@ describe("plugin shape compatibility matrix", () => {
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord("hybrid-company", "Hybrid Company"),
+      record: createPluginRecord({
+        id: "hybrid-company",
+        name: "Hybrid Company",
+        source: "/virtual/hybrid-company/index.ts",
+      }),
       register(api) {
         api.registerProvider({
           id: "hybrid-company",
@@ -117,7 +103,11 @@ describe("plugin shape compatibility matrix", () => {
     registerTestPlugin({
       registry,
       config,
-      record: createPluginRecord("channel-demo", "Channel Demo"),
+      record: createPluginRecord({
+        id: "channel-demo",
+        name: "Channel Demo",
+        source: "/virtual/channel-demo/index.ts",
+      }),
       register(api) {
         api.registerChannel({
           plugin: {
