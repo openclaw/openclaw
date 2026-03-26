@@ -1,6 +1,7 @@
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
+import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
 
 function mockGoogleApiKeyAuth() {
   vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
@@ -280,6 +281,22 @@ describe("Google image-generation provider", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent",
       expect.any(Object),
+    );
+  });
+
+  it("prefers scoped configured Gemini API keys over environment fallbacks", () => {
+    expect(
+      geminiWebSearchTesting.resolveGeminiApiKey({
+        apiKey: "gemini-secret",
+      }),
+    ).toBe("gemini-secret");
+  });
+
+  it("falls back to the default Gemini model when unset or blank", () => {
+    expect(geminiWebSearchTesting.resolveGeminiModel()).toBe("gemini-2.5-flash");
+    expect(geminiWebSearchTesting.resolveGeminiModel({ model: "  " })).toBe("gemini-2.5-flash");
+    expect(geminiWebSearchTesting.resolveGeminiModel({ model: "gemini-2.5-pro" })).toBe(
+      "gemini-2.5-pro",
     );
   });
 });

@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { getModel } from "@mariozechner/pi-ai";
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadConfig } from "../../src/config/config.js";
 import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
@@ -11,7 +14,23 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/extensions/provider-registration.js";
+import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+
+const runtimeMocks = vi.hoisted(() => ({
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+  getOAuthApiKey: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: runtimeMocks.getOAuthApiKey,
+}));
+
+import { getOAuthApiKey as getCodexOAuthApiKey } from "./openai-codex-provider.runtime.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
@@ -21,50 +40,40 @@ const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIV
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
-function createTemplateModel(modelId: string) {
+function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
     case "gpt-5.4":
-      return {
-        id: "gpt-5.2",
-        name: "GPT-5.2",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      };
+      return "gpt-5.2";
     case "gpt-5.4-mini":
-      return {
-        id: "gpt-5-mini",
-        name: "GPT-5 mini",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      };
+      return "gpt-5-mini";
     case "gpt-5.4-nano":
-      return {
-        id: "gpt-5-nano",
-        name: "GPT-5 nano",
-        provider: "openai",
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 64_000,
-      };
+      return "gpt-5-nano";
     default:
       throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
   }
+}
+
+function createTemplateModelRegistry(modelId: string): ModelRegistry {
+  const registry = new ModelRegistry(AuthStorage.inMemory());
+  const template = getModel("openai", resolveTemplateModelId(modelId));
+  registry.registerProvider("openai", {
+    apiKey: "test",
+    baseUrl: template.baseUrl,
+    models: [
+      {
+        id: template.id,
+        name: template.name,
+        api: template.api,
+        reasoning: template.reasoning,
+        input: template.input,
+        cost: template.cost,
+        contextWindow: template.contextWindow,
+        maxTokens: template.maxTokens,
+        ...(template.compat ? { compat: template.compat } : {}),
+      },
+    ],
+  });
+  return registry;
 }
 
 const registerOpenAIPlugin = () =>
@@ -164,20 +173,131 @@ async function createTempAgentDir(): Promise<string> {
 }
 
 describe("openai plugin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("registers the expected provider surfaces", () => {
     const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
 
     expect(providers).toHaveLength(2);
-    expect(
-      providers.map(
-        (provider) =>
-          // oxlint-disable-next-line typescript/no-explicit-any
-          (provider as any).id,
-      ),
-    ).toEqual(["openai", "openai-codex"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
     expect(speechProviders).toHaveLength(1);
-    expect(mediaProviders).toHaveLength(1);
+    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
+    const codexMediaProvider = requireRegisteredProvider(
+      mediaProviders,
+      "openai-codex",
+      "media provider",
+    );
+    expect(codexMediaProvider.capabilities).toEqual(["image"]);
     expect(imageProviders).toHaveLength(1);
+  });
+
+  it("generates PNG buffers from the OpenAI Images API", async () => {
+    const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            b64_json: Buffer.from("png-data").toString("base64"),
+            revised_prompt: "revised",
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const authStore = { version: 1, profiles: {} };
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "draw a cat",
+      cfg: {},
+      authStore,
+    });
+
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        store: authStore,
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          model: "gpt-image-1",
+          prompt: "draw a cat",
+          n: 1,
+          size: "1024x1024",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        {
+          buffer: Buffer.from("png-data"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+          revisedPrompt: "revised",
+        },
+      ],
+      model: "gpt-image-1",
+    });
+  });
+
+  it("rejects reference-image edits for now", async () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-1",
+        prompt: "Edit this image",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("does not support reference-image edits");
+  });
+
+  it("bootstraps the env proxy dispatcher before refreshing oauth credentials", async () => {
+    const refreshed = {
+      newCredentials: {
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 60_000,
+      },
+    };
+    runtimeMocks.getOAuthApiKey.mockResolvedValue(refreshed);
+
+    await expect(
+      getCodexOAuthApiKey("openai-codex", {
+        "openai-codex": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now(),
+        },
+      }),
+    ).resolves.toBe(refreshed);
+
+    expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(runtimeMocks.getOAuthApiKey).toHaveBeenCalledOnce();
+    expect(
+      runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+    ).toBeLessThan(runtimeMocks.getOAuthApiKey.mock.invocationCallOrder[0]);
   });
 });
 
@@ -186,27 +306,17 @@ describeLive("openai plugin live", () => {
     const { providers } = registerOpenAIPlugin();
     const provider = requireRegisteredProvider(providers, "openai");
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const resolved = (provider as any).resolveDynamicModel?.({
+    const resolved = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: LIVE_MODEL_ID,
-      modelRegistry: {
-        find(providerId: string, id: string) {
-          if (providerId !== "openai") {
-            return null;
-          }
-          const template = createTemplateModel(LIVE_MODEL_ID);
-          return id === template.id ? template : null;
-        },
-      },
+      modelRegistry: createTemplateModelRegistry(LIVE_MODEL_ID),
     });
 
     if (!resolved) {
       throw new Error("openai provider did not resolve the live model");
     }
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const normalized = (provider as any).normalizeResolvedModel?.({
+    const normalized = provider.normalizeResolvedModel?.({
       provider: "openai",
       modelId: resolved.id,
       model: resolved,
@@ -236,8 +346,7 @@ describeLive("openai plugin live", () => {
     const { speechProviders } = registerOpenAIPlugin();
     const speechProvider = requireRegisteredProvider(speechProviders, "openai");
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const voices = await (speechProvider as any).listVoices?.({});
+    const voices = await speechProvider.listVoices?.({});
     if (!voices) {
       throw new Error("openai speech provider did not return voices");
     }
@@ -246,8 +355,7 @@ describeLive("openai plugin live", () => {
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const audioFile = await (speechProvider as any).synthesize({
+    const audioFile = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
       config: ttsConfig,
@@ -257,8 +365,7 @@ describeLive("openai plugin live", () => {
     expect(audioFile.fileExtension).toBe(".mp3");
     expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const telephony = await (speechProvider as any).synthesizeTelephony?.({
+    const telephony = await speechProvider.synthesizeTelephony?.({
       text: "Telephony check OK.",
       cfg,
       config: ttsConfig,
@@ -276,16 +383,14 @@ describeLive("openai plugin live", () => {
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const synthesized = await (speechProvider as any).synthesize({
+    const synthesized = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
       config: ttsConfig,
       target: "audio-file",
     });
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const transcription = await (mediaProvider as any).transcribeAudio?.({
+    const transcription = await mediaProvider.transcribeAudio?.({
       buffer: synthesized.audioBuffer,
       fileName: "openai-plugin-live.mp3",
       mime: "audio/mpeg",
@@ -307,8 +412,7 @@ describeLive("openai plugin live", () => {
     const agentDir = await createTempAgentDir();
 
     try {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const generated = await (imageProvider as any).generateImage({
+      const generated = await imageProvider.generateImage({
         provider: "openai",
         model: LIVE_IMAGE_MODEL,
         prompt: "Create a minimal flat orange square centered on a white background.",
@@ -336,8 +440,7 @@ describeLive("openai plugin live", () => {
     const agentDir = await createTempAgentDir();
 
     try {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      const description = await (mediaProvider as any).describeImage?.({
+      const description = await mediaProvider.describeImage?.({
         buffer: createReferencePng(),
         fileName: "reference.png",
         mime: "image/png",

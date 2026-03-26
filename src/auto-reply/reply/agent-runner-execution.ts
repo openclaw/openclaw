@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -12,6 +15,8 @@ import {
   isContextOverflowError,
   isBillingErrorMessage,
   isLikelyContextOverflowError,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -73,6 +78,38 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+/**
+ * Build a human-friendly rate-limit message from a FallbackSummaryError.
+ * Includes a countdown when the soonest cooldown expiry is known.
+ */
+function buildRateLimitCooldownMessage(err: unknown): string {
+  if (!isFallbackSummaryError(err)) {
+    return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+  }
+  const expiry = err.soonestCooldownExpiry;
+  const now = Date.now();
+  if (typeof expiry === "number" && expiry > now) {
+    const secsLeft = Math.max(1, Math.ceil((expiry - now) / 1000));
+    if (secsLeft <= 60) {
+      return `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`;
+    }
+    const minsLeft = Math.ceil(secsLeft / 60);
+    return `⚠️ Rate-limited — ready in ~${minsLeft} min. Please try again shortly.`;
+  }
+  return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
+}
+
+function isPureTransientRateLimitSummary(err: unknown): boolean {
+  return (
+    isFallbackSummaryError(err) &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => {
+      const reason = attempt.reason;
+      return reason === "rate_limit" || reason === "overloaded";
+    })
+  );
+}
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
@@ -652,17 +689,26 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      // Only classify as rate-limit when we have concrete evidence from the
+      // underlying error. FallbackSummaryError messages embed per-attempt
+      // reason labels like `(rate_limit)`, so string-matching the summary text
+      // would misclassify mixed-cause exhaustion as a pure transient cooldown.
+      const isRateLimit = isFallbackSummaryError(err)
+        ? isPureTransientRateLimitSummary(err)
+        : isRateLimitErrorMessage(message);
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isContextOverflow
-          ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-          : isRoleOrderingError
-            ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-            : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+        : isRateLimit
+          ? buildRateLimitCooldownMessage(err)
+          : isContextOverflow
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+            : isRoleOrderingError
+              ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
 
       return {
         kind: "final",
@@ -680,13 +726,54 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => p.text?.trim());
-  if (finalEmbeddedError && isContextOverflowError(finalEmbeddedError.message) && !hasPayloadText) {
-    return {
-      kind: "final",
-      payload: {
-        text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
-      },
-    };
+  if (finalEmbeddedError && !hasPayloadText) {
+    const errorMsg = finalEmbeddedError.message ?? "";
+    if (isContextOverflowError(errorMsg)) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context overflow — this conversation is too large for the model. Use /new to start a fresh session.",
+        },
+      };
+    }
+  }
+
+  // Surface rate limit and overload errors that occur mid-turn (after tool
+  // calls) instead of silently returning an empty response. See #36142.
+  // Only applies when the assistant produced no valid (non-error) reply text,
+  // so tool-level rate-limit messages don't override a successful turn.
+  // Prioritize metaErrorMsg (raw upstream error) over errorPayloadText to
+  // avoid self-matching on pre-formatted "⚠️" messages from run.ts, and
+  // skip already-formatted payloads so tool-specific 429 errors (e.g.
+  // browser/search tool failures) are preserved rather than overwritten.
+  //
+  // Instead of early-returning kind:"final" (which would bypass
+  // buildReplyPayloads() filtering and session bookkeeping), inject the
+  // error payload into runResult so it flows through the normal
+  // kind:"success" path — preserving streaming dedup, message_send
+  // suppression, and usage/model metadata updates.
+  if (runResult) {
+    const hasNonErrorContent = runResult.payloads?.some(
+      (p) => !p.isError && !p.isReasoning && hasOutboundReplyContent(p, { trimText: true }),
+    );
+    if (!hasNonErrorContent) {
+      const metaErrorMsg = finalEmbeddedError?.message ?? "";
+      const rawErrorPayloadText =
+        runResult.payloads?.find((p) => p.isError && p.text?.trim() && !p.text.startsWith("⚠️"))
+          ?.text ?? "";
+      const errorCandidate = metaErrorMsg || rawErrorPayloadText;
+      if (
+        errorCandidate &&
+        (isRateLimitErrorMessage(errorCandidate) || isOverloadedErrorMessage(errorCandidate))
+      ) {
+        runResult.payloads = [
+          {
+            text: "⚠️ API rate limit reached — the model couldn't generate a response. Please try again in a moment.",
+            isError: true,
+          },
+        ];
+      }
+    }
   }
 
   return {

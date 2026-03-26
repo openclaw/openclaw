@@ -14,6 +14,7 @@ import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
@@ -26,7 +27,6 @@ import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
@@ -71,6 +71,7 @@ type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerat
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
+  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
@@ -365,6 +366,7 @@ const bundledProviderPlugins = dedupePlugins([
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
+  microsoftFoundryPlugin,
   minimaxPlugin,
   mistralPlugin,
   modelStudioPlugin,
@@ -376,7 +378,6 @@ const bundledProviderPlugins = dedupePlugins([
   opencodeGoPlugin,
   openrouterPlugin,
   qianfanPlugin,
-  qwenPortalAuthPlugin,
   sglangPlugin,
   syntheticPlugin,
   togetherPlugin,
@@ -409,6 +410,7 @@ function upsertPluginRegistrationContractEntry(
     entries.push(next);
     return;
   }
+  existing.cliBackendIds = mergeIds(existing.cliBackendIds, next.cliBackendIds);
   existing.providerIds = mergeIds(existing.providerIds, next.providerIds);
   existing.speechProviderIds = mergeIds(existing.speechProviderIds, next.speechProviderIds);
   existing.mediaUnderstandingProviderIds = mergeIds(
@@ -439,6 +441,7 @@ function mergeProviderContractRegistrations(
   for (const [pluginId, providerIds] of byPluginId) {
     upsertPluginRegistrationContractEntry(registrationEntries, {
       pluginId,
+      cliBackendIds: [],
       providerIds: providerIds.toSorted((left, right) => left.localeCompare(right)),
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
@@ -456,6 +459,7 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
       const captured = captureRegistrations(plugin);
       upsertPluginRegistrationContractEntry(entries, {
         pluginId: plugin.id,
+        cliBackendIds: captured.cliBackends.map((backend) => backend.id),
         providerIds: captured.providers.map((provider) => provider.id),
         speechProviderIds: captured.speechProviders.map((provider) => provider.id),
         mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(
