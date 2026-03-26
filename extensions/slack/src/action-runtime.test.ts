@@ -306,6 +306,28 @@ describe("handleSlackAction", () => {
     ).rejects.toThrow(/requires content, blocks, or mediaUrl/i);
   });
 
+  it("routes uploadFile through sendSlackMessage with upload metadata", async () => {
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "user:U123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+        filename: "report-final.png",
+        title: "Report Final",
+        threadTs: "111.222",
+      },
+      slackConfig(),
+    );
+
+    expect(sendSlackMessage).toHaveBeenCalledWith("user:U123", "fresh report", {
+      mediaUrl: "/tmp/report.png",
+      threadTs: "111.222",
+      uploadFileName: "report-final.png",
+      uploadTitle: "Report Final",
+    });
+  });
+
   it("rejects blocks combined with mediaUrl", async () => {
     await expect(
       handleSlackAction(
