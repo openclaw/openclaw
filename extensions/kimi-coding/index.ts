@@ -22,7 +22,7 @@ export default definePluginEntry({
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "Kimi API key (subscription)",
+          label: "Kimi Code API key (subscription)",
           hint: "Kimi K2.5 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
@@ -38,10 +38,10 @@ export default definePluginEntry({
           noteTitle: "Kimi",
           wizard: {
             choiceId: "kimi-code-api-key",
-            choiceLabel: "Kimi API key (subscription)",
+            choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi",
+            groupHint: "Kimi K2.5",
           },
         }),
       ],
