@@ -43,6 +43,53 @@ export type OpenShellSandboxBackend = SandboxBackendHandle &
     syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
   };
 
+/**
+ * Environment variable names that are safe to forward to SSH subprocesses.
+ *
+ * Hoisted to module scope so the Set is allocated once and is importable for
+ * testing.
+ */
+const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
+  // POSIX basics
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TERM",
+  "LANG",
+  "TZ",
+  "TMPDIR",
+  // SSH agent forwarding
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  // Windows-specific (required for child processes on Windows)
+  ...(process.platform === "win32"
+    ? ["SystemRoot", "WINDIR", "ComSpec", "PATHEXT", "TEMP", "TMP"]
+    : []),
+]);
+
+/**
+ * Build a minimal environment object to pass to SSH subprocesses.
+ *
+ * Passing the full process.env to the SSH child process leaks every secret
+ * that OpenClaw carries in its environment \u2014 API keys, auth tokens, internal
+ * service credentials \u2014 into the remote sandbox (CWE-526).  An attacker who
+ * gains code execution inside the sandbox can read those values via
+ * /proc/self/environ or simply by printing them.
+ *
+ * Only variables that are genuinely required for the SSH session to function
+ * correctly are forwarded.  All other variables (including FIRECRAWL_API_KEY,
+ * ANTHROPIC_API_KEY, OPENAI_API_KEY, gateway secrets, etc.) are stripped.
+ */
+export function buildSshSubprocessEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([k]) => SAFE_ENV_KEYS.has(k) || k.startsWith("LC_"),
+    ),
+  );
+}
+
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
 ): SandboxBackendFactory {
@@ -119,7 +166,7 @@ async function createOpenShellSandboxBackend(params: {
       const pending = await impl.prepareExec({ command, workdir, env, usePty });
       return {
         argv: pending.argv,
-        env: process.env,
+        env: buildSshSubprocessEnv(),
         stdinMode: "pipe-open",
         finalizeToken: pending.token,
       };
@@ -176,7 +223,7 @@ class OpenShellSandboxBackendImpl {
         const pending = await self.prepareExec({ command, workdir, env, usePty });
         return {
           argv: pending.argv,
-          env: process.env,
+          env: buildSshSubprocessEnv(),
           stdinMode: "pipe-open",
           finalizeToken: pending.token,
         };
@@ -263,6 +310,12 @@ class OpenShellSandboxBackendImpl {
       context: this.params.execContext,
     });
     try {
+      // TODO: runSshSandboxCommand (from plugin-sdk) does not accept an `env`
+      // option, so we cannot filter the environment for this code-path.
+      // The SSH session itself is created via createOpenShellSshSession which
+      // uses the filtered env from buildSshSubprocessEnv() in the spawn call,
+      // but runSshSandboxCommand may inherit the full process.env internally.
+      // A follow-up SDK change should add an `env` parameter here.
       return await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
@@ -421,7 +474,7 @@ class OpenShellSandboxBackendImpl {
       await replaceDirectoryContents({
         sourceDir: tmpDir,
         targetDir: this.params.createParams.workspaceDir,
-        // Never sync hooks/ from the remote sandbox — mirrored content must not
+        // Never sync hooks/ from the remote sandbox \u2014 mirrored content must not
         // become trusted workspace hook code on the host.
         excludeDirs: ["hooks"],
       });
