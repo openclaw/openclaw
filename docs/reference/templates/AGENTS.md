@@ -39,16 +39,20 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - **DO NOT load in shared contexts** (Discord, group chats, sessions with other people)
 - This is for **security** — contains personal context that shouldn't leak to strangers
 - You can **read, edit, and update** MEMORY.md freely in main sessions
-- Write significant events, thoughts, decisions, opinions, lessons learned
+- Write cross-cutting personal context: people, preferences, relationships, decisions that aren't owned by any single skill
 - This is your curated memory — the distilled essence, not raw logs
 - Over time, review your daily files and update MEMORY.md with what's worth keeping
+- **Routing rule:** If a lesson only matters when running a specific skill, put it in that skill's SKILL.md (gotchas section), NOT here. MEMORY.md is for things that apply across multiple skills or aren't tied to any skill. Skill-specific lessons in MEMORY.md waste tokens (loaded every session even when the skill isn't active) and are invisible to cron agents that only read SKILL.md.
 
 ### 📝 Write It Down - No "Mental Notes"!
 
 - **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
 - "Mental notes" don't survive session restarts. Files do.
 - When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
-- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
+- When you learn a lesson → put it where it will be read at the right time:
+  - **Skill-specific lesson** (gotcha, edge case, bug) → that skill's SKILL.md gotchas section
+  - **Cross-cutting preference or decision** → MEMORY.md
+  - **Environment-specific note** (API keys, device names) → TOOLS.md
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain** 📝
 
@@ -207,7 +211,7 @@ Periodically (every few days), use a heartbeat to:
 
 1. Read through recent `memory/YYYY-MM-DD.md` files
 2. Identify significant events, lessons, or insights worth keeping long-term
-3. Update `MEMORY.md` with distilled learnings
+3. Route each lesson to the right file: skill-specific → SKILL.md gotchas; cross-cutting → MEMORY.md
 4. Remove outdated info from MEMORY.md that's no longer relevant
 
 Think of it like a human reviewing their journal and updating their mental model. Daily files are raw notes; MEMORY.md is curated wisdom.
