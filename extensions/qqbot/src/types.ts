@@ -1,17 +1,13 @@
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
-/**
- * QQ Bot 配置类型
- */
+/** QQ Bot base config. */
 export interface QQBotConfig {
   appId: string;
   clientSecret?: SecretInput;
   clientSecretFile?: string;
 }
 
-/**
- * 解析后的 QQ Bot 账户
- */
+/** Resolved QQ Bot account config used at runtime. */
 export interface ResolvedQQBotAccount {
   accountId: string;
   name?: string;
@@ -19,16 +15,14 @@ export interface ResolvedQQBotAccount {
   appId: string;
   clientSecret: string;
   secretSource: "config" | "file" | "env" | "none";
-  /** 系统提示词 */
+  /** Additional system prompt text. */
   systemPrompt?: string;
-  /** 是否支持 markdown 消息（默认 true） */
+  /** Whether markdown output is enabled. Defaults to true. */
   markdownSupport: boolean;
   config: QQBotAccountConfig;
 }
 
-/**
- * QQ Bot 账户配置
- */
+/** QQ Bot account config from user settings. */
 export interface QQBotAccountConfig {
   enabled?: boolean;
   name?: string;
@@ -37,81 +31,64 @@ export interface QQBotAccountConfig {
   clientSecretFile?: string;
   dmPolicy?: "open" | "pairing" | "allowlist";
   allowFrom?: string[];
-  /** 系统提示词，会添加在用户消息前面 */
+  /** Optional system prompt prepended to user messages. */
   systemPrompt?: string;
-  /** 是否支持 markdown 消息（默认 true，设为 false 可禁用） */
+  /** Whether markdown output is enabled. Defaults to true. */
   markdownSupport?: boolean;
   /**
-   * @deprecated 请使用 audioFormatPolicy.uploadDirectFormats
-   * 可直接上传的音频格式（不转换为 SILK），向后兼容
+   * @deprecated Use audioFormatPolicy.uploadDirectFormats instead.
+   * Legacy list of formats that can upload directly without SILK conversion.
    */
   voiceDirectUploadFormats?: string[];
   /**
-   * 音频格式策略配置
-   * 统一管理入站（STT）和出站（上传）的音频格式转换行为
+   * Audio format policy covering inbound STT and outbound upload behavior.
    */
   audioFormatPolicy?: AudioFormatPolicy;
   /**
-   * 是否启用公网 URL 直传 QQ 平台（默认 true）
-   * 启用时：公网 URL 先直传给 QQ 开放平台的富媒体 API，平台自行拉取；失败后自动 fallback 到插件下载再 Base64 上传
-   * 禁用时：公网 URL 始终由插件先下载到本地，再以 Base64 上传（适用于 QQ 平台无法访问目标 URL 的场景）
+   * Whether public URLs should be uploaded to QQ directly. Defaults to true.
    */
   urlDirectUpload?: boolean;
   /**
-   * /bot-upgrade 指令返回的升级指引网址
-   * 默认: https://doc.weixin.qq.com/doc/w3_AKEAGQaeACgCNHrh1CbHzTAKtT2gB?scode=AJEAIQdfAAozxFEnLZAKEAGQaeACg
+   * Upgrade guide URL returned by `/bot-upgrade`.
    */
   upgradeUrl?: string;
   /**
-   * /bot-upgrade 指令的行为模式
-   * - "doc"：展示升级文档链接（默认，安全模式）
-   * - "hot-reload"：检测到新版本时直接执行 npm 升级脚本进行热更新
+   * Upgrade command mode.
+   * - "doc": show an upgrade guide link
+   * - "hot-reload": run an in-place npm update flow
    */
   upgradeMode?: "doc" | "hot-reload";
 }
 
-/**
- * 音频格式策略：控制哪些格式可跳过转换
- */
+/** Audio format policy controlling which formats can skip transcoding. */
 export interface AudioFormatPolicy {
   /**
-   * STT 模型直接支持的音频格式（入站：跳过 SILK→WAV 转换）
-   * 如果 STT 服务支持直接处理某些格式（如 silk/amr），可将其加入此列表
-   * 例如: [".silk", ".amr", ".wav", ".mp3", ".ogg"]
-   * 默认为空（所有语音都先转换为 WAV 再送 STT）
+   * Formats supported directly by the STT provider.
    */
   sttDirectFormats?: string[];
   /**
-   * QQ 平台支持直传的音频格式（出站：跳过→SILK 转换）
-   * 默认为 [".wav", ".mp3", ".silk"]（QQ Bot API 原生支持的三种格式）
-   * 仅当需要覆盖默认值时才配置此项
+   * Formats QQ accepts directly for outbound uploads.
    */
   uploadDirectFormats?: string[];
   /**
-   * 是否启用语音转码（默认 true）
-   * 设为 false 可在环境无 ffmpeg 时跳过转码，直接以文件形式发送
-   * 当禁用时，非原生格式的音频会 fallback 到 sendDocument（文件发送）
+   * Whether outbound audio transcoding is enabled. Defaults to true.
    */
   transcodeEnabled?: boolean;
 }
 
-/**
- * 富媒体附件
- */
+/** Rich-media attachment metadata. */
 export interface MessageAttachment {
-  content_type: string; // 如 "image/png"
+  content_type: string;
   filename?: string;
   height?: number;
   width?: number;
   size?: number;
   url: string;
-  voice_wav_url?: string; // QQ 提供的 WAV 格式语音直链，有值时优先使用以避免 SILK→WAV 转换
-  asr_refer_text?: string; // QQ 事件内置 ASR 语音识别文本
+  voice_wav_url?: string;
+  asr_refer_text?: string;
 }
 
-/**
- * C2C 消息事件
- */
+/** C2C message event payload. */
 export interface C2CMessageEvent {
   author: {
     id: string;
@@ -123,15 +100,13 @@ export interface C2CMessageEvent {
   timestamp: string;
   message_scene?: {
     source: string;
-    /** ext 数组，可能包含 ref_msg_idx=REFIDX_xxx（引用的消息）和 msg_idx=REFIDX_xxx（自身索引） */
+    /** ext can contain ref_msg_idx and msg_idx values. */
     ext?: string[];
   };
   attachments?: MessageAttachment[];
 }
 
-/**
- * 频道 AT 消息事件
- */
+/** Guild @-message event payload. */
 export interface GuildMessageEvent {
   id: string;
   channel_id: string;
@@ -150,9 +125,7 @@ export interface GuildMessageEvent {
   attachments?: MessageAttachment[];
 }
 
-/**
- * 群聊 AT 消息事件
- */
+/** Group @-message event payload. */
 export interface GroupMessageEvent {
   author: {
     id: string;
@@ -170,9 +143,7 @@ export interface GroupMessageEvent {
   attachments?: MessageAttachment[];
 }
 
-/**
- * WebSocket 事件负载
- */
+/** WebSocket event payload. */
 export interface WSPayload {
   op: number;
   d?: unknown;

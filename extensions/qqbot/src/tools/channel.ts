@@ -18,24 +18,25 @@ const ChannelApiSchema = {
   properties: {
     method: {
       type: "string",
-      description: "HTTP 请求方法。可选值：GET, POST, PUT, PATCH, DELETE",
+      description: "HTTP method. Allowed values: GET, POST, PUT, PATCH, DELETE.",
       enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     },
     path: {
       type: "string",
       description:
-        "API 路径（不含域名），占位符需替换为实际值。" +
-        "示例：/users/@me/guilds, /guilds/{guild_id}/channels, /channels/{channel_id}",
+        "API path without the host. Replace placeholders with concrete values. " +
+        "Examples: /users/@me/guilds, /guilds/{guild_id}/channels, /channels/{channel_id}.",
     },
     body: {
       type: "object",
-      description: "请求体（JSON），用于 POST/PUT/PATCH 请求。GET/DELETE 请求不需要此参数。",
+      description:
+        "JSON request body for POST/PUT/PATCH requests. GET/DELETE usually do not need it.",
     },
     query: {
       type: "object",
       description:
-        "URL 查询参数（键值对），会拼接到路径后面。" +
-        '如 { "limit": "100", "after": "0" } 会拼接为 ?limit=100&after=0',
+        "URL query parameters as key/value pairs appended to the path. " +
+        'For example, { "limit": "100", "after": "0" } becomes ?limit=100&after=0.',
       additionalProperties: { type: "string" },
     },
   },
@@ -68,22 +69,22 @@ function buildUrl(path: string, query?: Record<string, string>): string {
 
 function validatePath(path: string): string | null {
   if (!path.startsWith("/")) {
-    return "path 必须以 / 开头";
+    return "path must start with /";
   }
   if (path.includes("..") || path.includes("//")) {
-    return "path 不允许包含 .. 或 //";
+    return "path must not contain .. or //";
   }
   if (!/^\/[a-zA-Z0-9\-._~:@!$&'()*+,;=/%]+$/.test(path) && path !== "/") {
-    return "path 包含非法字符";
+    return "path contains unsupported characters";
   }
   return null;
 }
 
 /**
- * 注册 QQ 频道 API 代理工具。
+ * Register the QQ channel API proxy tool.
  *
- * 该工具作为 QQ 开放平台频道 API 的 HTTP 代理，自动处理 Token 鉴权。
- * AI 通过 skill 文档了解各接口的路径、方法和参数，构造请求后由此工具代理发送。
+ * The tool acts as an authenticated HTTP proxy for the QQ Open Platform channel APIs.
+ * Agents learn endpoint details from the skill docs and send requests through this proxy.
  */
 export function registerChannelTool(api: OpenClawPluginApi): void {
   const cfg = api.config;
@@ -111,33 +112,33 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
       name: "qqbot_channel_api",
       label: "QQBot Channel API",
       description:
-        "QQ 开放平台频道 API HTTP 代理，自动填充鉴权 Token。" +
-        "常用接口速查：" +
-        "频道列表 GET /users/@me/guilds | " +
-        "子频道列表 GET /guilds/{guild_id}/channels | " +
-        "子频道详情 GET /channels/{channel_id} | " +
-        "创建子频道 POST /guilds/{guild_id}/channels | " +
-        "成员列表 GET /guilds/{guild_id}/members?after=0&limit=100 | " +
-        "成员详情 GET /guilds/{guild_id}/members/{user_id} | " +
-        "帖子列表 GET /channels/{channel_id}/threads | " +
-        "发帖 PUT /channels/{channel_id}/threads | " +
-        "创建公告 POST /guilds/{guild_id}/announces | " +
-        "创建日程 POST /channels/{channel_id}/schedules。" +
-        "更多接口和参数详情请阅读 qqbot-channel skill。",
+        "Authenticated HTTP proxy for QQ Open Platform channel APIs. " +
+        "Common endpoints: " +
+        "list guilds GET /users/@me/guilds | " +
+        "list channels GET /guilds/{guild_id}/channels | " +
+        "get channel GET /channels/{channel_id} | " +
+        "create channel POST /guilds/{guild_id}/channels | " +
+        "list members GET /guilds/{guild_id}/members?after=0&limit=100 | " +
+        "get member GET /guilds/{guild_id}/members/{user_id} | " +
+        "list threads GET /channels/{channel_id}/threads | " +
+        "create thread PUT /channels/{channel_id}/threads | " +
+        "create announce POST /guilds/{guild_id}/announces | " +
+        "create schedule POST /channels/{channel_id}/schedules. " +
+        "See the qqbot-channel skill for full endpoint details.",
       parameters: ChannelApiSchema,
       async execute(_toolCallId, params) {
         const p = params as ChannelApiParams;
         if (!p.method) {
-          return json({ error: "method 为必填参数" });
+          return json({ error: "method is required" });
         }
         if (!p.path) {
-          return json({ error: "path 为必填参数" });
+          return json({ error: "path is required" });
         }
 
         const method = p.method.toUpperCase();
         if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
           return json({
-            error: `不支持的 HTTP 方法: ${method}，可选值：GET, POST, PUT, PATCH, DELETE`,
+            error: `Unsupported HTTP method: ${method}. Allowed values: GET, POST, PUT, PATCH, DELETE`,
           });
         }
 
@@ -180,11 +181,14 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
             clearTimeout(timeoutId);
             if (err instanceof Error && err.name === "AbortError") {
               debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
-              return json({ error: `请求超时（${DEFAULT_TIMEOUT_MS}ms）`, path: p.path });
+              return json({
+                error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+                path: p.path,
+              });
             }
             debugError("[qqbot-channel-api] <<< Network error:", err);
             return json({
-              error: `网络错误: ${err instanceof Error ? err.message : String(err)}`,
+              error: `Network error: ${err instanceof Error ? err.message : String(err)}`,
               path: p.path,
             });
           } finally {
@@ -199,7 +203,7 @@ export function registerChannelTool(api: OpenClawPluginApi): void {
               return json({ success: true, status: res.status, path: p.path });
             }
             return json({
-              error: `API 返回 ${res.status} ${res.statusText}`,
+              error: `API returned ${res.status} ${res.statusText}`,
               status: res.status,
               path: p.path,
             });

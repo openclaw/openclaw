@@ -1,12 +1,8 @@
-/**
- * 输入状态自动续期
- * 在消息处理期间定时续发 "正在输入" 状态通知，确保用户持续看到 bot 在处理中。
- * 仅 C2C 私聊有效（QQ 群聊 API 不支持输入状态通知）。
- */
+/** Periodically refresh C2C typing state while a response is still in progress. */
 
 import { sendC2CInputNotify } from "./api.js";
 
-// 每 50 秒续发一次（QQ API input_second=60，留 10s 余量）
+// Refresh every 50s for the QQ API's 60s input-notify window.
 export const TYPING_INTERVAL_MS = 50_000;
 export const TYPING_INPUT_SECOND = 60;
 
@@ -27,7 +23,7 @@ export class TypingKeepAlive {
     private readonly logPrefix = "[qqbot]",
   ) {}
 
-  /** 启动定时续期（首次发送由调用方自行处理，这里只负责后续续期） */
+  /** Start periodic keep-alive sends. */
   start(): void {
     if (this.stopped) return;
     this.timer = setInterval(() => {
@@ -39,7 +35,7 @@ export class TypingKeepAlive {
     }, TYPING_INTERVAL_MS);
   }
 
-  /** 停止续期 */
+  /** Stop periodic keep-alive sends. */
   stop(): void {
     this.stopped = true;
     if (this.timer) {

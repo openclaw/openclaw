@@ -28,9 +28,7 @@ function normalizeAppId(raw: unknown): string {
   return String(raw).trim();
 }
 
-/**
- * 列出所有 QQBot 账户 ID
- */
+/** List all configured QQBot account IDs. */
 export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
@@ -50,16 +48,12 @@ export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
   return Array.from(ids);
 }
 
-/**
- * 获取默认账户 ID
- */
+/** Resolve the default QQBot account ID. */
 export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
-  // 如果有默认账户配置，返回 default
   if (qqbot?.appId) {
     return DEFAULT_ACCOUNT_ID;
   }
-  // 否则返回第一个配置的账户
   if (qqbot?.accounts) {
     const ids = Object.keys(qqbot.accounts);
     if (ids.length > 0) {
@@ -69,9 +63,7 @@ export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
   return DEFAULT_ACCOUNT_ID;
 }
 
-/**
- * 解析 QQBot 账户配置
- */
+/** Resolve QQBot account config for runtime or setup flows. */
 export function resolveQQBotAccount(
   cfg: OpenClawConfig,
   accountId?: string | null,
@@ -80,18 +72,17 @@ export function resolveQQBotAccount(
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
   const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
-  // 基础配置
   let accountConfig: QQBotAccountConfig = {};
   let appId = "";
   let clientSecret = "";
   let secretSource: "config" | "file" | "env" | "none" = "none";
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
-    // 默认账户从顶层读取，同时保留顶层配置的完整字段面
+    // Default account reads from top-level config and keeps the full field surface.
     accountConfig = normalizeQQBotAccountConfig(qqbot);
     appId = normalizeAppId(qqbot?.appId);
   } else {
-    // 命名账户从 accounts 读取
+    // Named accounts read from channels.qqbot.accounts.
     const account = qqbot?.accounts?.[resolvedAccountId];
     accountConfig = normalizeQQBotAccountConfig(account);
     appId = normalizeAppId(account?.appId);
@@ -102,7 +93,7 @@ export function resolveQQBotAccount(
       ? "channels.qqbot.clientSecret"
       : `channels.qqbot.accounts.${resolvedAccountId}.clientSecret`;
 
-  // 解析 clientSecret
+  // Resolve clientSecret from config, file, or environment.
   if (hasConfiguredSecretInput(accountConfig.clientSecret)) {
     clientSecret = opts?.allowUnresolvedSecretRef
       ? (normalizeSecretInputString(accountConfig.clientSecret) ?? "")
@@ -123,7 +114,7 @@ export function resolveQQBotAccount(
     secretSource = "env";
   }
 
-  // AppId 也可以从环境变量读取
+  // AppId can also fall back to an environment variable.
   if (!appId && process.env.QQBOT_APP_ID && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     appId = normalizeAppId(process.env.QQBOT_APP_ID);
   }
@@ -141,9 +132,7 @@ export function resolveQQBotAccount(
   };
 }
 
-/**
- * 应用账户配置
- */
+/** Apply account config updates back into the OpenClaw config object. */
 export function applyQQBotAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -157,7 +146,7 @@ export function applyQQBotAccountConfig(
   const next = { ...cfg };
 
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    // 如果没有设置过 allowFrom，默认设置为 ["*"]
+    // Default allowFrom to ["*"] when not yet configured.
     const existingConfig = (next.channels?.qqbot as QQBotChannelConfig) || {};
     const allowFrom = existingConfig.allowFrom ?? ["*"];
 
@@ -177,7 +166,7 @@ export function applyQQBotAccountConfig(
       },
     };
   } else {
-    // 如果没有设置过 allowFrom，默认设置为 ["*"]
+    // Default allowFrom to ["*"] when not yet configured.
     const existingAccountConfig =
       (next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {};
     const allowFrom = existingAccountConfig.allowFrom ?? ["*"];

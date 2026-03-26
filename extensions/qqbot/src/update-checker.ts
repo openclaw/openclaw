@@ -1,11 +1,9 @@
 /**
- * 版本检查器
+ * Update-check helpers for the standalone npm package.
  *
- * - triggerUpdateCheck(): gateway 启动时调用，后台预热缓存
- * - getUpdateInfo(): 每次实时查询 npm registry，返回最新结果
- *
- * 使用 HTTPS 直接请求 npm registry API（不依赖 npm CLI），
- * 支持多 registry fallback：npmjs.org → npmmirror.com，解决国内网络问题。
+ * `triggerUpdateCheck()` warms the cache in the background and `getUpdateInfo()`
+ * queries the registry on demand. The lookup talks directly to the npm registry
+ * API and falls back from npmjs.org to npmmirror.com.
  */
 
 import https from "node:https";
@@ -31,11 +29,11 @@ try {
 
 export interface UpdateInfo {
   current: string;
-  /** 最佳升级目标（prerelease 用户优先 alpha，稳定版用户取 latest） */
+  /** Preferred upgrade target: alpha for prerelease users, latest for stable users. */
   latest: string | null;
-  /** 稳定版 dist-tag */
+  /** Stable dist-tag. */
   stable: string | null;
-  /** alpha dist-tag */
+  /** Alpha dist-tag. */
   alpha: string | null;
   hasUpdate: boolean;
   checkedAt: number;
@@ -96,7 +94,7 @@ function buildUpdateInfo(tags: Record<string, string>): UpdateInfo {
   const stableTag = tags.latest || null;
   const alphaTag = tags.alpha || null;
 
-  // 严格隔离：alpha 只跟 alpha 比，正式版只跟正式版比，不交叉
+  // Keep prerelease and stable tracks isolated from each other.
   const compareTarget = currentIsPrerelease ? alphaTag : stableTag;
 
   const hasUpdate =
@@ -114,14 +112,14 @@ function buildUpdateInfo(tags: Record<string, string>): UpdateInfo {
   };
 }
 
-/** gateway 启动时调用，保存 log 引用 */
+/** Capture a logger and warm the update check in the background. */
 export function triggerUpdateCheck(log?: {
   info: (msg: string) => void;
   error: (msg: string) => void;
   debug?: (msg: string) => void;
 }): void {
   if (log) _log = log;
-  // 预热：fire-and-forget
+  // Warm the cache without blocking startup.
   getUpdateInfo()
     .then((info) => {
       if (info.hasUpdate) {
@@ -133,7 +131,7 @@ export function triggerUpdateCheck(log?: {
     .catch(() => {});
 }
 
-/** 每次实时查询 npm registry */
+/** Query the npm registry on demand. */
 export async function getUpdateInfo(): Promise<UpdateInfo> {
   try {
     const tags = await fetchDistTags();
@@ -153,8 +151,7 @@ export async function getUpdateInfo(): Promise<UpdateInfo> {
 }
 
 /**
- * 检查指定版本是否存在于 npm registry
- * 用于 /bot-upgrade --version 的前置校验
+ * Check whether a specific version exists in the npm registry.
  */
 export async function checkVersionExists(version: string): Promise<boolean> {
   for (const baseUrl of REGISTRIES) {
@@ -177,16 +174,16 @@ function compareVersions(a: string, b: string): number {
   };
   const pa = parse(a);
   const pb = parse(b);
-  // 先比主版本号
+  // Compare the numeric core version first.
   for (let i = 0; i < 3; i++) {
     const diff = (pa.parts[i] || 0) - (pb.parts[i] || 0);
     if (diff !== 0) return diff;
   }
-  // 主版本号相同：正式版 > prerelease
+  // For equal core versions, stable beats prerelease.
   if (!pa.pre && pb.pre) return 1;
   if (pa.pre && !pb.pre) return -1;
   if (!pa.pre && !pb.pre) return 0;
-  // 都是 prerelease：按段逐一比较（alpha.1 vs alpha.2）
+  // When both are prereleases, compare each prerelease segment in order.
   const aParts = pa.pre!.split(".");
   const bParts = pb.pre!.split(".");
   for (let i = 0; i < Math.max(aParts.length, bParts.length); i++) {
@@ -194,11 +191,11 @@ function compareVersions(a: string, b: string): number {
     const bP = bParts[i] ?? "";
     const aNum = Number(aP);
     const bNum = Number(bP);
-    // 都是数字则按数字比较
+    // Compare numerically when both segments are numbers.
     if (!isNaN(aNum) && !isNaN(bNum)) {
       if (aNum !== bNum) return aNum - bNum;
     } else {
-      // 字符串比较
+      // Fall back to lexical comparison for string segments.
       if (aP < bP) return -1;
       if (aP > bP) return 1;
     }

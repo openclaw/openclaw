@@ -1,12 +1,12 @@
 import type { QueueSnapshot } from "./slash-commands.js";
 
-// 消息队列配置
+// Message queue limits.
 const MESSAGE_QUEUE_SIZE = 1000;
 const PER_USER_QUEUE_SIZE = 20;
 const MAX_CONCURRENT_USERS = 10;
 
 /**
- * 消息队列项类型（用于异步处理消息，防止阻塞心跳）
+ * Queue item used for asynchronous message handling without blocking heartbeats.
  */
 export interface QueuedMessage {
   type: "c2c" | "guild" | "dm" | "group";
@@ -25,9 +25,9 @@ export interface QueuedMessage {
     voice_wav_url?: string;
     asr_refer_text?: string;
   }>;
-  /** 被引用消息的 refIdx（用户引用了哪条历史消息） */
+  /** refIdx of the quoted message. */
   refMsgIdx?: string;
-  /** 当前消息自身的 refIdx（供将来被引用） */
+  /** refIdx assigned to this message for future quoting. */
   msgIdx?: string;
 }
 
@@ -38,7 +38,7 @@ export interface MessageQueueContext {
     error: (msg: string) => void;
     debug?: (msg: string) => void;
   };
-  /** 外部提供的 abort 状态检查 */
+  /** Abort-state probe supplied by the caller. */
   isAborted: () => boolean;
 }
 
@@ -47,14 +47,15 @@ export interface MessageQueue {
   startProcessor: (handleMessageFn: (msg: QueuedMessage) => Promise<void>) => void;
   getSnapshot: (senderPeerId: string) => QueueSnapshot;
   getMessagePeerId: (msg: QueuedMessage) => string;
-  /** 清空指定用户的排队消息，返回被丢弃的消息数 */
+  /** Clear a user's queued messages and return how many were dropped. */
   clearUserQueue: (peerId: string) => number;
-  /** 立即执行一条消息（绕过队列），用于紧急命令 */
+  /** Execute one message immediately, bypassing the queue for urgent commands. */
   executeImmediate: (msg: QueuedMessage) => void;
 }
 
 /**
- * 创建按用户并发的消息队列（同用户串行，跨用户并行）
+ * Create a per-user concurrent queue.
+ * Messages are serialized per user and processed in parallel across users.
  */
 export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
   const { accountId, log } = ctx;

@@ -1,13 +1,8 @@
 /**
- * 跨平台兼容工具
+ * Cross-platform compatibility helpers.
  *
- * 统一 Mac / Linux / Windows 三大系统的：
- * - 用户主目录获取
- * - 临时目录获取
- * - 本地路径判断
- * - ffmpeg / ffprobe 可执行文件路径
- * - silk-wasm 原生模块兼容性检测
- * - 启动诊断报告
+ * This module centralizes home/temp directory discovery, local-path checks,
+ * ffmpeg/ffprobe lookup, native-module compatibility checks, and startup diagnostics.
  */
 
 import { execFile } from "node:child_process";
@@ -16,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { debugLog, debugWarn } from "./debug-log.js";
 
-// ============ 基础平台信息 ============
+// Basic platform information.
 
 export type PlatformType = "darwin" | "linux" | "win32" | "other";
 
@@ -30,18 +25,15 @@ export function isWindows(): boolean {
   return process.platform === "win32";
 }
 
-// ============ 用户主目录 ============
+// Home directory helpers.
 
 /**
- * 安全获取用户主目录
+ * Resolve the current user's home directory safely across platforms.
  *
- * 优先级:
- * 1. os.homedir()（Node 原生，所有平台）
- * 2. $HOME（Mac/Linux）或 %USERPROFILE%（Windows）
- * 3. 降级到 /tmp（Linux/Mac）或 os.tmpdir()（Windows）
- *
- * 与之前 `process.env.HOME || "/home/ubuntu"` 的硬编码相比，
- * 现在能正确处理 Windows 和非 ubuntu 用户。
+ * Priority:
+ * 1. `os.homedir()`
+ * 2. `$HOME` or `%USERPROFILE%`
+ * 3. `os.tmpdir()` as a last resort
  */
 export function getHomeDir(): string {
   try {
@@ -49,17 +41,16 @@ export function getHomeDir(): string {
     if (home && fs.existsSync(home)) return home;
   } catch {}
 
-  // fallback 环境变量
+  // Fall back to environment variables.
   const envHome = process.env.HOME || process.env.USERPROFILE;
   if (envHome && fs.existsSync(envHome)) return envHome;
 
-  // 最后降级
+  // Final fallback.
   return os.tmpdir();
 }
 
 /**
- * 获取 .openclaw/qqbot 下的子目录路径，并自动创建
- * 替代各文件中分散的 path.join(HOME, ".openclaw", "qqbot", ...)
+ * Return a path under `~/.openclaw/qqbot`, creating it on demand.
  */
 export function getQQBotDataDir(...subPaths: string[]): string {
   const dir = path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
@@ -70,13 +61,10 @@ export function getQQBotDataDir(...subPaths: string[]): string {
 }
 
 /**
- * 获取 .openclaw/media/qqbot 下的子目录路径，并自动创建
+ * Return a path under `~/.openclaw/media/qqbot`, creating it on demand.
  *
- * 与 getQQBotDataDir 不同，此目录位于 OpenClaw 核心的媒体安全白名单
- * (~/.openclaw/media) 之下，下载到这里的文件可以被框架的 image/media
- * 工具直接访问，不会触发 "Local media path is not under an allowed directory" 错误。
- *
- * 用于存放从 QQ 下载的图片、语音等需要被框架处理的媒体文件。
+ * Unlike `getQQBotDataDir`, this lives under OpenClaw's core media allowlist so
+ * downloaded images and audio can be accessed by framework media tooling.
  */
 export function getQQBotMediaDir(...subPaths: string[]): string {
   const dir = path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
@@ -86,32 +74,19 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
   return dir;
 }
 
-// ============ 临时目录 ============
+// Temporary directory helpers.
 
-/**
- * 获取系统临时目录（跨平台安全）
- * Mac: /var/folders/... 或 /tmp
- * Linux: /tmp
- * Windows: %TEMP% 或 C:\Users\xxx\AppData\Local\Temp
- */
+/** Return the OS temp directory. */
 export function getTempDir(): string {
   return os.tmpdir();
 }
 
-// ============ 波浪线路径展开 ============
+// Tilde expansion.
 
 /**
- * 展开路径中的波浪线（~）为用户主目录
+ * Expand `~` to the current user's home directory.
  *
- * Mac/Linux 用户经常使用 `~/Desktop/file.png` 这样的路径，
- * 但 Node.js 的 fs 模块不会像 shell 一样自动展开 `~`。
- *
- * 支持:
- * - `~/xxx`  → `/Users/you/xxx`（Mac）或 `/home/you/xxx`（Linux）
- * - `~`      → `/Users/you`
- * - 非 `~` 开头的路径原样返回
- *
- * 注意: 不支持 `~otheruser/xxx` 语法（极少使用，且需要系统调用获取其他用户信息）
+ * Supports `~` and `~/...`. Other forms are returned unchanged.
  */
 export function expandTilde(p: string): string {
   if (!p) return p;
@@ -123,19 +98,18 @@ export function expandTilde(p: string): string {
 }
 
 /**
- * 对路径进行完整的规范化处理：剥离 file:// 前缀 + 展开波浪线 + 去除首尾空白
- * 所有文件操作前应通过此函数处理用户输入的路径
+ * Normalize a user-provided path by trimming, stripping `file://`, and expanding `~`.
  */
 export function normalizePath(p: string): string {
   let result = p.trim();
-  // 剥离 file:// 协议前缀: file:///Users/... → /Users/...
+  // Strip the local file URI scheme.
   if (result.startsWith("file://")) {
     result = result.slice("file://".length);
-    // 处理 URL 编码（file:// 路径中空格等字符可能被编码）
+    // Decode URL-escaped paths when possible.
     try {
       result = decodeURIComponent(result);
     } catch {
-      // decodeURIComponent 失败时保留原样
+      // Keep the raw string if decoding fails.
     }
   }
   return expandTilde(result);
@@ -147,10 +121,7 @@ function isPathWithinRoot(candidate: string, root: string): boolean {
 }
 
 /**
- * 修正 QQBot 本地媒体路径。
- *
- * 当模型或旧提示词把媒体路径写成 ~/.openclaw/workspace/qqbot/... 或
- * ~/.openclaw/qqbot/... 时，自动回退到真实存在的 ~/.openclaw/media/qqbot/...。
+ * Remap legacy or hallucinated QQ Bot local media paths to real files when possible.
  */
 export function resolveQQBotLocalMediaPath(p: string): string {
   const normalized = normalizePath(p);
@@ -183,111 +154,76 @@ export function resolveQQBotLocalMediaPath(p: string): string {
   return normalized;
 }
 
-// ============ 文件名 UTF-8 规范化 ============
+// Filename normalization.
 
 /**
- * 规范化文件名为 QQ Bot API 要求的 UTF-8 编码格式
+ * Normalize filenames into a UTF-8 form that the QQ Bot API accepts reliably.
  *
- * 问题场景:
- * - macOS HFS+/APFS 文件系统使用 NFD（Unicode 分解形式）存储文件名，
- *   例如「中文.txt」被分解为多个码点，QQ Bot API 可能拒绝
- * - 文件名可能包含 API 不接受的特殊控制字符
- * - URL 路径中可能包含 percent-encoded 的文件名需要解码
- *
- * 处理:
- * 1. Unicode NFC 规范化（将 NFD 分解形式合并为 NFC 组合形式）
- * 2. 去除 ASCII 控制字符（0x00-0x1F, 0x7F）
- * 3. 去除首尾空白
- * 4. 对 percent-encoded 的文件名尝试 URI 解码
+ * This decodes percent-escaped names, converts Unicode to NFC, and strips ASCII
+ * control characters.
  */
 export function sanitizeFileName(name: string): string {
   if (!name) return name;
 
   let result = name.trim();
 
-  // 尝试 URI 解码（处理 URL 中 percent-encoded 的中文文件名）
-  // 例如 %E4%B8%AD%E6%96%87.txt → 中文.txt
+  // Decode percent-escaped names when they came from URLs.
   if (result.includes("%")) {
     try {
       result = decodeURIComponent(result);
     } catch {
-      // 解码失败（非合法 percent-encoding），保留原始值
+      // Keep the raw value if it is not valid percent-encoding.
     }
   }
 
-  // Unicode NFC 规范化：将 macOS NFD 分解形式合并为标准 NFC 组合形式
+  // Convert macOS-style NFD names into standard NFC form.
   result = result.normalize("NFC");
 
-  // 去除 ASCII 控制字符（保留所有可打印字符和非 ASCII Unicode 字符）
+  // Drop ASCII control characters while keeping printable Unicode content.
   result = result.replace(/[\x00-\x1F\x7F]/g, "");
 
   return result;
 }
 
-// ============ 本地路径判断 ============
+// Local path detection.
 
 /**
- * 判断字符串是否为本地文件路径（非 URL）
- *
- * 覆盖:
- * - Unix 绝对路径: /Users/..., /home/..., /tmp/...
- * - Windows 绝对路径: C:\..., D:/..., \\server\share
- * - 相对路径: ./file, ../file
- * - 波浪线路径: ~/Desktop/file.png
- * - file:// 协议: file:///Users/..., file:///home/...
- *
- * 不匹配:
- * - http:// / https:// URL
- * - data: URL
+ * Return true when the string looks like a local filesystem path rather than a URL.
  */
 export function isLocalPath(p: string): boolean {
   if (!p) return false;
-  // file:// 协议（本地文件 URI）
+  // Local file URI.
   if (p.startsWith("file://")) return true;
-  // 波浪线路径（Mac/Linux 用户常用）
+  // Tilde-based Unix path.
   if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) return true;
-  // Unix 绝对路径
+  // Unix absolute path.
   if (p.startsWith("/")) return true;
-  // Windows 盘符: C:\ 或 C:/
+  // Windows drive-letter path.
   if (/^[a-zA-Z]:[\\/]/.test(p)) return true;
-  // Windows UNC: \\server\share
+  // Windows UNC path.
   if (p.startsWith("\\\\")) return true;
-  // 相对路径
+  // POSIX relative path.
   if (p.startsWith("./") || p.startsWith("../")) return true;
-  // Windows 相对路径
+  // Windows relative path.
   if (p.startsWith(".\\") || p.startsWith("..\\")) return true;
   return false;
 }
 
-/**
- * 判断 markdown 中提取的路径是否像本地路径
- * 比 isLocalPath 更宽松，用于从 markdown ![](path) 中检测误用
- */
+/** Looser local-path heuristic used for markdown-extracted paths. */
 export function looksLikeLocalPath(p: string): boolean {
   if (isLocalPath(p)) return true;
-  // 常见系统目录前缀（不以 / 开头时也匹配）
   return /^(?:Users|home|tmp|var|private|[A-Z]:)/i.test(p);
 }
 
-// ============ ffmpeg 跨平台检测 ============
-
-let _ffmpegPath: string | null | undefined; // undefined = 未检测, null = 不可用
+let _ffmpegPath: string | null | undefined;
 let _ffmpegCheckPromise: Promise<string | null> | null = null;
 
-/**
- * 检测 ffmpeg 是否可用，返回可执行路径
- *
- * Windows 上检测 ffmpeg.exe，Mac/Linux 检测 ffmpeg
- * 支持通过环境变量 FFMPEG_PATH 指定自定义路径
- *
- * @returns ffmpeg 可执行文件路径，不可用返回 null
- */
+/** Detect ffmpeg and return an executable path when available. */
 export function detectFfmpeg(): Promise<string | null> {
   if (_ffmpegPath !== undefined) return Promise.resolve(_ffmpegPath);
   if (_ffmpegCheckPromise) return _ffmpegCheckPromise;
 
   _ffmpegCheckPromise = (async () => {
-    // 1. 环境变量自定义路径
     const envPath = process.env.FFMPEG_PATH;
     if (envPath) {
       const ok = await testExecutable(envPath, ["-version"]);
@@ -299,7 +235,6 @@ export function detectFfmpeg(): Promise<string | null> {
       debugWarn(`[platform] FFMPEG_PATH set but not working: ${envPath}`);
     }
 
-    // 2. 系统 PATH 中检测
     const cmd = isWindows() ? "ffmpeg.exe" : "ffmpeg";
     const ok = await testExecutable(cmd, ["-version"]);
     if (ok) {
@@ -308,7 +243,6 @@ export function detectFfmpeg(): Promise<string | null> {
       return _ffmpegPath;
     }
 
-    // 3. 常见安装位置（Mac brew、Windows choco/scoop）
     const commonPaths = isWindows()
       ? [
           "C:\\ffmpeg\\bin\\ffmpeg.exe",
@@ -316,10 +250,10 @@ export function detectFfmpeg(): Promise<string | null> {
           path.join(process.env.ProgramFiles || "", "ffmpeg", "bin", "ffmpeg.exe"),
         ]
       : [
-          "/usr/local/bin/ffmpeg", // Mac brew
-          "/opt/homebrew/bin/ffmpeg", // Mac ARM brew
-          "/usr/bin/ffmpeg", // Linux apt
-          "/snap/bin/ffmpeg", // Linux snap
+          "/usr/local/bin/ffmpeg",
+          "/opt/homebrew/bin/ffmpeg",
+          "/usr/bin/ffmpeg",
+          "/snap/bin/ffmpeg",
         ];
 
     for (const p of commonPaths) {
@@ -342,7 +276,7 @@ export function detectFfmpeg(): Promise<string | null> {
   return _ffmpegCheckPromise;
 }
 
-/** 测试可执行文件是否能正常运行 */
+/** Return true when an executable responds successfully to the given args. */
 function testExecutable(cmd: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 5000 }, (err) => {
@@ -351,28 +285,21 @@ function testExecutable(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
-/** 重置 ffmpeg 缓存（用于测试） */
+/** Reset ffmpeg detection state, mainly for tests. */
 export function resetFfmpegCache(): void {
   _ffmpegPath = undefined;
   _ffmpegCheckPromise = null;
 }
 
-// ============ silk-wasm 兼容性 ============
-
 let _silkWasmAvailable: boolean | null = null;
 
-/**
- * 检测 silk-wasm 是否可用
- *
- * silk-wasm 依赖 WASM 运行时，在某些环境（如老版本 Node、某些容器）可能不可用。
- * 提前检测避免运行时崩溃。
- */
+/** Check whether silk-wasm can run in the current environment. */
 export async function checkSilkWasmAvailable(): Promise<boolean> {
   if (_silkWasmAvailable !== null) return _silkWasmAvailable;
 
   try {
     const { isSilk } = await import("silk-wasm");
-    // 用一个空 buffer 快速测试 WASM 是否能加载
+    // Use an empty buffer as a cheap smoke test for WASM loading.
     isSilk(new Uint8Array(0));
     _silkWasmAvailable = true;
     debugLog("[platform] silk-wasm: available");
@@ -385,7 +312,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
   return _silkWasmAvailable;
 }
 
-// ============ 启动环境诊断 ============
+// Startup environment diagnostics.
 
 export interface DiagnosticReport {
   platform: string;
@@ -400,8 +327,8 @@ export interface DiagnosticReport {
 }
 
 /**
- * 运行启动诊断，返回环境报告
- * 在 gateway 启动时调用，打印环境信息并给出警告
+ * Run startup diagnostics and return an environment report.
+ * Called during gateway startup to log environment details and warnings.
  */
 export async function runDiagnostics(): Promise<DiagnosticReport> {
   const warnings: string[] = [];
@@ -413,41 +340,41 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
   const tempDir = getTempDir();
   const dataDir = getQQBotDataDir();
 
-  // 检测 ffmpeg
+  // Check ffmpeg availability.
   const ffmpegPath = await detectFfmpeg();
   if (!ffmpegPath) {
     warnings.push(
       isWindows()
-        ? "⚠️ ffmpeg 未安装。语音/视频格式转换将受限。安装方式: choco install ffmpeg 或 scoop install ffmpeg 或从 https://ffmpeg.org 下载"
+        ? "⚠️ ffmpeg is not installed. Audio/video conversion will be limited. Install it with choco install ffmpeg, scoop install ffmpeg, or from https://ffmpeg.org."
         : getPlatform() === "darwin"
-          ? "⚠️ ffmpeg 未安装。语音/视频格式转换将受限。安装方式: brew install ffmpeg"
-          : "⚠️ ffmpeg 未安装。语音/视频格式转换将受限。安装方式: sudo apt install ffmpeg 或 sudo yum install ffmpeg",
+          ? "⚠️ ffmpeg is not installed. Audio/video conversion will be limited. Install it with brew install ffmpeg."
+          : "⚠️ ffmpeg is not installed. Audio/video conversion will be limited. Install it with sudo apt install ffmpeg or sudo yum install ffmpeg.",
     );
   }
 
-  // 检测 silk-wasm
+  // Check silk-wasm availability.
   const silkWasm = await checkSilkWasmAvailable();
   if (!silkWasm) {
     warnings.push(
-      "⚠️ silk-wasm 不可用。QQ 语音消息的收发将无法工作。请确认 Node.js 版本 >= 16 且 WASM 支持正常",
+      "⚠️ silk-wasm is unavailable. QQ voice send/receive will not work. Ensure Node.js >= 16 and WASM support are available.",
     );
   }
 
-  // 检查数据目录可写性
+  // Check whether the data directory is writable.
   try {
     const testFile = path.join(dataDir, ".write-test");
     fs.writeFileSync(testFile, "test");
     fs.unlinkSync(testFile);
   } catch {
-    warnings.push(`⚠️ 数据目录不可写: ${dataDir}。请检查权限`);
+    warnings.push(`⚠️ Data directory is not writable: ${dataDir}. Check filesystem permissions.`);
   }
 
-  // Windows 特殊提醒
+  // Windows-specific reminder.
   if (isWindows()) {
-    // 检查路径中是否有中文或空格（可能导致某些工具异常）
+    // Chinese characters or spaces in the home path can break external tools.
     if (/[\u4e00-\u9fa5]/.test(homeDir) || homeDir.includes(" ")) {
       warnings.push(
-        `⚠️ 用户目录包含中文或空格: ${homeDir}。某些工具可能无法正常工作，建议设置 QQBOT_DATA_DIR 环境变量指定纯英文路径`,
+        `⚠️ Home directory contains Chinese characters or spaces: ${homeDir}. Some tools may fail. Consider setting QQBOT_DATA_DIR to an ASCII-only path.`,
       );
     }
   }
@@ -464,16 +391,16 @@ export async function runDiagnostics(): Promise<DiagnosticReport> {
     warnings,
   };
 
-  // 打印诊断报告
-  debugLog("=== QQBot 环境诊断 ===");
-  debugLog(`  平台: ${platform} (${arch})`);
+  // Print the report once for startup visibility.
+  debugLog("=== QQBot Environment Diagnostics ===");
+  debugLog(`  Platform: ${platform} (${arch})`);
   debugLog(`  Node: ${nodeVersion}`);
-  debugLog(`  主目录: ${homeDir}`);
-  debugLog(`  数据目录: ${dataDir}`);
-  debugLog(`  ffmpeg: ${ffmpegPath ?? "未安装"}`);
-  debugLog(`  silk-wasm: ${silkWasm ? "可用" : "不可用"}`);
+  debugLog(`  Home: ${homeDir}`);
+  debugLog(`  Data dir: ${dataDir}`);
+  debugLog(`  ffmpeg: ${ffmpegPath ?? "not installed"}`);
+  debugLog(`  silk-wasm: ${silkWasm ? "available" : "unavailable"}`);
   if (warnings.length > 0) {
-    debugLog("  --- 警告 ---");
+    debugLog("  --- Warnings ---");
     for (const w of warnings) {
       debugLog(`  ${w}`);
     }

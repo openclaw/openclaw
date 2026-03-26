@@ -1,7 +1,6 @@
 /**
- * 用户面向的提示文案 — 已清空
+ * User-facing prompt strings are intentionally empty.
  *
- * 设计原则（对齐飞书插件）：
- * QQBot 插件层不生成额外的用户提示信息。
- * 所有运行时错误仅写日志，不面向用户展示。
+ * The QQ Bot plugin follows the same rule as Feishu: runtime errors are logged
+ * but no extra plugin-layer user messages are injected.
  */

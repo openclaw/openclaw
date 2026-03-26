@@ -15,19 +15,17 @@ import {
   resolveQQBotAccount,
   resolveDefaultQQBotAccountId,
 } from "./config.js";
-import { startGateway } from "./gateway.js";
-import { sendText, sendMedia } from "./outbound.js";
 import { getQQBotRuntime } from "./runtime.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
-/** QQ Bot 单条消息文本长度上限 */
+/** Maximum text length for a single QQ Bot message. */
 export const TEXT_CHUNK_LIMIT = 5000;
 
 /**
- * Markdown 感知的文本分块函数
- * 委托给 SDK 内置的 channel.text.chunkMarkdownText
- * 支持代码块自动关闭/重开、括号感知等
+ * Markdown-aware text chunking.
+ *
+ * Delegates to the SDK chunker so code fences and bracket balance stay intact.
  */
 export function chunkText(text: string, limit: number): string[] {
   const runtime = getQQBotRuntime();
@@ -51,8 +49,8 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     reactions: false,
     threads: false,
     /**
-     * blockStreaming: true 表示该 Channel 支持块流式
-     * 框架会收集流式响应，然后通过 deliver 回调发送
+     * blockStreaming=true means the channel supports block streaming.
+     * The framework collects streamed blocks and sends them through deliver().
      */
     blockStreaming: true,
   },
@@ -64,7 +62,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     resolveAccount: (cfg, accountId) =>
       resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true }),
     defaultAccountId: (cfg) => resolveDefaultQQBotAccountId(cfg),
-    // 新增：设置账户启用状态
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
         cfg,
@@ -73,7 +70,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         enabled,
         allowTopLevel: true,
       }),
-    // 新增：删除账户
     deleteAccount: ({ cfg, accountId }) =>
       deleteAccountFromConfigSection({
         cfg,
@@ -100,24 +96,21 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       ),
       tokenSource: account?.secretSource,
     }),
-    // 关键：解析 allowFrom 配置，用于命令授权
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveQQBotAccount(cfg, accountId, { allowUnresolvedSecretRef: true });
       const allowFrom = account.config?.allowFrom;
       return allowFrom;
     },
-    // 格式化 allowFrom 条目（移除 qqbot: 前缀，统一大写）
+    // Normalize allowFrom entries by removing the qqbot: prefix and uppercasing IDs.
     formatAllowFrom: ({ allowFrom }) =>
       (allowFrom ?? [])
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => entry.replace(/^qqbot:/i, ""))
-        .map((entry) => entry.toUpperCase()), // QQ openid 是大写的
+        .map((entry) => entry.toUpperCase()),
   },
   setup: {
-    // 新增：规范化账户 ID
     resolveAccountId: ({ accountId }) => accountId?.trim().toLowerCase() || DEFAULT_ACCOUNT_ID,
-    // 新增：应用账户名称
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
         cfg,
@@ -151,80 +144,42 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       });
     },
   },
-  // Messaging 配置：用于解析目标地址
   messaging: {
-    /**
-     * 规范化目标地址
-     * 支持以下格式：
-     * - qqbot:c2c:openid -> 私聊
-     * - qqbot:group:groupid -> 群聊
-     * - qqbot:channel:channelid -> 频道
-     * - c2c:openid -> 私聊
-     * - group:groupid -> 群聊
-     * - channel:channelid -> 频道
-     * - 纯 openid（32位十六进制）-> 私聊
-     */
+    /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: (target: string): string | undefined => {
-      // 去掉 qqbot: 前缀（如果有）
       const id = target.replace(/^qqbot:/i, "");
-
-      // 检查是否是已知格式
       if (id.startsWith("c2c:") || id.startsWith("group:") || id.startsWith("channel:")) {
         return `qqbot:${id}`;
       }
-
-      // 检查是否是纯 openid（32位十六进制，不带连字符）
-      // QQ Bot OpenID 格式类似: 207A5B8339D01F6582911C014668B77B
       const openIdHexPattern = /^[0-9a-fA-F]{32}$/;
       if (openIdHexPattern.test(id)) {
         return `qqbot:c2c:${id}`;
       }
-
-      // 检查是否是 UUID 格式的 openid（带连字符）
       const openIdUuidPattern =
         /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
       if (openIdUuidPattern.test(id)) {
         return `qqbot:c2c:${id}`;
       }
 
-      // 不认识的格式，返回 undefined 让核心使用原始值
       return undefined;
     },
-    /**
-     * 目标解析器配置
-     * 用于判断一个目标 ID 是否看起来像 QQ Bot 的格式
-     */
     targetResolver: {
-      /**
-       * 判断目标 ID 是否可能是 QQ Bot 格式
-       * 支持以下格式：
-       * - qqbot:c2c:xxx
-       * - qqbot:group:xxx
-       * - qqbot:channel:xxx
-       * - c2c:xxx
-       * - group:xxx
-       * - channel:xxx
-       * - UUID 格式的 openid
-       */
+      /** Return true when the id looks like a QQ Bot target. */
       looksLikeId: (id: string): boolean => {
-        // 带 qqbot: 前缀的格式
         if (/^qqbot:(c2c|group|channel):/i.test(id)) {
           return true;
         }
-        // 不带前缀但有类型标识
         if (/^(c2c|group|channel):/i.test(id)) {
           return true;
         }
-        // 32位十六进制 openid（不带连字符）
         if (/^[0-9a-fA-F]{32}$/.test(id)) {
           return true;
         }
-        // UUID 格式的 openid（带连字符）
         const openIdPattern =
           /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
         return openIdPattern.test(id);
       },
-      hint: "QQ Bot 目标格式: qqbot:c2c:openid (私聊) 或 qqbot:group:groupid (群聊)",
+      hint: "QQ Bot target format: qqbot:c2c:openid (direct) or qqbot:group:groupid (group)",
     },
   },
   outbound: {
@@ -234,6 +189,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     textChunkLimit: 5000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
+      const { sendText } = await import("./outbound.js");
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendText({ to, text, accountId, replyToId, account });
       return {
@@ -244,6 +200,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
+      const { sendMedia } = await import("./outbound.js");
       initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
       const result = await sendMedia({
         to,
@@ -264,6 +221,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     startAccount: async (ctx) => {
       const { account } = ctx;
       const { abortSignal, log, cfg } = ctx;
+      const { startGateway } = await import("./gateway.js");
 
       log?.info(
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
@@ -292,7 +250,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         },
       });
     },
-    // 新增：登出账户（清除配置中的凭证）
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;
       const nextQQBot = cfg.channels?.qqbot ? { ...cfg.channels.qqbot } : undefined;
@@ -347,7 +304,6 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       lastInboundAt: null,
       lastOutboundAt: null,
     },
-    // 新增：构建通道摘要
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       tokenSource: snapshot.tokenSource ?? "none",

@@ -1,8 +1,3 @@
-/**
- * QQ Bot API 鉴权和请求封装
- * [修复版] 已重构为支持多实例并发，消除全局变量冲突
- */
-
 import { createRequire } from "node:module";
 import os from "node:os";
 import { debugLog, debugError } from "./utils/debug-log.js";
@@ -12,9 +7,7 @@ import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/u
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 
-// ============ Plugin User-Agent ============
-// 格式: QQBotPlugin/{version} (Node/{nodeVersion}; {os})
-// 示例: QQBotPlugin/1.6.0 (Node/22.14.0; darwin)
+// Plugin User-Agent format: QQBotPlugin/{version} (Node/{nodeVersion}; {os})
 const _require = createRequire(import.meta.url);
 let _pluginVersion = "unknown";
 try {
@@ -29,68 +22,45 @@ export const PLUGIN_USER_AGENT = `QQBotPlugin/${_pluginVersion} (Node/${process.
 // =========================================================================
 const markdownSupportMap = new Map<string, boolean>();
 
-/** 出站消息元信息（结构化存储，不做预格式化） */
+/** Structured metadata recorded for outbound messages. */
 export interface OutboundMeta {
-  /** 消息文本内容 */
   text?: string;
-  /** 媒体类型 */
   mediaType?: "image" | "voice" | "video" | "file";
-  /** 媒体来源：在线 URL */
   mediaUrl?: string;
-  /** 媒体来源：本地文件路径或文件名 */
   mediaLocalPath?: string;
-  /** TTS 原文本（仅 voice 类型有效，用于保存 TTS 前的文本内容） */
   ttsText?: string;
 }
 
 type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
 const onMessageSentHookMap = new Map<string, OnMessageSentCallback>();
 
-/**
- * 注册出站消息回调（按 appId 隔离）
- * 当消息发送成功且 QQ 返回 ref_idx 时，自动回调此函数
- * 用于在最底层统一缓存 bot 出站消息的 refIdx
- */
+/** Register an outbound-message hook scoped to one appId. */
 export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
   onMessageSentHookMap.set(String(appId).trim(), callback);
 }
 
-/**
- * 初始化 API 配置（按 appId 隔离）
- * @param appId - 机器人 AppID
- * @param options.markdownSupport - 是否支持 markdown 消息（默认 false，需要机器人具备该权限才能启用）
- */
+/** Initialize per-app API behavior such as markdown support. */
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
   markdownSupportMap.set(String(appId).trim(), options.markdownSupport === true);
 }
 
-/**
- * 获取指定 appId 是否支持 markdown
- */
+/** Return whether markdown is enabled for the given appId. */
 export function isMarkdownSupport(appId: string): boolean {
   return markdownSupportMap.get(String(appId).trim()) ?? false;
 }
 
-// =========================================================================
-// 🚀 [核心修复] 将全局状态改为 Map，按 appId 隔离，彻底解决多账号串号问题
-// =========================================================================
+// Keep token state per appId to avoid multi-account cross-talk.
 const tokenCacheMap = new Map<string, { token: string; expiresAt: number; appId: string }>();
 const tokenFetchPromises = new Map<string, Promise<string>>();
 
 /**
- * 获取 AccessToken（带缓存 + singleflight 并发安全）
- *
- * 使用 singleflight 模式：当多个请求同时发现 Token 过期时，
- * 只有第一个请求会真正去获取新 Token，其他请求复用同一个 Promise。
- *
- * 按 appId 隔离，支持多机器人并发请求。
+ * Resolve an access token with caching and singleflight semantics.
  */
 export async function getAccessToken(appId: string, clientSecret: string): Promise<string> {
   const normalizedAppId = String(appId).trim();
   const cachedToken = tokenCacheMap.get(normalizedAppId);
 
-  // 检查缓存：未过期时复用
-  // 提前刷新阈值：取 expiresIn 的 1/3 和 5 分钟的较小值，避免短有效期 token 永远被判定过期
+  // Refresh slightly ahead of expiry without making short-lived tokens unusable.
   const REFRESH_AHEAD_MS = cachedToken
     ? Math.min(5 * 60 * 1000, (cachedToken.expiresAt - Date.now()) / 3)
     : 0;
@@ -98,7 +68,6 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
     return cachedToken.token;
   }
 
-  // Singleflight: 如果当前 appId 已有进行中的 Token 获取请求，复用它
   let fetchPromise = tokenFetchPromises.get(normalizedAppId);
   if (fetchPromise) {
     debugLog(
@@ -107,12 +76,10 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
     return fetchPromise;
   }
 
-  // 创建新的 Token 获取 Promise（singleflight 入口）
   fetchPromise = (async () => {
     try {
       return await doFetchToken(normalizedAppId, clientSecret);
     } finally {
-      // 无论成功失败，都清除 Promise 缓存
       tokenFetchPromises.delete(normalizedAppId);
     }
   })();
@@ -121,14 +88,11 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
   return fetchPromise;
 }
 
-/**
- * 实际执行 Token 获取的内部函数
- */
+/** Perform the token fetch request. */
 async function doFetchToken(appId: string, clientSecret: string): Promise<string> {
   const requestBody = { appId, clientSecret };
   const requestHeaders = { "Content-Type": "application/json", "User-Agent": PLUGIN_USER_AGENT };
 
-  // 打印请求信息（隐藏敏感信息）
   debugLog(`[qqbot-api:${appId}] >>> POST ${TOKEN_URL}`);
 
   let response: Response;
@@ -145,7 +109,6 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
     );
   }
 
-  // 打印响应头
   const responseHeaders: Record<string, string> = {};
   response.headers.forEach((value, key) => {
     responseHeaders[key] = value;
@@ -159,7 +122,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   let rawBody: string;
   try {
     rawBody = await response.text();
-    // 隐藏 token 值
+    // Redact the token before logging the raw response body.
     const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
     debugLog(`[qqbot-api:${appId}] <<< Body:`, logBody);
     data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
@@ -186,10 +149,7 @@ async function doFetchToken(appId: string, clientSecret: string): Promise<string
   return data.access_token;
 }
 
-/**
- * 清除 Token 缓存
- * @param appId 选填。如果有，只清空特定账号的缓存；如果没有，清空所有账号。
- */
+/** Clear one token cache or all token caches. */
 export function clearTokenCache(appId?: string): void {
   if (appId) {
     const normalizedAppId = String(appId).trim();
@@ -201,9 +161,7 @@ export function clearTokenCache(appId?: string): void {
   }
 }
 
-/**
- * 获取 Token 缓存状态（用于监控）
- */
+/** Return token-cache status for diagnostics. */
 export function getTokenStatus(appId: string): {
   status: "valid" | "expired" | "refreshing" | "none";
   expiresAt: number | null;
@@ -220,23 +178,17 @@ export function getTokenStatus(appId: string): {
   return { status: isValid ? "valid" : "expired", expiresAt: cached.expiresAt };
 }
 
-/**
- * 获取全局唯一的消息序号（范围 0 ~ 65535）
- * 使用毫秒级时间戳低位 + 随机数异或混合，无状态，避免碰撞
- */
+/** Generate a message sequence in the 0..65535 range. */
 export function getNextMsgSeq(_msgId: string): number {
-  const timePart = Date.now() % 100000000; // 毫秒时间戳后8位
-  const random = Math.floor(Math.random() * 65536); // 0~65535
-  return (timePart ^ random) % 65536; // 异或混合后限制在 0~65535
+  const timePart = Date.now() % 100000000;
+  const random = Math.floor(Math.random() * 65536);
+  return (timePart ^ random) % 65536;
 }
 
-// API 请求超时配置（毫秒）
-const DEFAULT_API_TIMEOUT = 30000; // 默认 30 秒
-const FILE_UPLOAD_TIMEOUT = 120000; // 文件上传 120 秒
+const DEFAULT_API_TIMEOUT = 30000;
+const FILE_UPLOAD_TIMEOUT = 120000;
 
-/**
- * API 请求封装
- */
+/** Shared API request wrapper. */
 export async function apiRequest<T = unknown>(
   accessToken: string,
   method: string,
@@ -269,7 +221,6 @@ export async function apiRequest<T = unknown>(
     options.body = JSON.stringify(body);
   }
 
-  // 打印请求信息
   debugLog(`[qqbot-api] >>> ${method} ${url} (timeout: ${timeout}ms)`);
   if (body) {
     const logBody = { ...body } as Record<string, unknown>;
@@ -323,7 +274,7 @@ export async function apiRequest<T = unknown>(
   return data;
 }
 
-// ============ 上传重试（指数退避） ============
+// Upload retry with exponential backoff.
 
 const UPLOAD_MAX_RETRIES = 2;
 const UPLOAD_BASE_DELAY_MS = 1000;
@@ -348,7 +299,7 @@ async function apiRequestWithRetry<T = unknown>(
         errMsg.includes("400") ||
         errMsg.includes("401") ||
         errMsg.includes("Invalid") ||
-        errMsg.includes("上传超时") ||
+        errMsg.includes("upload timeout") ||
         errMsg.includes("timeout") ||
         errMsg.includes("Timeout")
       ) {
@@ -373,20 +324,18 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
   return data.url;
 }
 
-// ============ 消息发送接口 ============
+// Message sending.
 
 export interface MessageResponse {
   id: string;
   timestamp: number | string;
-  /** 消息的引用索引信息（出站时由 QQ 服务端返回） */
   ext_info?: {
     ref_idx?: string;
   };
 }
 
 /**
- * 发送消息并自动触发 refIdx 回调（按 appId 路由 hook）
- * 所有消息发送函数统一经过此处，确保每条出站消息的 refIdx 都被捕获
+ * Send a message and invoke the refIdx hook when QQ returns one.
  */
 async function sendAndNotify(
   appId: string,
@@ -489,11 +438,7 @@ export async function sendChannelMessage(
   });
 }
 
-/**
- * 发送频道私信消息
- * @param guildId - 私信会话的 guild_id（由 DIRECT_MESSAGE_CREATE 事件提供）
- * @param msgId - 被动回复时必填
- */
+/** Send a direct-message payload inside a guild DM session. */
 export async function sendDmMessage(
   accessToken: string,
   guildId: string,
@@ -520,7 +465,7 @@ export async function sendGroupMessage(
 
 function buildProactiveMessageBody(appId: string, content: string): Record<string, unknown> {
   if (!content || content.trim().length === 0) {
-    throw new Error("主动消息内容不能为空 (markdown.content is empty)");
+    throw new Error("Proactive message content must not be empty (markdown.content is empty)");
   }
   if (isMarkdownSupport(appId)) {
     return { markdown: { content }, msg_type: 2 };
@@ -551,7 +496,7 @@ export async function sendProactiveGroupMessage(
   return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
 }
 
-// ============ 富媒体消息支持 ============
+// Rich media message support.
 
 export enum MediaFileType {
   IMAGE = 1,
@@ -922,9 +867,7 @@ export async function sendGroupVideoMessage(
   return sendGroupMediaMessage(accessToken, groupOpenid, uploadResult.file_info, msgId, content);
 }
 
-// ==========================================
-// 后台 Token 刷新 (P1-1) - 按 appId 隔离
-// ==========================================
+// Background token refresh, isolated per appId.
 
 interface BackgroundTokenRefreshOptions {
   refreshAheadMs?: number;
@@ -1004,8 +947,8 @@ export function startBackgroundTokenRefresh(
 }
 
 /**
- * 停止后台 Token 刷新
- * @param appId 选填。如果有，仅停止该账号的定时刷新。
+ * Stop background token refresh.
+ * @param appId Optional appId to stop a single account instead of all refresh loops.
  */
 export function stopBackgroundTokenRefresh(appId?: string): void {
   if (appId) {

@@ -15,39 +15,41 @@ const RemindSchema = {
   properties: {
     action: {
       type: "string",
-      description: "操作类型。add=创建提醒, list=查看已有提醒, remove=删除提醒",
+      description:
+        "Action type. add=create a reminder, list=show reminders, remove=delete a reminder.",
       enum: ["add", "list", "remove"],
     },
     content: {
       type: "string",
-      description: '提醒内容，如"喝水"、"开会"。action=add 时必填。',
+      description:
+        'Reminder content, for example "drink water" or "join the meeting". Required when action=add.',
     },
     to: {
       type: "string",
       description:
-        "投递目标地址，取自上下文中 [QQBot] to= 的值。" +
-        "私聊格式：qqbot:c2c:user_openid，群聊格式：qqbot:group:group_openid。action=add 时必填。",
+        "Delivery target from the `[QQBot] to=` context value. " +
+        "Direct-message format: qqbot:c2c:user_openid. Group format: qqbot:group:group_openid. Required when action=add.",
     },
     time: {
       type: "string",
       description:
-        "时间描述。支持两种格式：\n" +
-        '1. 相对时间：如 "5m"(5分钟后)、"1h"(1小时后)、"1h30m"(1.5小时后)、"2d"(2天后)\n' +
-        '2. cron 表达式：如 "0 8 * * *"(每天8点)、"0 9 * * 1-5"(工作日9点)\n' +
-        "系统会自动判断：包含空格的视为 cron 表达式（周期提醒），否则视为相对时间（一次性提醒）。\n" +
-        "action=add 时必填。",
+        "Time description. Supported formats:\n" +
+        '1. Relative time, for example "5m", "1h", "1h30m", or "2d"\n' +
+        '2. Cron expression, for example "0 8 * * *" or "0 9 * * 1-5"\n' +
+        "Values containing spaces are treated as cron expressions; everything else is treated as a one-shot relative delay.\n" +
+        "Required when action=add.",
     },
     timezone: {
       type: "string",
-      description: '时区，仅周期提醒(cron)时需要。默认 "Asia/Shanghai"。',
+      description: 'Timezone used for cron reminders. Defaults to "Asia/Shanghai".',
     },
     name: {
       type: "string",
-      description: "提醒任务名称（可选）。默认自动从 content 截取前 20 字。",
+      description: "Optional reminder job name. Defaults to the first 20 characters of content.",
     },
     jobId: {
       type: "string",
-      description: "要删除的任务 ID。action=remove 时必填，先用 list 获取。",
+      description: "Job ID to remove. Required when action=remove; fetch it with list first.",
     },
   },
   required: ["action"],
@@ -100,15 +102,15 @@ function isCronExpression(timeStr: string): boolean {
 function generateJobName(content: string): string {
   const trimmed = content.trim();
   const short = trimmed.length > 20 ? `${trimmed.slice(0, 20)}…` : trimmed;
-  return `提醒: ${short}`;
+  return `Reminder: ${short}`;
 }
 
 function buildReminderPrompt(content: string): string {
   return (
-    `你是一个暖心的提醒助手。请用温暖、有趣的方式提醒用户：${content}。` +
-    `要求：(1) 不要回复HEARTBEAT_OK (2) 不要解释你是谁 ` +
-    `(3) 直接输出一条暖心的提醒消息 (4) 可以加一句简短的鸡汤或关怀的话 ` +
-    `(5) 控制在2-3句话以内 (6) 用emoji点缀`
+    `You are a warm reminder assistant. Please remind the user about: ${content}. ` +
+    `Requirements: (1) do not reply with HEARTBEAT_OK (2) do not explain who you are ` +
+    `(3) output a direct and caring reminder message (4) you may add a short encouraging line ` +
+    `(5) keep it within 2-3 sentences (6) use a small amount of emoji.`
   );
 }
 
@@ -161,34 +163,34 @@ function buildCronJob(params: RemindParams) {
 
 function formatDelay(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}秒`;
+  if (totalSeconds < 60) return `${totalSeconds}s`;
   const totalMinutes = Math.round(ms / 60_000);
-  if (totalMinutes < 60) return `${totalMinutes}分钟`;
+  if (totalMinutes < 60) return `${totalMinutes}m`;
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  if (minutes === 0) return `${hours}小时`;
-  return `${hours}小时${minutes}分钟`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h${minutes}m`;
 }
 
 export function registerRemindTool(api: OpenClawPluginApi): void {
   api.registerTool(
     {
       name: "qqbot_remind",
-      label: "QQBot 定时提醒",
+      label: "QQBot Reminder",
       description:
-        "创建、查询、删除 QQ 定时提醒。" +
-        "使用简单参数即可，无需手动构造 cron JSON。\n" +
-        "创建提醒：action=add, content=提醒内容, to=目标地址, time=时间\n" +
-        "查看提醒：action=list\n" +
-        "删除提醒：action=remove, jobId=任务ID（先 list 获取）\n" +
-        '时间格式示例："5m"(5分钟后) "1h"(1小时后) "0 8 * * *"(每天8点)',
+        "Create, list, and remove QQ reminders. " +
+        "Use simple parameters without manually building cron JSON.\n" +
+        "Create: action=add, content=message, to=target, time=schedule\n" +
+        "List: action=list\n" +
+        "Remove: action=remove, jobId=job id from list\n" +
+        'Time examples: "5m", "1h", "0 8 * * *"',
       parameters: RemindSchema,
       async execute(_toolCallId, params) {
         const p = params as RemindParams;
 
         if (p.action === "list") {
           return json({
-            _instruction: "请立即使用 cron 工具执行以下参数",
+            _instruction: "Use the cron tool immediately with the following parameters.",
             cronParams: { action: "list" },
           });
         }
@@ -196,47 +198,49 @@ export function registerRemindTool(api: OpenClawPluginApi): void {
         if (p.action === "remove") {
           if (!p.jobId) {
             return json({
-              error: "action=remove 时 jobId 为必填参数。请先用 action=list 获取 jobId。",
+              error: "jobId is required when action=remove. Use action=list first.",
             });
           }
           return json({
-            _instruction: "请立即使用 cron 工具执行以下参数",
+            _instruction: "Use the cron tool immediately with the following parameters.",
             cronParams: { action: "remove", jobId: p.jobId },
           });
         }
 
         if (!p.content) {
-          return json({ error: "action=add 时 content（提醒内容）为必填参数" });
+          return json({ error: "content is required when action=add" });
         }
         if (!p.to) {
-          return json({ error: "action=add 时 to（目标地址）为必填参数" });
+          return json({ error: "to is required when action=add" });
         }
         if (!p.time) {
-          return json({ error: "action=add 时 time（提醒时间）为必填参数" });
+          return json({ error: "time is required when action=add" });
         }
 
         if (isCronExpression(p.time)) {
           return json({
-            _instruction: "请立即使用 cron 工具执行以下参数，然后回复用户提醒已设置",
+            _instruction:
+              "Use the cron tool immediately with the following parameters, then tell the user the reminder has been scheduled.",
             cronParams: buildCronJob(p),
-            summary: `⏰ 周期提醒: "${p.content}" (${p.time}, tz=${p.timezone || "Asia/Shanghai"})`,
+            summary: `⏰ Recurring reminder: "${p.content}" (${p.time}, tz=${p.timezone || "Asia/Shanghai"})`,
           });
         }
 
         const delayMs = parseRelativeTime(p.time);
         if (delayMs == null) {
           return json({
-            error: `无法解析时间格式: ${p.time}。请使用如 5m、1h、1h30m 或 cron 表达式`,
+            error: `Could not parse time format: ${p.time}. Use values like 5m, 1h, 1h30m, or a cron expression.`,
           });
         }
         if (delayMs < 30_000) {
-          return json({ error: "提醒时间不能少于 30 秒" });
+          return json({ error: "Reminder delay must be at least 30 seconds" });
         }
 
         return json({
-          _instruction: "请立即使用 cron 工具执行以下参数，然后回复用户提醒已设置",
+          _instruction:
+            "Use the cron tool immediately with the following parameters, then tell the user the reminder has been scheduled.",
           cronParams: buildOnceJob(p, delayMs),
-          summary: `⏰ ${formatDelay(delayMs)}后提醒: "${p.content}"`,
+          summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${p.content}"`,
         });
       },
     },

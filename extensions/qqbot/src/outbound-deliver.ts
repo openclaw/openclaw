@@ -1,9 +1,9 @@
 /**
- * 出站消息投递模块
+ * Outbound delivery helpers.
  *
- * 从 gateway deliver 回调中提取的两大发送管线：
- * 1. parseAndSendMediaTags — 解析 <qqimg/qqvoice/qqvideo/qqfile/qqmedia> 标签并按顺序发送
- * 2. sendPlainReply — 处理不含媒体标签的普通回复（markdown 图片/纯文本+图片）
+ * The gateway deliver callback uses two pipelines:
+ * 1. `parseAndSendMediaTags` handles `<qqimg/qqvoice/qqvideo/qqfile/qqmedia>` tags in order.
+ * 2. `sendPlainReply` handles plain replies, including markdown images and mixed text/media.
  */
 
 import {
@@ -29,7 +29,7 @@ import { normalizeMediaTags } from "./utils/media-tags.js";
 import { normalizePath, isLocalPath as isLocalFilePath } from "./utils/platform.js";
 import { filterInternalMarkers } from "./utils/text-parsing.js";
 
-// ============ 类型定义 ============
+// Type definitions.
 
 export interface DeliverEventContext {
   type: "c2c" | "guild" | "dm" | "group";
@@ -50,18 +50,19 @@ export interface DeliverAccountContext {
   };
 }
 
-/** token 重试包装 */
+/** Wrapper that retries when the access token expires. */
 export type SendWithRetryFn = <T>(sendFn: (token: string) => Promise<T>) => Promise<T>;
 
-/** 一次性消费引用 ref */
+/** Consume a quote ref exactly once. */
 export type ConsumeQuoteRefFn = () => string | undefined;
 
-// ============ 1. 媒体标签解析 + 发送 ============
+// Media-tag parsing and delivery.
 
 /**
- * 解析回复文本中的媒体标签并按顺序发送。
+ * Parse media tags from the reply text and send them in order.
  *
- * @returns true 如果检测到媒体标签并已处理；false 表示无媒体标签，调用方继续走普通文本管线
+ * @returns `true` when media tags were found and handled; `false` when the caller
+ * should continue through the plain-text pipeline.
  */
 export async function parseAndSendMediaTags(
   replyText: string,
@@ -73,7 +74,7 @@ export async function parseAndSendMediaTags(
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
 
-  // 预处理：纠正小模型常见的标签拼写错误和格式问题
+  // Normalize common malformed tags produced by smaller models.
   const text = normalizeMediaTags(replyText);
 
   const mediaTagRegex =
@@ -98,7 +99,7 @@ export async function parseAndSendMediaTags(
       .join(", ")}`,
   );
 
-  // 构建发送队列
+  // Build a sequential send queue.
   type QueueItem = {
     type: "text" | "image" | "voice" | "video" | "file" | "media";
     content: string;
@@ -147,7 +148,7 @@ export async function parseAndSendMediaTags(
 
   log?.info(`${prefix} Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-  // 按顺序发送
+  // Send queue items in order.
   const mediaTarget: MediaTargetContext = {
     targetType: event.type === "c2c" ? "c2c" : event.type === "group" ? "group" : "channel",
     targetId:
@@ -191,7 +192,7 @@ export async function parseAndSendMediaTags(
   return { handled: true, normalizedText: text };
 }
 
-// ============ 2. 非结构化消息发送（普通文本 + 图片） ============
+// Unstructured reply delivery for plain text and images.
 
 export interface PlainReplyPayload {
   text?: string;
@@ -200,8 +201,8 @@ export interface PlainReplyPayload {
 }
 
 /**
- * 发送不含媒体标签的普通回复。
- * 处理 markdown 图片嵌入、Base64 富媒体、纯文本分块、本地媒体自动路由。
+ * Send a reply that does not contain structured media tags.
+ * Handles markdown image embeds, Base64 media, plain-text chunking, and local media routing.
  */
 export async function sendPlainReply(
   payload: PlainReplyPayload,
@@ -246,7 +247,7 @@ export async function sendPlainReply(
   }
   if (payload.mediaUrl) collectImageUrl(payload.mediaUrl);
 
-  // 提取 markdown 图片
+  // Extract markdown images.
   const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/gi;
   const mdMatches = [...replyText.matchAll(mdImageRegex)];
   for (const m of mdMatches) {
@@ -264,7 +265,7 @@ export async function sendPlainReply(
     }
   }
 
-  // 提取裸 URL 图片
+  // Extract bare image URLs.
   const bareUrlRegex =
     /(?<![(\["'])(https?:\/\/[^\s)"'<>]+\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>]*)?)/gi;
   const bareUrlMatches = [...replyText.matchAll(bareUrlRegex)];
@@ -305,7 +306,7 @@ export async function sendPlainReply(
     );
   }
 
-  // 发送本地媒体（由 payload.mediaUrl 或 markdown 本地路径触发）
+  // Send local media collected from payload.mediaUrl or markdown local paths.
   if (localMediaToSend.length > 0) {
     log?.info(
       `${prefix} Sending ${localMediaToSend.length} local media via sendMedia auto-routing`,
@@ -329,7 +330,7 @@ export async function sendPlainReply(
     }
   }
 
-  // 转发 tool 阶段收集的媒体
+  // Forward media gathered during the tool phase.
   if (toolMediaUrls.length > 0) {
     log?.info(
       `${prefix} Forwarding ${toolMediaUrls.length} tool-collected media URL(s) after block deliver`,
@@ -354,9 +355,9 @@ export async function sendPlainReply(
   }
 }
 
-// ============ 内部辅助函数 ============
+// Internal helpers.
 
-/** 解码媒体路径：剥离 MEDIA: 前缀、展开 ~、修复转义 */
+/** Decode a media path by stripping `MEDIA:`, expanding `~`, and unescaping. */
 function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix: string): string {
   let mediaPath = raw;
   if (mediaPath.startsWith("MEDIA:")) {
@@ -398,7 +399,7 @@ function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix:
   return mediaPath;
 }
 
-/** 发送文本分块（共用逻辑） */
+/** Shared helper for sending chunked text replies. */
 async function sendTextChunks(
   text: string,
   event: DeliverEventContext,
@@ -443,7 +444,7 @@ async function sendTextChunks(
   }
 }
 
-/** 语音发送（带 45s 超时保护） */
+/** Send voice with a 45s timeout guard. */
 async function sendVoiceWithTimeout(
   target: MediaTargetContext,
   voicePath: string,
@@ -461,7 +462,7 @@ async function sendVoiceWithTimeout(
       sendVoice(target, voicePath, uploadFormats, transcodeEnabled),
       new Promise<{ channel: string; error: string }>((resolve) =>
         setTimeout(
-          () => resolve({ channel: "qqbot", error: "语音发送超时，已跳过" }),
+          () => resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" }),
           voiceTimeout,
         ),
       ),
@@ -472,7 +473,7 @@ async function sendVoiceWithTimeout(
   }
 }
 
-/** Markdown 模式发送 */
+/** Send in markdown mode. */
 async function sendMarkdownReply(
   textWithoutImages: string,
   imageUrls: string[],
@@ -486,7 +487,7 @@ async function sendMarkdownReply(
   const { account, log } = actx;
   const prefix = `[qqbot:${account.accountId}]`;
 
-  // 分离图片：公网 URL vs Base64
+  // Split images into public URLs vs. Base64 payloads.
   const httpImageUrls: string[] = [];
   const base64ImageUrls: string[] = [];
   for (const url of imageUrls) {
@@ -497,7 +498,7 @@ async function sendMarkdownReply(
     `${prefix} Image classification: httpUrls=${httpImageUrls.length}, base64=${base64ImageUrls.length}`,
   );
 
-  // 发送 Base64 图片
+  // Send Base64 images.
   if (base64ImageUrls.length > 0) {
     log?.info(`${prefix} Sending ${base64ImageUrls.length} image(s) via Rich Media API...`);
     for (const imageUrl of base64ImageUrls) {
@@ -532,7 +533,7 @@ async function sendMarkdownReply(
     }
   }
 
-  // 处理公网 URL 图片
+  // Handle public image URLs.
   const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
   const imagesToAppend: string[] = [];
 
@@ -551,7 +552,7 @@ async function sendMarkdownReply(
     }
   }
 
-  // 补充已有 markdown 图片的尺寸信息
+  // Backfill dimensions for existing markdown images.
   let result = textWithoutImages;
   for (const m of mdMatches) {
     const fullMatch = m[0];
@@ -571,18 +572,18 @@ async function sendMarkdownReply(
     }
   }
 
-  // 移除裸 URL 图片
+  // Remove bare image URLs from the text body.
   for (const m of bareUrlMatches) {
     result = result.replace(m[0], "").trim();
   }
 
-  // 追加图片
+  // Append markdown images.
   if (imagesToAppend.length > 0) {
     result = result.trim();
     result = result ? result + "\n\n" + imagesToAppend.join("\n") : imagesToAppend.join("\n");
   }
 
-  // 发送 markdown 文本
+  // Send markdown text.
   if (result.trim()) {
     const mdChunks = chunkText(result, TEXT_CHUNK_LIMIT);
     for (const chunk of mdChunks) {
@@ -620,7 +621,7 @@ async function sendMarkdownReply(
   }
 }
 
-/** 普通文本模式发送 */
+/** Send in plain-text mode. */
 async function sendPlainTextReply(
   textWithoutImages: string,
   imageUrls: string[],
@@ -651,7 +652,7 @@ async function sendPlainTextReply(
   for (const m of mdMatches) result = result.replace(m[0], "").trim();
   for (const m of bareUrlMatches) result = result.replace(m[0], "").trim();
 
-  // 群聊 URL 点号过滤
+  // QQ group messages reject some dotted bare URLs, so filter them first.
   if (result && event.type !== "c2c") {
     result = result.replace(/([a-zA-Z0-9])\.([a-zA-Z0-9])/g, "$1_$2");
   }

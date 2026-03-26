@@ -1,8 +1,8 @@
 /**
- * 管理员解析器模块
- * - 管理员 openid 持久化读写
- * - 升级问候目标读写
- * - 启动问候语发送
+ * Admin resolution helpers.
+ * - Persist the admin openid
+ * - Persist the upgrade greeting target
+ * - Send startup greetings
  */
 
 import * as fs from "node:fs";
@@ -16,7 +16,7 @@ import {
 } from "./startup-greeting.js";
 import { getQQBotDataDir } from "./utils/platform.js";
 
-// ---- 类型 ----
+// Types.
 
 export interface AdminResolverContext {
   accountId: string;
@@ -28,7 +28,7 @@ export interface AdminResolverContext {
   };
 }
 
-// ---- 文件路径 ----
+// File paths.
 
 function getAdminMarkerFile(accountId: string): string {
   return path.join(getQQBotDataDir("data"), `admin-${accountId}.json`);
@@ -43,7 +43,7 @@ function getUpgradeGreetingTargetFile(accountId: string, appId: string): string 
   );
 }
 
-// ---- 管理员 openid 持久化 ----
+// Admin openid persistence.
 
 export function loadAdminOpenId(accountId: string): string | undefined {
   try {
@@ -53,7 +53,7 @@ export function loadAdminOpenId(accountId: string): string | undefined {
       if (data.openid) return data.openid;
     }
   } catch {
-    /* 文件损坏视为无 */
+    /* Treat corrupted files as missing. */
   }
   return undefined;
 }
@@ -69,7 +69,7 @@ export function saveAdminOpenId(accountId: string, openid: string): void {
   }
 }
 
-// ---- 升级问候目标 ----
+// Upgrade greeting target persistence.
 
 export function loadUpgradeGreetingTargetOpenId(
   accountId: string,
@@ -89,7 +89,7 @@ export function loadUpgradeGreetingTargetOpenId(
       return data.openid;
     }
   } catch {
-    /* 文件损坏视为无 */
+    /* Treat corrupted files as missing. */
   }
   return undefined;
 }
@@ -105,12 +105,12 @@ export function clearUpgradeGreetingTargetOpenId(accountId: string, appId: strin
   }
 }
 
-// ---- 解析管理员 ----
+// Admin resolution.
 
 /**
- * 解析管理员 openid：
- * 1. 优先读持久化文件（稳定）
- * 2. fallback 取第一个私聊用户，并写入文件锁定
+ * Resolve the admin openid.
+ * 1. Prefer the persisted marker file.
+ * 2. Fall back to the first DM user and persist that choice.
  */
 export function resolveAdminOpenId(
   ctx: Pick<AdminResolverContext, "accountId" | "log">,
@@ -131,9 +131,9 @@ export function resolveAdminOpenId(
   return first;
 }
 
-// ---- 启动问候语 ----
+// Startup greeting delivery.
 
-/** 异步发送启动问候语（仅发给管理员） */
+/** Send the startup greeting asynchronously to the admin target only. */
 export function sendStartupGreetings(
   ctx: AdminResolverContext,
   trigger: "READY" | "RESUMED",

@@ -55,9 +55,7 @@ export interface ReplyContext {
   };
 }
 
-/**
- * 带 token 过期重试的消息发送
- */
+/** Send a message and retry once if the token appears to have expired. */
 export async function sendWithTokenRetry<T>(
   appId: string,
   clientSecret: string,
@@ -81,9 +79,7 @@ export async function sendWithTokenRetry<T>(
   }
 }
 
-/**
- * 根据消息类型路由发送文本
- */
+/** Route a text message to the correct QQ target type. */
 export async function sendTextToTarget(
   ctx: ReplyContext,
   text: string,
@@ -109,9 +105,7 @@ export async function sendTextToTarget(
   );
 }
 
-/**
- * 发送错误提示给用户
- */
+/** Best-effort delivery for error text back to the user. */
 export async function sendErrorToTarget(ctx: ReplyContext, errorText: string): Promise<void> {
   try {
     await sendTextToTarget(ctx, errorText);
@@ -121,8 +115,8 @@ export async function sendErrorToTarget(ctx: ReplyContext, errorText: string): P
 }
 
 /**
- * 处理结构化载荷（QQBOT_PAYLOAD: 前缀的 JSON）
- * 返回 true 表示已处理，false 表示不是结构化载荷
+ * Handle a structured payload prefixed with `QQBOT_PAYLOAD:`.
+ * Returns true when the reply was handled here, otherwise false.
  */
 export async function handleStructuredPayload(
   ctx: ReplyContext,
@@ -149,7 +143,7 @@ export async function handleStructuredPayload(
   if (isCronReminderPayload(parsedPayload)) {
     log?.info(`[qqbot:${account.accountId}] Processing cron_reminder payload`);
     const cronMessage = encodePayloadForCron(parsedPayload);
-    const confirmText = `⏰ 提醒已设置，将在指定时间发送: "${parsedPayload.content}"`;
+    const confirmText = `⏰ Reminder scheduled. It will be sent at the configured time: "${parsedPayload.content}"`;
     try {
       await sendTextToTarget(ctx, confirmText);
       log?.info(
@@ -188,7 +182,7 @@ export async function handleStructuredPayload(
   return true;
 }
 
-// ============ 媒体载荷处理 ============
+// Media payload handlers.
 
 async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Promise<void> {
   const { target, account, log } = ctx;
@@ -377,7 +371,7 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
             }
           } else {
             if (!(await fileExistsAsync(videoPath))) {
-              throw new Error(`视频文件不存在: ${videoPath}`);
+              throw new Error(`Video file does not exist: ${videoPath}`);
             }
             const vPaySzCheck = checkFileSize(videoPath);
             if (!vPaySzCheck.ok) {
@@ -471,7 +465,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
             }
           } else {
             if (!(await fileExistsAsync(filePath))) {
-              throw new Error(`文件不存在: ${filePath}`);
+              throw new Error(`File does not exist: ${filePath}`);
             }
             const fPaySzCheck = checkFileSize(filePath);
             if (!fPaySzCheck.ok) {

@@ -1,14 +1,10 @@
 /**
- * QQBot 插件级斜杠指令处理器
+ * QQBot plugin-level slash command handler.
  *
- * 设计原则：
- * 1. 在消息入队前拦截，匹配到插件级指令后直接回复，不进入 AI 处理队列
- * 2. 不匹配的 "/" 消息照常入队，交给 OpenClaw 框架处理
- * 3. 每个指令通过 SlashCommand 接口注册，易于扩展
- *
- * 时间线追踪：
- *   开平推送时间戳 → 插件收到(Date.now()) → 指令处理完成(Date.now())
- *   从而计算「开平→插件」和「插件处理」两段耗时
+ * Design goals:
+ * 1. Intercept plugin commands before messages enter the AI queue.
+ * 2. Let unmatched "/" messages continue through the normal framework path.
+ * 3. Keep command registration small and explicit.
  */
 
 import fs from "node:fs";
@@ -20,7 +16,7 @@ import { debugLog } from "./utils/debug-log.js";
 import { getHomeDir, getQQBotDataDir, isWindows } from "./utils/platform.js";
 const require = createRequire(import.meta.url);
 
-// 读取 package.json 中的版本号
+// Read the package version from package.json.
 let PLUGIN_VERSION = "unknown";
 try {
   const pkg = require("../package.json");
@@ -32,75 +28,75 @@ try {
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
 
-// ============ 类型定义 ============
+// ============ Types ============
 
-/** 斜杠指令上下文（消息元数据 + 运行时状态） */
+/** Slash command context (message metadata plus runtime state). */
 export interface SlashCommandContext {
-  /** 消息类型 */
+  /** Message type. */
   type: "c2c" | "guild" | "dm" | "group";
-  /** 发送者 ID */
+  /** Sender ID. */
   senderId: string;
-  /** 发送者昵称 */
+  /** Sender display name. */
   senderName?: string;
-  /** 消息 ID（用于被动回复） */
+  /** Message ID used for passive replies. */
   messageId: string;
-  /** 开平推送的事件时间戳（ISO 字符串） */
+  /** Event timestamp from QQ as an ISO string. */
   eventTimestamp: string;
-  /** 插件收到消息的本地时间（ms） */
+  /** Local receipt timestamp in milliseconds. */
   receivedAt: number;
-  /** 原始消息内容 */
+  /** Raw message content. */
   rawContent: string;
-  /** 指令参数（去掉指令名后的部分） */
+  /** Command arguments after stripping the command name. */
   args: string;
-  /** 频道 ID（guild 类型） */
+  /** Channel ID for guild messages. */
   channelId?: string;
-  /** 群 openid（group 类型） */
+  /** Group openid for group messages. */
   groupOpenid?: string;
-  /** 账号 ID */
+  /** Account ID. */
   accountId: string;
-  /** Bot App ID */
+  /** Bot App ID. */
   appId: string;
-  /** 账号配置（供指令读取可配置项） */
+  /** Account config available to the command handler. */
   accountConfig?: QQBotAccountConfig;
-  /** 当前用户队列状态快照 */
+  /** Queue snapshot for the current sender. */
   queueSnapshot: QueueSnapshot;
 }
 
-/** 队列状态快照 */
+/** Queue status snapshot. */
 export interface QueueSnapshot {
-  /** 各用户队列中的消息总数 */
+  /** Total pending messages across all sender queues. */
   totalPending: number;
-  /** 正在并行处理的用户数 */
+  /** Number of senders currently being processed. */
   activeUsers: number;
-  /** 最大并发用户数 */
+  /** Maximum concurrent sender count. */
   maxConcurrentUsers: number;
-  /** 当前发送者在队列中的待处理消息数 */
+  /** Pending messages for the current sender. */
   senderPending: number;
 }
 
-/** 斜杠指令返回值：文本、带文件的结果、或 null（不处理） */
+/** Slash command result: text, a text+file result, or null to skip handling. */
 export type SlashCommandResult = string | SlashCommandFileResult | null;
 
-/** 带文件的指令结果（先回复文本，再发送文件） */
+/** Slash command result that sends text first and then a local file. */
 export interface SlashCommandFileResult {
   text: string;
-  /** 要发送的本地文件路径 */
+  /** Local file path to send. */
   filePath: string;
 }
 
-/** 斜杠指令定义 */
+/** Slash command definition. */
 interface SlashCommand {
-  /** 指令名（不含 /） */
+  /** Command name without the leading slash. */
   name: string;
-  /** 简要描述 */
+  /** Short description. */
   description: string;
-  /** 详细用法说明（支持多行），用于 /指令 ? 查询 */
+  /** Detailed usage text shown by `/command ?`. */
   usage?: string;
-  /** 处理函数 */
+  /** Command handler. */
   handler: (ctx: SlashCommandContext) => SlashCommandResult | Promise<SlashCommandResult>;
 }
 
-// ============ 指令注册表 ============
+// ============ Command registry ============
 
 const commands: Map<string, SlashCommand> = new Map();
 
@@ -108,18 +104,18 @@ function registerCommand(cmd: SlashCommand): void {
   commands.set(cmd.name.toLowerCase(), cmd);
 }
 
-// ============ 内置指令 ============
+// ============ Built-in commands ============
 
 /**
- * /bot-ping — 测试当前 openclaw 与 QQ 连接的网络延迟
+ * /bot-ping — test current network latency between OpenClaw and QQ.
  */
 registerCommand({
   name: "bot-ping",
-  description: "测试当前 openclaw 与 QQ 连接的网络延迟",
+  description: "测试 OpenClaw 与 QQ 之间的网络延迟",
   usage: [
     `/bot-ping`,
     ``,
-    `测试 OpenClaw 主机与 QQ 服务器之间的网络延迟。`,
+    `测试当前 OpenClaw 宿主机与 QQ 服务器之间的网络延迟。`,
     `返回网络传输耗时和插件处理耗时。`,
   ].join("\n"),
   handler: (ctx) => {
@@ -132,56 +128,56 @@ registerCommand({
     const qqToPlugin = ctx.receivedAt - eventTime;
     const pluginProcess = now - ctx.receivedAt;
     const lines = [
-      `✅ pong！`,
+      `✅ pong!`,
       ``,
-      `⏱ 延迟: ${totalMs}ms`,
-      `  ├ 网络传输: ${qqToPlugin}ms`,
-      `  └ 插件处理: ${pluginProcess}ms`,
+      `⏱ 延迟：${totalMs}ms`,
+      `  ├ 网络传输：${qqToPlugin}ms`,
+      `  └ 插件处理：${pluginProcess}ms`,
     ];
     return lines.join("\n");
   },
 });
 
 /**
- * /bot-version — 查看框架版本号
+ * /bot-version — show the OpenClaw framework version.
  */
 registerCommand({
   name: "bot-version",
-  description: "查看框架版本号",
+  description: "查看 OpenClaw 框架版本",
   usage: [`/bot-version`, ``, `查看当前 OpenClaw 框架版本。`].join("\n"),
   handler: async () => {
     const frameworkVersion = resolveRuntimeServiceVersion();
-    const lines = [`🦞OpenClaw 版本：${frameworkVersion}`];
-    lines.push(`🌟官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`);
+    const lines = [`🦞 OpenClaw 版本：${frameworkVersion}`];
+    lines.push(`🌟 官方 GitHub 仓库：[点击前往](${QQBOT_PLUGIN_GITHUB_URL})`);
     return lines.join("\n");
   },
 });
 
 /**
- * /bot-upgrade — 查看升级指引
+ * /bot-upgrade — show the upgrade guide.
  */
 registerCommand({
   name: "bot-upgrade",
-  description: "查看 QQBot 插件升级指引",
-  usage: [`/bot-upgrade`, ``, `查看 QQBot 插件升级说明和操作指引。`].join("\n"),
+  description: "查看 QQBot 升级指引",
+  usage: [`/bot-upgrade`, ``, `查看 QQBot 升级说明。`].join("\n"),
   handler: () =>
     [`📘 QQBot 升级指引：`, `[点击查看升级说明](${QQBOT_UPGRADE_GUIDE_URL})`].join("\n"),
 });
 
 /**
- * /bot-help — 查看所有指令以及用途
+ * /bot-help — list all built-in QQBot commands.
  */
 registerCommand({
   name: "bot-help",
-  description: "查看所有指令以及用途",
+  description: "查看所有内置命令",
   usage: [
     `/bot-help`,
     ``,
-    `列出所有可用的 QQBot 插件内置指令及其简要说明。`,
-    `使用 /指令名 ? 可查看某条指令的详细用法。`,
+    `查看所有可用的 QQBot 内置命令及其简要说明。`,
+    `在命令后追加 ? 可查看详细用法。`,
   ].join("\n"),
   handler: () => {
-    const lines = [`### QQBot插件内置调试指令`, ``];
+    const lines = [`### QQBot 内置命令`, ``];
     for (const [name, cmd] of commands) {
       lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
     }
@@ -189,10 +185,7 @@ registerCommand({
   },
 });
 
-/**
- * 从 openclaw.json / clawdbot.json / moltbot.json 的 logging.file 配置中
- * 提取用户自定义的日志文件路径（直接文件路径，非目录）。
- */
+/** Read user-configured log file paths from local config files. */
 function getConfiguredLogFiles(): string[] {
   const homeDir = getHomeDir();
   const files: string[] = [];
@@ -213,17 +206,7 @@ function getConfiguredLogFiles(): string[] {
   return files;
 }
 
-/**
- * /bot-logs — 导出本地日志文件
- *
- * 日志定位策略（兼容腾讯云/各云厂商不同安装路径）：
- * 0. 优先从 openclaw.json 的 logging.file 配置中读取自定义日志路径（最精确）
- * 1. 使用 *_STATE_DIR 环境变量（OPENCLAW/CLAWDBOT/MOLTBOT）
- * 2. 扫描常见状态目录：~/.openclaw, ~/.clawdbot, ~/.moltbot 及其 logs 子目录
- * 3. 扫描 home/cwd/AppData 下名称包含 openclaw/clawdbot/moltbot 的目录
- * 4. 扫描 /var/log 下的 openclaw/clawdbot/moltbot 目录
- * 5. 在候选目录中选取最近更新的日志文件（gateway/openclaw/clawdbot/moltbot）
- */
+/** Collect directories that may contain runtime logs across common install layouts. */
 function collectCandidateLogDirs(): string[] {
   const homeDir = getHomeDir();
   const dirs = new Set<string>();
@@ -240,12 +223,10 @@ function collectCandidateLogDirs(): string[] {
     pushDir(path.join(stateDir, "logs"));
   };
 
-  // 0. 从配置文件的 logging.file 提取目录
   for (const logFile of getConfiguredLogFiles()) {
     pushDir(path.dirname(logFile));
   }
 
-  // 1. 环境变量 *_STATE_DIR
   for (const [key, value] of Object.entries(process.env)) {
     if (!value) continue;
     if (/STATE_DIR$/i.test(key) && /(OPENCLAW|CLAWDBOT|MOLTBOT)/i.test(key)) {
@@ -253,13 +234,11 @@ function collectCandidateLogDirs(): string[] {
     }
   }
 
-  // 2. 常见状态目录
   for (const name of [".openclaw", ".clawdbot", ".moltbot", "openclaw", "clawdbot", "moltbot"]) {
     pushDir(path.join(homeDir, name));
     pushDir(path.join(homeDir, name, "logs"));
   }
 
-  // 3. home/cwd/AppData 下包含 openclaw/clawdbot/moltbot 的子目录
   const searchRoots = new Set<string>([homeDir, process.cwd(), path.dirname(process.cwd())]);
   if (process.env.APPDATA) searchRoots.add(process.env.APPDATA);
   if (process.env.LOCALAPPDATA) searchRoots.add(process.env.LOCALAPPDATA);
@@ -275,21 +254,21 @@ function collectCandidateLogDirs(): string[] {
         pushDir(path.join(base, "logs"));
       }
     } catch {
-      // 无权限或不存在，跳过
+      // Ignore missing or inaccessible directories.
     }
   }
 
-  // 4. /var/log 下的常见日志目录（Linux 服务器部署场景）
+  // Common Linux log directories under /var/log.
   if (!isWindows()) {
     for (const name of ["openclaw", "clawdbot", "moltbot"]) {
       pushDir(path.join("/var/log", name));
     }
   }
 
-  // 5. /tmp 和系统临时目录下的日志（gateway 默认日志路径可能在 /tmp/openclaw/）
+  // Temporary directories may also contain gateway logs.
   const tmpRoots = new Set<string>();
   if (isWindows()) {
-    // Windows: C:\tmp, %TEMP%, %LOCALAPPDATA%\Temp
+    // Windows temp locations.
     tmpRoots.add("C:\\tmp");
     if (process.env.TEMP) tmpRoots.add(process.env.TEMP);
     if (process.env.TMP) tmpRoots.add(process.env.TMP);
@@ -325,11 +304,11 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
       dedupe.add(normalized);
       candidates.push({ filePath: normalized, sourceDir, mtimeMs: stat.mtimeMs });
     } catch {
-      // 文件不存在或无权限
+      // Ignore missing or inaccessible files.
     }
   };
 
-  // 优先级最高：用户在 openclaw.json logging.file 中显式配置的日志文件
+  // Highest priority: explicit logging.file paths from config.
   for (const logFile of getConfiguredLogFiles()) {
     pushFile(logFile, path.dirname(logFile));
   }
@@ -350,7 +329,7 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
         pushFile(path.join(dir, entry.name), dir);
       }
     } catch {
-      // 无权限或不存在，跳过
+      // Ignore missing or inaccessible directories.
     }
   }
 
@@ -364,8 +343,8 @@ registerCommand({
   usage: [
     `/bot-logs`,
     ``,
-    `导出最近的 OpenClaw 日志文件（最多 4 个）。`,
-    `每个文件最多保留最后 1000 行，以文件形式返回。`,
+    `导出最近的 OpenClaw 日志文件（最多 4 个文件）。`,
+    `每个文件只保留最后 1000 行，并作为附件返回。`,
   ].join("\n"),
   handler: () => {
     const logDirs = collectCandidateLogDirs();
@@ -385,14 +364,15 @@ registerCommand({
           : logDirs
               .slice(0, 6)
               .map((d) => `  • ${d}`)
-              .join("\n") + (logDirs.length > 6 ? `\n  …及其他 ${logDirs.length - 6} 个路径` : "");
+              .join("\n") +
+            (logDirs.length > 6 ? `\n  …以及另外 ${logDirs.length - 6} 个路径` : "");
       return [
         `⚠️ 未找到日志文件`,
         ``,
-        `已搜索以下${existingDirs.length > 0 ? "已存在的" : ""}路径：`,
+        `已搜索以下${existingDirs.length > 0 ? "存在的" : ""}路径：`,
         searched,
         ``,
-        `💡 如果日志在自定义路径，请在配置文件中添加：`,
+        `💡 如果日志存放在自定义路径，请在配置中添加：`,
         `  "logging": { "file": "/path/to/your/logfile.log" }`,
       ].join("\n");
     }
@@ -420,12 +400,12 @@ registerCommand({
           if (totalFileLines > MAX_LINES_PER_FILE) truncatedCount++;
         }
       } catch {
-        lines.push(`[读取 ${path.basename(logFile.filePath)} 失败]`);
+        lines.push(`[Failed to read ${path.basename(logFile.filePath)}]`);
       }
     }
 
     if (lines.length === 0) {
-      return `⚠️ 找到日志文件但读取失败，请检查文件权限`;
+      return `⚠️ 找到了日志文件，但无法读取。请检查文件权限。`;
     }
 
     const tmpDir = getQQBotDataDir("downloads");
@@ -435,10 +415,10 @@ registerCommand({
 
     const fileCount = recentFiles.length;
     const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
-    // 紧凑摘要：N 个日志文件，共 X 行（如有截断则注明）
-    let summaryText = `${fileCount} 个日志文件，共 ${totalIncluded} 行`;
+    // Keep the summary compact and mention truncation when it happened.
+    let summaryText = `共 ${fileCount} 个日志文件，包含 ${totalIncluded} 行内容`;
     if (truncatedCount > 0) {
-      summaryText += `（${truncatedCount} 个文件因过长仅保留最后 ${MAX_LINES_PER_FILE} 行，原始共 ${totalOriginal} 行）`;
+      summaryText += `（其中 ${truncatedCount} 个文件已截断为最后 ${MAX_LINES_PER_FILE} 行，总计原始 ${totalOriginal} 行）`;
     }
     return {
       text: `📋 ${summaryText}\n📂 来源：${topSources.join(" | ")}`,
@@ -447,31 +427,31 @@ registerCommand({
   },
 });
 
-// ============ 匹配入口 ============
+// Slash command entry point.
 
 /**
- * 尝试匹配并执行插件级斜杠指令
+ * Try to match and execute a plugin-level slash command.
  *
- * @returns 回复文本（匹配成功），null（不匹配，应入队正常处理）
+ * @returns A reply when matched, or null when the message should continue through normal routing.
  */
 export async function matchSlashCommand(ctx: SlashCommandContext): Promise<SlashCommandResult> {
   const content = ctx.rawContent.trim();
   if (!content.startsWith("/")) return null;
 
-  // 解析指令名和参数
+  // Parse the command name and trailing arguments.
   const spaceIdx = content.indexOf(" ");
   const cmdName = (spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx)).toLowerCase();
   const args = spaceIdx === -1 ? "" : content.slice(spaceIdx + 1).trim();
 
   const cmd = commands.get(cmdName);
-  if (!cmd) return null; // 不是插件级指令，交给框架
+  if (!cmd) return null;
 
-  // /指令 ? — 返回用法说明
+  // `/command ?` returns usage help.
   if (args === "?") {
     if (cmd.usage) {
       return `📖 /${cmd.name} 用法：\n\n${cmd.usage}`;
     }
-    return `/${cmd.name} — ${cmd.description}`;
+    return `/${cmd.name} - ${cmd.description}`;
   }
 
   ctx.args = args;
@@ -479,7 +459,7 @@ export async function matchSlashCommand(ctx: SlashCommandContext): Promise<Slash
   return result;
 }
 
-/** 获取插件版本号（供外部使用） */
+/** Return the plugin version for external callers. */
 export function getPluginVersion(): string {
   return PLUGIN_VERSION;
 }

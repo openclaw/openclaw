@@ -1,59 +1,38 @@
-/**
- * 已知用户存储
- * 记录与机器人交互过的所有用户
- * 支持主动消息和批量通知功能
- */
-
 import fs from "node:fs";
 import path from "node:path";
 import { debugLog, debugError } from "./utils/debug-log.js";
 
-// 已知用户信息接口
+/** Persisted record for a user who has interacted with the bot. */
 export interface KnownUser {
-  /** 用户 openid（唯一标识） */
   openid: string;
-  /** 消息类型：私聊用户 / 群组 */
   type: "c2c" | "group";
-  /** 用户昵称（如有） */
   nickname?: string;
-  /** 群组 openid（如果是群消息） */
   groupOpenid?: string;
-  /** 关联的机器人账户 ID */
   accountId: string;
-  /** 首次交互时间戳 */
   firstSeenAt: number;
-  /** 最后交互时间戳 */
   lastSeenAt: number;
-  /** 交互次数 */
   interactionCount: number;
 }
 
 import { getQQBotDataDir } from "./utils/platform.js";
 
-// 存储文件路径
 const KNOWN_USERS_DIR = getQQBotDataDir("data");
 const KNOWN_USERS_FILE = path.join(KNOWN_USERS_DIR, "known-users.json");
 
-// 内存缓存
 let usersCache: Map<string, KnownUser> | null = null;
 
-// 写入节流配置
-const SAVE_THROTTLE_MS = 5000; // 5秒写入一次
+const SAVE_THROTTLE_MS = 5000;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let isDirty = false;
 
-/**
- * 确保目录存在
- */
+/** Ensure the data directory exists. */
 function ensureDir(): void {
   if (!fs.existsSync(KNOWN_USERS_DIR)) {
     fs.mkdirSync(KNOWN_USERS_DIR, { recursive: true });
   }
 }
 
-/**
- * 从文件加载用户数据到缓存
- */
+/** Load persisted users into the in-memory cache. */
 function loadUsersFromFile(): Map<string, KnownUser> {
   if (usersCache !== null) {
     return usersCache;
@@ -67,7 +46,6 @@ function loadUsersFromFile(): Map<string, KnownUser> {
       const users = JSON.parse(data) as KnownUser[];
 
       for (const user of users) {
-        // 使用复合键：accountId + type + openid（群组还要加 groupOpenid）
         const key = makeUserKey(user);
         usersCache.set(key, user);
       }
@@ -82,14 +60,12 @@ function loadUsersFromFile(): Map<string, KnownUser> {
   return usersCache;
 }
 
-/**
- * 保存用户数据到文件（节流版本）
- */
+/** Schedule a throttled write to disk. */
 function saveUsersToFile(): void {
   if (!isDirty) return;
 
   if (saveTimer) {
-    return; // 已有定时器在等待
+    return;
   }
 
   saveTimer = setTimeout(() => {
@@ -98,9 +74,7 @@ function saveUsersToFile(): void {
   }, SAVE_THROTTLE_MS);
 }
 
-/**
- * 实际执行保存
- */
+/** Perform the actual write to disk. */
 function doSaveUsersToFile(): void {
   if (!usersCache || !isDirty) return;
 
@@ -114,9 +88,7 @@ function doSaveUsersToFile(): void {
   }
 }
 
-/**
- * 强制立即保存（用于进程退出前）
- */
+/** Flush pending writes immediately, typically during shutdown. */
 export function flushKnownUsers(): void {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -125,9 +97,7 @@ export function flushKnownUsers(): void {
   doSaveUsersToFile();
 }
 
-/**
- * 生成用户唯一键
- */
+/** Build a stable composite key for one user record. */
 function makeUserKey(user: Partial<KnownUser>): string {
   const base = `${user.accountId}:${user.type}:${user.openid}`;
   if (user.type === "group" && user.groupOpenid) {
@@ -136,10 +106,7 @@ function makeUserKey(user: Partial<KnownUser>): string {
   return base;
 }
 
-/**
- * 记录已知用户（收到消息时调用）
- * @param user 用户信息（部分字段）
- */
+/** Record a known user whenever a message is received. */
 export function recordKnownUser(user: {
   openid: string;
   type: "c2c" | "group";
@@ -154,14 +121,12 @@ export function recordKnownUser(user: {
   const existing = cache.get(key);
 
   if (existing) {
-    // 更新已存在的用户
     existing.lastSeenAt = now;
     existing.interactionCount++;
     if (user.nickname && user.nickname !== existing.nickname) {
       existing.nickname = user.nickname;
     }
   } else {
-    // 新用户
     const newUser: KnownUser = {
       openid: user.openid,
       type: user.type,
@@ -180,13 +145,7 @@ export function recordKnownUser(user: {
   saveUsersToFile();
 }
 
-/**
- * 获取单个用户信息
- * @param accountId 机器人账户 ID
- * @param openid 用户 openid
- * @param type 消息类型
- * @param groupOpenid 群组 openid（可选）
- */
+/** Look up one known user. */
 export function getKnownUser(
   accountId: string,
   openid: string,
@@ -198,28 +157,18 @@ export function getKnownUser(
   return cache.get(key);
 }
 
-/**
- * 列出所有已知用户
- * @param options 筛选选项
- */
+/** List known users with optional filtering and sorting. */
 export function listKnownUsers(options?: {
-  /** 筛选特定机器人账户的用户 */
   accountId?: string;
-  /** 筛选消息类型 */
   type?: "c2c" | "group";
-  /** 最近活跃时间（毫秒，如 86400000 表示最近 24 小时） */
   activeWithin?: number;
-  /** 返回数量限制 */
   limit?: number;
-  /** 排序方式 */
   sortBy?: "lastSeenAt" | "firstSeenAt" | "interactionCount";
-  /** 排序方向 */
   sortOrder?: "asc" | "desc";
 }): KnownUser[] {
   const cache = loadUsersFromFile();
   let users = Array.from(cache.values());
 
-  // 筛选
   if (options?.accountId) {
     users = users.filter((u) => u.accountId === options.accountId);
   }
@@ -231,7 +180,6 @@ export function listKnownUsers(options?: {
     users = users.filter((u) => u.lastSeenAt >= cutoff);
   }
 
-  // 排序
   const sortBy = options?.sortBy ?? "lastSeenAt";
   const sortOrder = options?.sortOrder ?? "desc";
   users.sort((a, b) => {
@@ -240,7 +188,6 @@ export function listKnownUsers(options?: {
     return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
   });
 
-  // 限制数量
   if (options?.limit && options.limit > 0) {
     users = users.slice(0, options.limit);
   }
@@ -248,10 +195,7 @@ export function listKnownUsers(options?: {
   return users;
 }
 
-/**
- * 获取用户统计信息
- * @param accountId 机器人账户 ID（可选，不传则返回所有账户的统计）
- */
+/** Return summary stats for known users. */
 export function getKnownUsersStats(accountId?: string): {
   totalUsers: number;
   c2cUsers: number;
@@ -273,13 +217,7 @@ export function getKnownUsersStats(accountId?: string): {
   };
 }
 
-/**
- * 删除用户记录
- * @param accountId 机器人账户 ID
- * @param openid 用户 openid
- * @param type 消息类型
- * @param groupOpenid 群组 openid（可选）
- */
+/** Remove one user record. */
 export function removeKnownUser(
   accountId: string,
   openid: string,
@@ -300,16 +238,12 @@ export function removeKnownUser(
   return false;
 }
 
-/**
- * 清除所有用户记录
- * @param accountId 机器人账户 ID（可选，不传则清除所有）
- */
+/** Clear all user records, optionally scoped to one account. */
 export function clearKnownUsers(accountId?: string): number {
   const cache = loadUsersFromFile();
   let count = 0;
 
   if (accountId) {
-    // 只清除指定账户的用户
     for (const [key, user] of cache.entries()) {
       if (user.accountId === accountId) {
         cache.delete(key);
@@ -317,35 +251,26 @@ export function clearKnownUsers(accountId?: string): number {
       }
     }
   } else {
-    // 清除所有
     count = cache.size;
     cache.clear();
   }
 
   if (count > 0) {
     isDirty = true;
-    doSaveUsersToFile(); // 立即保存
+    doSaveUsersToFile();
     debugLog(`[known-users] Cleared ${count} users`);
   }
 
   return count;
 }
 
-/**
- * 获取用户的所有群组（某用户在哪些群里交互过）
- * @param accountId 机器人账户 ID
- * @param openid 用户 openid
- */
+/** Return all groups in which a user has interacted. */
 export function getUserGroups(accountId: string, openid: string): string[] {
   const users = listKnownUsers({ accountId, type: "group" });
   return users.filter((u) => u.openid === openid && u.groupOpenid).map((u) => u.groupOpenid!);
 }
 
-/**
- * 获取群组的所有成员
- * @param accountId 机器人账户 ID
- * @param groupOpenid 群组 openid
- */
+/** Return all recorded members for one group. */
 export function getGroupMembers(accountId: string, groupOpenid: string): KnownUser[] {
   return listKnownUsers({ accountId, type: "group" }).filter((u) => u.groupOpenid === groupOpenid);
 }

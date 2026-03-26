@@ -1,14 +1,6 @@
-/**
- * QQ Bot 文本解析工具函数
- */
-
 import type { RefAttachmentSummary } from "../ref-index-store.js";
 
-/**
- * 解析 QQ 表情标签，将 <faceType=1,faceId="13",ext="base64..."> 格式
- * 替换为 【表情: 中文名】 格式
- * ext 字段为 Base64 编码的 JSON，格式如 {"text":"呲牙"}
- */
+/** Replace QQ face tags with readable text labels. */
 export function parseFaceTags(text: string): string {
   if (!text) return text;
 
@@ -16,33 +8,26 @@ export function parseFaceTags(text: string): string {
     try {
       const decoded = Buffer.from(ext, "base64").toString("utf-8");
       const parsed = JSON.parse(decoded);
-      const faceName = parsed.text || "未知表情";
-      return `【表情: ${faceName}】`;
+      const faceName = parsed.text || "unknown emoji";
+      return `[Emoji: ${faceName}]`;
     } catch {
       return _match;
     }
   });
 }
 
-/**
- * 过滤内部标记（如 [[reply_to: xxx]]）
- * 这些标记可能被 AI 错误地学习并输出，需要在发送前移除
- */
+/** Remove internal framework markers before sending text outward. */
 export function filterInternalMarkers(text: string): string {
   if (!text) return text;
 
   let result = text.replace(/\[\[[a-z_]+:\s*[^\]]*\]\]/gi, "");
-  // 过滤框架内部图片引用标记：@image:image_xxx.png、@voice:voice_xxx.silk 等
   result = result.replace(/@(?:image|voice|video|file):[a-zA-Z0-9_.-]+/g, "");
   result = result.replace(/\n{3,}/g, "\n\n").trim();
 
   return result;
 }
 
-/**
- * 从 message_scene.ext 数组中解析引用索引
- * ext 格式示例: ["", "ref_msg_idx=REFIDX_xxx", "msg_idx=REFIDX_yyy"]
- */
+/** Parse quote-related ref indices from `message_scene.ext`. */
 export function parseRefIndices(ext?: string[]): { refMsgIdx?: string; msgIdx?: string } {
   if (!ext || ext.length === 0) return {};
   let refMsgIdx: string | undefined;
@@ -57,9 +42,7 @@ export function parseRefIndices(ext?: string[]): { refMsgIdx?: string; msgIdx?: 
   return { refMsgIdx, msgIdx };
 }
 
-/**
- * 从附件列表中构建附件摘要（用于引用索引缓存）
- */
+/** Build attachment summaries for ref-index caching. */
 export function buildAttachmentSummaries(
   attachments?: Array<{
     content_type: string;

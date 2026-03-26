@@ -1,31 +1,21 @@
-/**
- * 文件操作工具 — 异步读取 + 大小校验 + 进度提示
- */
-
 import crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-/** QQ Bot API 最大上传文件大小：20MB */
+/** Maximum file size accepted by the QQ Bot API. */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
 
-/** 大文件阈值（超过此值发送进度提示）：5MB */
+/** Threshold used to treat an upload as a large file. */
 export const LARGE_FILE_THRESHOLD = 5 * 1024 * 1024;
 
-/**
- * 文件大小校验结果
- */
+/** Result of local file-size validation. */
 export interface FileSizeCheckResult {
   ok: boolean;
   size: number;
   error?: string;
 }
 
-/**
- * 校验文件大小是否在上传限制内
- * @param filePath 文件路径
- * @param maxSize 最大允许大小（字节），默认 20MB
- */
+/** Validate that a file is within the allowed upload size. */
 export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): FileSizeCheckResult {
   try {
     const stat = fs.statSync(filePath);
@@ -35,7 +25,7 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
       return {
         ok: false,
         size: stat.size,
-        error: `文件过大 (${sizeMB}MB)，QQ Bot API 上传限制为 ${limitMB}MB`,
+        error: `File is too large (${sizeMB}MB); QQ Bot API limit is ${limitMB}MB`,
       };
     }
     return { ok: true, size: stat.size };
@@ -43,22 +33,17 @@ export function checkFileSize(filePath: string, maxSize = MAX_UPLOAD_SIZE): File
     return {
       ok: false,
       size: 0,
-      error: `无法读取文件信息: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Failed to read file metadata: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
 
-/**
- * 异步读取文件内容
- * 替代 fs.readFileSync，避免阻塞事件循环
- */
+/** Read file contents asynchronously. */
 export async function readFileAsync(filePath: string): Promise<Buffer> {
   return fs.promises.readFile(filePath);
 }
 
-/**
- * 异步检查文件是否存在
- */
+/** Check file readability asynchronously. */
 export async function fileExistsAsync(filePath: string): Promise<boolean> {
   try {
     await fs.promises.access(filePath, fs.constants.R_OK);
@@ -68,33 +53,25 @@ export async function fileExistsAsync(filePath: string): Promise<boolean> {
   }
 }
 
-/**
- * 异步获取文件大小
- */
+/** Get file size asynchronously. */
 export async function getFileSizeAsync(filePath: string): Promise<number> {
   const stat = await fs.promises.stat(filePath);
   return stat.size;
 }
 
-/**
- * 判断文件是否为"大文件"（需要进度提示）
- */
+/** Return true when a file should be treated as large. */
 export function isLargeFile(sizeBytes: number): boolean {
   return sizeBytes >= LARGE_FILE_THRESHOLD;
 }
 
-/**
- * 格式化文件大小为人类可读的字符串
- */
+/** Format a byte count into a human-readable size string. */
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-/**
- * 根据文件扩展名获取 MIME 类型
- */
+/** Infer a MIME type from the file extension. */
 export function getMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   const mimeTypes: Record<string, string> = {
@@ -122,14 +99,7 @@ export function getMimeType(filePath: string): string {
   return mimeTypes[ext] ?? "application/octet-stream";
 }
 
-/**
- * 将远端文件下载到本地目录。
- *
- * @param url 远端 URL
- * @param destDir 目标目录（不存在时自动创建）
- * @param originalFilename 可选的原始文件名（覆盖 URL 推断）
- * @returns 本地文件完整路径；下载失败返回 null
- */
+/** Download a remote file into a local directory. */
 export async function downloadFile(
   url: string,
   destDir: string,
@@ -143,7 +113,6 @@ export async function downloadFile(
     const resp = await fetch(url, { redirect: "follow" });
     if (!resp.ok || !resp.body) return null;
 
-    // 确定文件名：优先使用 originalFilename，否则从 URL 推断
     let filename = originalFilename?.trim() || "";
     if (!filename) {
       try {
@@ -154,7 +123,6 @@ export async function downloadFile(
       }
     }
 
-    // 加上时间戳避免同名冲突
     const ts = Date.now();
     const ext = path.extname(filename);
     const base = path.basename(filename, ext) || "file";

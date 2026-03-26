@@ -1,43 +1,24 @@
-/**
- * Session 持久化存储
- * 将 WebSocket 连接状态（sessionId、lastSeq）持久化到文件
- * 支持进程重启后通过 Resume 机制快速恢复连接
- */
-
 import fs from "node:fs";
 import path from "node:path";
 import { debugLog, debugError } from "./utils/debug-log.js";
 
-// Session 状态接口
+/** Persisted gateway session state. */
 export interface SessionState {
-  /** WebSocket Session ID */
   sessionId: string | null;
-  /** 最后收到的消息序号 */
   lastSeq: number | null;
-  /** 上次连接成功的时间戳 */
   lastConnectedAt: number;
-  /** 上次成功的权限级别索引 */
   intentLevelIndex: number;
-  /** 关联的机器人账户 ID */
   accountId: string;
-  /** 保存时间 */
   savedAt: number;
-  /** 创建此 session 时使用的 appId（用于检测凭据变更） */
   appId?: string;
 }
 
 import { getQQBotDataDir } from "./utils/platform.js";
 
-// Session 文件目录
 const SESSION_DIR = getQQBotDataDir("sessions");
 
-// Session 过期时间（5分钟）- Resume 要求在断开后一定时间内恢复
 const SESSION_EXPIRE_TIME = 5 * 60 * 1000;
-
-// 写入节流时间（避免频繁写入）
 const SAVE_THROTTLE_MS = 1000;
-
-// 每个账户的节流状态
 const throttleState = new Map<
   string,
   {
@@ -47,30 +28,20 @@ const throttleState = new Map<
   }
 >();
 
-/**
- * 确保目录存在
- */
+/** Ensure the session directory exists. */
 function ensureDir(): void {
   if (!fs.existsSync(SESSION_DIR)) {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
   }
 }
 
-/**
- * 获取 Session 文件路径
- */
+/** Return the session file path for one account. */
 function getSessionPath(accountId: string): string {
-  // 清理 accountId 中的特殊字符
   const safeId = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
   return path.join(SESSION_DIR, `session-${safeId}.json`);
 }
 
-/**
- * 加载 Session 状态
- * @param accountId 账户 ID
- * @param expectedAppId 当前使用的 appId，如果与保存时的 appId 不匹配则视为失效
- * @returns Session 状态，如果不存在、已过期或 appId 不匹配返回 null
- */
+/** Load a saved session, rejecting expired or mismatched appId entries. */
 export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
   const filePath = getSessionPath(accountId);
 
@@ -82,7 +53,6 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
     const data = fs.readFileSync(filePath, "utf-8");
     const state = JSON.parse(data) as SessionState;
 
-    // 检查是否过期
     const now = Date.now();
     if (now - state.savedAt > SESSION_EXPIRE_TIME) {
       debugLog(
@@ -90,26 +60,20 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
       );
       try {
         fs.unlinkSync(filePath);
-      } catch {
-        // 忽略删除错误
-      }
+      } catch {}
       return null;
     }
 
-    // 检查 appId 是否匹配（凭据变更检测）
     if (expectedAppId && state.appId && state.appId !== expectedAppId) {
       debugLog(
         `[session-store] appId mismatch for ${accountId}: saved=${state.appId}, current=${expectedAppId}. Discarding stale session.`,
       );
       try {
         fs.unlinkSync(filePath);
-      } catch {
-        // 忽略删除错误
-      }
+      } catch {}
       return null;
     }
 
-    // 验证必要字段
     if (!state.sessionId || state.lastSeq === null || state.lastSeq === undefined) {
       debugLog(`[session-store] Invalid session data for ${accountId}`);
       return null;
@@ -125,14 +89,10 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
   }
 }
 
-/**
- * 保存 Session 状态（带节流，避免频繁写入）
- * @param state Session 状态
- */
+/** Save session state with throttling. */
 export function saveSession(state: SessionState): void {
   const { accountId } = state;
 
-  // 获取或初始化节流状态
   let throttle = throttleState.get(accountId);
   if (!throttle) {
     throttle = {
@@ -146,22 +106,18 @@ export function saveSession(state: SessionState): void {
   const now = Date.now();
   const timeSinceLastSave = now - throttle.lastSaveTime;
 
-  // 如果距离上次保存时间足够长，立即保存
   if (timeSinceLastSave >= SAVE_THROTTLE_MS) {
     doSaveSession(state);
     throttle.lastSaveTime = now;
     throttle.pendingState = null;
 
-    // 清除待定的节流定时器
     if (throttle.throttleTimer) {
       clearTimeout(throttle.throttleTimer);
       throttle.throttleTimer = null;
     }
   } else {
-    // 记录待保存的状态
     throttle.pendingState = state;
 
-    // 如果没有设置定时器，设置一个
     if (!throttle.throttleTimer) {
       const delay = SAVE_THROTTLE_MS - timeSinceLastSave;
       throttle.throttleTimer = setTimeout(() => {
@@ -179,16 +135,13 @@ export function saveSession(state: SessionState): void {
   }
 }
 
-/**
- * 实际执行保存操作
- */
+/** Write one session file to disk immediately. */
 function doSaveSession(state: SessionState): void {
   const filePath = getSessionPath(state.accountId);
 
   try {
     ensureDir();
 
-    // 更新保存时间
     const stateToSave: SessionState = {
       ...state,
       savedAt: Date.now(),
@@ -203,14 +156,10 @@ function doSaveSession(state: SessionState): void {
   }
 }
 
-/**
- * 清除 Session 状态
- * @param accountId 账户 ID
- */
+/** Clear a saved session and any pending throttle state. */
 export function clearSession(accountId: string): void {
   const filePath = getSessionPath(accountId);
 
-  // 清除节流状态
   const throttle = throttleState.get(accountId);
   if (throttle) {
     if (throttle.throttleTimer) {
@@ -229,11 +178,7 @@ export function clearSession(accountId: string): void {
   }
 }
 
-/**
- * 更新 lastSeq（轻量级更新）
- * @param accountId 账户 ID
- * @param lastSeq 最新的消息序号
- */
+/** Update only lastSeq on the persisted session. */
 export function updateLastSeq(accountId: string, lastSeq: number): void {
   const existing = loadSession(accountId);
   if (existing && existing.sessionId) {
@@ -244,9 +189,7 @@ export function updateLastSeq(accountId: string, lastSeq: number): void {
   }
 }
 
-/**
- * 获取所有保存的 Session 状态
- */
+/** Load all saved sessions from disk. */
 export function getAllSessions(): SessionState[] {
   const sessions: SessionState[] = [];
 
@@ -262,19 +205,19 @@ export function getAllSessions(): SessionState[] {
           const state = JSON.parse(data) as SessionState;
           sessions.push(state);
         } catch {
-          // 忽略解析错误
+          // Ignore malformed session files here.
         }
       }
     }
   } catch {
-    // 目录不存在等错误
+    // Ignore missing directories and similar filesystem errors.
   }
 
   return sessions;
 }
 
 /**
- * 清理过期的 Session 文件
+ * Remove expired session files from disk.
  */
 export function cleanupExpiredSessions(): number {
   let cleaned = 0;
@@ -297,18 +240,18 @@ export function cleanupExpiredSessions(): number {
             debugLog(`[session-store] Cleaned expired session: ${file}`);
           }
         } catch {
-          // 忽略解析错误，但也删除损坏的文件
+          // Remove corrupted session files while ignoring parse errors.
           try {
             fs.unlinkSync(filePath);
             cleaned++;
           } catch {
-            // 忽略
+            // Ignore cleanup failures.
           }
         }
       }
     }
   } catch {
-    // 目录不存在等错误
+    // Ignore missing directories and similar filesystem errors.
   }
 
   return cleaned;

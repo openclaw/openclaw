@@ -1,16 +1,7 @@
-/**
- * 入站附件处理模块
- *
- * 负责下载、转换、转录用户发送的附件（图片/语音/文件），
- * 并归类为统一的 ProcessedAttachments 结构供 gateway 消费。
- */
-
 import { transcribeAudio, resolveSTTConfig } from "./stt.js";
 import { convertSilkToWav, isVoiceAttachment, formatDuration } from "./utils/audio-convert.js";
 import { downloadFile } from "./utils/file-utils.js";
 import { getQQBotMediaDir } from "./utils/platform.js";
-
-// ============ 类型定义 ============
 
 export interface RawAttachment {
   content_type: string;
@@ -22,25 +13,16 @@ export interface RawAttachment {
 
 export type TranscriptSource = "stt" | "asr" | "fallback";
 
-/** processAttachments 的返回值 */
+/** Normalized attachment output consumed by the gateway. */
 export interface ProcessedAttachments {
-  /** 附件描述文本（其它类型附件） */
   attachmentInfo: string;
-  /** 图片本地路径或远程 URL */
   imageUrls: string[];
-  /** 图片 MIME 类型（与 imageUrls 一一对应） */
   imageMediaTypes: string[];
-  /** 语音本地路径 */
   voiceAttachmentPaths: string[];
-  /** 语音远程 URL */
   voiceAttachmentUrls: string[];
-  /** QQ ASR 原始识别文本 */
   voiceAsrReferTexts: string[];
-  /** 语音转录文本 */
   voiceTranscripts: string[];
-  /** 转录来源 */
   voiceTranscriptSources: TranscriptSource[];
-  /** 每个附件的本地路径（与原始 attachments 数组一一对应，未下载的为 null） */
   attachmentLocalPaths: Array<string | null>;
 }
 
@@ -54,8 +36,6 @@ interface ProcessContext {
   };
 }
 
-// ============ 空结果常量 ============
-
 const EMPTY_RESULT: ProcessedAttachments = {
   attachmentInfo: "",
   imageUrls: [],
@@ -68,16 +48,7 @@ const EMPTY_RESULT: ProcessedAttachments = {
   attachmentLocalPaths: [],
 };
 
-// ============ 主函数 ============
-
-/**
- * 处理入站消息的附件列表。
- *
- * 三阶段流水线：
- * 1. 并行下载所有附件到本地
- * 2. 并行处理语音转换 + STT 转录
- * 3. 按原始顺序归类结果
- */
+/** Download, convert, transcribe, and classify inbound attachments. */
 export async function processAttachments(
   attachments: RawAttachment[] | undefined,
   ctx: ProcessContext,
@@ -88,7 +59,6 @@ export async function processAttachments(
   const downloadDir = getQQBotMediaDir("downloads");
   const prefix = `[qqbot:${accountId}]`;
 
-  // 结果收集
   const imageUrls: string[] = [];
   const imageMediaTypes: string[] = [];
   const voiceAttachmentPaths: string[] = [];
@@ -99,7 +69,7 @@ export async function processAttachments(
   const attachmentLocalPaths: Array<string | null> = [];
   const otherAttachments: string[] = [];
 
-  // Phase 1: 并行下载所有附件
+  // Phase 1: download all attachments in parallel.
   const downloadTasks = attachments.map(async (att) => {
     const attUrl = att.url?.startsWith("//") ? `https:${att.url}` : att.url;
     const isVoice = isVoiceAttachment(att);
@@ -135,7 +105,7 @@ export async function processAttachments(
 
   const downloadResults = await Promise.all(downloadTasks);
 
-  // Phase 2: 并行处理语音转换 + 转录（非语音附件同步归类）
+  // Phase 2: convert/transcribe voice attachments and classify everything else.
   const processTasks = downloadResults.map(
     async ({ att, attUrl, isVoice, localPath, audioPath }) => {
       const asrReferText = typeof att.asr_refer_text === "string" ? att.asr_refer_text.trim() : "";
@@ -204,7 +174,7 @@ export async function processAttachments(
 
   const processResults = await Promise.all(processTasks);
 
-  // Phase 3: 按原始顺序归类结果
+  // Phase 3: collect results in the original attachment order.
   for (const result of processResults) {
     if (result.meta.voiceUrl) voiceAttachmentUrls.push(result.meta.voiceUrl);
     if (result.meta.asrReferText) voiceAsrReferTexts.push(result.meta.asrReferText);
@@ -219,7 +189,7 @@ export async function processAttachments(
       voiceTranscriptSources.push(result.transcriptSource);
       attachmentLocalPaths.push(result.localPath);
     } else if (result.type === "other" && result.localPath) {
-      otherAttachments.push(`[附件: ${result.localPath}]`);
+      otherAttachments.push(`[Attachment: ${result.localPath}]`);
       attachmentLocalPaths.push(result.localPath);
     } else if (result.type === "image-fallback") {
       imageUrls.push(result.attUrl);
@@ -230,7 +200,7 @@ export async function processAttachments(
       voiceTranscriptSources.push("asr");
       attachmentLocalPaths.push(null);
     } else if (result.type === "other-fallback") {
-      otherAttachments.push(`[附件: ${result.filename}] (下载失败)`);
+      otherAttachments.push(`[Attachment: ${result.filename}] (download failed)`);
       attachmentLocalPaths.push(null);
     }
   }
@@ -250,17 +220,15 @@ export async function processAttachments(
   };
 }
 
-/**
- * 将语音转录结果组装为用户消息中的文本片段。
- */
+/** Format voice transcripts into user-visible text. */
 export function formatVoiceText(transcripts: string[]): string {
   if (transcripts.length === 0) return "";
   return transcripts.length === 1
-    ? `[语音消息] ${transcripts[0]}`
-    : transcripts.map((t, i) => `[语音${i + 1}] ${t}`).join("\n");
+    ? `[Voice message] ${transcripts[0]}`
+    : transcripts.map((t, i) => `[Voice ${i + 1}] ${t}`).join("\n");
 }
 
-// ============ 内部辅助 ============
+// Internal helpers.
 
 type VoiceResult =
   | {
@@ -314,13 +282,13 @@ async function processVoiceAttachment(
     return {
       localPath,
       type: "voice",
-      transcript: "[语音消息 - 语音识别未配置，无法转录]",
+      transcript: "[Voice message - transcription unavailable because STT is not configured]",
       transcriptSource: "fallback",
       meta,
     };
   }
 
-  // SILK→WAV 转换
+  // Convert SILK input to WAV before STT when necessary.
   if (!audioPath) {
     log?.info(`${prefix} Voice attachment: ${att.filename}, converting SILK→WAV...`);
     try {
@@ -347,14 +315,14 @@ async function processVoiceAttachment(
       return {
         localPath,
         type: "voice",
-        transcript: "[语音消息 - 格式转换失败]",
+        transcript: "[Voice message - format conversion failed]",
         transcriptSource: "fallback",
         meta,
       };
     }
   }
 
-  // STT 转录
+  // Run speech-to-text on the prepared audio file.
   try {
     const transcript = await transcribeAudio(audioPath!, cfg as Record<string, unknown>);
     if (transcript) {
@@ -369,7 +337,7 @@ async function processVoiceAttachment(
     return {
       localPath,
       type: "voice",
-      transcript: "[语音消息 - 转录结果为空]",
+      transcript: "[Voice message - transcription returned an empty result]",
       transcriptSource: "fallback",
       meta,
     };
@@ -381,7 +349,7 @@ async function processVoiceAttachment(
     return {
       localPath,
       type: "voice",
-      transcript: "[语音消息 - 转录失败]",
+      transcript: "[Voice message - transcription failed]",
       transcriptSource: "fallback",
       meta,
     };
