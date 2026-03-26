@@ -295,6 +295,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://localhost:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
@@ -308,6 +309,7 @@ describe("downloadBlueBubblesAttachment", () => {
     await downloadBlueBubblesAttachment(attachment, {
       serverUrl: "http://192.168.1.5:1234",
       password: "test",
+      cfg: { channels: { bluebubbles: {} } },
     });
 
     const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
