@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CliSessionBinding } from "../config/sessions.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -37,6 +38,7 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { hashCliSessionText, resolveCliSessionReuse } from "./cli-session.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
@@ -71,6 +73,8 @@ export async function runCliAgent(params: {
   streamParams?: import("./command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
+  cliSessionBinding?: CliSessionBinding;
+  authProfileId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Backward-compat fallback when only the previous signature is available. */
   bootstrapPromptWarningSignature?: string;
@@ -106,6 +110,20 @@ export async function runCliAgent(params: {
     warn: (message) => log.warn(message),
   });
   const backend = preparedBackend.backend;
+  const extraSystemPromptHash = hashCliSessionText(params.extraSystemPrompt);
+  const reusableCliSession = resolveCliSessionReuse({
+    binding:
+      params.cliSessionBinding ??
+      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
+    authProfileId: params.authProfileId,
+    extraSystemPromptHash,
+    mcpConfigHash: preparedBackend.mcpConfigHash,
+  });
+  if (reusableCliSession.invalidatedReason) {
+    log.info(
+      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+    );
+  }
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backend);
   const modelDisplay = `${params.provider}/${modelId}`;
@@ -431,9 +449,10 @@ export async function runCliAgent(params: {
   // Try with the provided CLI session ID first
   try {
     try {
-      const output = await executeCliWithSession(params.cliSessionId);
+      const output = await executeCliWithSession(reusableCliSession.sessionId);
       const text = output.text?.trim();
       const payloads = text ? [{ text }] : undefined;
+      const effectiveCliSessionId = output.sessionId ?? reusableCliSession.sessionId;
 
       return {
         payloads,
@@ -441,19 +460,31 @@ export async function runCliAgent(params: {
           durationMs: Date.now() - started,
           systemPromptReport,
           agentMeta: {
-            sessionId: output.sessionId ?? params.cliSessionId ?? params.sessionId ?? "",
+            sessionId: effectiveCliSessionId ?? params.sessionId ?? "",
             provider: params.provider,
             model: modelId,
             usage: output.usage,
+            ...(effectiveCliSessionId
+              ? {
+                  cliSessionBinding: {
+                    sessionId: effectiveCliSessionId,
+                    ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                    ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
+                    ...(preparedBackend.mcpConfigHash
+                      ? { mcpConfigHash: preparedBackend.mcpConfigHash }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         },
       };
     } catch (err) {
       if (err instanceof FailoverError) {
         // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && params.cliSessionId && params.sessionKey) {
+        if (err.reason === "session_expired" && reusableCliSession.sessionId && params.sessionKey) {
           log.warn(
-            `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(params.cliSessionId)}`,
+            `CLI session expired, clearing session ID and retrying: provider=${params.provider} session=${redactRunIdentifier(reusableCliSession.sessionId)}`,
           );
 
           // Clear the expired session ID from the session entry
@@ -464,6 +495,7 @@ export async function runCliAgent(params: {
           const output = await executeCliWithSession(undefined);
           const text = output.text?.trim();
           const payloads = text ? [{ text }] : undefined;
+          const effectiveCliSessionId = output.sessionId;
 
           return {
             payloads,
@@ -475,6 +507,18 @@ export async function runCliAgent(params: {
                 provider: params.provider,
                 model: modelId,
                 usage: output.usage,
+                ...(effectiveCliSessionId
+                  ? {
+                      cliSessionBinding: {
+                        sessionId: effectiveCliSessionId,
+                        ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+                        ...(extraSystemPromptHash ? { extraSystemPromptHash } : {}),
+                        ...(preparedBackend.mcpConfigHash
+                          ? { mcpConfigHash: preparedBackend.mcpConfigHash }
+                          : {}),
+                      },
+                    }
+                  : {}),
               },
             },
           };
