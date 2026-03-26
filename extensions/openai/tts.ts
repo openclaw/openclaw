@@ -1,4 +1,4 @@
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
 
@@ -21,7 +21,7 @@ export const OPENAI_TTS_VOICES = [
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
-function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
+export function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_BASE_URL;
@@ -36,21 +36,24 @@ function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
   return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== DEFAULT_OPENAI_BASE_URL;
 }
 
-function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
+export function isValidOpenAIModel(model: string, baseUrl?: string): boolean {
   if (isCustomOpenAIEndpoint(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_MODELS.includes(model as (typeof OPENAI_TTS_MODELS)[number]);
 }
 
-function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
+export function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTtsVoice {
   if (isCustomOpenAIEndpoint(baseUrl)) {
     return true;
   }
   return OPENAI_TTS_VOICES.includes(voice as OpenAiTtsVoice);
 }
 
-function resolveOpenAITtsInstructions(model: string, instructions?: string): string | undefined {
+export function resolveOpenAITtsInstructions(
+  model: string,
+  instructions?: string,
+): string | undefined {
   const next = instructions?.trim();
   return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
 }

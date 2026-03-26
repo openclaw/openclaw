@@ -12,11 +12,7 @@ function trimToUndefined(value: string | undefined): string | undefined {
 export function normalizeSpeechProviderId(
   providerId: string | undefined,
 ): SpeechProviderId | undefined {
-  const normalized = trimToUndefined(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized === "edge" ? "microsoft" : normalized;
+  return trimToUndefined(providerId);
 }
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
@@ -69,4 +65,15 @@ export function getSpeechProvider(
     return undefined;
   }
   return buildProviderMaps(cfg).aliases.get(normalized);
+}
+
+export function canonicalizeSpeechProviderId(
+  providerId: string | undefined,
+  cfg?: OpenClawConfig,
+): SpeechProviderId | undefined {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return getSpeechProvider(normalized, cfg)?.id ?? normalized;
 }

@@ -1,8 +1,18 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import {
+  buildElevenLabsSpeechProvider,
+  isValidVoiceId,
+} from "../../extensions/elevenlabs/speech-provider.ts";
 import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
 import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
+import {
+  isValidOpenAIModel,
+  isValidOpenAIVoice,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
+} from "../../extensions/openai/tts.ts";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -73,17 +83,11 @@ vi.mock("../agents/custom-api-registry.js", () => ({
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
-  isValidVoiceId,
-  isValidOpenAIVoice,
-  isValidOpenAIModel,
-  OPENAI_TTS_MODELS,
-  OPENAI_TTS_VOICES,
   parseTtsDirectives,
-  resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
-  resolveEdgeOutputFormat,
+  getResolvedSpeechProviderConfig,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -317,7 +321,10 @@ describe("tts", () => {
       ] as const;
       for (const testCase of cases) {
         const config = resolveTtsConfig(testCase.cfg);
-        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+        const providerConfig = getResolvedSpeechProviderConfig(config, "microsoft") as {
+          outputFormat?: string;
+        };
+        expect(providerConfig.outputFormat, testCase.name).toBe(testCase.expected);
       }
     });
   });
@@ -329,13 +336,19 @@ describe("tts", () => {
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
       const result = parseTtsDirectives(input, policy);
+      const elevenlabsOverrides = result.overrides.providerOverrides?.elevenlabs as
+        | {
+            voiceId?: string;
+            voiceSettings?: { stability?: number; speed?: number };
+          }
+        | undefined;
 
       expect(result.cleanedText).not.toContain("[[tts:");
       expect(result.ttsText).toBe("(laughs) Read the song once more.");
       expect(result.overrides.provider).toBe("elevenlabs");
-      expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
-      expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
-      expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+      expect(elevenlabsOverrides?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
+      expect(elevenlabsOverrides?.voiceSettings?.stability).toBe(0.4);
+      expect(elevenlabsOverrides?.voiceSettings?.speed).toBe(1.1);
     });
 
     it("accepts edge as a legacy microsoft provider override", () => {
@@ -350,9 +363,12 @@ describe("tts", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
       const result = parseTtsDirectives(input, policy);
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string }
+        | undefined;
 
       expect(result.overrides.provider).toBeUndefined();
-      expect(result.overrides.openai?.voice).toBe("alloy");
+      expect(openaiOverrides?.voice).toBe("alloy");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -370,9 +386,12 @@ describe("tts", () => {
       const customBaseUrl = "http://localhost:8880/v1";
 
       const result = parseTtsDirectives(input, policy, customBaseUrl);
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string; model?: string }
+        | undefined;
 
-      expect(result.overrides.openai?.voice).toBe("kokoro-chinese");
-      expect(result.overrides.openai?.model).toBe("kokoro-v1");
+      expect(openaiOverrides?.voice).toBe("kokoro-chinese");
+      expect(openaiOverrides?.model).toBe("kokoro-v1");
       expect(result.warnings).toHaveLength(0);
     });
 
@@ -382,8 +401,11 @@ describe("tts", () => {
       const defaultBaseUrl = "https://api.openai.com/v1";
 
       const result = parseTtsDirectives(input, policy, defaultBaseUrl);
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string }
+        | undefined;
 
-      expect(result.overrides.openai?.voice).toBeUndefined();
+      expect(openaiOverrides?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
   });
@@ -704,7 +726,10 @@ describe("tts", () => {
       ] as const) {
         withEnv(testCase.env, () => {
           const config = resolveTtsConfig(testCase.cfg);
-          expect(config.openai.baseUrl, testCase.name).toBe(testCase.expected);
+          const openaiConfig = getResolvedSpeechProviderConfig(config, "openai") as {
+            baseUrl?: string;
+          };
+          expect(openaiConfig.baseUrl, testCase.name).toBe(testCase.expected);
         });
       }
     });
