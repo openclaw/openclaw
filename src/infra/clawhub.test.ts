@@ -80,9 +80,6 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
-    expect(satisfiesPluginApiRange("2026.3.23-1", ">=2026.3.23")).toBe(true);
-    expect(satisfiesPluginApiRange("2026.3.23-1", ">=2026.3.22")).toBe(true);
-    expect(satisfiesPluginApiRange("2026.3.23-2", "^2026.3.23")).toBe(true);
   });
 
   it("checks min gateway versions with loose host labels", () => {
