@@ -14,6 +14,7 @@ import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
@@ -75,7 +76,6 @@ type PluginRegistrationContractEntry = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -366,6 +366,7 @@ const bundledProviderPlugins = dedupePlugins([
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
+  microsoftFoundryPlugin,
   minimaxPlugin,
   mistralPlugin,
   modelStudioPlugin,
@@ -420,10 +421,6 @@ function upsertPluginRegistrationContractEntry(
     existing.imageGenerationProviderIds,
     next.imageGenerationProviderIds,
   );
-  existing.videoGenerationProviderIds = mergeIds(
-    existing.videoGenerationProviderIds,
-    next.videoGenerationProviderIds,
-  );
   existing.webSearchProviderIds = mergeIds(
     existing.webSearchProviderIds,
     next.webSearchProviderIds,
@@ -448,7 +445,6 @@ function mergeProviderContractRegistrations(
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
       webSearchProviderIds: [],
       toolNames: [],
     });
@@ -468,9 +464,6 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
           (provider) => provider.id,
         ),
         imageGenerationProviderIds: captured.imageGenerationProviders.map(
-          (provider) => provider.id,
-        ),
-        videoGenerationProviderIds: captured.videoGenerationProviders.map(
           (provider) => provider.id,
         ),
         webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
