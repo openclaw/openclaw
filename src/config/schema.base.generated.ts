@@ -1907,6 +1907,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                         const: "ollama",
                       },
+                      {
+                        type: "string",
+                        const: "agentmemo",
+                      },
                     ],
                   },
                   remote: {
@@ -2067,6 +2071,84 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                       },
                       modelCacheDir: {
+                        type: "string",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  agentmemo: {
+                    type: "object",
+                    properties: {
+                      url: {
+                        type: "string",
+                      },
+                      apiKey: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                      namespace: {
                         type: "string",
                       },
                     },
@@ -3524,6 +3606,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                           const: "ollama",
                         },
+                        {
+                          type: "string",
+                          const: "agentmemo",
+                        },
                       ],
                     },
                     remote: {
@@ -3684,6 +3770,84 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "string",
                         },
                         modelCacheDir: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    agentmemo: {
+                      type: "object",
+                      properties: {
+                        url: {
+                          type: "string",
+                        },
+                        apiKey: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                        namespace: {
                           type: "string",
                         },
                       },
@@ -16124,6 +16288,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "models"],
     },
+    "agents.defaults.memorySearch.agentmemo.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth"],
+    },
     "agents.defaults.sandbox.ssh.identityData": {
       sensitive: true,
       tags: ["security", "storage"],
@@ -16137,6 +16305,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "storage"],
     },
     "agents.list[].memorySearch.remote.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth"],
+    },
+    "agents.list[].memorySearch.agentmemo.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
     },

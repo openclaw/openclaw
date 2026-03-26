@@ -1,4 +1,4 @@
-{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5631}
+{"generatedBy":"scripts/generate-config-doc-baseline.ts","recordType":"meta","totalPaths":5645}
 {"recordType":"path","path":"acp","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"ACP","help":"ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents","kind":"core","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":["access"],"label":"ACP Allowed Agents","help":"Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.","hasChildren":true}
 {"recordType":"path","path":"acp.allowedAgents.*","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -162,6 +162,13 @@
 {"recordType":"path","path":"agents.defaults.maxConcurrent","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.mediaMaxMb","kind":"core","type":"number","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.memorySearch","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["advanced"],"label":"Memory Search","help":"Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).","hasChildren":true}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.apiKey","kind":"core","type":["object","string"],"required":false,"deprecated":false,"sensitive":true,"tags":["auth","security"],"hasChildren":true}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.apiKey.id","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.apiKey.provider","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.apiKey.source","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.namespace","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.defaults.memorySearch.agentmemo.url","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.defaults.memorySearch.cache","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.defaults.memorySearch.cache.enabled","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":["storage"],"label":"Memory Search Embedding Cache","help":"Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.","hasChildren":false}
 {"recordType":"path","path":"agents.defaults.memorySearch.cache.maxEntries","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":["performance","storage"],"label":"Memory Search Embedding Cache Max Entries","help":"Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.","hasChildren":false}
@@ -388,6 +395,13 @@
 {"recordType":"path","path":"agents.list.*.identity.name","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.identity.theme","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.memorySearch","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.apiKey","kind":"core","type":["object","string"],"required":false,"deprecated":false,"sensitive":true,"tags":["auth","security"],"hasChildren":true}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.apiKey.id","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.apiKey.provider","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.apiKey.source","kind":"core","type":"string","required":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.namespace","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"agents.list.*.memorySearch.agentmemo.url","kind":"core","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.memorySearch.cache","kind":"core","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"agents.list.*.memorySearch.cache.enabled","kind":"core","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"agents.list.*.memorySearch.cache.maxEntries","kind":"core","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}

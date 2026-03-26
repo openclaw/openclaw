@@ -151,7 +151,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return await createEmbeddingProvider({
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
-      provider: params.settings.provider,
+      // agentmemo is handled upstream in search-manager.ts; this path is never
+      // reached for that provider, but the union type still includes it.
+      provider: params.settings.provider as EmbeddingProviderRequest,
       remote: params.settings.remote,
       model: params.settings.model,
       outputDimensionality: params.settings.outputDimensionality,
@@ -234,7 +236,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
     this.provider = null;
-    this.requestedProvider = params.settings.provider;
+    this.requestedProvider = params.settings.provider as EmbeddingProviderRequest;
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }

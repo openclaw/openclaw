@@ -17,7 +17,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
-  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama" | "agentmemo" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -39,6 +39,11 @@ export type ResolvedMemorySearchConfig = {
   local: {
     modelPath?: string;
     modelCacheDir?: string;
+  };
+  agentmemo?: {
+    url?: string;
+    apiKey?: SecretInput;
+    namespace?: string;
   };
   store: {
     driver: "sqlite";
@@ -207,6 +212,16 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
+  const defaultAgentmemo = defaults?.agentmemo;
+  const overrideAgentmemo = overrides?.agentmemo;
+  const agentmemo =
+    provider === "agentmemo"
+      ? {
+          url: overrideAgentmemo?.url ?? defaultAgentmemo?.url,
+          apiKey: overrideAgentmemo?.apiKey ?? defaultAgentmemo?.apiKey,
+          namespace: overrideAgentmemo?.namespace ?? defaultAgentmemo?.namespace,
+        }
+      : undefined;
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
@@ -335,6 +350,7 @@ function mergeConfig(
     model,
     outputDimensionality,
     local,
+    agentmemo,
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
     sync: {

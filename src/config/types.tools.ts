@@ -341,7 +341,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "agentmemo";
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -374,6 +374,15 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+  };
+  /** agentMemo provider settings. */
+  agentmemo?: {
+    /** Base URL of the agentMemo service. */
+    url?: string;
+    /** Bearer token / API key. */
+    apiKey?: SecretInput;
+    /** Namespace to scope memories. */
+    namespace?: string;
   };
   /** Index storage configuration. */
   store?: {

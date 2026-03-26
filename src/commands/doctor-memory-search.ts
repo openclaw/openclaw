@@ -79,6 +79,10 @@ export async function noteMemorySearchHealth(
       );
       return;
     }
+    // agentmemo uses its own config block; skip remote API key checks.
+    if (resolved.provider === "agentmemo") {
+      return;
+    }
     // Remote provider — check for API key
     if (hasRemoteApiKey || (await hasApiKeyForProvider(resolved.provider, cfg, agentDir))) {
       return;

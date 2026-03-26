@@ -1,4 +1,6 @@
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
@@ -43,6 +45,23 @@ export async function getMemorySearchManager(params: {
   agentId: string;
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
+  const memorySearch = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (memorySearch?.provider === "agentmemo") {
+    try {
+      const { createAgentMemoSearchManager } = await import("./providers/agentmemo.js");
+      const apiKey = normalizeSecretInputString(memorySearch.agentmemo?.apiKey);
+      const manager = createAgentMemoSearchManager({
+        url: memorySearch.agentmemo?.url,
+        apiKey,
+        namespace: memorySearch.agentmemo?.namespace,
+      });
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { manager: null, error: message };
+    }
+  }
+
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
