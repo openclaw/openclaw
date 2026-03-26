@@ -31,6 +31,9 @@ describe("validateProviderConfig", () => {
     delete process.env.TELNYX_PUBLIC_KEY;
     delete process.env.PLIVO_AUTH_ID;
     delete process.env.PLIVO_AUTH_TOKEN;
+    // Also clear realtime env vars so .env-loaded REALTIME_VOICE_ENABLED=true does
+    // not cause resolveVoiceCallConfig to enable realtime and fail inboundPolicy checks.
+    delete process.env.REALTIME_VOICE_ENABLED;
   };
 
   beforeEach(() => {
@@ -321,6 +324,26 @@ describe("resolveVoiceCallConfig — realtime env vars", () => {
     base.realtime = { enabled: false, voice: "coral", tools: [] };
     const resolved = resolveVoiceCallConfig(base);
     expect(resolved.realtime.voice).toBe("coral");
+  });
+
+  it("throws at resolve time when REALTIME_VOICE_TEMPERATURE is non-numeric", () => {
+    process.env.REALTIME_VOICE_TEMPERATURE = "abc";
+    expect(() => resolveVoiceCallConfig(createVoiceCallBaseConfig())).toThrow();
+  });
+
+  it("throws at resolve time when REALTIME_VOICE_TEMPERATURE is out of range", () => {
+    process.env.REALTIME_VOICE_TEMPERATURE = "5";
+    expect(() => resolveVoiceCallConfig(createVoiceCallBaseConfig())).toThrow();
+  });
+
+  it("throws at resolve time when VAD_THRESHOLD is non-numeric", () => {
+    process.env.VAD_THRESHOLD = "not-a-number";
+    expect(() => resolveVoiceCallConfig(createVoiceCallBaseConfig())).toThrow();
+  });
+
+  it("throws at resolve time when SILENCE_DURATION_MS is non-numeric", () => {
+    process.env.SILENCE_DURATION_MS = "bad";
+    expect(() => resolveVoiceCallConfig(createVoiceCallBaseConfig())).toThrow();
   });
 });
 

@@ -552,6 +552,11 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.realtime.silenceDurationMs = parseInt(process.env.SILENCE_DURATION_MS, 10);
   }
 
+  // Re-validate realtime sub-config so env var parsing errors (e.g. NaN from a
+  // non-numeric REALTIME_VOICE_TEMPERATURE) throw at startup instead of propagating
+  // silently into session.update at call time.
+  resolved.realtime = VoiceCallRealtimeConfigSchema.parse(resolved.realtime);
+
   return normalizeVoiceCallConfig(resolved);
 }
 
