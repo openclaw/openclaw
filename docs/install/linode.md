@@ -209,9 +209,11 @@ apt install -y s3cmd
 # Configure with your Linode Object Storage credentials
 s3cmd --configure
 
-# Create a backup and upload
-openclaw backup create --output /tmp/openclaw-backup.tar.gz
-s3cmd put /tmp/openclaw-backup.tar.gz s3://your-bucket/openclaw/$(date +%F).tar.gz
+# Create a backup with a unique filename and upload
+BACKUP="/tmp/openclaw-backup-$(date +%F).tar.gz"
+openclaw backup create --output "$BACKUP"
+s3cmd put "$BACKUP" s3://your-bucket/openclaw/
+rm "$BACKUP"
 ```
 
 Automate this with a cron job for daily offsite backups.
