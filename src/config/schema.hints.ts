@@ -113,6 +113,7 @@ const SENSITIVE_PATTERNS = [
   /password/i,
   /secret/i,
   /api.?key/i,
+  /encrypt.?key/i,
   /serviceaccount(?:ref)?$/i,
 ];
 
