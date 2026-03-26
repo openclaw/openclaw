@@ -147,6 +147,125 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(401);
   });
 
+  it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
+    const weakToken = "00000129";
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "weak-token-bruteforce-" + Date.now(),
+        token: weakToken,
+        rateLimitPerMinute: 5,
+      }),
+      deliver,
+      log,
+    });
+
+    let guessedToken: string | null = null;
+    let saw429 = false;
+
+    for (let i = 0; i < 130; i += 1) {
+      const candidate = String(i).padStart(8, "0");
+      const req = makeReq(
+        "POST",
+        makeFormBody({
+          token: candidate,
+          user_id: "123",
+          username: "testuser",
+          text: "Hello bot",
+        }),
+      );
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      const res = makeRes();
+      await handler(req, res);
+
+      if (res._status === 429) {
+        saw429 = true;
+        break;
+      }
+
+      if (res._status === 204) {
+        guessedToken = candidate;
+        break;
+      }
+
+      expect(res._status).toBe(401);
+    }
+
+    expect(saw429).toBe(true);
+    expect(guessedToken).toBeNull();
+    const lockedReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: weakToken,
+        user_id: "123",
+        username: "testuser",
+        text: "Hello bot",
+      }),
+    );
+    (lockedReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const lockedRes = makeRes();
+    await handler(lockedReq, lockedRes);
+
+    expect(lockedRes._status).toBe(429);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps pre-auth throttling scoped to the remote IP", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "preauth-ip-scope-" + Date.now(),
+        rateLimitPerMinute: 1,
+      }),
+      deliver,
+      log,
+    });
+
+    const invalidReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: "wrong-token",
+        user_id: "123",
+        username: "testuser",
+        text: "Hello",
+      }),
+    );
+    (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const invalidRes = makeRes();
+    await handler(invalidReq, invalidRes);
+    expect(invalidRes._status).toBe(401);
+
+    const validReq = makeReq("POST", validBody);
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes._status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend invalid-token budget on successful requests", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "invalid-token-budget-" + Date.now(),
+        rateLimitPerMinute: 30,
+      }),
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 11; i += 1) {
+      const req = makeReq("POST", validBody);
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.20";
+      const res = makeRes();
+      await handler(req, res);
+      expect(res._status).toBe(204);
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(11);
+  });
+
   it("accepts application/json with alias fields", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({
