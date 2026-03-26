@@ -1,0 +1,33 @@
+{
+  "id": "observability-aop",
+  "name": "AOP Observability Bridge",
+  "description": "Bridges upstream plugin hooks and diagnostic events to the AOP Server for fleet-wide observability",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "aopServerUrl": {
+        "type": "string",
+        "description": "AOP Server URL (default: http://100.69.32.10:3010)"
+      },
+      "nodeName": {
+        "type": "string",
+        "description": "This node's fleet ID for event attribution"
+      },
+      "batchSize": {
+        "type": "number",
+        "description": "Events to buffer before flushing (default: 10)"
+      },
+      "flushIntervalMs": {
+        "type": "number",
+        "description": "Max time between flushes in ms (default: 5000)"
+      }
+    }
+  },
+  "uiHints": {
+    "aopServerUrl": {
+      "label": "AOP Server URL",
+      "help": "HTTP endpoint for the AOP event ingestion server"
+    }
+  }
+}

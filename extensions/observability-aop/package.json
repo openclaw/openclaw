@@ -1,0 +1,10 @@
+{
+  "name": "@openclaw/observability-aop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AOP observability bridge — forwards plugin hooks and diagnostic events to AOP Server",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
