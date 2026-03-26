@@ -233,15 +233,12 @@ export function wrapStreamFnWithReActFallback(
     }
 
     let shouldApplyFallback = false;
-    if (config.toolFallback === "react") {
+    const effectiveFallback = config.toolFallback ?? "auto";
+
+    if (effectiveFallback === "react") {
       shouldApplyFallback = true;
-    } else if (config.toolFallback === "auto") {
+    } else if (effectiveFallback === "auto") {
       if (currentStatus === "react" || (isLocal && capabilities.toolFormat === "none")) {
-        shouldApplyFallback = true;
-      }
-    } else if (config.toolFallback !== "none") {
-      // Internal override if we definitely know it's a react model
-      if (currentStatus === "react") {
         shouldApplyFallback = true;
       }
     }

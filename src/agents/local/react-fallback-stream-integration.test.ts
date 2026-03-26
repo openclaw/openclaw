@@ -340,4 +340,37 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
     expect(textPart).toContain('You should not just write Action: {"tool": "fake", "args": {}}');
     expect(textPart).not.toContain('Action: {"tool": "real_tool"');
   });
+
+  it("should default to 'auto' when toolFallback is undefined and use heuristics", async () => {
+    // phi-2 is known to have no native tools according to discovery.ts
+    const nativeStreamFn = createMockNativeStreamFn('Action: {"tool": "phi_tool", "args": {}}');
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId: "phi-2",
+      providerId: "phi-2",
+      providerType: "ollama",
+      // toolFallback: undefined // Default
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line no-explicit-any
+      { id: "phi-2", api: "test", provider: "ollama" } as unknown as any,
+      // eslint-disable-next-line no-explicit-any
+      { tools: [{ name: "phi_tool", description: "testing" }] } as unknown as any,
+      {},
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const chunk of stream) {
+      events.push(chunk as Record<string, unknown>);
+    }
+
+    const doneEvent = events[0];
+    const message = doneEvent.message as Record<string, unknown>;
+    const content = message.content as Array<Record<string, unknown>>;
+
+    const toolCalls = content.filter((p) => p.type === "toolCall");
+    // Should trigger fallback because of heuristic
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].name).toBe("phi_tool");
+  });
 });
