@@ -1131,7 +1131,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (onEarlyGatewayDebug) {
       earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
     }
-    gatewaySupervisor?.dispose();
+    // Defer disposal so that any late "Max reconnect attempts" error emitted
+    // asynchronously by the Discord gateway after disconnect() is still caught
+    // by the supervisor's error listener (in "teardown" phase) instead of
+    // becoming an uncaught EventEmitter error that crashes the process.
+    // See: https://github.com/openclaw/openclaw/issues/54931
+    if (gatewaySupervisor) {
+      setTimeout(() => gatewaySupervisor.dispose(), 5_000);
+    }
     if (!lifecycleStarted) {
       threadBindings.stop();
     }

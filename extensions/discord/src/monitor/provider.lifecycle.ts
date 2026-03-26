@@ -402,7 +402,14 @@ export async function runDiscordGatewayLifecycle(params: {
       },
     });
   } catch (err) {
-    if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
+    // When the lifecycle is stopping intentionally (abort signal), the
+    // "Max reconnect attempts" error from the Discord gateway is expected
+    // and should not propagate.  Rethrowing it causes an uncaught exception
+    // crash loop when the health-monitor restarts a stale channel.
+    // See: https://github.com/openclaw/openclaw/issues/54931
+    const isIntentionalShutdownError =
+      lifecycleStopping && String(err).includes("Max reconnect attempts");
+    if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err) && !isIntentionalShutdownError) {
       throw err;
     }
   } finally {
