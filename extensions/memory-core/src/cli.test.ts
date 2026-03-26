@@ -20,8 +20,8 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
-vi.mock("openclaw/plugin-sdk/memory-core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/memory-core")>();
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
   return {
     ...actual,
     getMemorySearchManager,
@@ -32,13 +32,13 @@ vi.mock("openclaw/plugin-sdk/memory-core", async (importOriginal) => {
 });
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
-let defaultRuntime: typeof import("openclaw/plugin-sdk/memory-core").defaultRuntime;
-let isVerbose: typeof import("openclaw/plugin-sdk/memory-core").isVerbose;
-let setVerbose: typeof import("openclaw/plugin-sdk/memory-core").setVerbose;
+let defaultRuntime: typeof import("./api.js").defaultRuntime;
+let isVerbose: typeof import("./api.js").isVerbose;
+let setVerbose: typeof import("./api.js").setVerbose;
 
 beforeAll(async () => {
   ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } = await import("openclaw/plugin-sdk/memory-core"));
+  ({ defaultRuntime, isVerbose, setVerbose } = await import("./api.js"));
 });
 
 beforeEach(() => {

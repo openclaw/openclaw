@@ -95,6 +95,7 @@
   "matrix",
   "mattermost",
   "memory-core",
+  "memory-core-host",
   "memory-lancedb",
   "msteams",
   "nextcloud-talk",
