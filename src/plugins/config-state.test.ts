@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -185,6 +186,47 @@ describe("resolveEffectiveEnableState", () => {
       },
     });
     expect(state).toEqual({ enabled: false, reason: "disabled in config" });
+  });
+
+  it("allows bundled channels when plugins.allow is non-empty but the channel is enabled via channel config", () => {
+    const state = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "bundled",
+      config: normalizePluginsConfig({
+        allow: ["acpx"],
+      }),
+      rootConfig: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    });
+    expect(state).toEqual({ enabled: true });
+  });
+
+  it("does NOT allow a workspace plugin with a channel ID to bypass the allowlist", () => {
+    const rootConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        allow: ["acpx"],
+      },
+    };
+
+    const result = resolveEffectiveEnableState({
+      id: "telegram",
+      origin: "workspace",
+      config: normalizePluginsConfig(rootConfig.plugins),
+      rootConfig: rootConfig as OpenClawConfig,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.reason).toBe("workspace plugin (disabled by default)");
   });
 });
 
