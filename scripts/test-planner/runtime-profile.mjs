@@ -102,6 +102,7 @@ const LOCAL_MEMORY_BUDGETS = {
     heavyLaneCount: 3,
     memoryHeavyFileLimit: 8,
     unitFastBatchTargetMs: 10_000,
+    channelsBatchTargetMs: 0,
   },
   moderate: {
     vitestCap: 3,
@@ -117,6 +118,7 @@ const LOCAL_MEMORY_BUDGETS = {
     heavyLaneCount: 4,
     memoryHeavyFileLimit: 12,
     unitFastBatchTargetMs: 15_000,
+    channelsBatchTargetMs: 0,
   },
   mid: {
     vitestCap: 4,
@@ -132,6 +134,7 @@ const LOCAL_MEMORY_BUDGETS = {
     heavyLaneCount: 4,
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 0,
+    channelsBatchTargetMs: 0,
   },
   high: {
     vitestCap: 6,
@@ -140,13 +143,14 @@ const LOCAL_MEMORY_BUDGETS = {
     unitHeavy: 2,
     extensions: 4,
     gateway: 3,
-    topLevelNoIsolate: 12,
+    topLevelNoIsolate: 14,
     topLevelIsolated: 4,
-    deferred: 3,
+    deferred: 8,
     heavyFileLimit: 80,
     heavyLaneCount: 5,
     memoryHeavyFileLimit: 16,
     unitFastBatchTargetMs: 45_000,
+    channelsBatchTargetMs: 30_000,
   },
 };
 
@@ -296,8 +300,8 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     memoryHeavyUnitFileLimit: bandBudget.memoryHeavyFileLimit,
     unitFastLaneCount: 1,
     unitFastBatchTargetMs: bandBudget.unitFastBatchTargetMs,
-    channelsBatchTargetMs: 0,
-    extensionsBatchTargetMs: 0,
+    channelsBatchTargetMs: bandBudget.channelsBatchTargetMs ?? 0,
+    extensionsBatchTargetMs: 240_000,
   };
 
   const loadAdjustedBudget = {
