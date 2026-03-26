@@ -130,6 +130,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(runId);
     for (const prunedRunId of pruneRunMap(finalizedRuns)) {
       terminalRunStatus.delete(prunedRunId);
+      toolCallsByRun.delete(prunedRunId);
     }
   };
 

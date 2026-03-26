@@ -695,4 +695,58 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(Array.from(toolIds as Iterable<string>)).toEqual(["tool-cleanup-1"]);
     expect(opts).toEqual({ isError: false });
   });
+
+  it("drops pruned late-tool bookkeeping before a run id is reused", () => {
+    const { state, chatLog, handleChatEvent, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-reused",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    handleAgentEvent({
+      runId: "run-reused",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-old", name: "exec" },
+    });
+
+    for (let index = 0; index < 201; index += 1) {
+      handleChatEvent({
+        runId: `run-${index}`,
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: `done ${index}` }] },
+      });
+    }
+
+    chatLog.settlePendingTools.mockClear();
+
+    handleChatEvent({
+      runId: "run-reused",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello again" },
+    });
+
+    handleAgentEvent({
+      runId: "run-reused",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-new", name: "exec" },
+    });
+
+    handleChatEvent({
+      runId: "run-reused",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done again" }] },
+    });
+
+    const [toolIds, opts] = chatLog.settlePendingTools.mock.calls.at(-1) ?? [];
+    expect(Array.from(toolIds as Iterable<string>)).toEqual(["tool-new"]);
+    expect(opts).toEqual({ isError: false });
+  });
 });
