@@ -12,6 +12,7 @@ import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js"
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
+import { sanitizeForPromptLiteral } from "./prompt-sanitization.js";
 
 function extractGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = (raw ?? "").trim();
@@ -150,8 +151,8 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
  * directly instead of using the message tool.
  */
 export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): string {
-  const subject = params.sessionCtx.GroupSubject?.trim();
-  const members = params.sessionCtx.GroupMembers?.trim();
+  const subject = sanitizeForPromptLiteral(params.sessionCtx.GroupSubject);
+  const members = sanitizeForPromptLiteral(params.sessionCtx.GroupMembers);
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
 
   const lines: string[] = [];

@@ -1,4 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { sanitizeForPromptLiteral } from "../auto-reply/reply/prompt-sanitization.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
@@ -1207,7 +1208,7 @@ export function buildSubagentSystemPrompt(params: {
   lines.push(
     "## Session Context",
     ...[
-      params.label ? `- Label: ${params.label}` : undefined,
+      params.label ? `- Label: ${sanitizeForPromptLiteral(params.label)}` : undefined,
       params.requesterSessionKey
         ? `- Requester session: ${params.requesterSessionKey}.`
         : undefined,
