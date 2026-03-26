@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/profile-capabilities.js";
+export * from "../compat/browser/profile-capabilities.js";

@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/pw-tools-core.test-harness.js";
+export * from "../compat/browser/pw-tools-core.test-harness.js";

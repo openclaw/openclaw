@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/pw-ai.js";
+export * from "../compat/browser/pw-ai.js";

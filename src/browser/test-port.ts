@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/test-port.js";
+export * from "../compat/browser/test-port.js";

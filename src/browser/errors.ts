@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/errors.js";
+export * from "../compat/browser/errors.js";

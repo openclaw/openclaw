@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/screenshot.js";
+export * from "../compat/browser/screenshot.js";

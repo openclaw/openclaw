@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/test-fetch.js";
+export * from "../compat/browser/test-fetch.js";

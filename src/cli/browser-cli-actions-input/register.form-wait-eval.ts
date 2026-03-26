@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/cli/browser-cli-actions-input/register.form-wait-eval.js";
+export * from "../../compat/browser/cli/browser-cli-actions-input/register.form-wait-eval.js";

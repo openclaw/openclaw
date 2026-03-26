@@ -300,7 +300,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
   },
   {
     dirName: "browser",
-    idHint: "browser-plugin",
+    idHint: "browser",
     source: {
       source: "./index.ts",
       built: "index.js",

@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser-tool.js";
+export * from "../../compat/browser/tools/browser-tool.js";

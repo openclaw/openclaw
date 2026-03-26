@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/trash.js";
+export * from "../compat/browser/trash.js";

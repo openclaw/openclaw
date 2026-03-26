@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/pw-session.mock-setup.js";
+export * from "../compat/browser/pw-session.mock-setup.js";

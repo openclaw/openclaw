@@ -94,7 +94,6 @@ export {
   selectDefaultNodeFromList,
   safeParseJson,
   shortenHomePath,
-  startBrowserControlServerIfEnabled,
   stringEnum,
   theme,
   withTimeout,

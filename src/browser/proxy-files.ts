@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/proxy-files.js";
+export * from "../compat/browser/proxy-files.js";

@@ -23,8 +23,11 @@ export {
 } from "../media/image-ops.js";
 export { ensureMediaDir, saveMediaBuffer } from "../media/store.js";
 export { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+export {
+  startLazyPluginServiceModule,
+  type LazyPluginServiceHandle,
+} from "../plugins/lazy-service-module.js";
 export type { OpenClawPluginService } from "../plugins/types.js";
-export { startBrowserControlServerIfEnabled } from "../gateway/server-browser.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 export { isLoopbackHost } from "../gateway/net.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
