@@ -291,13 +291,14 @@ async function emitToolResultOutput(params: {
 
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
-    if (outputText) {
+    if (outputText && ctx.params.onToolResult) {
       ctx.emitToolOutput(toolName, meta, outputText, result);
       // In verbose/full mode, emitToolOutput handles media delivery.
       // Do not also queue pending media to avoid duplicate sends.
       return;
     }
-    // Fall through to media-only handling when the tool result has no text.
+    // Fall through to media-only handling when the tool result has no text,
+    // or when tool output callbacks are not wired.
   }
 
   if (isToolError) {

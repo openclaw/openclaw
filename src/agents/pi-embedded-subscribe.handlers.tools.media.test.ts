@@ -8,9 +8,10 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
-  onToolResult?: ReturnType<typeof vi.fn>;
+  onToolResult?: ReturnType<typeof vi.fn> | undefined;
 }): EmbeddedPiSubscribeContext {
-  const onToolResult = overrides?.onToolResult ?? vi.fn();
+  const hasOnToolResult = Object.prototype.hasOwnProperty.call(overrides ?? {}, "onToolResult");
+  const onToolResult = hasOnToolResult ? overrides?.onToolResult : vi.fn();
   return {
     params: {
       runId: "test-run",
@@ -224,6 +225,30 @@ describe("handleToolExecutionEnd media emission", () => {
       isError: false,
       result: {
         content: [],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
+
+  it("queues structured media when verbose is full but onToolResult is missing", async () => {
+    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: undefined });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated audio reply." }],
         details: {
           media: {
             mediaUrl: "/tmp/reply.opus",
