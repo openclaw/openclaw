@@ -67,6 +67,41 @@ describe("refreshModelCatalog", () => {
     expect(state.chatModelCatalog).toEqual([{ id: "gpt-5", name: "GPT-5", provider: "openai" }]);
   });
 
+  it("clears the catalog on refresh failure when requested", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("offline"));
+    const state = createState(request, {
+      chatModelCatalog: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
+    });
+
+    await refreshModelCatalog(state, { clearOnError: true });
+
+    expect(state.chatModelsLoading).toBe(false);
+    expect(state.chatModelCatalog).toEqual([]);
+  });
+
+  it("upgrades an in-flight refresh to clear on error when a concurrent caller requests it", async () => {
+    const deferred = createDeferred<{
+      models: Array<{ id: string; name: string; provider: string }>;
+    }>();
+    const request = vi.fn().mockReturnValue(deferred.promise);
+    const state = createState(request, {
+      chatModelCatalog: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
+    });
+
+    const first = refreshModelCatalog(state);
+    const second = refreshModelCatalog(state, { clearOnError: true });
+
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(1);
+
+    deferred.reject(new Error("offline"));
+    await first;
+    await second;
+
+    expect(state.chatModelsLoading).toBe(false);
+    expect(state.chatModelCatalog).toEqual([]);
+  });
+
   it("awaits the existing in-flight refresh instead of returning early", async () => {
     const deferred = createDeferred<{
       models: Array<{ id: string; name: string; provider: string }>;
@@ -93,6 +128,45 @@ describe("refreshModelCatalog", () => {
     expect(secondResolved).toBe(true);
     expect(state.chatModelCatalog).toEqual([
       { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+    ]);
+  });
+
+  it("starts a new refresh when the client changes and ignores stale results", async () => {
+    const deferredA = createDeferred<{
+      models: Array<{ id: string; name: string; provider: string }>;
+    }>();
+    const deferredB = createDeferred<{
+      models: Array<{ id: string; name: string; provider: string }>;
+    }>();
+    const requestA = vi.fn().mockReturnValue(deferredA.promise);
+    const requestB = vi.fn().mockReturnValue(deferredB.promise);
+    const clientA = { request: requestA } as never;
+    const clientB = { request: requestB } as never;
+    const state = createState(requestA, { client: clientA });
+
+    const first = refreshModelCatalog(state);
+    await Promise.resolve();
+    expect(requestA).toHaveBeenCalledTimes(1);
+
+    state.client = clientB;
+    const second = refreshModelCatalog(state);
+    await Promise.resolve();
+
+    expect(requestA).toHaveBeenCalledTimes(1);
+    expect(requestB).toHaveBeenCalledTimes(1);
+
+    deferredA.resolve({
+      models: [{ id: "gpt-old", name: "GPT Old", provider: "openai" }],
+    });
+    await first;
+    expect(state.chatModelCatalog).toEqual([]);
+
+    deferredB.resolve({
+      models: [{ id: "gpt-new", name: "GPT New", provider: "openai" }],
+    });
+    await second;
+    expect(state.chatModelCatalog).toEqual([
+      { id: "gpt-new", name: "GPT New", provider: "openai" },
     ]);
   });
 });

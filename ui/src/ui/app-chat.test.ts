@@ -12,11 +12,12 @@ vi.mock("./app-settings.ts", () => ({
 }));
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 
 async function loadChatHelpers(): Promise<void> {
   vi.resetModules();
-  ({ handleSendChat, refreshChatAvatar } = await import("./app-chat.ts"));
+  ({ handleSendChat, refreshChat, refreshChatAvatar } = await import("./app-chat.ts"));
 }
 
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
@@ -155,6 +156,52 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+});
+
+describe("refreshChat", () => {
+  beforeEach(async () => {
+    await loadChatHelpers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("clears stale chat models when the model refresh fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        throw new Error("offline");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatModelCatalog: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }],
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(host.chatModelCatalog).toEqual([]);
   });
 });
 

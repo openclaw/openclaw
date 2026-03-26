@@ -373,7 +373,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
 }
 
 async function refreshChatModels(host: ChatHost) {
-  await refreshModelCatalog(host);
+  await refreshModelCatalog(host, { clearOnError: true });
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

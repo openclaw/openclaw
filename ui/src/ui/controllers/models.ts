@@ -8,7 +8,17 @@ export type ModelCatalogState = {
   chatModelCatalog: ModelCatalogEntry[];
 };
 
-const modelCatalogRefreshes = new WeakMap<ModelCatalogState, Promise<void>>();
+type ModelCatalogRefreshEntry = {
+  client: GatewayBrowserClient;
+  clearOnError: boolean;
+  promise: Promise<void>;
+};
+
+type RefreshModelCatalogOptions = {
+  clearOnError?: boolean;
+};
+
+const modelCatalogRefreshes = new WeakMap<ModelCatalogState, ModelCatalogRefreshEntry>();
 
 async function requestModels(client: GatewayBrowserClient): Promise<ModelCatalogEntry[]> {
   const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {});
@@ -30,7 +40,10 @@ export async function loadModels(client: GatewayBrowserClient): Promise<ModelCat
   }
 }
 
-export async function refreshModelCatalog(state: ModelCatalogState): Promise<void> {
+export async function refreshModelCatalog(
+  state: ModelCatalogState,
+  opts: RefreshModelCatalogOptions = {},
+): Promise<void> {
   const client = state.client;
   if (!client || !state.connected) {
     state.chatModelsLoading = false;
@@ -38,22 +51,38 @@ export async function refreshModelCatalog(state: ModelCatalogState): Promise<voi
     return;
   }
   const inFlight = modelCatalogRefreshes.get(state);
-  if (inFlight) {
-    return inFlight;
+  if (inFlight?.client === client) {
+    if (opts.clearOnError) {
+      inFlight.clearOnError = true;
+    }
+    return inFlight.promise;
   }
   state.chatModelsLoading = true;
-  const request = (async () => {
+  const entry: ModelCatalogRefreshEntry = {
+    client,
+    clearOnError: Boolean(opts.clearOnError),
+    promise: Promise.resolve(),
+  };
+  entry.promise = (async () => {
     try {
-      state.chatModelCatalog = await requestModels(client);
+      const models = await requestModels(client);
+      if (state.client === client) {
+        state.chatModelCatalog = models;
+      }
     } catch {
-      // Keep the last known catalog so model pickers do not flash into a partial state.
+      if (entry.clearOnError && state.client === client) {
+        state.chatModelCatalog = [];
+      }
     } finally {
-      state.chatModelsLoading = false;
-      modelCatalogRefreshes.delete(state);
+      const current = modelCatalogRefreshes.get(state);
+      if (current === entry) {
+        state.chatModelsLoading = false;
+        modelCatalogRefreshes.delete(state);
+      }
     }
   })();
-  modelCatalogRefreshes.set(state, request);
-  return request;
+  modelCatalogRefreshes.set(state, entry);
+  return entry.promise;
 }
 
 export function ensureModelCatalog(state: ModelCatalogState): Promise<void> | undefined {
