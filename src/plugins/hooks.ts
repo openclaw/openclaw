@@ -983,24 +983,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_response_emit",
       event,
       ctx,
-      (acc, next) => ({
-        // content and allContent are mutually exclusive — first-writer-wins.
-        // If a higher-priority handler set either, it wins.
-        content:
-          acc?.content !== undefined
-            ? acc.content
-            : acc?.allContent !== undefined
-              ? undefined
-              : next.content,
-        allContent:
-          acc?.allContent !== undefined
-            ? acc.allContent
-            : acc?.content !== undefined
-              ? undefined
-              : next.allContent,
-        block: next.block || acc?.block,
-        blockReason: acc?.blockReason ?? next.blockReason,
-      }),
+      {
+        mergeResults: (acc, next) => ({
+          // content and allContent are mutually exclusive — first-writer-wins.
+          // If a higher-priority handler set either, it wins.
+          content:
+            acc?.content !== undefined
+              ? acc.content
+              : acc?.allContent !== undefined
+                ? undefined
+                : next.content,
+          allContent:
+            acc?.allContent !== undefined
+              ? acc.allContent
+              : acc?.content !== undefined
+                ? undefined
+                : next.allContent,
+          block: next.block || acc?.block,
+          blockReason: acc?.blockReason ?? next.blockReason,
+        }),
+      },
     );
   }
 
