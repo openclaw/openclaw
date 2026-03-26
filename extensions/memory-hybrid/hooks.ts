@@ -15,6 +15,7 @@ import type { DreamService } from "./dream.js";
 import type { Embeddings } from "./embeddings.js";
 import type { GraphDB } from "./graph.js";
 import { extractGraphFromBatch } from "./graph.js";
+import { TaskPriority } from "./limiter.js";
 import { MemoryQueue } from "./queue.js";
 import { hybridScore, getGraphEnrichment } from "./recall.js";
 import { validateMemoryInput } from "./security.js";
@@ -216,19 +217,26 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
             const result =
               isTrivial || !validation.isValid
                 ? { shouldStore: false as const, facts: [] }
-                : await smartCapture(lastUserMsg, lastAssistantMsg || undefined, chatModel);
+                : await smartCapture(
+                    lastUserMsg,
+                    lastAssistantMsg || undefined,
+                    chatModel,
+                    TaskPriority.NORMAL,
+                  );
 
             if (result.shouldStore && result.facts.length > 0) {
               const factsToProcess = result.facts.slice(0, 5);
               const vectors = await embeddings.embedBatch(factsToProcess.map((f) => f.text));
 
               let stored = 0;
+              const storedFacts: string[] = [];
               for (let i = 0; i < factsToProcess.length; i++) {
                 const fact = factsToProcess[i];
                 const vector = vectors[i];
 
                 try {
                   let skipStore = false;
+                  let toDeleteId: string | undefined;
                   if (fact.isCorrection) {
                     const broadExisting = await db.search(vector, 3, 0.6);
                     if (broadExisting.length > 0) {
@@ -238,10 +246,7 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
                         fact.text,
                       );
                       if (analysis.action === "update") {
-                        await db.delete(topMatch.entry.id);
-                        api.logger.info(
-                          `memory-hybrid: [Correction] auto-deleted old memory ${topMatch.entry.id} (replaced by new fact)`,
-                        );
+                        toDeleteId = topMatch.entry.id;
                       } else if (analysis.action === "ignore_new") {
                         skipStore = true;
                       }
@@ -265,8 +270,17 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
                     emotionalTone: fact.emotionalTone ?? "neutral",
                     emotionScore: fact.emotionScore ?? 0,
                   });
+
+                  // Store-Before-Delete: only delete old entry AFTER new one is safely persisted
+                  if (toDeleteId) {
+                    await db.delete(toDeleteId);
+                    api.logger.info(
+                      `memory-hybrid: [Correction] replaced old memory ${toDeleteId} with new fact`,
+                    );
+                  }
                   tracer.traceStore(fact.text, fact.category, "auto-capture");
                   stored++;
+                  storedFacts.push(fact.text);
                 } catch (err) {
                   api.logger.warn(
                     `memory-hybrid: smart-capture fact skip: ${err instanceof Error ? err.message : String(err)}`,
@@ -277,9 +291,9 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
               if (stored > 0) {
                 api.logger.info(`memory-hybrid: smart-captured ${stored} facts`);
 
-                const factTexts = factsToProcess.map((f) => f.text);
+                const factTexts = storedFacts;
                 try {
-                  const graph = await extractGraphFromBatch(factTexts, chatModel);
+                  const graph = await extractGraphFromBatch(factTexts, chatModel, TaskPriority.LOW);
                   if (graph.nodes.length > 0 || graph.edges.length > 0) {
                     await graphDB.modify(() => {
                       for (const n of graph.nodes) graphDB.addNode(n);
@@ -314,7 +328,7 @@ export function registerHooks(api: OpenClawPluginApi, deps: HookDeps) {
                 const promotion = workingMemory.add(text, importance, category);
                 if (!promotion.promoted) continue;
 
-                const vector = await embeddings.embed(text);
+                const vector = await embeddings.embed(text, TaskPriority.NORMAL);
                 const existing = await db.search(vector, 1, 0.95);
                 if (existing.length > 0) continue;
 
