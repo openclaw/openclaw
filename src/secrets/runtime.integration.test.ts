@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearConfigCache,
@@ -10,6 +10,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -17,6 +18,8 @@ import {
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
+
+vi.unmock("../version.js");
 
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 const allowInsecureTempSecretFile = process.platform === "win32";
@@ -33,45 +36,69 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot integration", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
+      "OPENCLAW_VERSION",
+    ]);
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
+    delete process.env.OPENCLAW_VERSION;
+  });
+
   afterEach(() => {
+    vi.restoreAllMocks();
+    envSnapshot.restore();
     clearSecretsRuntimeSnapshot();
     clearConfigCache();
   });
 
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
-    const prepared = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
+    await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+        OPENCLAW_VERSION: undefined,
+      },
+      async () => {
+        const prepared = await prepareSecretsRuntimeSnapshot({
+          config: asConfig({
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  models: [],
+                },
+              },
             },
-          },
-        },
-      }),
-      env: { OPENAI_API_KEY: "sk-runtime" },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            keyRef: OPENAI_ENV_KEY_REF,
-          },
-        }),
-    });
+          }),
+          env: { OPENAI_API_KEY: "sk-runtime" },
+          agentDirs: ["/tmp/openclaw-agent-main"],
+          loadAuthStore: () =>
+            loadAuthStoreWithProfiles({
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                keyRef: OPENAI_ENV_KEY_REF,
+              },
+            }),
+        });
 
-    activateSecretsRuntimeSnapshot(prepared);
+        activateSecretsRuntimeSnapshot(prepared);
 
-    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
-    expect(
-      ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
-    ).toMatchObject({
-      type: "api_key",
-      key: "sk-runtime",
-    });
+        expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
+        expect(
+          ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
+        ).toMatchObject({
+          type: "api_key",
+          key: "sk-runtime",
+        });
+      },
+    );
   });
 
   it("keeps active secrets runtime snapshots resolved after config writes", async () => {

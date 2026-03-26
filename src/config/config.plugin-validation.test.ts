@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./config.js";
+
+vi.unmock("../version.js");
 
 async function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -84,11 +86,14 @@ describe("config plugin validation", () => {
   let manifestlessClaudeBundleDir = "";
   const suiteEnv = () =>
     ({
-      ...process.env,
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: undefined,
+      VITEST: "true",
     }) satisfies NodeJS.ProcessEnv;
 
   const validateInSuite = (raw: unknown) =>
@@ -192,6 +197,11 @@ describe("config plugin validation", () => {
     });
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearPluginManifestRegistryCache();
+  });
+
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
@@ -220,11 +230,15 @@ describe("config plugin validation", () => {
       ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
           { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
         ]),
       );
+      expect(res.warnings).toContainEqual({
+        path: "plugins.allow",
+        message:
+          "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+      });
       expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:

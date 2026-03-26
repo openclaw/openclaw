@@ -133,6 +133,15 @@ export {
   discoverVercelAiGatewayModels,
   VERCEL_AI_GATEWAY_BASE_URL,
 } from "../agents/vercel-ai-gateway.js";
+export {
+  buildModelStudioDefaultModelDefinition,
+  buildModelStudioModelDefinition,
+  MODELSTUDIO_CN_BASE_URL,
+  MODELSTUDIO_DEFAULT_COST,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+  MODELSTUDIO_GLOBAL_BASE_URL,
+} from "../plugins/provider-model-definitions.js";
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
   return {

@@ -125,12 +125,11 @@ export async function createChildAdapter(params: {
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         killProcessTree(pid);
-      } else {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // ignore kill errors
-        }
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore kill errors
       }
       return;
     }

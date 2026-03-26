@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -139,42 +140,8 @@ function createDefaultProbeGatewayResult(): ProbeGatewayResult {
   };
 }
 
-async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
-  const prevValue = process.env[key];
-  process.env[key] = value;
-  try {
-    return await run();
-  } finally {
-    if (prevValue === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = prevValue;
-    }
-  }
-}
-
-const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn().mockReturnValue({ session: {} }),
-  loadSessionStore: vi.fn().mockReturnValue({
-    "+1000": createDefaultSessionStoreEntry(),
-  }),
-  resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
-  webAuthExists: vi.fn().mockResolvedValue(true),
-  getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
-  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
-  logWebSelfId: vi.fn(),
-  probeGateway: vi.fn().mockResolvedValue({
-    ...createDefaultProbeGatewayResult(),
-  }),
-  callGateway: vi.fn().mockResolvedValue({}),
-  listGatewayAgentsBasic: vi.fn().mockReturnValue({
-    defaultId: "main",
-    mainKey: "agent:main:main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Main" }],
-  }),
-  runSecurityAudit: vi.fn().mockResolvedValue({
+function createDefaultSecurityAuditResult() {
+  return {
     ts: 0,
     summary: { critical: 1, warn: 1, info: 2 },
     findings: [
@@ -204,9 +171,56 @@ const mocks = vi.hoisted(() => ({
         detail: "More FYI",
       },
     ],
+  };
+}
+
+async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  const prevValue = process.env[key];
+  process.env[key] = value;
+  try {
+    return await run();
+  } finally {
+    if (prevValue === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = prevValue;
+    }
+  }
+}
+
+const mocks = vi.hoisted(() => ({
+  hasPotentialConfiguredChannels: vi.fn(() => true),
+  loadConfig: vi.fn().mockReturnValue({ session: {} }),
+  loadSessionStore: vi.fn().mockReturnValue({
+    "+1000": createDefaultSessionStoreEntry(),
   }),
+  resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
+  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
+  webAuthExists: vi.fn().mockResolvedValue(true),
+  getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
+  readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
+  logWebSelfId: vi.fn(),
+  probeGateway: vi.fn().mockResolvedValue({
+    ...createDefaultProbeGatewayResult(),
+  }),
+  callGateway: vi.fn().mockResolvedValue({}),
+  listGatewayAgentsBasic: vi.fn().mockReturnValue({
+    defaultId: "main",
+    mainKey: "agent:main:main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Main" }],
+  }),
+  runSecurityAudit: vi.fn().mockResolvedValue(createDefaultSecurityAuditResult()),
   buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
+
+vi.mock("../channels/config-presence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
+  return {
+    ...actual,
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  };
+});
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -257,6 +271,13 @@ vi.mock("../config/sessions/types.js", async (importOriginal) => {
           ? entry.totalTokens
           : undefined,
     ),
+  };
+});
+vi.mock("../channels/config-presence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
+  return {
+    ...actual,
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   };
 });
 vi.mock("../channels/plugins/index.js", () => ({
@@ -371,6 +392,11 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 1234 }),
     readCommand: async () => ({
@@ -384,6 +410,11 @@ vi.mock("../daemon/node-service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
+    stage: async () => {},
+    install: async () => {},
+    uninstall: async () => {},
+    stop: async () => {},
+    restart: async () => ({ outcome: "completed" as const }),
     isLoaded: async () => true,
     readRuntime: async () => ({ status: "running", pid: 4321 }),
     readCommand: async () => ({
@@ -417,6 +448,8 @@ const runtimeLogMock = runtime.log as Mock<(...args: unknown[]) => void>;
 
 describe("statusCommand", () => {
   afterEach(() => {
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -440,51 +473,18 @@ describe("statusCommand", () => {
     });
     mocks.buildPluginCompatibilityNotices.mockReset();
     mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
+    mocks.hasPotentialConfiguredChannels.mockReset();
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
-    mocks.runSecurityAudit.mockResolvedValue({
-      ts: 0,
-      summary: { critical: 1, warn: 1, info: 2 },
-      findings: [
-        {
-          checkId: "test.critical",
-          severity: "critical",
-          title: "Test critical finding",
-          detail: "Something is very wrong\nbut on two lines",
-          remediation: "Do the thing",
-        },
-        {
-          checkId: "test.warn",
-          severity: "warn",
-          title: "Test warning finding",
-          detail: "Something is maybe wrong",
-        },
-        {
-          checkId: "test.info",
-          severity: "info",
-          title: "Test info finding",
-          detail: "FYI only",
-        },
-        {
-          checkId: "test.info2",
-          severity: "info",
-          title: "Another info finding",
-          detail: "More FYI",
-        },
-      ],
-    });
+    mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     runtimeLogMock.mockClear();
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
 
   it("prints JSON when requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
@@ -539,13 +539,7 @@ describe("statusCommand", () => {
 
   it("prints formatted lines otherwise", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [

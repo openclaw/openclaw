@@ -215,12 +215,21 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
-    buildLineMessageContextMock.mockReset().mockResolvedValue(buildDefaultLineMessageContext());
-    buildLinePostbackContextMock.mockReset().mockResolvedValue(null as unknown);
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
+    buildLineMessageContextMock.mockReset();
+    buildLineMessageContextMock.mockImplementation(async () => ({
+      ctxPayload: { From: "line:group:group-1" },
+      replyToken: "reply-token",
+      route: { agentId: "default" },
+      isGroup: true,
+      accountId: "default",
+    }));
+    buildLinePostbackContextMock.mockReset();
+    buildLinePostbackContextMock.mockImplementation(async () => null as unknown);
+    readAllowFromStoreMock.mockReset();
+    readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
+    upsertPairingRequestMock.mockReset();
+    upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
   });
-
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
     const event = {

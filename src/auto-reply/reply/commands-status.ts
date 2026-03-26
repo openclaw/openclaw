@@ -5,7 +5,11 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
+import {
+  countPendingDescendantRuns,
+  getLatestSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
+} from "../../agents/subagent-registry.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -27,7 +31,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
-import { resolveSubagentLabel } from "./subagents-utils.js";
+import { resolveSubagentLabel, sortSubagentRuns } from "./subagents-utils.js";
 
 // Some usage endpoints only work with CLI/session OAuth tokens, not API keys.
 // Skip those probes when the active auth mode cannot satisfy the endpoint.
@@ -185,10 +189,24 @@ export async function buildStatusReply(params: {
   if (sessionKey) {
     const { mainKey, alias } = resolveMainSessionAlias(cfg);
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
-    const runs = listSubagentRunsForRequester(requesterKey);
+    const seenChildSessionKeys = new Set<string>();
+    const runs = sortSubagentRuns(listSubagentRunsForRequester(requesterKey)).filter((entry) => {
+      if (seenChildSessionKeys.has(entry.childSessionKey)) {
+        return false;
+      }
+      const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
+      const latestRequesterSessionKey = latest?.requesterSessionKey?.trim();
+      if (!latest || latest.runId !== entry.runId || latestRequesterSessionKey !== requesterKey) {
+        return false;
+      }
+      seenChildSessionKeys.add(entry.childSessionKey);
+      return true;
+    });
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     if (runs.length > 0) {
-      const active = runs.filter((entry) => !entry.endedAt);
+      const active = runs.filter(
+        (entry) => !entry.endedAt || countPendingDescendantRuns(entry.childSessionKey) > 0,
+      );
       const done = runs.length - active.length;
       if (verboseEnabled) {
         const labels = active
