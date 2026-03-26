@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { SessionBindingAdapter } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readJsonFileWithFallback,
@@ -8,7 +7,7 @@ import {
   unregisterSessionBindingAdapter,
   writeJsonFileAtomically,
 } from "../runtime-api.js";
-import { resolveMatrixStoragePaths } from "./client/storage.js";
+import { resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
@@ -62,16 +61,13 @@ function resolveBindingsPath(params: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 }): string {
-  const storagePaths = resolveMatrixStoragePaths({
-    homeserver: params.auth.homeserver,
-    userId: params.auth.userId,
-    accessToken: params.auth.accessToken,
+  return resolveMatrixStateFilePath({
+    auth: params.auth,
     accountId: params.accountId,
-    deviceId: params.auth.deviceId,
     env: params.env,
     stateDir: params.stateDir,
+    filename: "thread-bindings.json",
   });
-  return path.join(storagePaths.rootDir, "thread-bindings.json");
 }
 
 async function loadBindingsFromDisk(filePath: string, accountId: string) {
