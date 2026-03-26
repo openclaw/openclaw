@@ -1,1 +1,1 @@
-export * from "../../extensions/browser/src/browser/request-policy.js";
+export * from "../compat/browser/request-policy.js";
