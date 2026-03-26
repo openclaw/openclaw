@@ -129,4 +129,29 @@ describe("resolveAgentTimeoutMs", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
     expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
   });
+
+  it("uses subagent-specific timeout from config when forSubagent is true", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { runTimeoutSeconds: 600 },
+          timeoutSeconds: 48 * 60 * 60,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveAgentTimeoutSeconds(cfg, { forSubagent: true })).toBe(600);
+    expect(resolveAgentTimeoutMs({ cfg }, { forSubagent: true })).toBe(600 * 1000);
+  });
+
+  it("falls back to main agent timeout when subagent config is not set", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          timeoutSeconds: 7200,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveAgentTimeoutSeconds(cfg, { forSubagent: true })).toBe(7200);
+    expect(resolveAgentTimeoutMs({ cfg }, { forSubagent: true })).toBe(7200 * 1000);
+  });
 });

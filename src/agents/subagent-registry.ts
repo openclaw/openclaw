@@ -834,7 +834,7 @@ function resolveSubagentWaitTimeoutMs(
   cfg: ReturnType<typeof loadConfig>,
   runTimeoutSeconds?: number,
 ) {
-  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds ?? 0 });
+  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds }, { forSubagent: true });
 }
 
 function startSweeper() {
@@ -1344,7 +1344,7 @@ export function replaceSubagentRunAfterSteer(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds ?? source.runTimeoutSeconds ?? undefined;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const preserveFrozenResultFallback = params.preserveFrozenResultFallback === true;
   const sessionStartedAt = resolveSubagentSessionStartedAt(source) ?? now;
@@ -1421,7 +1421,7 @@ export function registerSubagentRun(params: {
       : archiveAfterMs
         ? now + archiveAfterMs
         : undefined;
-  const runTimeoutSeconds = params.runTimeoutSeconds ?? 0;
+  const runTimeoutSeconds = params.runTimeoutSeconds ?? undefined;
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   subagentRuns.set(params.runId, {
