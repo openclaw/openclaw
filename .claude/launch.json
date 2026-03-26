@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "OpenClaw Gateway (dev)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 18789
+    },
+    {
+      "name": "UI (Vite)",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "ui", "dev"],
+      "port": 5173
+    }
+  ]
+}
