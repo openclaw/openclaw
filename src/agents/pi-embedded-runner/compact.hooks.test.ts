@@ -95,6 +95,43 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
+async function runCompactionHooks(params: { sessionKey?: string; messageProvider?: string }) {
+  const originalMessages = sessionMessages.slice(1) as AgentMessage[];
+  const currentMessages = sessionMessages.slice(1) as AgentMessage[];
+  const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
+    originalMessages,
+    currentMessages,
+    estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
+  });
+
+  const hookState = await compactTesting.runBeforeCompactionHooks({
+    hookRunner,
+    sessionId: TEST_SESSION_ID,
+    sessionKey: params.sessionKey,
+    sessionAgentId: "main",
+    workspaceDir: TEST_WORKSPACE_DIR,
+    messageProvider: params.messageProvider,
+    metrics: beforeMetrics,
+  });
+
+  await compactTesting.runAfterCompactionHooks({
+    hookRunner,
+    sessionId: TEST_SESSION_ID,
+    sessionAgentId: "main",
+    hookSessionKey: hookState.hookSessionKey,
+    missingSessionKey: hookState.missingSessionKey,
+    workspaceDir: TEST_WORKSPACE_DIR,
+    messageProvider: params.messageProvider,
+    messageCountAfter: 1,
+    tokensAfter: 10,
+    compactedCount: 1,
+    sessionFile: TEST_SESSION_FILE,
+    summaryLength: "summary".length,
+    tokensBefore: 120,
+    firstKeptEntryId: "entry-1",
+  });
+}
+
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactEmbeddedPiSessionDirect = loaded.compactEmbeddedPiSessionDirect;
@@ -174,37 +211,9 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    const originalMessages = sessionMessages.slice(1) as AgentMessage[];
-    const currentMessages = sessionMessages.slice(1) as AgentMessage[];
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages,
-      currentMessages,
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-    const { hookSessionKey, missingSessionKey } = await compactTesting.runBeforeCompactionHooks({
-      hookRunner,
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      workspaceDir: "/tmp",
+    await runCompactionHooks({
+      sessionKey: TEST_SESSION_KEY,
       messageProvider: "telegram",
-      metrics: beforeMetrics,
-    });
-    await compactTesting.runAfterCompactionHooks({
-      hookRunner,
-      sessionId: "session-1",
-      sessionAgentId: "main",
-      hookSessionKey,
-      missingSessionKey,
-      workspaceDir: "/tmp",
-      messageProvider: "telegram",
-      messageCountAfter: 1,
-      tokensAfter: 10,
-      compactedCount: 1,
-      sessionFile: "/tmp/session.jsonl",
-      summaryLength: "summary".length,
-      tokensBefore: 120,
-      firstKeptEntryId: "entry-1",
     });
 
     expect(sessionHook("compact:before")).toMatchObject({
@@ -248,32 +257,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    const originalMessages = sessionMessages.slice(1) as AgentMessage[];
-    const currentMessages = sessionMessages.slice(1) as AgentMessage[];
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages,
-      currentMessages,
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-    const { hookSessionKey, missingSessionKey } = await compactTesting.runBeforeCompactionHooks({
-      hookRunner,
-      sessionId: "session-1",
-      sessionAgentId: "main",
-      workspaceDir: "/tmp",
-      metrics: beforeMetrics,
-    });
-    await compactTesting.runAfterCompactionHooks({
-      hookRunner,
-      sessionId: "session-1",
-      sessionAgentId: "main",
-      hookSessionKey,
-      missingSessionKey,
-      workspaceDir: "/tmp",
-      messageCountAfter: 1,
-      tokensAfter: 10,
-      compactedCount: 1,
-      sessionFile: "/tmp/session.jsonl",
-    });
+    await runCompactionHooks({});
 
     expect(sessionHook("compact:before")?.sessionKey).toBe("session-1");
     expect(sessionHook("compact:after")?.sessionKey).toBe("session-1");
