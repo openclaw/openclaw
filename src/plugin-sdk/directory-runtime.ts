@@ -14,6 +14,8 @@ export {
 export {
   applyDirectoryQueryAndLimit,
   collectNormalizedDirectoryIds,
+  createInspectedDirectoryEntriesLister,
+  createResolvedDirectoryEntriesLister,
   listDirectoryEntriesFromSources,
   listDirectoryGroupEntriesFromMapKeys,
   listDirectoryGroupEntriesFromMapKeysAndAllowFrom,
