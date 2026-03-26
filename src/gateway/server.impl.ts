@@ -743,7 +743,9 @@ export async function startGatewayServer(
   let stopGatewayUpdateCheck = () => {};
   let tailscaleCleanup: (() => Promise<void>) | null = null;
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
-  let persistentMcpManager: import("../agents/persistent-mcp-manager.js").PersistentMcpManager | null = null;
+  let persistentMcpManager:
+    | import("../agents/persistent-mcp-manager.js").PersistentMcpManager
+    | null = null;
   let skillsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   const skillsRefreshDelayMs = 30_000;
   let skillsChangeUnsub = () => {};

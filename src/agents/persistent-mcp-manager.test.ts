@@ -32,11 +32,10 @@ function makeLog() {
 /** Write a simple forever-sleep script that never exits on its own. */
 async function writeSleepServer(filePath: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(
-    filePath,
-    `#!/usr/bin/env node\nsetTimeout(() => {}, 10 * 60 * 1000);\n`,
-    { encoding: "utf-8", mode: 0o755 },
-  );
+  await fs.writeFile(filePath, `#!/usr/bin/env node\nsetTimeout(() => {}, 10 * 60 * 1000);\n`, {
+    encoding: "utf-8",
+    mode: 0o755,
+  });
 }
 
 const managers: PersistentMcpManager[] = [];
@@ -63,9 +62,7 @@ afterEach(async () => {
   // Dispose all managers created during the test (order doesn't matter).
   await Promise.allSettled(managers.splice(0).map((m) => m.dispose()));
   // Remove temp directories.
-  await Promise.all(
-    tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
 // ────────────────────────────────────────────────────────────
@@ -236,7 +233,11 @@ describe("PersistentMcpManager – stale lock handling", () => {
     const lockPath = path.join(lockDir, "probeServer.lock");
     await fs.writeFile(
       lockPath,
-      JSON.stringify({ pid: 999999999, serverName: "probeServer", createdAt: new Date().toISOString() }),
+      JSON.stringify({
+        pid: 999999999,
+        serverName: "probeServer",
+        createdAt: new Date().toISOString(),
+      }),
       "utf8",
     );
 
@@ -285,7 +286,11 @@ describe("PersistentMcpManager – stale lock handling", () => {
       const lockPath = path.join(lockDir, "probeServer.lock");
       await fs.writeFile(
         lockPath,
-        JSON.stringify({ pid: orphanPid, serverName: "probeServer", createdAt: new Date().toISOString() }),
+        JSON.stringify({
+          pid: orphanPid,
+          serverName: "probeServer",
+          createdAt: new Date().toISOString(),
+        }),
         "utf8",
       );
 
@@ -331,51 +336,54 @@ describe("PersistentMcpManager – stale lock handling", () => {
     }
   });
 
-  it.skipIf(process.platform !== "linux")("B3: PID recycled (starttime mismatch) – does not kill the new process", async () => {
-    const stateDir = await makeStateDir();
-    const serverScript = path.join(stateDir, "probe-server.mjs");
-    await writeBundleProbeMcpServer(serverScript);
+  it.skipIf(process.platform !== "linux")(
+    "B3: PID recycled (starttime mismatch) – does not kill the new process",
+    async () => {
+      const stateDir = await makeStateDir();
+      const serverScript = path.join(stateDir, "probe-server.mjs");
+      await writeBundleProbeMcpServer(serverScript);
 
-    // Write a stale lock with a real-but-unrelated pid (current test process itself)
-    // and a deliberately wrong starttime so the manager thinks it's a different process.
-    const lockDir = path.join(stateDir, "mcp");
-    await fs.mkdir(lockDir, { recursive: true });
-    const lockPath = path.join(lockDir, "probeServer.lock");
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({
-        pid: process.pid,             // real alive PID
-        starttime: 1,                 // wrong starttime → PID recycle
-        serverName: "probeServer",
-        createdAt: new Date().toISOString(),
-      }),
-      "utf8",
-    );
+      // Write a stale lock with a real-but-unrelated pid (current test process itself)
+      // and a deliberately wrong starttime so the manager thinks it's a different process.
+      const lockDir = path.join(stateDir, "mcp");
+      await fs.mkdir(lockDir, { recursive: true });
+      const lockPath = path.join(lockDir, "probeServer.lock");
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid, // real alive PID
+          starttime: 1, // wrong starttime → PID recycle
+          serverName: "probeServer",
+          createdAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
 
-    const mgr = makeManager({
-      stateDir,
-      cfg: {
-        mcp: {
-          servers: {
-            probeServer: {
-              command: "node",
-              args: [serverScript],
-              persistent: true,
+      const mgr = makeManager({
+        stateDir,
+        cfg: {
+          mcp: {
+            servers: {
+              probeServer: {
+                command: "node",
+                args: [serverScript],
+                persistent: true,
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    await mgr.ensureReady();
+      await mgr.ensureReady();
 
-    // Current process must still be alive.
-    expect(() => process.kill(process.pid, 0)).not.toThrow();
+      // Current process must still be alive.
+      expect(() => process.kill(process.pid, 0)).not.toThrow();
 
-    // New server still started fine.
-    const client = await mgr.getReadyClient("probeServer");
-    expect(client).not.toBeNull();
-  });
+      // New server still started fine.
+      const client = await mgr.getReadyClient("probeServer");
+      expect(client).not.toBeNull();
+    },
+  );
 });
 
 // ────────────────────────────────────────────────────────────

@@ -165,9 +165,7 @@ async function createPersistentConfiguredMcpProjection(params: {
   try {
     await manager.ensureReady();
   } catch {
-    logWarn(
-      "persistent-mcp: ensureReady() failed; skipping persistent projection for this run",
-    );
+    logWarn("persistent-mcp: ensureReady() failed; skipping persistent projection for this run");
     return { runtime: { tools: [], dispose: async () => {} }, ownedServerNames: new Set() };
   }
 
@@ -187,9 +185,7 @@ async function createPersistentConfiguredMcpProjection(params: {
     }
 
     if (!client) {
-      logWarn(
-        `persistent-mcp: server "${serverName}" is not ready; skipping for this run`,
-      );
+      logWarn(`persistent-mcp: server "${serverName}" is not ready; skipping for this run`);
       // Still mark as owned so transient runtime does not spawn a duplicate process.
       ownedServerNames.add(serverName);
       continue;
@@ -223,7 +219,8 @@ async function createPersistentConfiguredMcpProjection(params: {
       tools.push({
         name: tool.name,
         label: tool.title ?? tool.name,
-        description: tool.description?.trim() || `Provided by persistent MCP server "${serverName}".`,
+        description:
+          tool.description?.trim() || `Provided by persistent MCP server "${serverName}".`,
         parameters: normalizeMcpInputSchema(tool.inputSchema),
         execute: async (_toolCallId, input) => {
           const result = (await capturedClient.callTool({
