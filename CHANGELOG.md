@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- OpenAI Codex/image tools: register Codex for media understanding and route image prompts through Codex instructions so image analysis no longer fails on missing provider registration or missing `instructions`. (#54829) Thanks @neeravmakwana.
 - Telegram: deliver verbose tool summaries inside forum topic sessions again, so threaded topic chats now match DM verbose behavior. (#43236) Thanks @frankbuild.
 - Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
 - Agents/sandbox: make blocked-tool guidance glob-aware again, redact/sanitize session-specific explain hints for safer copy-paste, and avoid leaking control-character session keys in those hints. (#54684) Thanks @ngutman.
@@ -27,8 +28,10 @@ Docs: https://docs.openclaw.ai
 - Telegram/pairing: ignore self-authored DM `message` updates so bot-pinned status cards and similar service updates do not trigger bogus pairing requests or re-enter inbound dispatch. (#54530) thanks @huntharo
 - iMessage: stop leaking inline `[[reply_to:...]]` tags into delivered text by sending `reply_to` as RPC metadata and stripping stray directive tags from outbound messages. (#39512) Thanks @mvanhorn.
 - Agents/embedded replies: surface mid-turn 429 and overload failures when embedded runs end without a user-visible reply, while preserving successful media-only replies that still use legacy `mediaUrl`. (#50930) Thanks @infichen.
+- Agents/image tool: restore the generic image-runtime fallback when no provider-specific media-understanding provider is registered, so image analysis works again for providers like `openrouter` and `minimax-portal`. (#54858) Thanks @MonkeyLeeT.
 - Agents/compaction: trigger timeout recovery compaction before retrying high-context LLM timeouts so embedded runs stop repeating oversized requests. (#46417) thanks @joeykrug.
 - Microsoft Teams/config: accept the existing `welcomeCard`, `groupWelcomeCard`, `promptStarters`, and feedback/reflection keys in strict config validation so already-supported Teams runtime settings stop failing schema checks. (#54679) Thanks @gumclaw.
+- CLI/plugins: make routed commands use the same auto-enabled bundled-channel snapshot as gateway startup, so configured bundled channels like Slack load without requiring a prior config rewrite. (#54809) Thanks @neeravmakwana.
 - Agents/status: use provider-aware context window lookup for fresh Anthropic 4.6 model overrides so `/status` shows the correct 1.0m window instead of an underreported shared-cache minimum. (#54796) Thanks @neeravmakwana.
 - CLI/message send: write manual `openclaw message send` deliveries into the resolved agent session transcript again by always threading the default CLI agent through outbound mirroring. (#54187) Thanks @KevInTheCloud5617.
 - CLI/onboarding: show the Kimi Code API key option again in the Moonshot setup menu so the interactive picker includes all Kimi setup paths together. Fixes #54412 Thanks @sparkyrider
