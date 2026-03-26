@@ -306,10 +306,11 @@ describe("scripts/test-parallel lane planning", () => {
     );
 
     expect(midMemoryOutput).toContain("extensions-batch-1 filters=all maxWorkers=3");
-    expect(midMemoryOutput).toContain("extensions-batch-3 filters=all maxWorkers=3");
+    expect(midMemoryOutput).toContain("extensions-batch-2 filters=all maxWorkers=3");
+    expect(midMemoryOutput).not.toContain("extensions-batch-3");
     expect(highMemoryOutput).toContain("extensions-batch-1 filters=all maxWorkers=5");
-    expect(highMemoryOutput).toContain("extensions-batch-3 filters=all maxWorkers=5");
-    expect(highMemoryOutput).not.toContain("extensions-batch-4");
+    expect(highMemoryOutput).toContain("extensions-batch-2 filters=all maxWorkers=5");
+    expect(highMemoryOutput).not.toContain("extensions-batch-3");
   });
 
   it("starts isolated channel lanes before shared extension batches on high-memory local hosts", () => {
