@@ -325,6 +325,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    if (!query.trim()) {
+      return [];
+    }
     const base = await this.searchCore(query, opts);
     const episodic = await this.searchEpisodic(query, opts).catch((err) => {
       log.warn(`episodic search skipped: ${String(err)}`);
@@ -764,7 +767,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const store = new EpisodicStore(dbPath);
       try {
         const episode = store.getById(episodeId);
-        if (!episode) {
+        if (!episode || episode.agent_id !== this.agentId) {
           return { text: "", path: params.relPath };
         }
         const lines: string[] = [
