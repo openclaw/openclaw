@@ -11,6 +11,7 @@ import {
   handleExportSessionCommand,
   handleHelpCommand,
   handleStatusCommand,
+  handleToolsCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
 import { handleMcpCommand } from "./commands-mcp.js";
@@ -45,6 +46,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleTtsCommands,
     handleHelpCommand,
     handleCommandsListCommand,
+    handleToolsCommand,
     handleStatusCommand,
     handleAllowlistCommand,
     handleApproveCommand,

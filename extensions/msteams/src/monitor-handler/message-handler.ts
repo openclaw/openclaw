@@ -29,6 +29,12 @@ import {
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  fetchChannelMessage,
+  fetchThreadReplies,
+  formatThreadContext,
+  resolveTeamGroupId,
+} from "../graph-thread.js";
+import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
@@ -474,6 +480,29 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+
+    // Fetch thread history when the message is a reply inside a Teams channel thread.
+    // This is a best-effort enhancement; errors are logged and do not block the reply.
+    let threadContext: string | undefined;
+    if (activity.replyToId && isChannel && teamId) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        const groupId = await resolveTeamGroupId(graphToken, teamId);
+        const [parentMsg, replies] = await Promise.all([
+          fetchChannelMessage(graphToken, groupId, conversationId, activity.replyToId),
+          fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
+        ]);
+        const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
+        const formatted = formatThreadContext(allMessages, activity.id);
+        if (formatted) {
+          threadContext = formatted;
+        }
+      } catch (err) {
+        log.debug?.("failed to fetch thread history", { error: String(err) });
+        // Graceful degradation: thread history is an optional enhancement.
+      }
+    }
+
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
     const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
@@ -518,9 +547,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : undefined;
     const commandBody = text.trim();
 
+    // Prepend thread history to the agent body so the agent has full thread context.
+    const bodyForAgent = threadContext
+      ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
+      : rawBody;
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: rawBody,
+      BodyForAgent: bodyForAgent,
       InboundHistory: inboundHistory,
       RawBody: rawBody,
       CommandBody: commandBody,
@@ -587,25 +621,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // and proactive sends within the same session.
     // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
     const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
-    const effectiveCfg =
+    const configOverride =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
-            ...cfg,
             agents: {
-              ...cfg.agents,
               defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
             },
           }
-        : cfg;
+        : undefined;
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg: effectiveCfg,
+        cfg,
         ctxPayload,
         dispatcher,
         onSettled: () => markDispatchIdle(),
         replyOptions,
+        configOverride,
       });
 
       log.info("dispatch complete", { queuedFinal, counts });

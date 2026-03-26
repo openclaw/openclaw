@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -30,27 +30,6 @@ vi.mock("../secrets/resolve.js", () => ({
 }));
 
 let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
-
-async function loadFreshDashboardModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../config/config.js", () => ({
-    readConfigFileSnapshot: readConfigFileSnapshotMock,
-    resolveGatewayPort: resolveGatewayPortMock,
-  }));
-  vi.doMock("./onboard-helpers.js", () => ({
-    resolveControlUiLinks: resolveControlUiLinksMock,
-    detectBrowserOpenSupport: detectBrowserOpenSupportMock,
-    openUrl: openUrlMock,
-    formatControlUiSshHint: formatControlUiSshHintMock,
-  }));
-  vi.doMock("../infra/clipboard.js", () => ({
-    copyToClipboard: copyToClipboardMock,
-  }));
-  vi.doMock("../secrets/resolve.js", () => ({
-    resolveSecretRefValues: resolveSecretRefValuesMock,
-  }));
-  return await import("./dashboard.js");
-}
 
 const runtime = {
   log: vi.fn(),
@@ -84,7 +63,11 @@ function mockSnapshot(token: unknown = "abc") {
 }
 
 describe("dashboardCommand", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ dashboardCommand } = await import("./dashboard.js"));
+  });
+
+  beforeEach(() => {
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
     resolveGatewayPortMock.mockClear();
@@ -95,7 +78,6 @@ describe("dashboardCommand", () => {
     copyToClipboardMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
-    ({ dashboardCommand } = await loadFreshDashboardModuleForTest());
   });
 
   it("opens and copies the dashboard link by default", async () => {

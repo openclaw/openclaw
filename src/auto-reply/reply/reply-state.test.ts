@@ -21,6 +21,7 @@ import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
   shouldRunMemoryFlush,
+  shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -52,6 +53,35 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
   await seedSessionStore({ storePath, sessionKey, entry });
   return { storePath, sessionKey, sessionStore };
+}
+
+async function rotateCompactionSessionFile(params: {
+  tempPrefix: string;
+  sessionFile: (tmp: string) => string;
+  newSessionId: string;
+}) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+  tempDirs.push(tmp);
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionKey = "main";
+  const entry = {
+    sessionId: "s1",
+    sessionFile: params.sessionFile(tmp),
+    updatedAt: Date.now(),
+    compactionCount: 0,
+  } as SessionEntry;
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+  await seedSessionStore({ storePath, sessionKey, entry });
+  await incrementCompactionCount({
+    sessionEntry: entry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    newSessionId: params.newSessionId,
+  });
+  const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+  const expectedDir = await fs.realpath(tmp);
+  return { stored, sessionKey, expectedDir };
 }
 
 describe("history helpers", () => {
@@ -359,6 +389,31 @@ describe("shouldRunMemoryFlush", () => {
   });
 });
 
+describe("shouldRunPreflightCompaction", () => {
+  it("ignores stale cached totals when no projected token count is provided", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 96_000, totalTokensFresh: false },
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("triggers when a projected token count crosses the threshold", () => {
+    expect(
+      shouldRunPreflightCompaction({
+        entry: { totalTokens: 10, totalTokensFresh: false },
+        tokenCount: 93_000,
+        contextWindowTokens: 100_000,
+        reserveTokensFloor: 5_000,
+        softThresholdTokens: 2_000,
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("hasAlreadyFlushedForCurrentCompaction", () => {
   it("returns true when memoryFlushCompactionCount matches compactionCount", () => {
     expect(
@@ -446,57 +501,21 @@ describe("incrementCompactionCount", () => {
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-rotate-"));
-    tempDirs.push(tmp);
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const entry = {
-      sessionId: "s1",
-      sessionFile: path.join(tmp, "s1-topic-456.jsonl"),
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-rotate-",
+      sessionFile: (tmp) => path.join(tmp, "s1-topic-456.jsonl"),
       newSessionId: "s2",
     });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    const expectedDir = await fs.realpath(tmp);
     expect(stored[sessionKey].sessionId).toBe("s2");
     expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2-topic-456.jsonl"));
   });
 
   it("preserves fork transcript filenames when compaction rotates transcripts", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-fork-"));
-    tempDirs.push(tmp);
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const entry = {
-      sessionId: "s1",
-      sessionFile: path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-fork-",
+      sessionFile: (tmp) => path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
       newSessionId: "s2",
     });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    const expectedDir = await fs.realpath(tmp);
     expect(stored[sessionKey].sessionId).toBe("s2");
     expect(stored[sessionKey].sessionFile).toBe(
       path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
@@ -504,30 +523,11 @@ describe("incrementCompactionCount", () => {
   });
 
   it("falls back to the derived transcript path when rewritten absolute sessionFile is unsafe", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-unsafe-"));
-    tempDirs.push(tmp);
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
-    const unsafePath = path.join(tmp, "outside", "s1.jsonl");
-    const entry = {
-      sessionId: "s1",
-      sessionFile: unsafePath,
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
+    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
+      tempPrefix: "openclaw-compact-unsafe-",
+      sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
       newSessionId: "s2",
     });
-
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
-    const expectedDir = await fs.realpath(tmp);
     expect(stored[sessionKey].sessionId).toBe("s2");
     expect(stored[sessionKey].sessionFile).toBe(path.join(expectedDir, "s2.jsonl"));
   });

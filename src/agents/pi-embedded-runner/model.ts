@@ -10,6 +10,7 @@ import {
 } from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { resolveGoogleGenerativeAiTransport } from "../google-generative-ai.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { normalizeModelCompat } from "../model-compat.js";
@@ -175,10 +176,14 @@ function applyConfiguredProviderOverrides(params: {
       ? resolvedInput.filter((item) => item === "text" || item === "image")
       : (["text"] as Array<"text" | "image">);
 
-  return {
-    ...discoveredModel,
+  const resolvedTransport = resolveGoogleGenerativeAiTransport({
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+  });
+  return {
+    ...discoveredModel,
+    api: resolvedTransport.api,
+    baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
     cost: configuredModel?.cost ?? discoveredModel.cost,
@@ -207,24 +212,30 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
-    return (entry?.models ?? []).map((model) => ({
-      ...model,
-      provider: trimmed,
-      baseUrl: entry?.baseUrl,
-      api: model.api ?? entry?.api,
-      headers: (() => {
-        const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-          stripSecretRefMarkers: true,
-        });
-        if (!providerHeaders && !modelHeaders) {
-          return undefined;
-        }
-        return {
-          ...providerHeaders,
-          ...modelHeaders,
-        };
-      })(),
-    }));
+    return (entry?.models ?? []).map((model) => {
+      const transport = resolveGoogleGenerativeAiTransport({
+        api: model.api ?? entry?.api,
+        baseUrl: entry?.baseUrl,
+      });
+      return {
+        ...model,
+        provider: trimmed,
+        baseUrl: transport.baseUrl,
+        api: transport.api,
+        headers: (() => {
+          const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
+            stripSecretRefMarkers: true,
+          });
+          if (!providerHeaders && !modelHeaders) {
+            return undefined;
+          }
+          return {
+            ...providerHeaders,
+            ...modelHeaders,
+          };
+        })(),
+      };
+    });
   });
 }
 
@@ -358,6 +369,10 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
+  const fallbackTransport = resolveGoogleGenerativeAiTransport({
+    api: providerConfig?.api ?? "openai-responses",
+    baseUrl: providerConfig?.baseUrl,
+  });
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -365,9 +380,9 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: providerConfig?.api ?? "openai-responses",
+      api: fallbackTransport.api,
       provider,
-      baseUrl: providerConfig?.baseUrl,
+      baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

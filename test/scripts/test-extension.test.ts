@@ -5,6 +5,7 @@ import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
   listChangedExtensionIds,
+  partitionExtensionTestFiles,
   resolveExtensionTestPlan,
 } from "../../scripts/test-extension.mjs";
 
@@ -35,12 +36,34 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.testFiles.some((file) => file.startsWith("extensions/slack/"))).toBe(true);
   });
 
+  it("splits channel monitor files into isolated runs", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "discord", cwd: process.cwd() });
+
+    expect(plan.config).toBe("vitest.channels.config.ts");
+    expect(plan.isolatedTestFiles).toContain("extensions/discord/src/monitor/provider.test.ts");
+    expect(plan.sharedTestFiles).toContain("extensions/discord/src/channel.test.ts");
+    expect(plan.sharedTestFiles).not.toContain("extensions/discord/src/monitor/provider.test.ts");
+  });
+
   it("resolves provider extensions onto the extensions vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("firecrawl");
     expect(plan.config).toBe("vitest.extensions.config.ts");
     expect(plan.testFiles.some((file) => file.startsWith("extensions/firecrawl/"))).toBe(true);
+  });
+
+  it("applies exact isolated files for non-channel extensions", () => {
+    const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({
+      config: "vitest.extensions.config.ts",
+      testFiles: [
+        "extensions/firecrawl/src/firecrawl-scrape-tool.test.ts",
+        "extensions/firecrawl/src/index.test.ts",
+      ],
+    });
+
+    expect(isolatedTestFiles).toEqual(["extensions/firecrawl/src/firecrawl-scrape-tool.test.ts"]);
+    expect(sharedTestFiles).toEqual(["extensions/firecrawl/src/index.test.ts"]);
   });
 
   it("includes paired src roots when they contain tests", () => {

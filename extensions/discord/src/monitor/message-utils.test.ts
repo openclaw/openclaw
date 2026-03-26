@@ -1,6 +1,6 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
 import { StickerFormatType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
 const saveMediaBuffer = vi.fn();
@@ -28,7 +28,7 @@ let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscor
 let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
 let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.resetModules();
   ({
     __resetDiscordChannelInfoCacheForTest,

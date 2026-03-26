@@ -60,10 +60,10 @@ function digestBase64Payload(data: string): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-/**
- * Redacts image/base64 payload data from diagnostic objects before persistence.
- */
-export function redactImageDataForDiagnostics(value: unknown): unknown {
+function visitDiagnosticPayload(
+  value: unknown,
+  opts?: { omitField?: (key: string) => boolean },
+): unknown {
   const seen = new WeakSet<object>();
 
   const visit = (input: unknown): unknown => {
@@ -81,6 +81,9 @@ export function redactImageDataForDiagnostics(value: unknown): unknown {
     const record = input as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(record)) {
+      if (opts?.omitField?.(key)) {
+        continue;
+      }
       out[key] = visit(val);
     }
 
@@ -96,40 +99,16 @@ export function redactImageDataForDiagnostics(value: unknown): unknown {
 }
 
 /**
+ * Redacts image/base64 payload data from diagnostic objects before persistence.
+ */
+export function redactImageDataForDiagnostics(value: unknown): unknown {
+  return visitDiagnosticPayload(value);
+}
+
+/**
  * Removes credential-like fields and image/base64 payload data from diagnostic
  * objects before persistence.
  */
 export function sanitizeDiagnosticPayload(value: unknown): unknown {
-  const seen = new WeakSet<object>();
-
-  const visit = (input: unknown): unknown => {
-    if (Array.isArray(input)) {
-      return input.map((entry) => visit(entry));
-    }
-    if (!input || typeof input !== "object") {
-      return input;
-    }
-    if (seen.has(input)) {
-      return "[Circular]";
-    }
-    seen.add(input);
-
-    const record = input as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(record)) {
-      if (isCredentialFieldName(key)) {
-        continue;
-      }
-      out[key] = visit(val);
-    }
-
-    if (shouldRedactImageData(record)) {
-      out.data = REDACTED_IMAGE_DATA;
-      out.bytes = estimateBase64DecodedBytes(record.data);
-      out.sha256 = digestBase64Payload(record.data);
-    }
-    return out;
-  };
-
-  return visit(value);
+  return visitDiagnosticPayload(value, { omitField: isCredentialFieldName });
 }

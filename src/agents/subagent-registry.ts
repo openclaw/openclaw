@@ -287,6 +287,11 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
   const removed = subagentRuns.delete(params.runId);
   resumedRuns.delete(params.runId);
   if (!removed && !changed) {
@@ -1321,6 +1326,10 @@ export function replaceSubagentRunAfterSteer(params: {
 
   if (previousRunId !== nextRunId) {
     clearPendingLifecycleError(previousRunId);
+    const shouldDeleteAttachments = source.cleanup === "delete" || !source.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(source);
+    }
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -1545,6 +1554,10 @@ export function releaseSubagentRun(runId: string) {
   clearPendingLifecycleError(runId);
   const entry = subagentRuns.get(runId);
   if (entry) {
+    const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+    if (shouldDeleteAttachments) {
+      void safeRemoveAttachmentsDir(entry);
+    }
     void notifyContextEngineSubagentEnded({
       childSessionKey: entry.childSessionKey,
       reason: "released",
@@ -1583,16 +1596,17 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
 
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
   const runIds = findRunIdsByChildSessionKey(childSessionKey);
+  let latest: SubagentRunRecord | undefined;
   for (const runId of runIds) {
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
     }
-    if (typeof entry.endedAt !== "number") {
-      return true;
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
     }
   }
-  return false;
+  return Boolean(latest && typeof latest.endedAt !== "number");
 }
 
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
@@ -1654,10 +1668,27 @@ export function markSubagentRunTerminated(params: {
           childSessionKey: entry.childSessionKey,
         });
       });
+      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        void safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: entry.cleanup,
+        completedAt: now,
+      });
+      const cfg = loadConfig();
+      ensureRuntimePluginsLoaded({
+        config: cfg,
+        workspaceDir: entry.workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
       void emitSubagentEndedHookOnce({
         entry,
         reason: SUBAGENT_ENDED_REASON_KILLED,
         sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
         outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,
@@ -1747,6 +1778,27 @@ export function getSubagentRunByChildSessionKey(childSessionKey: string): Subage
   }
 
   return latestActive ?? latestEnded;
+}
+
+export function getLatestSubagentRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunRecord | null {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return null;
+  }
+
+  let latest: SubagentRunRecord | null = null;
+  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+    if (entry.childSessionKey !== key) {
+      continue;
+    }
+    if (!latest || entry.createdAt > latest.createdAt) {
+      latest = entry;
+    }
+  }
+
+  return latest;
 }
 
 export function initSubagentRegistry() {

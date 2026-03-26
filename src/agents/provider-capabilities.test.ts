@@ -32,6 +32,7 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
       };
     case "kimi":
       return {
+        openAiPayloadNormalizationMode: "moonshot-thinking",
         preserveAnthropicThinkingSignatures: false,
       };
     default:
@@ -122,7 +123,7 @@ describe("resolveProviderCapabilities", () => {
     expect(resolveProviderCapabilities("kimi-code")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
-      openAiPayloadNormalizationMode: "default",
+      openAiPayloadNormalizationMode: "moonshot-thinking",
       providerFamily: "default",
       preserveAnthropicThinkingSignatures: false,
       openAiCompatTurnValidation: true,
@@ -143,7 +144,13 @@ describe("resolveProviderCapabilities", () => {
 
   it("routes moonshot payload compatibility through the capability registry", () => {
     expect(usesMoonshotThinkingPayloadCompat("moonshot")).toBe(true);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
     expect(usesMoonshotThinkingPayloadCompat("openai")).toBe(false);
+  });
+
+  it("keeps the normalized kimi fallback aligned when plugin capabilities are unavailable", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => undefined);
+    expect(usesMoonshotThinkingPayloadCompat("kimi-coding")).toBe(true);
   });
 
   it("resolves transcript thought-signature and tool-call quirks through the registry", () => {

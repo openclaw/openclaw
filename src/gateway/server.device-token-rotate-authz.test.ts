@@ -149,7 +149,7 @@ async function connectApprovedNode(params: {
 
   const client = new GatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
-    connectDelayMs: 2_000,
+    connectChallengeTimeoutMs: 2_000,
     token: "secret",
     role: "node",
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,

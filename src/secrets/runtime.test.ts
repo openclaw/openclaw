@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -123,7 +123,7 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 }
 
 describe("secrets runtime snapshot", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ clearConfigCache } = await import("../config/config.js"));
     ({
@@ -132,6 +132,9 @@ describe("secrets runtime snapshot", () => {
       getActiveRuntimeWebToolsMetadata,
       prepareSecretsRuntimeSnapshot,
     } = await import("./runtime.js"));
+  });
+
+  beforeEach(() => {
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolveBundledPluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
     resolvePluginWebSearchProvidersMock.mockReset();

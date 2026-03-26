@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 let expectInboundContextContract: typeof import("../../../../src/channels/plugins/contracts/suites.js").expectChannelInboundContextContract;
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -49,7 +49,7 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.useRealTimers();
     vi.resetModules();
     ({ expectChannelInboundContextContract: expectInboundContextContract } =
@@ -57,6 +57,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     ({ createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
       await import("./event-handler.test-harness.js"));
     ({ createSignalEventHandler } = await import("./event-handler.js"));
+  });
+
+  beforeEach(() => {
     capture.ctx = undefined;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
