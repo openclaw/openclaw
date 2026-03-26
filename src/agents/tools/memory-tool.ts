@@ -52,7 +52,12 @@ export function createMemorySearchTool(options: {
         agentId,
       });
       if (!manager) {
-        return jsonResult({ results: [], disabled: true, error });
+        return jsonResult({
+          results: [],
+          disabled: true,
+          error,
+          hint: resolveMemoryErrorHint(error),
+        });
       }
       try {
         const citationsMode = resolveMemoryCitationsMode(cfg);
@@ -215,4 +220,25 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+/**
+ * Return a short, actionable hint for common memory search errors.
+ * Surfaced in the tool result so agents can inform the user.
+ */
+function resolveMemoryErrorHint(error?: string | null): string | undefined {
+  if (!error) {
+    return undefined;
+  }
+  const lower = error.toLowerCase();
+  if (lower.includes("leaked") || lower.includes("reported as leaked")) {
+    return "The embedding API key was flagged as leaked. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
+  }
+  if (lower.includes("quota") || lower.includes("rate limit")) {
+    return "Embedding provider quota exhausted. Try again later or switch provider via `openclaw configure`.";
+  }
+  if (lower.includes("401") || lower.includes("unauthorized")) {
+    return "Embedding API key is invalid or expired. Update it via `openclaw configure`.";
+  }
+  return undefined;
 }
