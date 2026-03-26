@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import type { Client } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
@@ -43,6 +42,7 @@ vi.mock("./gateway-registry.js", () => ({
 
 describe("runDiscordGatewayLifecycle", () => {
   beforeEach(() => {
+    vi.resetModules();
     attachDiscordGatewayLoggingMock.mockClear();
     getDiscordGatewayEmitterMock.mockClear();
     waitForDiscordGatewayStopMock.mockClear();
@@ -72,6 +72,13 @@ describe("runDiscordGatewayLifecycle", () => {
       ws?: EventEmitter & { terminate?: () => void };
     };
   }) => {
+    const gateway =
+      params?.gateway ??
+      (() => {
+        const defaultGateway = createGatewayHarness().gateway;
+        defaultGateway.isConnected = true;
+        return defaultGateway;
+      })();
     const start = vi.fn(params?.start ?? (async () => undefined));
     const stop = vi.fn(params?.stop ?? (async () => undefined));
     const threadStop = vi.fn();
@@ -96,7 +103,7 @@ describe("runDiscordGatewayLifecycle", () => {
         return "continue";
       }),
       dispose: vi.fn(),
-      emitter: params?.gateway?.emitter,
+      emitter: gateway.emitter,
     };
     const statusSink = vi.fn();
     const runtime: RuntimeEnv = {
@@ -114,9 +121,7 @@ describe("runDiscordGatewayLifecycle", () => {
       statusSink,
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
-        client: {
-          getPlugin: vi.fn((name: string) => (name === "gateway" ? params?.gateway : undefined)),
-        } as unknown as Client,
+        gateway,
         runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
