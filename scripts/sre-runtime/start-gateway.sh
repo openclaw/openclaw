@@ -464,7 +464,7 @@ jq \
         | map(
             .id as $agent_id
             # Inject wrapper bin directory for SRE agents and SRE subagents only.
-            | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier"] | index($agent_id)) != null then
+            | if (["sre", "sre-k8s", "sre-observability", "sre-release", "sre-repo-runtime", "sre-repo-helm", "sre-verifier", "frontend-dev"] | index($agent_id)) != null then
               .tools = (.tools // {})
               | .tools.exec = (
                   if ((.tools.exec // null) | type) == "object" then
