@@ -1186,7 +1186,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       try {
         lifecycleGateway?.disconnect();
       } catch (err) {
-        runtime.error?.(danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`));
+        runtime.error?.(
+          danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
+        );
       }
     }
     gatewaySupervisor?.dispose();
