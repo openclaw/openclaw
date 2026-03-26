@@ -28,45 +28,45 @@ import { definePluginEntry } from "./plugin-entry.js";
 export type {
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
-  ProviderDiscoveryContext,
-  ProviderCatalogContext,
-  ProviderCatalogResult,
-  ProviderAugmentModelCatalogContext,
-  ProviderBuiltInModelSuppressionContext,
-  ProviderBuiltInModelSuppressionResult,
-  ProviderBuildMissingAuthMessageContext,
-  ProviderCacheTtlEligibilityContext,
-  ProviderDefaultThinkingPolicyContext,
-  ProviderFetchUsageSnapshotContext,
-  ProviderModernModelPolicyContext,
-  ProviderPreparedRuntimeAuth,
-  ProviderResolvedUsageAuth,
-  ProviderPrepareExtraParamsContext,
-  ProviderPrepareDynamicModelContext,
-  ProviderPrepareRuntimeAuthContext,
-  ProviderResolveUsageAuthContext,
-  ProviderResolveDynamicModelContext,
-  ProviderNormalizeResolvedModelContext,
-  ProviderRuntimeModel,
-  SpeechProviderPlugin,
-  ProviderThinkingPolicyContext,
-  ProviderWrapStreamFnContext,
+  OpenClawPluginDefinition,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
+  PluginCommandContext,
+  PluginInteractiveTelegramHandlerContext,
+  PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
-  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
-  OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginDefinition,
-  PluginCommandContext,
-  PluginLogger,
-  PluginInteractiveTelegramHandlerContext,
-} from "../plugins/types.js";
+  ProviderAugmentModelCatalogContext,
+  ProviderBuildMissingAuthMessageContext,
+  ProviderBuiltInModelSuppressionContext,
+  ProviderBuiltInModelSuppressionResult,
+  ProviderCacheTtlEligibilityContext,
+  ProviderCatalogContext,
+  ProviderCatalogResult,
+  ProviderDefaultThinkingPolicyContext,
+  ProviderDiscoveryContext,
+  ProviderFetchUsageSnapshotContext,
+  ProviderModernModelPolicyContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderPrepareDynamicModelContext,
+  ProviderPrepareExtraParamsContext,
+  ProviderPrepareRuntimeAuthContext,
+  ProviderPreparedRuntimeAuth,
+  ProviderResolveDynamicModelContext,
+  ProviderResolvedUsageAuth,
+  ProviderResolveUsageAuthContext,
+  ProviderRuntimeModel,
+  ProviderThinkingPolicyContext,
+  ProviderWrapStreamFnContext,
+  SpeechProviderPlugin,
+} from "./plugin-entry.js";
+export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
@@ -81,11 +81,9 @@ export type {
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { OpenClawPluginApi } from "../plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export { definePluginEntry } from "./plugin-entry.js";
+export { emptyPluginConfigSchema, definePluginEntry } from "./plugin-entry.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { delegateCompactionToRuntime } from "../context-engine/delegate.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
