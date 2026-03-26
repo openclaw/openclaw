@@ -11,11 +11,13 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  outputDimensionality?: number;
 };
 
 export function createRemoteEmbeddingProvider(params: {
   id: string;
   client: RemoteEmbeddingClient;
+  outputDimensionality?: number;
   errorPrefix: string;
   maxInputTokens?: number;
 }): EmbeddingProvider {
@@ -30,7 +32,11 @@ export function createRemoteEmbeddingProvider(params: {
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
-      body: { model: client.model, input },
+      body: {
+        model: client.model,
+        input,
+        ...(client.outputDimensionality ? { dimensions: client.outputDimensionality } : {}),
+      },
       errorPrefix: params.errorPrefix,
     });
   };
