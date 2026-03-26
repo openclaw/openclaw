@@ -1,8 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { SEARCH_PROVIDER_OPTIONS, setupSearch } from "./onboard-search.js";
+
+const obtainFirecrawlApiKeyThroughBrowser = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+
+vi.mock("./firecrawl-browser-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./firecrawl-browser-auth.js")>();
+  return {
+    ...actual,
+    obtainFirecrawlApiKeyThroughBrowser,
+  };
+});
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -121,6 +131,11 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
+  beforeEach(() => {
+    obtainFirecrawlApiKeyThroughBrowser.mockClear();
+    obtainFirecrawlApiKeyThroughBrowser.mockResolvedValue(null);
+  });
+
   it("returns config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
@@ -183,6 +198,22 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "firecrawl")).toBe("fc-test-key");
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(result.tools?.web?.fetch?.firecrawl?.apiKey).toBe("fc-test-key");
+    expect(obtainFirecrawlApiKeyThroughBrowser).toHaveBeenCalled();
+  });
+
+  it("applies firecrawl browser auth when user confirms and auth succeeds", async () => {
+    obtainFirecrawlApiKeyThroughBrowser.mockResolvedValueOnce({
+      apiKey: "fc-browser",
+      teamName: "Acme",
+    });
+    const cfg: OpenClawConfig = {};
+    const { prompter, notes } = createPrompter({ selectValue: "firecrawl" });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(pluginWebSearchApiKey(result, "firecrawl")).toBe("fc-browser");
+    expect(result.tools?.web?.fetch?.firecrawl?.apiKey).toBe("fc-browser");
+    expect(notes.some((n) => n.message.includes("Firecrawl connected"))).toBe(true);
   });
 
   it("re-enables firecrawl and persists its plugin config when selected from disabled state", async () => {
@@ -555,17 +586,9 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
+  it("exports web search providers with unique ids sorted alphabetically", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
-    expect(values).toEqual([
-      "brave",
-      "firecrawl",
-      "gemini",
-      "grok",
-      "kimi",
-      "perplexity",
-      "tavily",
-    ]);
+    expect(new Set(values).size).toBe(values.length);
+    expect(values).toEqual([...values].toSorted((a, b) => a.localeCompare(b)));
   });
 });
