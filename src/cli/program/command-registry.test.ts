@@ -72,7 +72,6 @@ describe("command-registry", () => {
   it("returns only commands that support subcommands", () => {
     const names = getCoreCliCommandsWithSubcommands();
     expect(names).toContain("config");
-    expect(names).toContain("memory");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
     expect(names).toContain("browser");

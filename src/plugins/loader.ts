@@ -119,7 +119,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "media",
   "tts",
   "stt",
-  "tools",
   "channel",
   "events",
   "logging",
