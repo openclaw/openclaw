@@ -24,6 +24,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/probe.js";',
     'export * from "./src/resolve-channels.js";',
     'export * from "./src/resolve-users.js";',
+    'export * from "./src/outbound-session-route.js";',
     'export * from "./src/send.js";',
   ],
   "extensions/imessage/runtime-api.ts": [
