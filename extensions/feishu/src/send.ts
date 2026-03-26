@@ -698,7 +698,14 @@ export async function sendMarkdownCardFeishu(params: {
   // Interactive cards in reply context cause older Feishu clients to show
   // "请升级至最新版本客户端" instead of the actual content.
   if (replyToMessageId) {
-    return sendMessageFeishu({ cfg, to, text: cardText, replyToMessageId, replyInThread, accountId });
+    return sendMessageFeishu({
+      cfg,
+      to,
+      text: cardText,
+      replyToMessageId,
+      replyInThread,
+      accountId,
+    });
   }
 
   const card = buildMarkdownCard(cardText);
