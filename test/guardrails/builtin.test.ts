@@ -23,21 +23,21 @@ describe("AllowlistProvider", () => {
     const provider = new AllowlistProvider({ allowedTools: ["exec"] });
     const decision = await provider.evaluate(makeRequest("browser"));
     expect(decision.allow).toBe(false);
-    expect(decision.reasons[0].code).toBe("tool_not_allowed");
+    expect(decision.reasons?.[0].code).toBe("tool_not_allowed");
   });
 
   it("denies tool in deniedTools", async () => {
     const provider = new AllowlistProvider({ deniedTools: ["exec"] });
     const decision = await provider.evaluate(makeRequest("exec"));
     expect(decision.allow).toBe(false);
-    expect(decision.reasons[0].code).toBe("tool_denied");
+    expect(decision.reasons?.[0].code).toBe("tool_denied");
   });
 
   it("deniedTools takes precedence over allowedTools", async () => {
     const provider = new AllowlistProvider({ allowedTools: ["exec"], deniedTools: ["exec"] });
     const decision = await provider.evaluate(makeRequest("exec"));
     expect(decision.allow).toBe(false);
-    expect(decision.reasons[0].code).toBe("tool_denied");
+    expect(decision.reasons?.[0].code).toBe("tool_denied");
   });
 
   it("allows tool not in deniedTools when no allowedTools", async () => {

@@ -25,8 +25,8 @@ export type GuardrailReason = {
 export type GuardrailDecision = {
   /** Whether the tool call should proceed. */
   allow: boolean;
-  /** Structured reasons for the decision. */
-  reasons: GuardrailReason[];
+  /** Structured reasons for the decision. May be omitted by external providers. */
+  reasons?: GuardrailReason[];
   /** Identifier of the policy that produced this decision. */
   policyId?: string;
   /** Provider-specific metadata (audit ID, signature, etc.). */

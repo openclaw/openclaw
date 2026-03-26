@@ -8,6 +8,8 @@ export type {
 } from "./types.js";
 export { AllowlistProvider } from "./builtin.js";
 
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { GuardrailProvider, GuardrailProviderConfig, GuardrailRequest } from "./types.js";
 import { AllowlistProvider } from "./builtin.js";
 
@@ -19,9 +21,14 @@ export async function loadGuardrailProvider(providerConfig: GuardrailProviderCon
     return new AllowlistProvider(opts as { allowedTools?: string[]; deniedTools?: string[] });
   }
 
+  // Resolve local paths (./foo.js) relative to cwd, not this module.
+  const specifier = use.startsWith("./") || use.startsWith("../")
+    ? pathToFileURL(path.resolve(process.cwd(), use)).href
+    : use;
+
   let mod: Record<string, unknown>;
   try {
-    mod = (await import(use)) as Record<string, unknown>;
+    mod = (await import(specifier)) as Record<string, unknown>;
   } catch (err) {
     throw new Error(`Failed to load guardrail provider '${use}': ${err instanceof Error ? err.message : String(err)}`);
   }

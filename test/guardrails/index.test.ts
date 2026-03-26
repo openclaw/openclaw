@@ -70,6 +70,24 @@ describe("evaluateGuardrail", () => {
     expect(result.block).toBe(false);
   });
 
+  it("handles provider returning no reasons", async () => {
+    const provider = makeProvider({
+      evaluate: vi.fn(async () => ({ allow: false })),
+    });
+    const result = await evaluateGuardrail(provider, { toolName: "exec", params: {} }, true);
+    expect(result.block).toBe(true);
+    expect(result.blockReason).toContain("blocked by guardrail policy");
+  });
+
+  it("handles provider returning empty reasons array", async () => {
+    const provider = makeProvider({
+      evaluate: vi.fn(async () => ({ allow: false, reasons: [] })),
+    });
+    const result = await evaluateGuardrail(provider, { toolName: "exec", params: {} }, true);
+    expect(result.block).toBe(true);
+    expect(result.blockReason).toContain("blocked by guardrail policy");
+  });
+
   it("passes context fields to provider", async () => {
     const evaluate = vi.fn(async (req: GuardrailRequest): Promise<GuardrailDecision> => ({
       allow: true, reasons: [{ code: "allowed" }],

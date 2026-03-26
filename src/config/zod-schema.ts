@@ -4,6 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
+import { GuardrailsSchema } from "./zod-schema.guardrails.js";
 import {
   HexColorSchema,
   ModelsConfigSchema,
@@ -514,6 +515,7 @@ export const OpenClawSchema = z
     messages: MessagesSchema,
     commands: CommandsSchema,
     approvals: ApprovalsSchema,
+    guardrails: GuardrailsSchema,
     session: SessionSchema,
     cron: z
       .object({
