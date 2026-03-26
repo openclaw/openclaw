@@ -1,7 +1,10 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getActivePluginChannelRegistry,
+  getActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -36,6 +39,20 @@ function maybeBootstrapChannelPlugin(params: {
 function resolveDirectFromActiveRegistry(
   channel: DeliverableMessageChannel,
 ): ChannelPlugin | undefined {
+  // Prefer the pinned channel registry — it is stable across subagent
+  // registry swaps that can evict channel entries from the mutable registry.
+  const channelRegistry = getActivePluginChannelRegistry();
+  if (channelRegistry) {
+    for (const entry of channelRegistry.channels) {
+      const plugin = entry?.plugin;
+      if (plugin?.id === channel) {
+        return plugin;
+      }
+    }
+  }
+
+  // Fall back to the mutable active registry for channels that were loaded
+  // after the initial pin (e.g. via maybeBootstrapChannelPlugin).
   const activeRegistry = getActivePluginRegistry();
   if (!activeRegistry) {
     return undefined;
