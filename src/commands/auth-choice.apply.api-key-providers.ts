@@ -4,7 +4,13 @@ import { LITELLM_DEFAULT_MODEL_REF, setLitellmApiKey } from "../plugins/provider
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import { ensureApiKeyFromOptionEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { applyLitellmConfig, applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
+import {
+  applyLitellmConfig,
+  applyLitellmProviderConfig,
+  fetchLitellmModelInfo,
+  LITELLM_BASE_URL,
+  LITELLM_DEFAULT_MODEL_ID,
+} from "./onboard-auth.config-litellm.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 type ApiKeyProviderConfigApplier = (
@@ -56,8 +62,14 @@ export async function applyLiteLlmApiKeyProvider({
     profileId = existingProfileId;
   }
 
+  // Track the resolved plaintext API key for the model info probe.
+  let resolvedApiKey: string | undefined;
+
   if (!hasCredential) {
-    await ensureApiKeyFromOptionEnvOrPrompt({
+    // ensureApiKeyFromOptionEnvOrPrompt always returns the plaintext key,
+    // even in --secret-input-mode=ref (the ref is passed to setCredential,
+    // but the return value is the resolved plaintext).
+    resolvedApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
       token: params.opts?.token,
       tokenProvider: normalizedTokenProvider,
       secretInputMode: requestedSecretInputMode,
@@ -76,6 +88,19 @@ export async function applyLiteLlmApiKeyProvider({
       noteTitle: "LiteLLM",
     });
     hasCredential = true;
+  } else if (existingCred?.type === "api_key") {
+    // Reusing a previously stored credential — try to read the plaintext key
+    // so the model info probe can authenticate on secured proxies.
+    const storedKey = (existingCred as { key?: unknown }).key;
+    if (typeof storedKey === "string") {
+      resolvedApiKey = storedKey;
+    }
+  }
+
+  // Fall back to the LITELLM_API_KEY env var when no plaintext key is available
+  // (e.g. ref-backed profiles where the stored key is a SecretRef object).
+  if (!resolvedApiKey) {
+    resolvedApiKey = process.env.LITELLM_API_KEY ?? undefined;
   }
 
   if (hasCredential) {
@@ -86,10 +111,26 @@ export async function applyLiteLlmApiKeyProvider({
     });
   }
   setConfig(nextConfig);
+
+  // Determine the LiteLLM base URL from a previously persisted config, if any,
+  // or fall back to the default localhost address. This fetch happens before
+  // applyProviderDefaultModel writes the new config.
+  const existingProvider = nextConfig.models?.providers?.litellm as
+    | { baseUrl?: unknown }
+    | undefined;
+  const baseUrl =
+    typeof existingProvider?.baseUrl === "string" && existingProvider.baseUrl.trim()
+      ? existingProvider.baseUrl.trim()
+      : LITELLM_BASE_URL;
+
+  // Probe the proxy for actual model capabilities (context window, max tokens)
+  // so the config reflects the real model limits instead of the 128k default.
+  const modelInfo = await fetchLitellmModelInfo(baseUrl, LITELLM_DEFAULT_MODEL_ID, resolvedApiKey);
+
   await applyProviderDefaultModel({
     defaultModel: LITELLM_DEFAULT_MODEL_REF,
-    applyDefaultConfig: applyLitellmConfig,
-    applyProviderConfig: applyLitellmProviderConfig,
+    applyDefaultConfig: (cfg) => applyLitellmConfig(cfg, modelInfo),
+    applyProviderConfig: (cfg) => applyLitellmProviderConfig(cfg, modelInfo),
     noteDefault: LITELLM_DEFAULT_MODEL_REF,
   });
   return { config: getConfig(), agentModelOverride: getAgentModelOverride() };
