@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -112,6 +114,32 @@ jobs:
           echo "display_date=$(TZ='Asia/Shanghai' date +'%Y.%m.%d %H:%M') UTC+8" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+      - name: Generate Release Notes
+        id: notes
+        run: |
+          previous_tag=$(git tag --list 'apk-*' --sort=-creatordate | head -n 1)
+          if [ -n "$previous_tag" ]; then
+            range="${previous_tag}..HEAD"
+            range_note="Changes in apps/android since ${previous_tag}:"
+          else
+            range="HEAD"
+            range_note="Changes in apps/android included in this release:"
+          fi
+
+          android_changes=$(git log $range --no-merges --pretty=format:'- %s (%h)' -- apps/android)
+          if [ -z "$android_changes" ]; then
+            android_changes='- No apps/android changes found in this release range.'
+          fi
+
+          {
+            echo "body<<EOF"
+            echo "Automated Android signed release APK from commit ${{ github.sha }}."
+            echo
+            echo "$range_note"
+            echo "$android_changes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -119,7 +147,7 @@ jobs:
           tag_name: "apk-${{ steps.vars.outputs.tag_date }}-${{ steps.vars.outputs.short_sha }}"
           name: "Android APK - ${{ steps.vars.outputs.display_date }}"
           files: ${{ steps.apk.outputs.apk_path }}
-          body: "Automated Android Signed Release APK from commit ${{ github.sha }}"
+          body: ${{ steps.notes.outputs.body }}
           draft: false
           make_latest: true
         env:
