@@ -48,24 +48,6 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime.js")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (params: {
-      provider: string;
-      accountId: string;
-      dmPolicy?: string | null;
-      shouldRead?: boolean | null;
-    }) => {
-      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
-        return [];
-      }
-      return await readAllowFromStoreMock(params.provider, params.accountId);
-    },
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/conversation-runtime", createConversationRuntimeMock);
 vi.mock("openclaw/plugin-sdk/conversation-runtime.js", createConversationRuntimeMock);
 vi.mock("../../../src/pairing/pairing-store.js", async (importOriginal) => {
