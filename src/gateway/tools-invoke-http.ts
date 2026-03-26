@@ -204,6 +204,11 @@ export async function handleToolsInvokeHttpRequest(
       ? (argsRaw as Record<string, unknown>)
       : {};
 
+  // Log args for debugging #54975
+  if (!args || Object.keys(args).length === 0) {
+    logWarn(`tools-invoke: empty args for tool=${toolName} bodyKeys=${Object.keys(body).join(",")}`);
+  }
+
   const rawSessionKey = resolveSessionKeyFromBody(body);
   const sessionKey =
     !rawSessionKey || rawSessionKey === "main" ? resolveMainSessionKey(cfg) : rawSessionKey;
@@ -337,6 +342,10 @@ export async function handleToolsInvokeHttpRequest(
         error: { type: "tool_call_blocked", message: hookResult.reason },
       });
       return true;
+    }
+    // Log hook result for debugging #54975
+    if (!hookResult.params || (typeof hookResult.params === "object" && Object.keys(hookResult.params).length === 0)) {
+      logWarn(`tools-invoke: empty params after hook for tool=${toolName} hadArgs=${Object.keys(args).length > 0}`);
     }
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(toolCallId, hookResult.params);
