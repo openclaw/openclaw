@@ -1,8 +1,11 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { updateModelCapability } from "./capabilities-cache.js";
 import { wrapStreamFnWithReActFallback } from "./react-fallback-stream.js";
 
 const FIXTURES_DIR = path.resolve(__dirname, "../../../test-fixtures/streams/local-models");
@@ -47,7 +50,20 @@ type DoneEvent = {
   };
 };
 
+let configDir: string;
+
 describe("ReAct Fallback Stream E2E Integration", () => {
+  beforeAll(async () => {
+    configDir = path.join(os.tmpdir(), `openclaw-test-${Date.now()}`);
+    await fs.mkdir(path.join(configDir, "mpm"), { recursive: true });
+  });
+
+  afterAll(async () => {
+    if (existsSync(configDir)) {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
   it("should process LMStudio Qwen/DeepSeek reasoning streams and extract valid ToolCalls while stripping <think>", async () => {
     const fixtureText = await fs.readFile(
       path.join(FIXTURES_DIR, "qwen3-lmstudio-think.txt"),
@@ -372,6 +388,61 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
     // Should trigger fallback because of heuristic
     expect(toolCalls).toHaveLength(1);
     expect(toolCalls[0].name).toBe("phi_tool");
+  });
+
+  it("should respect cached 'native' status in 'auto' mode even if heuristics say 'none'", async () => {
+    // 1. Setup cache with 'native' status for an Ollama model
+    const providerId = "learned-native-provider";
+    const modelId = "ollama-model";
+    await updateModelCapability(configDir, providerId, modelId, "native");
+
+    // 2. Mock native stream that returns a REAL tool call (simulating a model that actually supports it)
+    const nativeStreamFn = async () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", name: "native_tool", id: "call_1", args: {} }],
+          },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any);
+        stream.end();
+      });
+      return stream;
+    };
+
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId,
+      providerId,
+      providerType: "ollama", // Heuristically this would be toolFormat: 'none'
+      configDir,
+      toolFallback: "auto",
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line no-explicit-any
+      { id: modelId, api: "test", provider: "ollama" } as unknown as any,
+      // eslint-disable-next-line no-explicit-any
+      { tools: [{ name: "native_tool", description: "testing" }] } as unknown as any,
+      {},
+    );
+
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doneChunk = chunks.find((c: unknown) => (c as any).type === "done");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toolCalls = (doneChunk as any).message.content.filter((p: any) => p.type === "toolCall");
+
+    // Expectation: It used the NATIVE path (native_tool) because the cache said 'native',
+    // overriding the 'ollama' -> 'none' heuristic.
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].name).toBe("native_tool");
   });
 
   it("should NOT treat 'Action:' as a tool call if tools are not provided", async () => {

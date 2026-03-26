@@ -182,7 +182,11 @@ export function parseReActResponse(
 
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { getModelCapability, updateModelCapability } from "./capabilities-cache.js";
+import {
+  getModelCapability,
+  updateModelCapability,
+  type CapabilityStatus,
+} from "./capabilities-cache.js";
 import { discoverLocalCapabilities, isLocalProvider } from "./capabilities-discovery.js";
 import { runBackgroundCapabilityProbe } from "./capability-prober.js";
 
@@ -216,10 +220,13 @@ export function wrapStreamFnWithReActFallback(
     const isLocal = isLocalProvider(config.providerType);
     const configDir = config.configDir;
 
-    let currentStatus = "native";
-    if (isLocal && configDir) {
-      currentStatus = await getModelCapability(configDir, config.providerId, config.modelId);
-      if (currentStatus === "unknown" && config.toolFallback !== "none") {
+    let currentStatus: CapabilityStatus = "native";
+    if (isLocal) {
+      currentStatus = configDir
+        ? await getModelCapability(configDir, config.providerId, config.modelId)
+        : "unknown";
+
+      if (currentStatus === "unknown" && configDir && config.toolFallback !== "none") {
         // Trigger background probe for all new models unless explicitly disabled
         queueMicrotask(() =>
           runBackgroundCapabilityProbe({
@@ -238,7 +245,9 @@ export function wrapStreamFnWithReActFallback(
     if (effectiveFallback === "react") {
       shouldApplyFallback = true;
     } else if (effectiveFallback === "auto") {
-      if (currentStatus === "react" || (isLocal && capabilities.toolFormat === "none")) {
+      if (currentStatus === "react") {
+        shouldApplyFallback = true;
+      } else if (currentStatus === "unknown" && isLocal && capabilities.toolFormat === "none") {
         shouldApplyFallback = true;
       }
     }
