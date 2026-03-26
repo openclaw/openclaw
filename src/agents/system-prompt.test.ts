@@ -570,13 +570,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Use grep");
   });
 
-  it("includes context provenance guidance section", () => {
+  it("includes context provenance guidance section only when provenance is present", () => {
+    const withProvenance = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Hello",
+          provenance: { source: "AGENTS.md", injectedAt: "session_start", volatile: true },
+        },
+      ],
+    });
+    expect(withProvenance).toContain("## Context Provenance");
+
+    const withoutProvenance = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Hello" }],
+    });
+    expect(withoutProvenance).not.toContain("## Context Provenance");
+  });
+
+  it("escapes special characters in provenance attributes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "test.md",
+          content: "data",
+          provenance: { source: 'file"name-->.md', injectedAt: "session_start", volatile: false },
+        },
+      ],
     });
-
-    expect(prompt).toContain("## Context Provenance");
-    expect(prompt).toContain("ctx:provenance");
+    expect(prompt).toContain("file&quot;name--&gt;.md");
+    expect(prompt).not.toContain('file"name-->');
   });
 
   it("omits project context when no context files are injected", () => {
