@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -25,10 +26,6 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
-
-function shouldLogCoreIngressTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
 
 type ResetCommandAction = "new" | "reset";
 
@@ -108,20 +105,11 @@ export async function getReplyFromConfig(
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const ingressTimingEnabled = shouldLogCoreIngressTiming();
-  const ingressStartMs = ingressTimingEnabled ? Date.now() : 0;
-  const logIngressStage = (stage: string, extra?: string) => {
-    if (!ingressTimingEnabled) {
-      return;
-    }
-    const sessionKey = ctx.SessionKey?.trim() || "(no-session)";
-    const suffix = extra ? ` ${extra}` : "";
-    defaultRuntime.log?.(
-      `[ingress] session=${sessionKey} stage=${stage} elapsedMs=${Date.now() - ingressStartMs}${suffix}`,
-    );
-  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg = configOverride ?? loadConfig();
+  const cfg =
+    configOverride == null
+      ? loadConfig()
+      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -169,7 +157,6 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
   const workspaceDir = workspace.dir;
-  logIngressStage("workspace-ready");
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -188,18 +175,16 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    const appliedMediaUnderstanding = await applyMediaUnderstandingIfNeeded({
+    await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    logIngressStage("media-understanding", `applied=${appliedMediaUnderstanding ? "1" : "0"}`);
-    const appliedLinkUnderstanding = await applyLinkUnderstandingIfNeeded({
+    await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
-    logIngressStage("link-understanding", `applied=${appliedLinkUnderstanding ? "1" : "0"}`);
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -218,7 +203,6 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
-  logIngressStage("session-init");
   let {
     sessionCtx,
     sessionEntry,
@@ -311,9 +295,7 @@ export async function getReplyFromConfig(
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
   });
-  logIngressStage("directives-resolved");
   if (directiveResult.kind === "reply") {
-    logIngressStage("early-reply");
     return directiveResult.reply;
   }
 
@@ -425,7 +407,6 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
-  logIngressStage("sandbox-media");
 
   return runPreparedReply({
     ctx,

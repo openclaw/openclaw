@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryIndexManager } from "./index.js";
 
@@ -27,6 +27,14 @@ let buildFileEntry: MemoryInternalModule["buildFileEntry"];
 let createMemoryManagerOrThrow: TestManagerModule["createMemoryManagerOrThrow"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
+async function ensureProviderInitialized(manager: MemoryIndexManager): Promise<void> {
+  await (
+    manager as unknown as {
+      ensureProviderInitialized: () => Promise<void>;
+    }
+  ).ensureProviderInitialized();
+}
+
 describe("memory vector dedupe", () => {
   let workspaceDir: string;
   let indexPath: string;
@@ -45,13 +53,11 @@ describe("memory vector dedupe", () => {
     manager = null;
   }
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ buildFileEntry } = await import("./internal.js"));
     ({ createMemoryManagerOrThrow } = await import("./test-manager.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
-  beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await seedMemoryWorkspace(workspaceDir);
@@ -81,6 +87,7 @@ describe("memory vector dedupe", () => {
     } as OpenClawConfig;
 
     manager = await createMemoryManagerOrThrow(cfg);
+    await ensureProviderInitialized(manager);
 
     const db = (
       manager as unknown as {
@@ -89,18 +96,12 @@ describe("memory vector dedupe", () => {
     ).db;
     db.exec("CREATE TABLE IF NOT EXISTS chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
-    const sqlSeen: string[] = [];
-    const originalPrepare = db.prepare.bind(db);
-    db.prepare = (sql: string) => {
-      if (sql.includes("chunks_vec")) {
-        sqlSeen.push(sql);
-      }
-      return originalPrepare(sql);
-    };
-
     (
       manager as unknown as { ensureVectorReady: (dims?: number) => Promise<boolean> }
     ).ensureVectorReady = async () => true;
+    await (
+      manager as unknown as { ensureProviderInitialized: () => Promise<void> }
+    ).ensureProviderInitialized();
 
     const entry = await buildFileEntry(path.join(workspaceDir, "MEMORY.md"), workspaceDir);
     if (!entry) {
@@ -111,13 +112,27 @@ describe("memory vector dedupe", () => {
         indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
       }
     ).indexFile(entry, { source: "memory" });
+    await (
+      manager as unknown as {
+        indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
+      }
+    ).indexFile(entry, { source: "memory" });
 
-    const deleteIndex = sqlSeen.findIndex((sql) =>
-      sql.includes("DELETE FROM chunks_vec WHERE id = ?"),
-    );
-    const insertIndex = sqlSeen.findIndex((sql) => sql.includes("INSERT INTO chunks_vec"));
-    expect(deleteIndex).toBeGreaterThan(-1);
-    expect(insertIndex).toBeGreaterThan(-1);
-    expect(deleteIndex).toBeLessThan(insertIndex);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS fail_if_vector_row_not_deleted
+      BEFORE INSERT ON chunks_vec
+      WHEN EXISTS (SELECT 1 FROM chunks_vec WHERE id = NEW.id)
+      BEGIN
+        SELECT RAISE(FAIL, 'vector row not deleted before insert');
+      END;
+    `);
+
+    await expect(
+      (
+        manager as unknown as {
+          indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
+        }
+      ).indexFile(entry, { source: "memory" }),
+    ).resolves.toBeUndefined();
   });
 });

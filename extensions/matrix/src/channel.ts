@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderOpenWarningCollector,
-  projectWarningCollector,
+  projectAccountConfigWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createScopedAccountReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
@@ -22,6 +22,10 @@ import {
 import { buildTrafficStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
@@ -43,7 +47,6 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
-  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -195,7 +198,7 @@ function matchMatrixAcpConversation(params: {
 }
 
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
-  createChatChannelPlugin({
+  createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({
     base: {
       id: "matrix",
       meta,
@@ -318,14 +321,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             parentConversationId,
           }),
       },
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+      status: createComputedAccountStatusAdapter<ResolvedMatrixAccount, MatrixProbe>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("matrix", accounts),
         buildChannelSummary: ({ snapshot }) =>
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
@@ -353,23 +350,18 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             };
           }
         },
-        buildAccountSnapshot: ({ account, runtime, probe }) =>
-          buildComputedAccountStatusSnapshot(
-            {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured: account.configured,
-              runtime,
-              probe,
-            },
-            {
-              baseUrl: account.homeserver,
-              lastProbeAt: runtime?.lastProbeAt ?? null,
-              ...buildTrafficStatusSummary(runtime),
-            },
-          ),
-      },
+        resolveAccountSnapshot: ({ account, runtime }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: account.configured,
+          extra: {
+            baseUrl: account.homeserver,
+            lastProbeAt: runtime?.lastProbeAt ?? null,
+            ...buildTrafficStatusSummary(runtime),
+          },
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
@@ -419,11 +411,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     },
     security: {
       resolveDmPolicy: resolveMatrixDmPolicy,
-      collectWarnings: projectWarningCollector(
-        ({ account, cfg }: { account: ResolvedMatrixAccount; cfg: unknown }) => ({
-          account,
-          cfg: cfg as CoreConfig,
-        }),
+      collectWarnings: projectAccountConfigWarningCollector(
+        (cfg) => cfg as CoreConfig,
         collectMatrixSecurityWarningsForAccount,
       ),
     },

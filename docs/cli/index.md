@@ -113,7 +113,9 @@ openclaw [--dev] [--profile <name>] <command>
     audit
   secrets
     reload
-    migrate
+    audit
+    configure
+    apply
   reset
   uninstall
   update
@@ -132,16 +134,21 @@ openclaw [--dev] [--profile <name>] <command>
     check
   plugins
     list
-    info
+    inspect
     install
+    uninstall
+    update
     enable
     disable
     doctor
+    marketplace list
   memory
     status
     index
     search
   message
+    send
+    broadcast
   agent
   agents
     list
@@ -389,7 +396,7 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/schema/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
@@ -406,6 +413,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
+- `config schema`: print the generated JSON schema for `openclaw.json`.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -772,7 +780,8 @@ Options:
 - `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
-- `--claude-cli-logs`
+- `--cli-backend-logs`
+- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -1035,7 +1044,7 @@ Subcommands:
 Auth notes:
 
 - `node` resolves gateway auth from env/config (no `--token`/`--password` flags): `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, then `gateway.auth.*`. In local mode, node host intentionally ignores `gateway.remote.*`; in `gateway.mode=remote`, `gateway.remote.*` participates per remote precedence rules.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored for node-host auth resolution.
+- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ## Nodes
 

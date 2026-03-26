@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
-import { buildComputedAccountStatusSnapshot } from "../api.js";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import {
@@ -108,14 +111,8 @@ export const tlonPlugin = createChatChannelPlugin({
       },
       resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
     },
-    status: {
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+    status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts) => {
         return accounts.flatMap((account) => {
           if (!account.configured) {
@@ -145,22 +142,17 @@ export const tlonPlugin = createChatChannelPlugin({
         }
         return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
       },
-      buildAccountSnapshot: ({ account, runtime, probe }) =>
-        buildComputedAccountStatusSnapshot(
-          {
-            accountId: account.accountId,
-            name: account.name ?? undefined,
-            enabled: account.enabled,
-            configured: account.configured,
-            runtime,
-            probe,
-          },
-          {
-            ship: account.ship,
-            url: account.url,
-          },
-        ),
-    },
+      resolveAccountSnapshot: ({ account }) => ({
+        accountId: account.accountId,
+        name: account.name ?? undefined,
+        enabled: account.enabled,
+        configured: account.configured,
+        extra: {
+          ship: account.ship,
+          url: account.url,
+        },
+      }),
+    }),
     gateway: {
       startAccount: async (ctx) =>
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),

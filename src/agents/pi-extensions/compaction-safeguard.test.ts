@@ -4,13 +4,15 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
@@ -50,6 +52,14 @@ const {
   MAX_FILE_OPS_SECTION_CHARS,
   SUMMARY_TRUNCATED_MARKER,
 } = __testing;
+
+beforeEach(() => {
+  __testing.setSummarizeInStagesForTest(mockSummarizeInStages);
+});
+
+afterEach(() => {
+  __testing.setSummarizeInStagesForTest();
+});
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
   const stub: ExtensionContext["sessionManager"] = {
@@ -529,6 +539,24 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("consumes cancel reasons without dropping other runtime fields", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelReason(sm, "no API key");
+
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
+  });
+
+  it("clears cancel reason when set to undefined", () => {
+    const sm = {};
+    setCompactionSafeguardCancelReason(sm, "temporary reason");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
+    setCompactionSafeguardCancelReason(sm, undefined);
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {

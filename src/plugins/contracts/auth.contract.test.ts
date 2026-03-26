@@ -2,19 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { createNonExitingRuntime } from "../../runtime.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
   WizardProgress,
   WizardSelectParams,
 } from "../../wizard/prompts.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 type LoginOpenAICodexOAuth =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["loginOpenAICodexOAuth"];
-type LoginQwenPortalOAuth =
-  (typeof import("../../../extensions/qwen-portal-auth/oauth.js"))["loginQwenPortalOAuth"];
 type GithubCopilotLoginCommand =
   (typeof import("openclaw/plugin-sdk/provider-auth-login"))["githubCopilotLoginCommand"];
 type CreateVpsAwareHandlers =
@@ -25,7 +22,6 @@ type ListProfilesForProvider =
   typeof import("openclaw/plugin-sdk/agent-runtime").listProfilesForProvider;
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn<LoginOpenAICodexOAuth>());
-const loginQwenPortalOAuthMock = vi.hoisted(() => vi.fn<LoginQwenPortalOAuth>());
 const githubCopilotLoginCommandMock = vi.hoisted(() => vi.fn<GithubCopilotLoginCommand>());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn<EnsureAuthProfileStore>());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn<ListProfilesForProvider>());
@@ -48,29 +44,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../extensions/qwen-portal-auth/oauth.js", () => ({
-  loginQwenPortalOAuth: loginQwenPortalOAuthMock,
-}));
-
 import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
 import openAIPlugin from "../../../extensions/openai/index.js";
-import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {
@@ -108,6 +83,72 @@ function buildAuthContext() {
   };
 }
 
+function createJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
+}
+
+function getOpenAICodexProvider() {
+  return requireProvider(registerProviders(openAIPlugin), "openai-codex");
+}
+
+function buildOpenAICodexOAuthResult(params: {
+  profileId: string;
+  access: string;
+  refresh: string;
+  expires: number;
+  email?: string;
+}) {
+  return {
+    profiles: [
+      {
+        profileId: params.profileId,
+        credential: {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: params.access,
+          refresh: params.refresh,
+          expires: params.expires,
+          ...(params.email ? { email: params.email } : {}),
+        },
+      },
+    ],
+    configPatch: {
+      agents: {
+        defaults: {
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    },
+    defaultModel: "openai-codex/gpt-5.4",
+    notes: undefined,
+  };
+}
+
+async function expectOpenAICodexStableFallbackProfile(params: {
+  access: string;
+  profileId: string;
+}) {
+  const provider = getOpenAICodexProvider();
+  loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+    refresh: "refresh-token",
+    access: params.access,
+    expires: 1_700_000_000_000,
+  });
+  const result = await provider.auth[0]?.run(buildAuthContext() as never);
+  expect(result).toEqual(
+    buildOpenAICodexOAuthResult({
+      profileId: params.profileId,
+      access: params.access,
+      refresh: "refresh-token",
+      expires: 1_700_000_000_000,
+    }),
+  );
+}
+
 describe("provider auth contract", () => {
   let authStore: AuthProfileStore;
 
@@ -125,7 +166,6 @@ describe("provider auth contract", () => {
 
   afterEach(() => {
     loginOpenAICodexOAuthMock.mockReset();
-    loginQwenPortalOAuthMock.mockReset();
     githubCopilotLoginCommandMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
@@ -133,7 +173,7 @@ describe("provider auth contract", () => {
   });
 
   it("keeps OpenAI Codex OAuth auth results provider-owned", async () => {
-    const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+    const provider = getOpenAICodexProvider();
     loginOpenAICodexOAuthMock.mockResolvedValueOnce({
       email: "user@example.com",
       refresh: "refresh-token",
@@ -143,32 +183,99 @@ describe("provider auth contract", () => {
 
     const result = await provider.auth[0]?.run(buildAuthContext() as never);
 
-    expect(result).toEqual({
-      profiles: [
-        {
-          profileId: "openai-codex:user@example.com",
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-            email: "user@example.com",
-          },
-        },
-      ],
-      configPatch: {
-        agents: {
-          defaults: {
-            models: {
-              "openai-codex/gpt-5.4": {},
-            },
-          },
-        },
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:user@example.com",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+        email: "user@example.com",
+      }),
+    );
+  });
+
+  it("backfills OpenAI Codex OAuth email from the JWT profile claim", async () => {
+    const provider = getOpenAICodexProvider();
+    const access = createJwt({
+      "https://api.openai.com/profile": {
+        email: "jwt-user@example.com",
       },
-      defaultModel: "openai-codex/gpt-5.4",
-      notes: undefined,
     });
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access,
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:jwt-user@example.com",
+        access,
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+        email: "jwt-user@example.com",
+      }),
+    );
+  });
+
+  it("uses a stable fallback id when OpenAI Codex JWT email is missing", async () => {
+    const access = createJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_user_id: "user-123__acct-456",
+      },
+    });
+    const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
+    await expectOpenAICodexStableFallbackProfile({
+      access,
+      profileId: `openai-codex:id-${expectedStableId}`,
+    });
+  });
+
+  it("uses iss and sub to build a stable fallback id when auth claims are missing", async () => {
+    const access = createJwt({
+      iss: "https://accounts.openai.com",
+      sub: "user-abc",
+    });
+    const expectedStableId = Buffer.from("https://accounts.openai.com|user-abc").toString(
+      "base64url",
+    );
+    await expectOpenAICodexStableFallbackProfile({
+      access,
+      profileId: `openai-codex:id-${expectedStableId}`,
+    });
+  });
+
+  it("uses sub alone to build a stable fallback id when iss is missing", async () => {
+    const access = createJwt({
+      sub: "user-abc",
+    });
+    const expectedStableId = Buffer.from("user-abc").toString("base64url");
+    await expectOpenAICodexStableFallbackProfile({
+      access,
+      profileId: `openai-codex:id-${expectedStableId}`,
+    });
+  });
+
+  it("falls back to the default OpenAI Codex profile when JWT parsing yields no identity", async () => {
+    const provider = getOpenAICodexProvider();
+    loginOpenAICodexOAuthMock.mockResolvedValueOnce({
+      refresh: "refresh-token",
+      access: "not-a-jwt-token",
+      expires: 1_700_000_000_000,
+    });
+
+    const result = await provider.auth[0]?.run(buildAuthContext() as never);
+
+    expect(result).toEqual(
+      buildOpenAICodexOAuthResult({
+        profileId: "openai-codex:default",
+        access: "not-a-jwt-token",
+        refresh: "refresh-token",
+        expires: 1_700_000_000_000,
+      }),
+    );
   });
 
   it("keeps OpenAI Codex OAuth failures non-fatal at the provider layer", async () => {
@@ -178,50 +285,6 @@ describe("provider auth contract", () => {
     await expect(provider.auth[0]?.run(buildAuthContext() as never)).resolves.toEqual({
       profiles: [],
     });
-  });
-
-  it("keeps Qwen portal OAuth auth results provider-owned", async () => {
-    const provider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
-    loginQwenPortalOAuthMock.mockResolvedValueOnce({
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: 1_700_000_000_000,
-      resourceUrl: "portal.qwen.ai",
-    });
-
-    const result = await provider.auth[0]?.run(buildAuthContext() as never);
-
-    expect(result).toMatchObject({
-      profiles: [
-        {
-          profileId: "qwen-portal:default",
-          credential: {
-            type: "oauth",
-            provider: "qwen-portal",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: 1_700_000_000_000,
-          },
-        },
-      ],
-      defaultModel: "qwen-portal/coder-model",
-      configPatch: {
-        models: {
-          providers: {
-            "qwen-portal": {
-              baseUrl: "https://portal.qwen.ai/v1",
-              models: [],
-            },
-          },
-        },
-      },
-    });
-    expect(result?.notes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("auto-refresh"),
-        expect.stringContaining("Base URL defaults"),
-      ]),
-    );
   });
 
   it("keeps GitHub Copilot device auth results provider-owned", async () => {

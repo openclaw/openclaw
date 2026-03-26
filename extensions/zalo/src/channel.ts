@@ -20,6 +20,10 @@ import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-run
 import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -29,7 +33,6 @@ import { zaloMessageActions } from "./actions.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import {
-  buildBaseAccountStatusSnapshot,
   buildChannelConfigSchema,
   buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
@@ -199,38 +202,27 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           }),
         listGroups: async () => [],
       }),
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
+      status: createComputedAccountStatusAdapter<ResolvedZaloAccount, ZaloProbeResult>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         collectStatusIssues: collectZaloStatusIssues,
         buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
         probeAccount: async ({ account, timeoutMs }) =>
           await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
-        buildAccountSnapshot: ({ account, runtime }) => {
+        resolveAccountSnapshot: ({ account }) => {
           const configured = Boolean(account.token?.trim());
-          return buildBaseAccountStatusSnapshot(
-            {
-              account: {
-                accountId: account.accountId,
-                name: account.name,
-                enabled: account.enabled,
-                configured,
-              },
-              runtime,
-            },
-            {
+          return {
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured,
+            extra: {
               tokenSource: account.tokenSource,
               mode: account.config.webhookUrl ? "webhook" : "polling",
               dmPolicy: account.config.dmPolicy ?? "pairing",
             },
-          );
+          };
         },
-      },
+      }),
       gateway: {
         startAccount: async (ctx) =>
           await (await loadZaloChannelRuntime()).startZaloGatewayAccount(ctx),

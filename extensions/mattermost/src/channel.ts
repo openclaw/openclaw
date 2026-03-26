@@ -1,3 +1,4 @@
+import { Type } from "@sinclair/typebox";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
@@ -15,7 +16,10 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
-import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
@@ -94,7 +98,7 @@ function describeMattermostMessageTool({
       enabledAccounts.length > 0
         ? {
             properties: {
-              buttons: createMessageToolButtonsSchema(),
+              buttons: Type.Optional(createMessageToolButtonsSchema()),
             },
           }
         : null,
@@ -347,16 +351,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       },
     },
     status: createComputedAccountStatusAdapter<ResolvedMattermostAccount>({
-      defaultRuntime: {
-        accountId: DEFAULT_ACCOUNT_ID,
-        running: false,
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
         connected: false,
         lastConnectedAt: null,
         lastDisconnect: null,
-        lastStartAt: null,
-        lastStopAt: null,
-        lastError: null,
-      },
+      }),
       buildChannelSummary: ({ snapshot }) =>
         buildPassiveProbedChannelStatusSummary(snapshot, {
           botTokenSource: snapshot.botTokenSource ?? "none",

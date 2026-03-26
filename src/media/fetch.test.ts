@@ -68,6 +68,7 @@ describe("fetchRemoteMedia", () => {
   const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
 
   beforeAll(async () => {
+    vi.resetModules();
     ({ fetchRemoteMedia } = await import("./fetch.js"));
   });
 
@@ -184,6 +185,30 @@ describe("fetchRemoteMedia", () => {
       redactedTelegramToken,
       fetchImpl,
     });
+  });
+
+  it("bounds error-body snippets instead of reading the full response", async () => {
+    const hiddenTail = `${" ".repeat(9_000)}BAD`;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new TextEncoder().encode(hiddenTail)]), {
+          status: 400,
+          statusText: "Bad Request",
+        }),
+    );
+
+    const result = await fetchRemoteMedia({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      maxBytes: 1024,
+    }).catch((err: unknown) => err);
+
+    expect(result).toBeInstanceOf(Error);
+    if (!(result instanceof Error)) {
+      expect.unreachable("expected fetchRemoteMedia to reject");
+    }
+    expect(result.message).not.toContain("BAD");
+    expect(result.message).not.toContain("body:");
   });
 
   it("blocks private IP literals before fetching", async () => {

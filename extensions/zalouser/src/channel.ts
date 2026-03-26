@@ -8,6 +8,10 @@ import {
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createAsyncComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import type {
   ChannelAccountSnapshot,
   ChannelDirectoryEntry,
@@ -18,7 +22,6 @@ import type {
   GroupToolPolicyConfig,
 } from "../runtime-api.js";
 import {
-  buildBaseAccountStatusSnapshot,
   DEFAULT_ACCOUNT_ID,
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
@@ -408,38 +411,30 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
           runtime.log(waited.message);
         },
       },
-      status: {
-        defaultRuntime: {
-          accountId: DEFAULT_ACCOUNT_ID,
-          running: false,
-          lastStartAt: null,
-          lastStopAt: null,
-          lastError: null,
-        },
-        collectStatusIssues: collectZalouserStatusIssues,
-        buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
-        probeAccount: async ({ account, timeoutMs }) => probeZalouser(account.profile, timeoutMs),
-        buildAccountSnapshot: async ({ account, runtime }) => {
-          const configured = await checkZcaAuthenticated(account.profile);
-          const configError = "not authenticated";
-          return buildBaseAccountStatusSnapshot(
-            {
-              account: {
-                accountId: account.accountId,
-                name: account.name,
-                enabled: account.enabled,
-                configured,
+      status: createAsyncComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>(
+        {
+          defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+          collectStatusIssues: collectZalouserStatusIssues,
+          buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
+          probeAccount: async ({ account, timeoutMs }) => probeZalouser(account.profile, timeoutMs),
+          resolveAccountSnapshot: async ({ account, runtime }) => {
+            const configured = await checkZcaAuthenticated(account.profile);
+            const configError = "not authenticated";
+            return {
+              accountId: account.accountId,
+              name: account.name,
+              enabled: account.enabled,
+              configured,
+              extra: {
+                dmPolicy: account.config.dmPolicy ?? "pairing",
+                lastError: configured
+                  ? (runtime?.lastError ?? null)
+                  : (runtime?.lastError ?? configError),
               },
-              runtime: configured
-                ? runtime
-                : { ...runtime, lastError: runtime?.lastError ?? configError },
-            },
-            {
-              dmPolicy: account.config.dmPolicy ?? "pairing",
-            },
-          );
+            };
+          },
         },
-      },
+      ),
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;

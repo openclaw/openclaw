@@ -25,6 +25,7 @@ export type {
   TelegramInlineButtons,
 } from "../../../extensions/telegram/api.js";
 export type { StickerMetadata } from "../../../extensions/telegram/api.js";
+export type { TelegramApiOverride } from "../../../extensions/telegram/runtime-api.js";
 
 export { emptyPluginConfigSchema } from "../config-schema.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -128,3 +129,8 @@ export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
 } from "../../../extensions/telegram/api.js";
+export { resolveTelegramAutoThreadId } from "../../../extensions/telegram/src/action-threading.js";
+export {
+  buildTelegramExecApprovalPendingPayload,
+  shouldSuppressTelegramExecApprovalForwardingFallback,
+} from "../../../extensions/telegram/src/exec-approval-forwarding.js";

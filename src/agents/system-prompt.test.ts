@@ -158,6 +158,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Skills");
   });
 
+  it("omits the heartbeat section when no heartbeat prompt is provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "full",
+      heartbeatPrompt: undefined,
+    });
+
+    expect(prompt).not.toContain("## Heartbeats");
+    expect(prompt).not.toContain("HEARTBEAT_OK");
+    expect(prompt).not.toContain("Read HEARTBEAT.md");
+  });
+
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { computeBaseConfigSchemaResponse } from "../src/config/schema-base.js";
+import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
 
 const GENERATED_BY = "scripts/generate-base-config-schema.ts";
 const DEFAULT_OUTPUT_PATH = "src/config/schema.base.generated.ts";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function readIfExists(filePath: string): string | null {
   try {
@@ -17,27 +18,11 @@ function readIfExists(filePath: string): string | null {
 }
 
 function formatTypeScriptModule(source: string, outputPath: string): string {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const formatter = spawnSync(
-    process.platform === "win32" ? "pnpm" : "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", outputPath],
-    {
-      cwd: repoRoot,
-      input: source,
-      encoding: "utf8",
-      // Windows requires a shell to launch package-manager shim scripts reliably.
-      ...(process.platform === "win32" ? { shell: true } : {}),
-    },
-  );
-  if (formatter.status !== 0) {
-    const details =
-      formatter.stderr?.trim() ||
-      formatter.stdout?.trim() ||
-      formatter.error?.message ||
-      "unknown formatter failure";
-    throw new Error(`failed to format generated base config schema: ${details}`);
-  }
-  return formatter.stdout;
+  return formatGeneratedModule(source, {
+    repoRoot: REPO_ROOT,
+    outputPath,
+    errorLabel: "base config schema",
+  });
 }
 
 export function renderBaseConfigSchemaModule(params?: { generatedAt?: string }): string {
@@ -60,9 +45,7 @@ export function writeBaseConfigSchemaModule(params?: {
   outputPath?: string;
   check?: boolean;
 }): { changed: boolean; wrote: boolean; outputPath: string } {
-  const repoRoot = path.resolve(
-    params?.repoRoot ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
-  );
+  const repoRoot = path.resolve(params?.repoRoot ?? REPO_ROOT);
   const outputPath = path.resolve(repoRoot, params?.outputPath ?? DEFAULT_OUTPUT_PATH);
   const current = readIfExists(outputPath);
   const generatedAt =

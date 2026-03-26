@@ -7,7 +7,7 @@ import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
-import type { CronService } from "./service.js";
+import { CronService } from "./service.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
@@ -162,7 +162,6 @@ export async function startCronForStore(params: {
     params.requestHeartbeatNow ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeatNow"]);
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
-  const { CronService } = await import("./service.js");
   const cron = new CronService({
     cronEnabled: params.cronEnabled ?? true,
     storePath: params.storePath,

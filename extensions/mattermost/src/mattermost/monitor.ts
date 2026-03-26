@@ -175,7 +175,7 @@ export function resolveMattermostEffectiveReplyToId(params: {
   threadRootId?: string | null;
 }): string | undefined {
   const threadRootId = params.threadRootId?.trim();
-  if (threadRootId) {
+  if (threadRootId && params.replyToMode !== "off") {
     return threadRootId;
   }
   if (params.kind === "direct") {
@@ -263,7 +263,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     );
   }
 
-  const client = createMattermostClient({ baseUrl, botToken });
+  const client = createMattermostClient({
+    baseUrl,
+    botToken,
+    allowPrivateNetwork: account.config?.allowPrivateNetwork === true,
+  });
   const botUser = await fetchMattermostMe(client);
   const botUserId = botUser.id;
   const botUsername = botUser.username?.trim() || undefined;
@@ -1086,7 +1090,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   idLine: `Your Mattermost user id: ${senderId}`,
                   code,
                 }),
-                { accountId: account.accountId },
+                { cfg, accountId: account.accountId },
               );
               opts.statusSink?.({ lastOutboundAt: Date.now() });
             } catch (err) {

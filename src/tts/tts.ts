@@ -24,11 +24,11 @@ import type {
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
 import {
   OPENAI_DEFAULT_TTS_MODEL as DEFAULT_OPENAI_MODEL,
   OPENAI_DEFAULT_TTS_VOICE as DEFAULT_OPENAI_VOICE,
-} from "../providers/openai-defaults.js";
+} from "../plugins/provider-model-defaults.js";
+import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   getSpeechProvider,
@@ -36,7 +36,6 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
 import type { SpeechVoiceOption } from "./provider-types.js";
-import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,
@@ -71,10 +70,10 @@ const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   speed: 1.0,
 };
 
-const TELEGRAM_OUTPUT = {
+const OPUS_OUTPUT = {
   openai: "opus" as const,
   // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice-note tradeoff for Telegram.
+  // Opus @ 48kHz/64kbps is a good voice message tradeoff.
   elevenlabs: "opus_48000_64",
   extension: ".opus",
   voiceCompatible: true,
@@ -86,6 +85,8 @@ const DEFAULT_OUTPUT = {
   extension: ".mp3",
   voiceCompatible: false,
 };
+
+const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -230,6 +231,17 @@ type TtsStatusEntry = {
 };
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
+
+export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (TTS_AUTO_MODES.has(normalized as TtsAutoMode)) {
+    return normalized as TtsAutoMode;
+  }
+  return undefined;
+}
 
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
@@ -505,12 +517,12 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio and support voice-bubble playback */
-const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
+/** Channels that require opus audio */
+const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
 
 function resolveOutputFormat(channelId?: string | null) {
-  if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
-    return TELEGRAM_OUTPUT;
+  if (channelId && OPUS_CHANNELS.has(channelId)) {
+    return OPUS_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
@@ -684,7 +696,7 @@ export async function synthesizeSpeech(params: {
 
   const { config, providers } = setup;
   const channelId = resolveChannelId(params.channel);
-  const target = channelId && VOICE_BUBBLE_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
+  const target = channelId && OPUS_CHANNELS.has(channelId) ? "voice-note" : "audio-file";
 
   const errors: string[] = [];
 
@@ -936,7 +948,7 @@ export async function maybeApplyTtsToPayload(params: {
 
     const channelId = resolveChannelId(params.channel);
     const shouldVoice =
-      channelId !== null && VOICE_BUBBLE_CHANNELS.has(channelId) && result.voiceCompatible === true;
+      channelId !== null && OPUS_CHANNELS.has(channelId) && result.voiceCompatible === true;
     const finalPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,

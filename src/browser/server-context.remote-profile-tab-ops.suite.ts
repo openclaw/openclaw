@@ -1,18 +1,36 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import "./server-context.chrome-test-harness.js";
-import * as chromeModule from "./chrome.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
-import * as pwAiModule from "./pw-ai-module.js";
-import { createBrowserRouteContext } from "./server-context.js";
-import {
-  createJsonListFetchMock,
-  createRemoteRouteHarness,
-  createSequentialPageLister,
-  makeState,
-  originalFetch,
-} from "./server-context.remote-tab-ops.harness.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-afterEach(() => {
+const originalFetch = globalThis.fetch;
+
+let chromeModule: typeof import("./chrome.js");
+let InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
+let pwAiModule: typeof import("./pw-ai-module.js");
+let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
+let createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
+let createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
+let createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
+let createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
+let makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
+
+beforeAll(async () => {
+  vi.resetModules();
+  await import("./server-context.chrome-test-harness.js");
+  chromeModule = await import("./chrome.js");
+  ({ InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js"));
+  pwAiModule = await import("./pw-ai-module.js");
+  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
+  ({ createBrowserRouteContext } = await import("./server-context.js"));
+  ({ createJsonListFetchMock, createRemoteRouteHarness, createSequentialPageLister, makeState } =
+    await import("./server-context.remote-tab-ops.harness.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  globalThis.fetch = originalFetch;
+});
+
+afterEach(async () => {
+  await closePlaywrightBrowserConnection().catch(() => {});
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });

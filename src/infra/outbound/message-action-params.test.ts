@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseSlackTarget } from "../../../extensions/slack/src/targets.js";
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
+import { resolveTelegramAutoThreadId } from "../../plugin-sdk/telegram.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -25,51 +25,6 @@ function createToolContext(
     replyToMode: "all",
     ...overrides,
   };
-}
-
-function resolveSlackAutoThreadId(params: {
-  to: string;
-  toolContext?: {
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    replyToMode?: "off" | "first" | "all";
-    hasRepliedRef?: { value: boolean };
-  };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
-    return undefined;
-  }
-  const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
-    return undefined;
-  }
-  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
-    return undefined;
-  }
-  return context.currentThreadTs;
-}
-
-function resolveTelegramAutoThreadId(params: {
-  to: string;
-  toolContext?: { currentThreadTs?: string; currentChannelId?: string };
-}): string | undefined {
-  const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) {
-    return undefined;
-  }
-  const parsedTo = parseTelegramTarget(params.to);
-  const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
-    return undefined;
-  }
-  return context.currentThreadTs;
 }
 
 describe("message action threading helpers", () => {
@@ -183,6 +138,104 @@ describe("message action media helpers", () => {
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
+  });
+
+  maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
+    try {
+      const args: Record<string, unknown> = {
+        mediaUrl: " file:///workspace/assets/photo.png ",
+        fileUrl: "/workspace/docs/report.pdf",
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot: ` ${sandboxRoot} `,
+        },
+      });
+
+      expect(args).toMatchObject({
+        mediaUrl: path.join(sandboxRoot, "assets", "photo.png"),
+        fileUrl: path.join(sandboxRoot, "docs", "report.pdf"),
+      });
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt(
+    "keeps remote HTTP mediaUrl and fileUrl aliases unchanged under sandbox normalization",
+    async () => {
+      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-remote-alias-"));
+      try {
+        const args: Record<string, unknown> = {
+          mediaUrl: "https://example.com/assets/photo.png?sig=1",
+          fileUrl: "https://example.com/docs/report.pdf?sig=2",
+        };
+
+        await normalizeSandboxMediaParams({
+          args,
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot,
+          },
+        });
+
+        expect(args).toMatchObject({
+          mediaUrl: "https://example.com/assets/photo.png?sig=1",
+          fileUrl: "https://example.com/docs/report.pdf?sig=2",
+        });
+      } finally {
+        await fs.rm(sandboxRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("uses mediaUrl and fileUrl aliases when inferring attachment filenames", async () => {
+    const mediaArgs: Record<string, unknown> = {
+      mediaUrl: "https://example.com/pic.png",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args: mediaArgs,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(mediaArgs.filename).toBe("pic.png");
+
+    const fileArgs: Record<string, unknown> = {
+      fileUrl: "https://example.com/docs/report.pdf",
+    };
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args: fileArgs,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+    expect(fileArgs.filename).toBe("report.pdf");
+  });
+
+  it("falls back to extension-based attachment names for remote-host file URLs", async () => {
+    const args: Record<string, unknown> = {
+      media: "file://attacker/share/photo.png",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "slack",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("attachment");
   });
 });
 

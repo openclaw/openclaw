@@ -24,14 +24,15 @@ describe("memory manager atomic reindex", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-atomic-"));
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
     const embeddingMocks = await import("./embedding.test-mocks.js");
     embedBatch = embeddingMocks.getEmbedBatchMock();
     resetEmbeddingMocks = embeddingMocks.resetEmbeddingMocks;
     ({ getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js"));
     ({ closeAllMemorySearchManagers } = await import("./index.js"));
-  });
-
-  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     resetEmbeddingMocks();
     shouldFail = false;

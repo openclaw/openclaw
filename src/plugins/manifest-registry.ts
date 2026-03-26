@@ -45,6 +45,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind;
   channels: string[];
   providers: string[];
+  cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   skills: string[];
@@ -146,7 +147,8 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   return (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
-    normalizedHint === `${manifestId}-sandbox`
+    normalizedHint === `${manifestId}-sandbox` ||
+    normalizedHint === `${manifestId}-media-understanding`
   );
 }
 
@@ -169,6 +171,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,
     skills: params.manifest.skills ?? [],
@@ -223,6 +226,7 @@ function buildBundleRecord(params: {
     bundleCapabilities: params.manifest.capabilities,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: params.manifest.skills ?? [],
     settingsFiles: params.manifest.settingsFiles ?? [],
     hooks: params.manifest.hooks ?? [],

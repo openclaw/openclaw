@@ -1,13 +1,21 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
+import {
+  behaviorManifestPath,
+  unitMemoryHotspotManifestPath,
+  unitTimingManifestPath,
+} from "./scripts/test-runner-manifest.mjs";
+import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
+
+export { resolveLocalVitestMaxWorkers };
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
 export default defineConfig({
   resolve: {
@@ -37,12 +45,38 @@ export default defineConfig({
     unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
+    forceRerunTriggers: [
+      "package.json",
+      "pnpm-lock.yaml",
+      "test/setup.ts",
+      "scripts/test-parallel.mjs",
+      "scripts/test-planner/catalog.mjs",
+      "scripts/test-planner/executor.mjs",
+      "scripts/test-planner/planner.mjs",
+      "scripts/test-planner/runtime-profile.mjs",
+      "scripts/test-runner-manifest.mjs",
+      "vitest.channel-paths.mjs",
+      "vitest.channels.config.ts",
+      "vitest.config.ts",
+      "vitest.e2e.config.ts",
+      "vitest.extensions.config.ts",
+      "vitest.gateway.config.ts",
+      "vitest.live.config.ts",
+      "vitest.performance-config.ts",
+      "vitest.scoped-config.ts",
+      "vitest.unit.config.ts",
+      "vitest.unit-paths.mjs",
+      behaviorManifestPath,
+      unitTimingManifestPath,
+      unitMemoryHotspotManifestPath,
+    ],
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
+      "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",
       "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
@@ -154,5 +188,6 @@ export default defineConfig({
         "src/infra/tailscale.ts",
       ],
     },
+    ...loadVitestExperimentalConfig(),
   },
 });
