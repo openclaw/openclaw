@@ -1014,6 +1014,7 @@ describe("gateway server sessions", () => {
           spawnedBy: "agent:main:main",
           parentSessionKey: "agent:main:main",
           spawnDepth: 2,
+          elevatedLevel: "on",
           label: "owned child",
         },
       },
@@ -1023,22 +1024,36 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { spawnedBy?: string; parentSessionKey?: string; spawnDepth?: number; label?: string };
+      entry: {
+        spawnedBy?: string;
+        parentSessionKey?: string;
+        spawnDepth?: number;
+        elevatedLevel?: string;
+        label?: string;
+      };
     }>(ws, "sessions.reset", { key: "subagent:child" });
 
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
     expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
     expect(reset.payload?.entry.spawnDepth).toBe(2);
+    expect(reset.payload?.entry.elevatedLevel).toBe("on");
     expect(reset.payload?.entry.label).toBe("owned child");
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
-      { spawnedBy?: string; parentSessionKey?: string; spawnDepth?: number; label?: string }
+      {
+        spawnedBy?: string;
+        parentSessionKey?: string;
+        spawnDepth?: number;
+        elevatedLevel?: string;
+        label?: string;
+      }
     >;
     expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
     expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
     expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);
+    expect(store["agent:main:subagent:child"]?.elevatedLevel).toBe("on");
     expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
 
     ws.close();
