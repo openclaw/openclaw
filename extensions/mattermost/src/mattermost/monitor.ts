@@ -1458,16 +1458,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     // Turn sequence for which the current patchInterval is scheduled.
     // Used to prevent turn B partials from corrupting turn A finalization (ID=2991100636).
     let scheduledTurnSeq = 0;
-    // Count of turns already posted via streaming (flushed at assistant message boundaries).
-    // Used to skip re-delivery of those turns in the final reply array.
-    let streamedTurnCount = 0;
+    // Set of turn sequence numbers that were successfully finalized via streaming.
+    // Used to skip re-delivery of those turns in the final reply array. Keyed by
+    // currentTurnSeq at finalization time so out-of-order completion is handled
+    // correctly (ID=2991100644).
+    const streamedTurnSeqs = new Set<number>();
+    // Monotonic counter tracking which turn sequence deliver() is processing.
+    // Incremented on each isFinal deliver() call so the Set lookup stays in sync.
+    let deliveryTurnSeq = 0;
     // Over-limit preview posts waiting to be deleted after their re-delivery succeeds.
     // FIFO queue: each entry is dequeued and deleted only when the corresponding
     // turn's re-delivery completes in deliver(), preventing one turn's delivery
     // from removing another turn's preview (ID=2965255734).
     const pendingOrphanDeletes: string[] = [];
     // FIFO queue of preview post IDs that were successfully finalized via
-    // patchMattermostPost in onAssistantMessageStart (normal streamedTurnCount path).
+    // patchMattermostPost in onAssistantMessageStart (normal streamedTurnSeqs path).
     // Used by the skipped-turn media branch to delete the finalized preview and
     // replace it with a combined text+media post (ID=2969665547).
     const finalizedPreviewIds: string[] = [];
@@ -1649,15 +1654,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         typingCallbacks,
         deliver: async (payload: ReplyPayload, info) => {
           const isFinal = info.kind === "final";
+          // Track which turn sequence deliver() is processing so the Set lookup
+          // stays aligned even when turns finalize out of order.
+          const thisTurnSeq = isFinal ? deliveryTurnSeq++ : -1;
 
           // Skip turns that were already posted via streaming.
           // onAssistantMessageStart flushes each completed turn's streaming message
           // before the next turn starts. The core still returns all turns as final
           // replies, so we skip the ones we already delivered.
-          if (isFinal && streamedTurnCount > 0) {
-            streamedTurnCount--;
+          if (isFinal && streamedTurnSeqs.has(thisTurnSeq)) {
+            streamedTurnSeqs.delete(thisTurnSeq);
             runtime.log?.(
-              `stream-patch skipping already-delivered turn (${streamedTurnCount} remaining)`,
+              `stream-patch skipping already-delivered turn seq=${thisTurnSeq} (${streamedTurnSeqs.size} remaining)`,
             );
             // Even though the text was already delivered via streaming, the final
             // payload may carry media attachments (e.g. TTS audio) that onPartialReply
@@ -1671,12 +1679,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               //
               // Source priority for the preview ID to delete (ID=2969665547):
               // 1. finalizedPreviewIds: set by onAssistantMessageStart after a
-              //    successful patchMattermostPost (normal streamedTurnCount path).
+              //    successful patchMattermostPost (normal streamedTurnSeqs path).
               // 2. pendingOrphanDeletes: set when the boundary patch was over-limit
               //    or failed — do NOT shift here if turn A's preview is queued and
               //    turn B triggers this branch (ID=2969665550). Only shift when the
-              //    queue head belongs to this specific turn (turn that just decremented
-              //    streamedTurnCount, i.e. the front of finalizedPreviewIds is empty).
+              //    queue head belongs to this specific turn (turn matched in
+              //    streamedTurnSeqs, i.e. the front of finalizedPreviewIds is empty).
               const orphanId = finalizedPreviewIds.length > 0 ? finalizedPreviewIds.shift() : null;
               let mediaDeliverySucceeded = false;
               try {
@@ -1953,6 +1961,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             }
           })();
         }
+        // Fallback: drain orphans even when no active stream state existed at settle
+        // time. Orphans can be queued after boundary finalization and the run may
+        // settle without streamMessageId/patchSending/patchInterval being truthy.
+        if (pendingOrphanDeletes.length > 0 && blockStreamingClient) {
+          const orphansToDelete = [...pendingOrphanDeletes.splice(0)];
+          for (const id of orphansToDelete) {
+            void deleteMattermostPost(blockStreamingClient, id).catch(() => {});
+          }
+        }
       },
       run: () =>
         core.channel.reply.dispatchReplyFromConfig({
@@ -1980,6 +1997,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   const finalizeId = streamMessageId;
                   const finalizeText = pendingPatchText;
 
+                  // Capture the finishing turn's sequence for streamedTurnSeqs tracking.
+                  const finalizingTurnSeq = currentTurnSeq;
                   // Advance the turn sequence counter BEFORE clearing state.
                   // schedulePatch captures this value when it starts a send; if the
                   // value has changed by the time the POST resolves, the result belongs
@@ -2019,7 +2038,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                   patchSending = false;
                   // Truncate to textLimit — the same cap applied by schedulePatch/
-                  // Only increment streamedTurnCount when the full turn text fits within
+                  // Only add to streamedTurnSeqs when the full turn text fits within
                   // textLimit. If the text is longer, the patch would only store the
                   // first chunk — deliver() would then skip this turn and the remainder
                   // would be silently dropped. Instead, skip the turn-finalization patch
@@ -2045,7 +2064,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       // Increment only after a successful patch so deliver() only
                       // skips this turn if we know the complete text is visible.
                       // If the patch fails, deliver() falls back to normal re-delivery.
-                      streamedTurnCount++;
+                      streamedTurnSeqs.add(finalizingTurnSeq);
                       // Record the finalized preview ID so the skipped-turn media
                       // branch can delete it and deliver text+media as one post.
                       finalizedPreviewIds.push(finalizeId);
@@ -2057,8 +2076,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       // Patch failed: queue the preview for cleanup after the
                       // authoritative re-delivery in deliver() (ID=2966838455).
                       // Without this, the stale preview stays in-channel alongside
-                      // the re-delivered reply since streamedTurnCount was not
-                      // incremented and deliver() won't know to clean up.
+                      // the re-delivered reply since streamedTurnSeqs was not
+                      // updated and deliver() won't know to clean up.
                       pendingOrphanDeletes.push(finalizeId);
                     }
                   }
