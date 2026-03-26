@@ -472,6 +472,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const searcher = new EpisodicSearch(store, encoder);
       const episodicResults = await searcher.search({
         query,
+        // Scope retrieval to this agent so agents sharing a database file
+        // (via a shared agentDir) do not leak memories across personas.
+        agentId: this.agentId,
         limit: maxResults,
       });
 

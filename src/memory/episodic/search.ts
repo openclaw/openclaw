@@ -50,6 +50,7 @@ export class EpisodicSearch {
   async search(options: EpisodeSearchOptions): Promise<EpisodeSearchResult[]> {
     const {
       query,
+      agentId,
       timeRange,
       minImportance = 0.0,
       emotionalFilter,
@@ -58,9 +59,12 @@ export class EpisodicSearch {
       limit = 10,
     } = options;
 
-    // Get all episodes first — if the store is empty we can return early
-    // without paying for an embedding API round-trip.
-    let episodes = this.store.getAll();
+    // Get all episodes for this agent first — if the store is empty we can
+    // return early without paying for an embedding API round-trip.
+    // Passing agentId scopes the query to a single agent so agents that share
+    // a database file (via a shared agentDir) do not leak memories across
+    // personas.
+    let episodes = this.store.getAll(agentId);
     if (episodes.length === 0) {
       return [];
     }

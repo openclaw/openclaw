@@ -38,6 +38,8 @@ export interface EpisodeAssociation {
 
 export interface EpisodeSearchOptions {
   query: string;
+  /** When set, only episodes belonging to this agent are considered. */
+  agentId?: string;
   queryEmbedding?: Float32Array;
   timeRange?: {
     after?: string;

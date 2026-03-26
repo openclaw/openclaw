@@ -56,6 +56,19 @@ export class EpisodicStore {
         created_at    TEXT NOT NULL,
         PRIMARY KEY (episode_id, associated_id)
       );
+
+      -- Sentinel table used for atomic deduplication of compaction passes.
+      -- Each row represents a unique (agent, session, content-hash) batch that
+      -- has already been encoded.  The UNIQUE constraint plus INSERT OR IGNORE
+      -- makes the check-then-claim atomic at the SQLite level, preventing
+      -- duplicate episodes from fire-and-forget concurrent compaction calls.
+      CREATE TABLE IF NOT EXISTS episodic_compaction_hashes (
+        agent_id     TEXT NOT NULL,
+        session_key  TEXT NOT NULL,
+        context_hash TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        UNIQUE (agent_id, session_key, context_hash)
+      );
     `);
   }
 
@@ -257,11 +270,38 @@ export class EpisodicStore {
   }
 
   /**
+   * Atomically claim a (agent_id, session_key, context_hash) slot in the
+   * `episodic_compaction_hashes` sentinel table.
+   *
+   * Returns `true` if this call won the race and the caller should proceed
+   * to insert episodes.  Returns `false` if another concurrent (or previous)
+   * compaction pass already claimed the same hash, meaning the episodes have
+   * already been stored and the caller should skip.
+   *
+   * Using `INSERT OR IGNORE` with the UNIQUE constraint makes the check-and-
+   * claim a single atomic DB operation, which prevents the TOCTOU race that
+   * a separate `hasEpisodesForContentHash` + `create` pattern would allow
+   * when fire-and-forget compactions overlap.
+   */
+  claimContentHash(agentId: string, sessionKey: string, contextHash: string): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO episodic_compaction_hashes
+         (agent_id, session_key, context_hash, created_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(agentId, sessionKey, contextHash, new Date().toISOString());
+    // changes === 1 means the row was inserted (we won the race).
+    // changes === 0 means IGNORE fired (another caller already claimed it).
+    return (result.changes as number) === 1;
+  }
+
+  /**
+   * @deprecated Use `claimContentHash` for atomic deduplication instead.
+   *
    * Return true if at least one episode already exists for the given
-   * agent + session + content hash combination.  Used to prevent
-   * duplicate episode storage across repeated compaction passes of the
-   * same content while still allowing new episodes to be stored when
-   * the conversation has grown (different hash).
+   * agent + session + content hash combination.  This is a non-atomic read
+   * and is kept only for backwards compatibility with any external callers.
    */
   hasEpisodesForContentHash(agentId: string, sessionKey: string, contextHash: string): boolean {
     const stmt = this.db.prepare(
