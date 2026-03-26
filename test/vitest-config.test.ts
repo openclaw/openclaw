@@ -5,6 +5,21 @@ import {
 } from "../scripts/test-planner/runtime-profile.mjs";
 import { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
 
+function resolveHighMemoryLocalRuntime() {
+  return resolveRuntimeCapabilities(
+    {
+      RUNNER_OS: "macOS",
+    },
+    {
+      cpuCount: 16,
+      totalMemoryBytes: 128 * 1024 ** 3,
+      platform: "darwin",
+      mode: "local",
+      loadAverage: [0.2, 0.2, 0.2],
+    },
+  );
+}
+
 describe("resolveLocalVitestMaxWorkers", () => {
   it("derives a mid-tier local cap for 64 GiB hosts", () => {
     expect(
@@ -155,18 +170,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
   });
 
   it("enables shared channel batching on high-memory local hosts", () => {
-    const runtime = resolveRuntimeCapabilities(
-      {
-        RUNNER_OS: "macOS",
-      },
-      {
-        cpuCount: 16,
-        totalMemoryBytes: 128 * 1024 ** 3,
-        platform: "darwin",
-        mode: "local",
-        loadAverage: [0.2, 0.2, 0.2],
-      },
-    );
+    const runtime = resolveHighMemoryLocalRuntime();
     const budget = resolveExecutionBudget(runtime);
 
     expect(runtime.memoryBand).toBe("high");
@@ -178,18 +182,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
   });
 
   it("uses a coarser shared extension batch target on high-memory local hosts", () => {
-    const runtime = resolveRuntimeCapabilities(
-      {
-        RUNNER_OS: "macOS",
-      },
-      {
-        cpuCount: 16,
-        totalMemoryBytes: 128 * 1024 ** 3,
-        platform: "darwin",
-        mode: "local",
-        loadAverage: [0.2, 0.2, 0.2],
-      },
-    );
+    const runtime = resolveHighMemoryLocalRuntime();
     const budget = resolveExecutionBudget(runtime);
 
     expect(runtime.memoryBand).toBe("high");

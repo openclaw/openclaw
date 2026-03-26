@@ -59,6 +59,31 @@ const targetedUnitProxyFiles = [
   "src/cli/qr-dashboard.integration.test.ts",
 ];
 
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
+
+function runPlannerPlan(args: string[], env: NodeJS.ProcessEnv): string {
+  return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
+    cwd: REPO_ROOT,
+    env,
+    encoding: "utf8",
+  });
+}
+
+function runHighMemoryLocalMultiSurfacePlan(): string {
+  return runPlannerPlan(
+    ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
+    {
+      ...clearPlannerShardEnv(process.env),
+      CI: "",
+      GITHUB_ACTIONS: "",
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    },
+  );
+}
+
 describe("scripts/test-parallel fatal output guard", () => {
   it("fails a zero exit when V8 reports an out-of-memory fatal", () => {
     const output = [
@@ -264,33 +289,7 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("starts isolated channel lanes before shared extension batches on high-memory local hosts", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      [
-        "scripts/test-parallel.mjs",
-        "--plan",
-        "--surface",
-        "unit",
-        "--surface",
-        "extensions",
-        "--surface",
-        "channels",
-      ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
-    );
+    const output = runHighMemoryLocalMultiSurfacePlan();
 
     const firstChannelIsolated = output.indexOf(
       "message-handler.preflight.acp-bindings-channels-isolated",
@@ -304,33 +303,7 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("uses coarser unit-fast batching for high-memory local multi-surface runs", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      [
-        "scripts/test-parallel.mjs",
-        "--plan",
-        "--surface",
-        "unit",
-        "--surface",
-        "extensions",
-        "--surface",
-        "channels",
-      ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
-    );
+    const output = runHighMemoryLocalMultiSurfacePlan();
 
     expect(output).toContain("unit-fast-batch-4");
     expect(output).not.toContain("unit-fast-batch-5");
