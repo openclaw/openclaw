@@ -1,3 +1,11 @@
+import {
+  isSlackExecApprovalApprover,
+  isSlackExecApprovalClientEnabled,
+} from "../../../extensions/slack/exec-approvals-api.js";
+import {
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalClientEnabled,
+} from "../../../extensions/telegram/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
@@ -193,6 +201,27 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       shouldContinue: false,
       reply: { text: "❌ You are not authorized to approve plugin requests on Discord." },
     };
+  }
+
+  if (params.command.channel === "slack") {
+    if (!isSlackExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ Slack exec approvals are not enabled for this bot account." },
+      };
+    }
+    if (
+      !isSlackExecApprovalApprover({
+        cfg: params.cfg,
+        accountId: params.ctx.AccountId,
+        senderId: params.command.senderId,
+      })
+    ) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ You are not authorized to approve exec requests on Slack." },
+      };
+    }
   }
 
   const missingScope = requireGatewayClientScopeForInternalChannel(params, {

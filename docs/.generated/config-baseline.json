@@ -28904,6 +28904,101 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.accounts.*.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.accounts.*.groupPolicy",
       "kind": "channel",
       "type": "string",
@@ -30304,6 +30399,132 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals",
+      "help": "Slack-native exec approval routing and approver authorization. Enable this only when Slack should act as an explicit exec-approval client for the selected bot account.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Agent Filter",
+      "help": "Use this to keep Slack approval prompts scoped to specific agents, for example `[\"main\", \"ops-agent\"]`. When omitted, all agents are eligible.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Approvers",
+      "help": "Slack user IDs allowed to approve exec requests for this bot account. Prompts are only delivered to these approvers when target includes dm.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approvals Enabled",
+      "help": "Enable Slack exec approvals for this account. When false or unset, Slack buttons cannot approve exec requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network",
+        "storage"
+      ],
+      "label": "Slack Exec Approval Session Filter",
+      "help": "Optional session-key filters matched as substring or regex-style patterns before Slack approval routing is used.",
+      "hasChildren": true
+    },
+    {
+      "path": "channels.slack.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Exec Approval Target",
+      "help": "Where to send Slack exec approval prompts: \"dm\" (default) sends to approver DMs, \"channel\" posts in the originating channel, \"both\" sends to both.",
       "hasChildren": false
     },
     {

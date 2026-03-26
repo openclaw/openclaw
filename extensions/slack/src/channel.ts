@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildOutboundBaseSessionKey,
+  normalizeAccountId,
   normalizeOutboundThreadId,
   resolveThreadSessionKeys,
   type RoutePeer,
@@ -32,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import {
   listEnabledSlackAccounts,
+  listSlackAccountIds,
   resolveSlackAccount,
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
@@ -45,6 +47,11 @@ import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "./directory-config.js";
+import {
+  isSlackExecApprovalClientEnabled,
+  resolveSlackExecApprovalTarget,
+  shouldSuppressLocalSlackExecApprovalPrompt,
+} from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -445,6 +452,43 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         };
       },
     }),
+    execApprovals: {
+      getInitiatingSurfaceState: ({ cfg, accountId }) =>
+        isSlackExecApprovalClientEnabled({ cfg, accountId })
+          ? { kind: "enabled" }
+          : { kind: "disabled" },
+      shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalSlackExecApprovalPrompt({ cfg, accountId, payload }),
+      hasConfiguredDmRoute: ({ cfg }) => {
+        return listEnabledSlackAccounts(cfg).some(({ accountId }) => {
+          if (!isSlackExecApprovalClientEnabled({ cfg, accountId })) {
+            return false;
+          }
+          const target = resolveSlackExecApprovalTarget({ cfg, accountId });
+          return target === "dm" || target === "both";
+        });
+      },
+      shouldSuppressForwardingFallback: ({ cfg, target, request }) => {
+        const channel = target.channel?.trim().toLowerCase();
+        if (channel !== "slack") {
+          return false;
+        }
+        const requestChannel = request.request.turnSourceChannel?.trim().toLowerCase() ?? "";
+        if (requestChannel !== "slack") {
+          return false;
+        }
+        const targetAccountId = normalizeAccountId(target.accountId);
+        const sourceAccountId = normalizeAccountId(request.request.turnSourceAccountId);
+        // Only suppress if the target account matches the source account (or
+        // both are unset). In multi-account setups a cross-account forward
+        // should not be suppressed since the native handler skips mismatches.
+        if (targetAccountId && sourceAccountId && targetAccountId !== sourceAccountId) {
+          return false;
+        }
+        const accountId = targetAccountId || sourceAccountId;
+        return isSlackExecApprovalClientEnabled({ cfg, accountId });
+      },
+    },
     gateway: {
       startAccount: async (ctx) => {
         const account = ctx.account;

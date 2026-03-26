@@ -907,6 +907,16 @@ export const SlackAccountSchema = z
       })
       .strict()
       .optional(),
+    execApprovals: z
+      .object({
+        enabled: z.boolean().optional(),
+        approvers: z.array(z.string()).optional(),
+        agentFilter: z.array(z.string()).optional(),
+        sessionFilter: z.array(z.string()).optional(),
+        target: z.enum(["dm", "channel", "both"]).optional(),
+      })
+      .strict()
+      .optional(),
     slashCommand: z
       .object({
         enabled: z.boolean().optional(),

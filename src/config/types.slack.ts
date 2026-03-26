@@ -56,6 +56,21 @@ export type SlackCapabilitiesConfig =
       interactiveReplies?: boolean;
     };
 
+export type SlackExecApprovalTarget = "dm" | "channel" | "both";
+
+export type SlackExecApprovalConfig = {
+  /** Enable Slack exec approvals for this account. Default: false. */
+  enabled?: boolean;
+  /** Slack user IDs allowed to approve exec requests. Required if enabled. */
+  approvers?: string[];
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Where to send approval prompts. Default: "dm". */
+  target?: SlackExecApprovalTarget;
+};
+
 export type SlackActionConfig = {
   reactions?: boolean;
   messages?: boolean;
@@ -171,6 +186,8 @@ export type SlackAccountConfig = {
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
+  /** Slack-native exec approval delivery + approver authorization. */
+  execApprovals?: SlackExecApprovalConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).

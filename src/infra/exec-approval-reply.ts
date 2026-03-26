@@ -24,6 +24,13 @@ export type ExecApprovalPendingReplyParams = {
   nodeId?: string;
   expiresAtMs?: number;
   nowMs?: number;
+  /**
+   * Optional escape function applied to user-controlled text interpolated
+   * outside code fences (host, nodeId, cwd, approvalId). Callers rendering
+   * into formats with special characters (e.g. Slack mrkdwn) should pass an
+   * appropriate escaper here.
+   */
+  escapeText?: (value: string) => string;
 };
 
 export type ExecApprovalUnavailableReplyParams = {
@@ -79,6 +86,7 @@ export function getExecApprovalReplyMetadata(
 export function buildExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {
+  const esc = params.escapeText ?? ((v: string) => v);
   const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
   const lines: string[] = [];
   const warningText = params.warningText?.trim();
@@ -98,12 +106,12 @@ export function buildExecApprovalPendingReplyPayload(
     ),
   );
   const info: string[] = [];
-  info.push(`Host: ${params.host}`);
+  info.push(`Host: ${esc(params.host)}`);
   if (params.nodeId) {
-    info.push(`Node: ${params.nodeId}`);
+    info.push(`Node: ${esc(params.nodeId)}`);
   }
   if (params.cwd) {
-    info.push(`CWD: ${params.cwd}`);
+    info.push(`CWD: ${esc(params.cwd)}`);
   }
   if (typeof params.expiresAtMs === "number" && Number.isFinite(params.expiresAtMs)) {
     const expiresInSec = Math.max(
@@ -112,7 +120,7 @@ export function buildExecApprovalPendingReplyPayload(
     );
     info.push(`Expires in: ${expiresInSec}s`);
   }
-  info.push(`Full id: \`${params.approvalId}\``);
+  info.push(`Full id: \`${esc(params.approvalId)}\``);
   lines.push(info.join("\n"));
 
   return {
@@ -148,21 +156,21 @@ export function buildExecApprovalUnavailableReplyPayload(
       `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+      "Approve it from the Web UI or terminal UI, or from Discord, Telegram, or Slack if those approval clients are enabled.",
     );
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+      "Approve it from the Web UI or terminal UI, or from Discord, Telegram, or Slack if those approval clients are enabled.",
     );
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command.",
+      "Open the Web UI or terminal UI, or enable Discord, Telegram, or Slack exec approvals, then retry the command.",
     );
   }
 
