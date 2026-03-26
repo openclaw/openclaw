@@ -3234,7 +3234,7 @@
           "exportName": "resolveGatewayPort",
           "kind": "function",
           "source": {
-            "line": 285,
+            "line": 297,
             "path": "src/config/paths.ts"
           }
         },
