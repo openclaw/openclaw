@@ -797,6 +797,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let gatewaySupervisor: ReturnType<typeof createDiscordGatewaySupervisor> | undefined;
   let deactivateMessageHandler: (() => void) | undefined;
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
+  let lifecycleGateway: GatewayPlugin | undefined;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
   try {
@@ -946,15 +947,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     gatewaySupervisor = (
       createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor
     )({
-      client,
+      gateway: lifecycleGateway,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
       runtime,
     });
 
-    const lifecycleGateway = client.getPlugin<GatewayPlugin>("gateway");
     earlyGatewayEmitter = gatewaySupervisor.emitter;
     onEarlyGatewayDebug = (msg: unknown) => {
       if (!(isVerboseForTesting ?? isVerbose)()) {
@@ -1163,7 +1164,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     onEarlyGatewayDebug = undefined;
     await (runDiscordGatewayLifecycleForTesting ?? runDiscordGatewayLifecycle)({
       accountId: account.accountId,
-      client,
+      gateway: lifecycleGateway,
       runtime,
       abortSignal: opts.abortSignal,
       statusSink: opts.setStatus,
@@ -1180,6 +1181,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     opts.setStatus?.({ connected: false });
     if (onEarlyGatewayDebug) {
       earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
+    }
+    if (!lifecycleStarted) {
+      try {
+        lifecycleGateway?.disconnect();
+      } catch (err) {
+        runtime.error?.(
+          danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
+        );
+      }
     }
     gatewaySupervisor?.dispose();
     if (!lifecycleStarted) {

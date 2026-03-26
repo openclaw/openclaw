@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "../../extensions/memory-core/src/memory/index.js";
 
-type MemoryIndexModule = typeof import("./index.js");
+type MemoryIndexModule = typeof import("../../extensions/memory-core/src/memory/index.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
@@ -131,7 +131,8 @@ describe("memory index", () => {
   beforeAll(async () => {
     vi.resetModules();
     await import("./test-runtime-mocks.js");
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } =
+      await import("../../extensions/memory-core/src/memory/index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");

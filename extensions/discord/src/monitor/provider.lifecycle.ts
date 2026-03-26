@@ -1,4 +1,3 @@
-import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
 import { createArmableStallWatchdog } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -70,7 +69,7 @@ async function waitForDiscordGatewayReady(params: {
 
 export async function runDiscordGatewayLifecycle(params: {
   accountId: string;
-  client: Client;
+  gateway?: GatewayPlugin;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   isDisallowedIntentsError: (err: unknown) => boolean;
@@ -85,7 +84,7 @@ export async function runDiscordGatewayLifecycle(params: {
   const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   const RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
-  const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
+  const gateway = params.gateway;
   if (gateway) {
     registerGateway(params.accountId, gateway);
   }
@@ -486,6 +485,15 @@ export async function runDiscordGatewayLifecycle(params: {
       );
       return "stop";
     }
+    // When we deliberately set maxAttempts=0 and disconnected (health-monitor
+    // stale-socket restart), Carbon fires "Max reconnect attempts (0)". This
+    // is expected — log at info instead of error to avoid false alarms.
+    if (lifecycleStopping && event.type === "reconnect-exhausted") {
+      params.runtime.log?.(
+        `discord: ignoring expected reconnect-exhausted during shutdown: ${event.message}`,
+      );
+      return "stop";
+    }
     params.runtime.error?.(danger(`discord gateway error: ${event.message}`));
     return event.shouldStopLifecycle ? "stop" : "continue";
   };
@@ -495,7 +503,13 @@ export async function runDiscordGatewayLifecycle(params: {
       if (decision !== "stop") {
         return "continue";
       }
-      if (event.type === "disallowed-intents") {
+      // Don't throw for expected shutdown events — intentional disconnect
+      // (reconnect-exhausted with maxAttempts=0) and disallowed-intents are
+      // both handled without crashing the provider.
+      if (
+        event.type === "disallowed-intents" ||
+        (lifecycleStopping && event.type === "reconnect-exhausted")
+      ) {
         return "stop";
       }
       throw event.err;

@@ -2,7 +2,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { buildTalkConfigResponse, resolveActiveTalkProviderConfig } from "../../config/talk.js";
 import type { TalkProviderConfig } from "../../config/types.gateway.js";
-import type { OpenClawConfig, TtsConfig } from "../../config/types.js";
+import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
 import {
@@ -30,6 +30,12 @@ function trimString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function normalizeAliasKey(value: string): string {
@@ -87,7 +93,10 @@ function buildTalkTtsConfig(
     ...baseTts,
     auto: "always",
     provider,
-    [provider]: resolvedProviderConfig,
+    providers: {
+      ...((asRecord(baseTts.providers) ?? {}) as TtsProviderConfigMap),
+      [provider]: resolvedProviderConfig,
+    },
   };
 
   return {

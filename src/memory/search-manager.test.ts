@@ -96,21 +96,24 @@ const fallbackSearch = fallbackManager.search;
 const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock("./qmd-manager.js", () => ({
+vi.mock("../../extensions/memory-core/src/memory/qmd-manager.js", () => ({
   QmdMemoryManager: {
     create: vi.fn(async () => mockPrimary),
   },
 }));
 
-vi.mock("./manager-runtime.js", () => ({
+vi.mock("../../extensions/memory-core/src/memory/manager-runtime.js", () => ({
   MemoryIndexManager: {
     get: mockMemoryIndexGet,
   },
   closeAllMemoryIndexManagers: mockCloseAllMemoryIndexManagers,
 }));
 
-import { QmdMemoryManager } from "./qmd-manager.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./search-manager.js";
+import { QmdMemoryManager } from "../../extensions/memory-core/src/memory/qmd-manager.js";
+import {
+  closeAllMemorySearchManagers,
+  getMemorySearchManager,
+} from "../../extensions/memory-core/src/memory/search-manager.js";
 // eslint-disable-next-line @typescript-eslint/unbound-method -- mocked static function
 const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 

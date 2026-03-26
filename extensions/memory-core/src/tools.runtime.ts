@@ -1,5 +1,2 @@
-export {
-  getMemorySearchManager,
-  readAgentMemoryFile,
-  resolveMemoryBackendConfig,
-} from "openclaw/plugin-sdk/memory-core";
+export { readAgentMemoryFile, resolveMemoryBackendConfig } from "./api.js";
+export { getMemorySearchManager } from "./runtime-api.js";

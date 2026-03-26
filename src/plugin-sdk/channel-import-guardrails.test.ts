@@ -268,22 +268,21 @@ function collectExtensionSourceFiles(): string[] {
 function collectCoreSourceFiles(): string[] {
   const srcDir = resolve(ROOT_DIR, "..", "src");
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
-  const normalizedBrowserCompatDir = normalizePath(resolve(ROOT_DIR, "compat", "browser"));
   coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
     rootDir: srcDir,
-    shouldSkipEntry: ({ normalizedFullPath }) =>
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-harness.") ||
       normalizedFullPath.includes(".test-helpers.") ||
+      entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||
+      normalizedFullPath.includes(".suite.") ||
       normalizedFullPath.includes(".spec.") ||
       normalizedFullPath.includes(".fixture.") ||
       normalizedFullPath.includes(".snap") ||
       // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
       // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
-      normalizedFullPath.includes(`${normalizedPluginSdkDir}/`) ||
-      // src/compat/browser is the explicit browser compatibility shim layer that forwards
-      // legacy core entrypoints into the bundled browser plugin.
-      normalizedFullPath.includes(`${normalizedBrowserCompatDir}/`),
+      normalizedFullPath.includes(`${normalizedPluginSdkDir}/`),
   });
   return coreSourceFilesCache;
 }

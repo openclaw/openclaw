@@ -48,22 +48,6 @@ const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
 
-const OPUS_OUTPUT = {
-  openai: "opus" as const,
-  // ElevenLabs output formats use codec_sample_rate_bitrate naming.
-  // Opus @ 48kHz/64kbps is a good voice message tradeoff.
-  elevenlabs: "opus_48000_64",
-  extension: ".opus",
-  voiceCompatible: true,
-};
-
-const DEFAULT_OUTPUT = {
-  openai: "mp3" as const,
-  elevenlabs: "mp3_44100_128",
-  extension: ".mp3",
-  voiceCompatible: false,
-};
-
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
   mode: TtsMode;
@@ -173,9 +157,19 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   });
 }
 
+function resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
+  return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
+}
+
 function asProviderConfig(value: unknown): SpeechProviderConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as SpeechProviderConfig)
+    : {};
+}
+
+function asProviderConfigMap(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -185,13 +179,18 @@ function resolveSpeechProviderConfigs(
   timeoutMs: number,
 ): Record<string, SpeechProviderConfig> {
   const providerConfigs: Record<string, SpeechProviderConfig> = {};
+  const rawProviders = asProviderConfigMap(raw.providers);
   for (const provider of listSpeechProviders(cfg)) {
     providerConfigs[provider.id] =
       provider.resolveConfig?.({
         cfg,
-        rawConfig: raw as Record<string, unknown>,
+        rawConfig: {
+          ...(raw as Record<string, unknown>),
+          providers: rawProviders,
+        },
         timeoutMs,
-      }) ?? asProviderConfig((raw as Record<string, unknown>)[provider.id]);
+      }) ??
+      asProviderConfig(rawProviders[provider.id] ?? (raw as Record<string, unknown>)[provider.id]);
   }
   return providerConfigs;
 }
@@ -214,7 +213,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   return {
     auto,
     mode: raw.mode ?? "final",
-    provider: canonicalizeSpeechProviderId(raw.provider, cfg) ?? "microsoft",
+    provider:
+      canonicalizeSpeechProviderId(raw.provider, cfg) ??
+      resolveRegistryDefaultSpeechProviderId(cfg),
     providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
@@ -362,7 +363,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
       return provider.id;
     }
   }
-  return "microsoft";
+  return config.provider;
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
@@ -401,15 +402,8 @@ export function setLastTtsAttempt(entry: TtsStatusEntry | undefined): void {
   lastTtsAttempt = entry;
 }
 
-/** Channels that require opus audio */
+/** Channels that require voice-note-compatible audio */
 const OPUS_CHANNELS = new Set(["telegram", "feishu", "whatsapp", "matrix"]);
-
-function resolveOutputFormat(channelId?: string | null) {
-  if (channelId && OPUS_CHANNELS.has(channelId)) {
-    return OPUS_OUTPUT;
-  }
-  return DEFAULT_OUTPUT;
-}
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
   return channel ? normalizeChannelId(channel) : null;
@@ -859,6 +853,5 @@ export const _test = {
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
-  resolveOutputFormat,
   getResolvedSpeechProviderConfig,
 };

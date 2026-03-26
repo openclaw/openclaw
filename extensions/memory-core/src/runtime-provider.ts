@@ -1,8 +1,5 @@
-import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core";
-import {
-  getMemorySearchManager,
-  resolveMemoryBackendConfig,
-} from "openclaw/plugin-sdk/memory-core";
+import { resolveMemoryBackendConfig, type MemoryPluginRuntime } from "./api.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./runtime-api.js";
 
 export const memoryRuntime: MemoryPluginRuntime = {
   async getMemorySearchManager(params) {
@@ -14,5 +11,8 @@ export const memoryRuntime: MemoryPluginRuntime = {
   },
   resolveMemoryBackendConfig(params) {
     return resolveMemoryBackendConfig(params);
+  },
+  async closeAllMemorySearchManagers() {
+    await closeAllMemorySearchManagers();
   },
 };
