@@ -140,7 +140,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends; \
     fi && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git lsof openssl
+      procps hostname curl git lsof openssl openssh-client python3 python3-pip
+
+# Install Python MCP server dependencies for fleet tools (telegram-agentic extension).
+# These run as MCP server child processes spawned by the gateway.
+RUN pip3 install --break-system-packages --no-cache-dir mcp paramiko 2>/dev/null || true
 
 RUN chown node:node /app
 
