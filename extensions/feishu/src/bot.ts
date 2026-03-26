@@ -668,9 +668,9 @@ export async function handleFeishuMessage(params: {
     // authoritative transcript turns.
     log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
-    // Resolve media from message
+    // Resolve media from the triggering message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    let mediaList = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -679,7 +679,7 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
+    let mediaPayload = buildAgentMediaPayload(mediaList);
 
     // Fetch quoted/replied message content if parentId exists
     let quotedMessageInfo: Awaited<ReturnType<typeof getMessageFeishu>> = null;
@@ -757,6 +757,76 @@ export async function handleFeishuMessage(params: {
             timestamp: entry.timestamp,
           }))
         : undefined;
+
+    // Best-effort: if the bot is mentioned later, include media from pending group history
+    // (e.g. screenshots posted before the mention). This keeps the "history" section
+    // useful for debugging without requiring users to re-upload images.
+    if (isGroup && historyKey && historyLimit > 0 && chatHistories) {
+      const historyEntries = chatHistories.get(historyKey) ?? [];
+      const mediaCandidates = historyEntries
+        .filter((entry) =>
+          Boolean(entry.messageId) && /<media:|!\[image\]/.test(String(entry.body ?? "")),
+        )
+        .slice(-3); // keep it cheap: only resolve the most recent few media turns
+
+      if (mediaCandidates.length > 0) {
+        log(
+          `feishu[${account.accountId}]: resolving ${mediaCandidates.length} media message(s) from pending history`,
+        );
+      }
+
+      const historyMediaList: Awaited<ReturnType<typeof resolveFeishuMediaList>> = [];
+      for (const entry of mediaCandidates) {
+        const messageId = entry.messageId;
+        if (!messageId) {
+          continue;
+        }
+        try {
+          const info = await getMessageFeishu({
+            cfg,
+            messageId,
+            accountId: account.accountId,
+          });
+          if (!info?.rawContent) {
+            continue;
+          }
+          const resolved = await resolveFeishuMediaList({
+            cfg,
+            messageId,
+            messageType: info.contentType,
+            content: info.rawContent,
+            maxBytes: mediaMaxBytes,
+            log,
+            accountId: account.accountId,
+          });
+          historyMediaList.push(...resolved);
+          if (historyMediaList.length >= 10) {
+            break;
+          }
+        } catch (err) {
+          log(
+            `feishu[${account.accountId}]: failed to resolve pending history media for ${messageId}: ${String(err)}`,
+          );
+        }
+      }
+
+      if (historyMediaList.length > 0) {
+        // Prefer history media first so placeholders in history align with MediaPaths order.
+        const merged = [...historyMediaList, ...mediaList];
+        const seen = new Set<string>();
+        mediaList = merged.filter((m) => {
+          if (!m?.path) {
+            return false;
+          }
+          if (seen.has(m.path)) {
+            return false;
+          }
+          seen.add(m.path);
+          return true;
+        });
+        mediaPayload = buildAgentMediaPayload(mediaList);
+      }
+    }
 
     const threadContextBySessionKey = new Map<
       string,
