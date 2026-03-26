@@ -1117,18 +1117,24 @@ export function renderConfig(props: ConfigProps) {
                             : nothing
                         }
                       </span>
-                      <textarea
-                        class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
-                        .value=${blurred ? "" : props.raw}
-                        ?readonly=${blurred}
-                        @input=${(e: Event) => {
-                          if (blurred) {
-                            return;
-                          }
-                          props.onRawChange((e.target as HTMLTextAreaElement).value);
-                        }}
-                      ></textarea>
+                      ${
+                        blurred
+                          ? html`
+                              <div class="callout info" style="margin-top: 12px">
+                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"} hidden. Use the
+                                reveal button above to edit the raw config.
+                              </div>
+                            `
+                          : html`
+                              <textarea
+                                placeholder="Raw config (JSON/JSON5)"
+                                .value=${props.raw}
+                                @input=${(e: Event) => {
+                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
+                                }}
+                              ></textarea>
+                            `
+                      }
                     </div>
                   `;
                   })()
