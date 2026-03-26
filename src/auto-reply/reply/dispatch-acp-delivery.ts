@@ -28,6 +28,7 @@ type AcpDispatchDeliveryState = {
   accumulatedBlockText: string;
   blockCount: number;
   deliveredFinalReply: boolean;
+  deliveredVisibleText: boolean;
   routedCounts: Record<ReplyDispatchKind, number>;
   toolMessageByCallId: Map<string, ToolMessageHandle>;
 };
@@ -42,6 +43,7 @@ export type AcpDispatchDeliveryCoordinator = {
   getBlockCount: () => number;
   getAccumulatedBlockText: () => string;
   hasDeliveredFinalReply: () => boolean;
+  hasDeliveredVisibleText: () => boolean;
   getRoutedCounts: () => Record<ReplyDispatchKind, number>;
   applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => void;
 };
@@ -63,6 +65,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     accumulatedBlockText: "",
     blockCount: 0,
     deliveredFinalReply: false,
+    deliveredVisibleText: false,
     routedCounts: {
       tool: 0,
       block: 0,
@@ -183,6 +186,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "final") {
         state.deliveredFinalReply = true;
       }
+      if ((kind === "block" || kind === "final") && ttsPayload.text?.trim()) {
+        state.deliveredVisibleText = true;
+      }
       state.routedCounts[kind] += 1;
       return true;
     }
@@ -196,6 +202,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }
+    if (delivered && (kind === "block" || kind === "final") && ttsPayload.text?.trim()) {
+      state.deliveredVisibleText = true;
+    }
     return delivered;
   };
 
@@ -205,6 +214,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getBlockCount: () => state.blockCount,
     getAccumulatedBlockText: () => state.accumulatedBlockText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasDeliveredVisibleText: () => state.deliveredVisibleText,
     getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts) => {
       counts.tool += state.routedCounts.tool;
