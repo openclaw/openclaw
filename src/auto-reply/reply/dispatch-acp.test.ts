@@ -52,44 +52,9 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
-vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => managerMocks,
-}));
-
-vi.mock("../../acp/policy.js", () => ({
-  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
-    policyMocks.resolveAcpDispatchPolicyError(cfg),
-  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
-    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
-}));
-
-vi.mock("./route-reply.js", () => ({
-  routeReply: (params: unknown) => routeMocks.routeReply(params),
-}));
-
-vi.mock("../../infra/outbound/message-action-runner.js", () => ({
-  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
-}));
-
-vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
-}));
-
-vi.mock("../../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-}));
-
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
-  }),
-}));
-
-const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
+let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -246,7 +211,38 @@ function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
 }
 
 describe("tryDispatchAcpReply", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../../acp/control-plane/manager.js", () => ({
+      getAcpSessionManager: () => managerMocks,
+    }));
+    vi.doMock("../../acp/policy.js", () => ({
+      resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
+        policyMocks.resolveAcpDispatchPolicyError(cfg),
+      resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
+        policyMocks.resolveAcpAgentPolicyError(cfg, agent),
+    }));
+    vi.doMock("./route-reply.js", () => ({
+      routeReply: (params: unknown) => routeMocks.routeReply(params),
+    }));
+    vi.doMock("../../infra/outbound/message-action-runner.js", () => ({
+      runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+    }));
+    vi.doMock("../../tts/tts.js", () => ({
+      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+      resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+    }));
+    vi.doMock("../../acp/runtime/session-meta.js", () => ({
+      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        sessionMetaMocks.readAcpSessionEntry(params),
+    }));
+    vi.doMock("../../infra/outbound/session-binding-service.js", () => ({
+      getSessionBindingService: () => ({
+        listBySession: (targetSessionKey: string) =>
+          bindingServiceMocks.listBySession(targetSessionKey),
+      }),
+    }));
+    ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.getObservabilitySnapshot.mockReset();
@@ -463,7 +459,8 @@ describe("tryDispatchAcpReply", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
+        isError: true,
+        text: expect.stringContaining("ACP dispatch is disabled by policy."),
       }),
     );
   });
