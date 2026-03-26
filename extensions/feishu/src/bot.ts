@@ -764,8 +764,9 @@ export async function handleFeishuMessage(params: {
     if (isGroup && historyKey && historyLimit > 0 && chatHistories) {
       const historyEntries = chatHistories.get(historyKey) ?? [];
       const mediaCandidates = historyEntries
-        .filter((entry) =>
-          Boolean(entry.messageId) && /<media:|!\[image\]/.test(String(entry.body ?? "")),
+        .filter(
+          (entry) =>
+            Boolean(entry.messageId) && /<media:|!\[image\]/.test(String(entry.body ?? "")),
         )
         .slice(-3); // keep it cheap: only resolve the most recent few media turns
 
