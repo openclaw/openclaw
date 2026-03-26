@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
@@ -157,11 +158,9 @@ describe("state migrations", () => {
       `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
     ]);
 
-    const mergedStore = JSON.parse(
-      await fs.readFile(
-        path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
-        "utf8",
-      ),
+    const mergedStore = loadSessionStore(
+      path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json"),
+      { skipCache: true },
     ) as Record<string, { sessionId: string }>;
     expect(mergedStore["agent:worker-1:desk"]?.sessionId).toBe("legacy-direct");
     expect(mergedStore["agent:worker-1:whatsapp:group:123@g.us"]?.sessionId).toBe("group-session");
