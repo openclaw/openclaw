@@ -456,7 +456,7 @@ export function repairToolUseResultPairing(
             : sanitizedToOriginalId.get(sanitizeToolCallId(rawId))
           : undefined;
         if (matchedOriginalId) {
-          if (seenToolResultIds.has(matchedOriginalId)) {
+          if (seenToolResultIds.has(matchedOriginalId) || (rawId && seenToolResultIds.has(rawId))) {
             droppedDuplicateCount += 1;
             changed = true;
             continue;
