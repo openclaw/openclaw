@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 553,
+            "line": 554,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 558,
+            "line": 559,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 562,
+            "line": 563,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 238,
+            "line": 239,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -186,7 +186,7 @@
           }
         },
         {
-          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\";",
+          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\" | \"upload-file\";",
           "exportName": "ChannelMessageActionName",
           "kind": "type",
           "source": {
@@ -496,7 +496,7 @@
           "exportName": "RuntimeLogger",
           "kind": "type",
           "source": {
-            "line": 4,
+            "line": 7,
             "path": "src/plugins/runtime/types-core.ts"
           }
         },
@@ -914,7 +914,7 @@
           "exportName": "createMessageToolCardSchema",
           "kind": "function",
           "source": {
-            "line": 27,
+            "line": 29,
             "path": "src/plugin-sdk/channel-actions.ts"
           }
         },
@@ -1044,7 +1044,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 558,
+            "line": 559,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1053,7 +1053,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 564,
+            "line": 565,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1112,7 +1112,7 @@
           }
         },
         {
-          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\";",
+          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\" | \"upload-file\";",
           "exportName": "ChannelMessageActionName",
           "kind": "type",
           "source": {
@@ -1496,7 +1496,7 @@
           }
         },
         {
-          "declaration": "export const CHANNEL_MESSAGE_ACTION_NAMES: readonly [\"send\", \"broadcast\", \"poll\", \"poll-vote\", \"react\", \"reactions\", \"read\", \"edit\", \"unsend\", \"reply\", \"sendWithEffect\", \"renameGroup\", \"setGroupIcon\", \"addParticipant\", \"removeParticipant\", \"leaveGroup\", \"sendAttachment\", \"delete\", \"pin\", \"unpin\", \"list-pins\", \"permissions\", \"thread-create\", \"thread-list\", \"thread-reply\", \"search\", \"sticker\", \"sticker-search\", \"member-info\", \"role-info\", \"emoji-list\", \"emoji-upload\", \"sticker-upload\", \"role-add\", \"role-remove\", \"channel-info\", \"channel-list\", \"channel-create\", \"channel-edit\", \"channel-delete\", \"channel-move\", \"category-create\", \"category-edit\", \"category-delete\", \"topic-create\", \"topic-edit\", \"voice-status\", \"event-list\", \"event-create\", \"timeout\", \"kick\", \"ban\", \"set-profile\", \"set-presence\", \"set-profile\", \"download-file\"];",
+          "declaration": "export const CHANNEL_MESSAGE_ACTION_NAMES: readonly [\"send\", \"broadcast\", \"poll\", \"poll-vote\", \"react\", \"reactions\", \"read\", \"edit\", \"unsend\", \"reply\", \"sendWithEffect\", \"renameGroup\", \"setGroupIcon\", \"addParticipant\", \"removeParticipant\", \"leaveGroup\", \"sendAttachment\", \"delete\", \"pin\", \"unpin\", \"list-pins\", \"permissions\", \"thread-create\", \"thread-list\", \"thread-reply\", \"search\", \"sticker\", \"sticker-search\", \"member-info\", \"role-info\", \"emoji-list\", \"emoji-upload\", \"sticker-upload\", \"role-add\", \"role-remove\", \"channel-info\", \"channel-list\", \"channel-create\", \"channel-edit\", \"channel-delete\", \"channel-move\", \"category-create\", \"category-edit\", \"category-delete\", \"topic-create\", \"topic-edit\", \"voice-status\", \"event-list\", \"event-create\", \"timeout\", \"kick\", \"ban\", \"set-profile\", \"set-presence\", \"set-profile\", \"download-file\", \"upload-file\"];",
           "exportName": "CHANNEL_MESSAGE_ACTION_NAMES",
           "kind": "const",
           "source": {
@@ -1518,7 +1518,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 558,
+            "line": 559,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1527,7 +1527,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 564,
+            "line": 565,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1581,7 +1581,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 497,
+            "line": 498,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1590,7 +1590,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 362,
+            "line": 363,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1635,7 +1635,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 444,
+            "line": 445,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1653,7 +1653,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 553,
+            "line": 554,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1662,7 +1662,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 558,
+            "line": 559,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1671,7 +1671,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 562,
+            "line": 563,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1680,7 +1680,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 406,
+            "line": 407,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1707,7 +1707,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 437,
+            "line": 438,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1716,7 +1716,7 @@
           "exportName": "ChannelExecApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 463,
+            "line": 464,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1743,7 +1743,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 346,
+            "line": 347,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1752,7 +1752,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 238,
+            "line": 239,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1779,7 +1779,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 372,
+            "line": 373,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1806,7 +1806,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 449,
+            "line": 450,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1815,7 +1815,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 317,
+            "line": 318,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1824,7 +1824,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 322,
+            "line": 323,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1833,7 +1833,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 327,
+            "line": 328,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1842,7 +1842,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 311,
+            "line": 312,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1892,7 +1892,7 @@
           }
         },
         {
-          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\";",
+          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\" | \"upload-file\";",
           "exportName": "ChannelMessageActionName",
           "kind": "type",
           "source": {
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 154,
+            "line": 155,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1977,7 +1977,7 @@
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 335,
+            "line": 336,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2013,7 +2013,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 417,
+            "line": 418,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2022,7 +2022,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 427,
+            "line": 428,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2031,7 +2031,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 419,
+            "line": 420,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2040,7 +2040,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 575,
+            "line": 576,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2085,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 184,
+            "line": 185,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -4884,7 +4884,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 238,
+            "line": 239,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },

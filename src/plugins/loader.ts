@@ -607,18 +607,20 @@ function warnWhenAllowlistIsOpen(params: {
   if (params.allow.length > 0) {
     return;
   }
-  const nonBundled = params.discoverablePlugins.filter((entry) => entry.origin !== "bundled");
-  if (nonBundled.length === 0) {
+  const autoDiscoverable = params.discoverablePlugins.filter(
+    (entry) => entry.origin === "workspace" || entry.origin === "global",
+  );
+  if (autoDiscoverable.length === 0) {
     return;
   }
   if (openAllowlistWarningCache.has(params.warningCacheKey)) {
     return;
   }
-  const preview = nonBundled
+  const preview = autoDiscoverable
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
-  const extra = nonBundled.length > 6 ? ` (+${nonBundled.length - 6} more)` : "";
+  const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
   openAllowlistWarningCache.add(params.warningCacheKey);
   params.logger.warn(
     `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
@@ -725,7 +727,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    // Pass loader's moduleUrl so the openclaw root can always be resolved even when
+    // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
+    const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
