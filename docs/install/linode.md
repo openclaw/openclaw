@@ -182,11 +182,13 @@ Since the Gateway binds to loopback by default, no additional port rules are nee
 
 ### Backups
 
-Linode offers automated backups for $2/month on the Nanode plan. Alternatively, back up manually:
+Linode offers automated backups for $2/month on the Nanode plan. Alternatively, use the built-in backup command:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw
+openclaw backup create --output /tmp/openclaw-backup.tar.gz
 ```
+
+This correctly resolves symlinks and workspace paths, even if you have moved the workspace to Block Storage.
 
 ### Resize
 

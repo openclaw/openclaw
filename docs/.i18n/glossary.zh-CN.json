@@ -298,5 +298,21 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Linode (Akamai Connected Cloud)",
+    "target": "Linode (Akamai Connected Cloud)"
+  },
+  {
+    "source": "Docker install",
+    "target": "Docker 安装"
+  },
+  {
+    "source": "Configuration",
+    "target": "配置"
+  },
+  {
+    "source": "Linux Server",
+    "target": "Linux 服务器"
   }
 ]
