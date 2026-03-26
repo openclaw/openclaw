@@ -54,6 +54,7 @@ export type SessionListRow = {
   channel: string;
   label?: string;
   displayName?: string;
+  parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
   sessionId?: string;
