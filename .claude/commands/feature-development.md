@@ -1,7 +1,7 @@
 ---
 name: feature-development
 description: Workflow command scaffold for feature-development in openclaw.
-allowed_tools: ["Bash", "Read", "Write", "Grep", "Glob"]
+allowed-tools: ["Bash", "Read", "Write", "Grep", "Glob"]
 ---
 
 # /feature-development

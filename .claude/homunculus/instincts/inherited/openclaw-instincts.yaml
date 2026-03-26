@@ -1,4 +1,4 @@
-# Instincts generated from https://github.com/AbdulSadath77/openclaw
+# Instincts generated from https://github.com/openclaw/openclaw
 # Generated: 2026-03-25T18:39:07.134Z
 # Version: 2.0
 # NOTE: This file supplements (does not replace) any existing curated instincts.
@@ -10,7 +10,7 @@ trigger: "when writing a commit message"
 confidence: 0.85
 domain: git
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Commit Conventional
@@ -31,7 +31,7 @@ trigger: "when writing a commit message"
 confidence: 0.6
 domain: git
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Commit Length
@@ -51,7 +51,7 @@ trigger: "when creating a new file"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Naming Files
@@ -71,7 +71,7 @@ trigger: "when importing modules"
 confidence: 0.75
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Import Relative
@@ -91,7 +91,7 @@ trigger: "when exporting from a module"
 confidence: 0.7
 domain: code-style
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Export Style
@@ -111,7 +111,7 @@ trigger: "when adding new code"
 confidence: 0.8
 domain: architecture
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Arch Type Based
@@ -131,7 +131,7 @@ trigger: "when writing tests"
 confidence: 0.85
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Test Colocate
@@ -151,7 +151,7 @@ trigger: "when writing tests"
 confidence: 0.9
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Test Framework
@@ -171,7 +171,7 @@ trigger: "when creating a test file"
 confidence: 0.85
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Test Naming
@@ -191,7 +191,7 @@ trigger: "when mocking dependencies in tests"
 confidence: 0.75
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Test Mocking
@@ -211,7 +211,7 @@ trigger: "when planning tests for a feature"
 confidence: 0.7
 domain: testing
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Test Types
@@ -231,7 +231,7 @@ trigger: "when implementing a new feature"
 confidence: 0.75
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Feature Development
@@ -255,7 +255,7 @@ trigger: "when refactoring code"
 confidence: 0.7
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Refactoring
@@ -279,7 +279,7 @@ trigger: "when doing feature or bugfix with tests and changelog"
 confidence: 0.9
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Feature Or Bugfix With Tests And Changelog
@@ -303,7 +303,7 @@ trigger: "when doing plugin or extension provider addition or update"
 confidence: 0.6
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Plugin Or Extension Provider Addition Or Update
@@ -328,7 +328,7 @@ trigger: "when doing release preparation or version bump"
 confidence: 0.6
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Release Preparation Or Version Bump
@@ -353,7 +353,7 @@ trigger: "when doing test suite refactor or collapsing"
 confidence: 0.6
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Test Suite Refactor Or Collapsing
@@ -378,7 +378,7 @@ trigger: "when doing plugin sdk or loader alias update"
 confidence: 0.6
 domain: workflow
 source: repo-analysis
-source_repo: https://github.com/AbdulSadath77/openclaw
+source_repo: https://github.com/openclaw/openclaw
 ---
 
 # Openclaw Workflow Plugin Sdk Or Loader Alias Update
@@ -403,7 +403,7 @@ trigger: "When creating a new file"
 confidence: 0.9
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct File Naming
@@ -423,7 +423,7 @@ trigger: "When defining a new function"
 confidence: 0.9
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Function Naming
@@ -443,7 +443,7 @@ trigger: "When defining a new class"
 confidence: 0.9
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Class Naming
@@ -463,7 +463,7 @@ trigger: "When defining a constant"
 confidence: 0.9
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Constant Naming
@@ -483,7 +483,7 @@ trigger: "When importing modules"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Import Style
@@ -502,7 +502,7 @@ trigger: "When exporting functions or classes"
 confidence: 0.8
 domain: code-style
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Export Style
@@ -521,7 +521,7 @@ trigger: "When creating a test file"
 confidence: 0.9
 domain: testing
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Test File Pattern
@@ -541,7 +541,7 @@ trigger: "When writing tests"
 confidence: 0.9
 domain: testing
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Test Framework
@@ -561,7 +561,7 @@ trigger: "When mocking dependencies in tests"
 confidence: 0.8
 domain: testing
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Mocking Style
@@ -581,7 +581,7 @@ trigger: "When designing tests"
 confidence: 0.8
 domain: testing
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Test Types
@@ -601,7 +601,7 @@ trigger: "When writing a commit message"
 confidence: 0.9
 domain: git
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Commit Format
@@ -622,7 +622,7 @@ trigger: "When adding a new feature or fixing a bug that requires validation and
 confidence: 0.95
 domain: workflow
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Feature Bugfix Workflow
@@ -642,7 +642,7 @@ trigger: "When adding or updating a provider/capability in an extension or plugi
 confidence: 0.9
 domain: workflow
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Plugin Provider Workflow
@@ -662,7 +662,7 @@ trigger: "When preparing for a new release or bumping the version"
 confidence: 0.95
 domain: workflow
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Release Prep Workflow
@@ -682,7 +682,7 @@ trigger: "When restructuring, merging, or improving the organization of test fil
 confidence: 0.85
 domain: workflow
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Test Suite Refactor Workflow
@@ -702,7 +702,7 @@ trigger: "When changing plugin-sdk exports or plugin loader alias resolution"
 confidence: 0.85
 domain: workflow
 source: repo-analysis
-source_repo: AbdulSadath77/openclaw
+source_repo: openclaw/openclaw
 ---
 
 # Openclaw Instinct Plugin Sdk Alias Update Workflow
@@ -715,4 +715,3 @@ Modify sdk-alias/loader, update/add related tests, update package.json exports a
 
 - Workflow: plugin-sdk-or-loader-alias-update
 - Pattern in src/plugins/sdk-alias.ts, src/plugins/loader.ts, package.json, CHANGELOG.md
-

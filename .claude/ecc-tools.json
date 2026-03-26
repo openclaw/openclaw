@@ -3,7 +3,7 @@
   "schemaVersion": "1.0",
   "generatedBy": "ecc-tools",
   "generatedAt": "2026-03-25T18:38:21.030Z",
-  "repo": "https://github.com/AbdulSadath77/openclaw",
+  "repo": "https://github.com/openclaw/openclaw",
   "profiles": {
     "requested": "full",
     "recommended": "full",
@@ -25,10 +25,7 @@
     "team-rollout",
     "governance-controls"
   ],
-  "selectedComponents": [
-    "repo-baseline",
-    "workflow-automation"
-  ],
+  "selectedComponents": ["repo-baseline", "workflow-automation"],
   "requestedAddComponents": [],
   "requestedRemoveComponents": [],
   "blockedRemovalComponents": [],
@@ -46,10 +43,7 @@
     "team-config-sync",
     "enterprise-controls"
   ],
-  "selectedRootPackages": [
-    "runtime-core",
-    "workflow-pack"
-  ],
+  "selectedRootPackages": ["runtime-core", "workflow-pack"],
   "requestedPackages": [
     "runtime-core",
     "workflow-pack",
@@ -60,14 +54,8 @@
   ],
   "requestedAddPackages": [],
   "requestedRemovePackages": [],
-  "selectedPackages": [
-    "runtime-core",
-    "workflow-pack"
-  ],
-  "packages": [
-    "runtime-core",
-    "workflow-pack"
-  ],
+  "selectedPackages": ["runtime-core", "workflow-pack"],
+  "packages": ["runtime-core", "workflow-pack"],
   "blockedRemovalPackages": [],
   "tierFilteredRootPackages": [
     "agentshield-pack",
@@ -84,14 +72,9 @@
   "conflictingPackages": [],
   "dependencyGraph": {
     "runtime-core": [],
-    "workflow-pack": [
-      "runtime-core"
-    ]
+    "workflow-pack": ["runtime-core"]
   },
-  "resolutionOrder": [
-    "runtime-core",
-    "workflow-pack"
-  ],
+  "resolutionOrder": ["runtime-core", "workflow-pack"],
   "requestedModules": [
     "runtime-core",
     "workflow-pack",
@@ -100,14 +83,8 @@
     "team-config-sync",
     "enterprise-controls"
   ],
-  "selectedModules": [
-    "runtime-core",
-    "workflow-pack"
-  ],
-  "modules": [
-    "runtime-core",
-    "workflow-pack"
-  ],
+  "selectedModules": ["runtime-core", "workflow-pack"],
+  "modules": ["runtime-core", "workflow-pack"],
   "managedFiles": [
     ".claude/skills/openclaw/SKILL.md",
     ".agents/skills/openclaw/SKILL.md",

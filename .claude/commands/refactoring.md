@@ -1,7 +1,7 @@
 ---
 name: refactoring
 description: Workflow command scaffold for refactoring in openclaw.
-allowed_tools: ["Bash", "Read", "Write", "Grep", "Glob"]
+allowed-tools: ["Bash", "Read", "Write", "Grep", "Glob"]
 ---
 
 # /refactoring

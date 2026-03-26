@@ -1,57 +1,50 @@
 openclaw Development Patterns
-    
+
     > Auto-generated skill from repository analysis
-    
+
      Overview
     This skill teaches you the core development patterns, coding conventions, and collaborative workflows used in the openclaw codebase. openclaw is a TypeScript project using the Express framework, with a strong emphasis on modularity, test coverage, and clear changelogs. You'll learn how to contribute features, fix bugs, manage providers/extensions, prepare releases, refactor tests, and update plugin SDKs—all following the project's established conventions.
-    
+
      Coding Conventions
-    
-    - File Naming:  
-      Use kebab-case for all file and directory names.  
-      Example:  
-    
+
+    - File Naming:
+      Use kebab-case for all file and directory names.
+      Example:
 
 src/user-service.ts extensions/image-generation/image-provider.ts
 
-    
-    - Import Style:  
-    Use relative imports for internal modules.  
-    Example:  
+    - Import Style:
+    Use relative imports for internal modules.
+    Example:
     typescript
     import { getUser } from './user-service'
     import { ImageProvider } from '../image-generation/image-provider'
-    
 
-   Export Style:  
-    Use named exports for all modules.  
-    Example:
-    
+Export Style:  
+ Use named exports for all modules.  
+ Example:
+
         // Good
         export function getUser(id: string) { ... }
         export const USERROLE = 'admin'
-        
+
         // Avoid default exports
-        
-    
-   Commit Messages:  
-    Use conventional commit prefixes: fix, test, refactor.  
-    Keep messages concise (55 characters).  
-    Example:
-    
+
+Commit Messages:  
+ Use conventional commit prefixes: fix, test, refactor.  
+ Keep messages concise (55 characters).  
+ Example:
+
         fix: handle null user in getUserById
         test: add coverage for image provider errors
         refactor: collapse telegram test suites
-        
-    
 
-Workflows
----------
+## Workflows
 
- Feature or Bugfix with Tests and Changelog
+Feature or Bugfix with Tests and Changelog
 
 Trigger: When adding a new feature or fixing a bug that requires validation and release notes  
-Command: /feature-or-bugfix
+Command: /feature-or-bugfix-with-tests-and-changelog
 
 1.  Implement code changes in relevant source files (src/ or extensions/).
 2.  Add or update corresponding test files (.test.ts) in the same or related directory.
@@ -61,19 +54,16 @@ Example:
 
     // src/user-service.ts
     export function createUser(name: string) { ... }
-    
+
     // src/user-service.test.ts
     import { createUser } from './user-service'
     test('creates a user', () => { ... })
-    
+
 
     // CHANGELOG.md
     - feat: add createUser to user-service
-    
 
-  
-
- Plugin or Extension Provider Addition or Update
+Plugin or Extension Provider Addition or Update
 
 Trigger: When adding or updating a provider/capability in an extension/plugin  
 Command: /add-provider
@@ -88,11 +78,8 @@ Example:
     extensions/tts/tts-provider.ts
     extensions/tts/tts-provider.test.ts
     docs/providers/tts.md
-    
 
-  
-
- Release Preparation or Version Bump
+Release Preparation or Version Bump
 
 Trigger: When preparing a new release or bumping the version  
 Command: /release-prepare
@@ -106,15 +93,12 @@ Example:
 
     // package.json
     "version": "1.2.0"
-    
+
 
     // CHANGELOG.md
     - chore: bump version to 1.2.0
-    
 
-  
-
- Test Suite Refactor or Collapsing
+Test Suite Refactor or Collapsing
 
 Trigger: When restructuring, merging, or improving organization of test files  
 Command: /collapse-tests
@@ -128,11 +112,8 @@ Example:
 
     extensions/telegram/src/telegram-handler.test.ts
     // (merged from multiple smaller test files)
-    
 
-  
-
- Plugin SDK or Loader Alias Update
+Plugin SDK or Loader Alias Update
 
 Trigger: When changing plugin-sdk exports or plugin SDK path resolution  
 Command: /update-plugin-sdk
@@ -146,53 +127,38 @@ Example:
 
     // src/plugins/sdk-alias.ts
     export { PluginSDK } from './core-sdk'
-    
+
 
     // CHANGELOG.md
     - fix: update plugin-sdk alias resolution
-    
 
-Testing Patterns
-----------------
+## Testing Patterns
 
-   Framework: [vitest](https://vitest.dev/)
-   Test File Pattern: Files end with .test.ts and are placed alongside or near the code they test.
-   Example:
-    
+Framework: [vitest](https://vitest.dev/)
+Test File Pattern: Files end with .test.ts and are placed alongside or near the code they test.
+Example:
+
         // src/foo.test.ts
         import { foo } from './foo'
-        
+
         test('foo returns bar', () => {
           expect(foo()).toBe('bar')
         })
-        
-    
 
-Commands
---------
+## Commands
 
 Command
 
 Purpose
 
-/feature-or-bugfix
+/feature-or-bugfix-with-tests-and-changelog
 
 Add a feature or fix a bug with tests and changelog update
 
-/add-provider
+/feature-development
 
-Add or update a provider/extension with docs and tests
+Implement a new feature with tests and documentation
 
-/release-prepare
+/refactoring
 
-Prepare for a new release or version bump
-
-/collapse-tests
-
-Refactor or merge test suites for maintainability
-
-/update-plugin-sdk
-
-Update plugin-sdk exports or loader alias resolution
-
-\\\
+Refactor code structure while keeping tests green

@@ -1,7 +1,7 @@
 ---
 name: feature-or-bugfix-with-tests-and-changelog
 description: Workflow command scaffold for feature-or-bugfix-with-tests-and-changelog in openclaw.
-allowed_tools: ["Bash", "Read", "Write", "Grep", "Glob"]
+allowed-tools: ["Bash", "Read", "Write", "Grep", "Glob"]
 ---
 
 # /feature-or-bugfix-with-tests-and-changelog
