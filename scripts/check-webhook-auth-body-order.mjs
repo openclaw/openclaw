@@ -8,6 +8,7 @@ import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs"
 const sourceRoots = ["extensions"];
 const enforcedFiles = new Set([
   "extensions/bluebubbles/src/monitor.ts",
+  "extensions/feishu/src/monitor.transport.ts",
   "extensions/googlechat/src/monitor.ts",
   "extensions/zalo/src/monitor.webhook.ts",
 ]);
