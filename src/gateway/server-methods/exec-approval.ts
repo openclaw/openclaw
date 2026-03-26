@@ -312,23 +312,31 @@ export function createExecApprovalHandlers(
       }
       const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
-      // Security: prevent self-approval — the connection that submitted the request
-      // cannot also resolve it. This blocks prompt-injected agents from immediately
-      // approving their own dangerous command requests without human oversight.
-      if (
-        snapshot?.requestedByConnId != null &&
-        client?.connId != null &&
-        client.connId === snapshot.requestedByConnId
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "requester cannot approve their own exec request",
-          ),
-        );
-        return;
+      // Security: prevent self-approval — the device/client that submitted the
+      // request cannot also *allow* it.  Self-deny is permitted so that a
+      // requester can cancel their own pending approval.  Identity is matched
+      // on deviceId / clientId (stable across reconnects) rather than connId
+      // which changes on every WebSocket reconnection.
+      if (decision !== "deny") {
+        const sameDevice =
+          snapshot?.requestedByDeviceId != null &&
+          client?.connect?.device?.id != null &&
+          client.connect.device.id === snapshot.requestedByDeviceId;
+        const sameClient =
+          snapshot?.requestedByClientId != null &&
+          client?.connect?.client?.id != null &&
+          client.connect.client.id === snapshot.requestedByClientId;
+        if (sameDevice || sameClient) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "requester cannot approve their own exec request",
+            ),
+          );
+          return;
+        }
       }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
