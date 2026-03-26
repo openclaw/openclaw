@@ -32,6 +32,7 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
 - For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields before the scheduler touches them.
+- Optional maintenance-window role isolation (`cron.maintenance`) hard-gates which agents can run by time window.
 
 ## Quick start (actionable)
 
@@ -460,6 +461,16 @@ Configure `cron.retry` to override these defaults (see [Configuration](/automati
       maxBytes: "2mb", // default 2_000_000 bytes
       keepLines: 2000, // default 2000
     },
+    // Optional: hard role isolation by local wall-clock window.
+    maintenance: {
+      enabled: false,
+      window: {
+        start: "02:00", // HH:MM
+        end: "04:00", // HH:MM (can cross midnight)
+        timezone: "user", // "user" | "local" | IANA (e.g. "America/New_York")
+      },
+      maintenanceAgents: ["maint"], // only these agents run during maintenance
+    },
   },
 }
 ```
@@ -487,6 +498,16 @@ Disable cron entirely:
 ## Maintenance
 
 Cron has two built-in maintenance paths: isolated run-session retention and run-log pruning.
+
+Cron can also enforce a daily maintenance window for role isolation:
+
+- Phase = `maintenance`: only `cron.maintenance.maintenanceAgents` can run.
+- Phase = `normal`: maintenance agents are blocked; non-maintenance agents run as usual.
+- Blocked due runs are not dropped:
+  - cron jobs are deferred durably on disk and replayed FIFO when phase allows.
+  - heartbeat wakes are deferred in memory and replayed FIFO when phase allows.
+- Manual `cron.run` returns `{ ok: true, ran: false, reason: "maintenance-blocked" }` on mismatch.
+- `cron.status` adds an optional `maintenance` block with current phase/window and deferred counters.
 
 ### Defaults
 
@@ -663,7 +684,7 @@ openclaw cron run <jobId>
 openclaw cron run <jobId> --due
 ```
 
-`cron.run` now acknowledges once the manual run is queued, not after the job finishes. Successful queue responses look like `{ ok: true, enqueued: true, runId }`. If the job is already running or `--due` finds nothing due, the response stays `{ ok: true, ran: false, reason }`. Use `openclaw cron runs --id <jobId>` or the `cron.runs` gateway method to inspect the eventual finished entry.
+`cron.run` now acknowledges once the manual run is queued, not after the job finishes. Successful queue responses look like `{ ok: true, enqueued: true, runId }`. If the job is already running, blocked by maintenance role gating, or `--due` finds nothing due, the response stays `{ ok: true, ran: false, reason }`. Use `openclaw cron runs --id <jobId>` or the `cron.runs` gateway method to inspect the eventual finished entry.
 
 Edit an existing job (patch fields):
 

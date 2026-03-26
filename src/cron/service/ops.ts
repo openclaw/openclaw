@@ -1,5 +1,7 @@
+import { resolveMaintenanceExecutionDecision } from "../../infra/maintenance-phase.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -47,6 +49,40 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+
+function resolveJobAgentId(state: CronServiceState, job: CronJob): string {
+  const fallback = normalizeAgentId(state.deps.defaultAgentId);
+  return normalizeAgentId(job.agentId) || fallback;
+}
+
+function resolveMaintenanceDiagnostics(state: CronServiceState) {
+  const now = state.deps.nowMs();
+  const defaultDecision = resolveMaintenanceExecutionDecision({
+    cronConfig: state.deps.cronConfig,
+    userTimezone: state.deps.userTimezone,
+    nowMs: now,
+    agentId: state.deps.defaultAgentId,
+  });
+  let deferredJobs = 0;
+  let deferredRuns = 0;
+  for (const job of state.store?.jobs ?? []) {
+    const deferred = Math.max(0, Math.floor(job.state.deferredMaintenanceRuns ?? 0));
+    if (deferred <= 0) {
+      continue;
+    }
+    deferredJobs += 1;
+    deferredRuns += deferred;
+  }
+  return {
+    enabled: defaultDecision.enabled,
+    phase: defaultDecision.phase,
+    window: defaultDecision.window,
+    maintenanceAgents: defaultDecision.maintenanceAgents,
+    deferredJobs,
+    deferredRuns,
+  };
+}
+
 function mergeManualRunSnapshotAfterReload(params: {
   state: CronServiceState;
   jobId: string;
@@ -149,6 +185,7 @@ export async function status(state: CronServiceState) {
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
+      maintenance: resolveMaintenanceDiagnostics(state),
     };
   });
 }
@@ -352,7 +389,7 @@ type PreparedManualRun =
   | {
       ok: true;
       ran: false;
-      reason: "already-running" | "not-due";
+      reason: "already-running" | "not-due" | "maintenance-blocked";
     }
   | {
       ok: true;
@@ -392,6 +429,15 @@ async function inspectManualRunPreflight(
     // persist does not block manual triggers for up to STUCK_RUN_MS (#17554).
     recomputeNextRunsForMaintenance(state);
     const job = findJobOrThrow(state, id);
+    const maintenance = resolveMaintenanceExecutionDecision({
+      cronConfig: state.deps.cronConfig,
+      userTimezone: state.deps.userTimezone,
+      nowMs: state.deps.nowMs(),
+      agentId: resolveJobAgentId(state, job),
+    });
+    if (!maintenance.allowed) {
+      return { ok: true, ran: false, reason: "maintenance-blocked" as const };
+    }
     if (typeof job.state.runningAtMs === "number") {
       return { ok: true, ran: false, reason: "already-running" as const };
     }

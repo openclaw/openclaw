@@ -167,6 +167,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([]);
   });
 
+  it("restarts cron + heartbeat when cron.maintenance changes", () => {
+    const plan = buildGatewayReloadPlan(["cron.maintenance.window.start"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartCron).toBe(true);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toContain("cron.maintenance.window.start");
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);

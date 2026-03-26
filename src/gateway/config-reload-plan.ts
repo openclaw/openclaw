@@ -76,6 +76,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  {
+    prefix: "cron.maintenance",
+    kind: "hot",
+    actions: ["restart-cron", "restart-heartbeat"],
+  },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   {
     prefix: "browser",

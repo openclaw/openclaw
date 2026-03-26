@@ -283,4 +283,124 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("queues targeted wakes during maintenance and replays when phase allows", async () => {
+    useFakeHeartbeatTime();
+    vi.setSystemTime(new Date("2026-03-26T02:30:00.000Z"));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+        },
+        cron: {
+          maintenance: {
+            enabled: true,
+            window: {
+              start: "00:00",
+              end: "23:59",
+              timezone: "UTC",
+            },
+            maintenanceAgents: ["maint"],
+          },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "cron:job-maint",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.updateConfig({
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+      },
+      cron: {
+        maintenance: {
+          enabled: true,
+          window: {
+            start: "00:00",
+            end: "01:00",
+            timezone: "UTC",
+          },
+          maintenanceAgents: ["maint"],
+        },
+      },
+    } as OpenClawConfig);
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "cron:job-maint",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    );
+
+    runner.stop();
+  });
+
+  it("captures blocked interval runs and replays each deferred run FIFO", async () => {
+    useFakeHeartbeatTime();
+    vi.setSystemTime(new Date("2026-03-26T00:00:00.000Z"));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+        },
+        cron: {
+          maintenance: {
+            enabled: true,
+            window: {
+              start: "00:00",
+              end: "23:59",
+              timezone: "UTC",
+            },
+            maintenanceAgents: ["maint"],
+          },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.updateConfig({
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+      },
+      cron: {
+        maintenance: {
+          enabled: true,
+          window: {
+            start: "00:00",
+            end: "00:01",
+            timezone: "UTC",
+          },
+          maintenanceAgents: ["maint"],
+        },
+      },
+    } as OpenClawConfig);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+    expect(runSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ reason: "interval" }));
+
+    runner.stop();
+  });
 });

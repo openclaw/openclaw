@@ -73,6 +73,7 @@ import {
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { resolveMaintenanceExecutionDecision } from "./maintenance-phase.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
@@ -113,6 +114,13 @@ type HeartbeatAgentState = {
   intervalMs: number;
   lastRunMs?: number;
   nextDueMs: number;
+  deferredRuns: DeferredHeartbeatRun[];
+};
+
+type DeferredHeartbeatRun = {
+  reason?: string;
+  sessionKey?: string;
+  queuedAtMs: number;
 };
 
 export type HeartbeatRunner = {
@@ -970,6 +978,9 @@ export function startHeartbeatRunner(opts: {
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
+  const DEFERRED_READY_RECHECK_MS = 1_000;
+  const DEFERRED_BLOCKED_RECHECK_MS = 60_000;
+  const MAINTENANCE_BLOCKED_REASON = "maintenance-blocked";
   let initialized = false;
 
   const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
@@ -985,6 +996,87 @@ export function startHeartbeatRunner(opts: {
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+  };
+
+  const isMaintenanceAllowedForAgent = (agentId: string, nowMs: number) => {
+    const decision = resolveMaintenanceExecutionDecision({
+      cronConfig: state.cfg.cron,
+      userTimezone: state.cfg.agents?.defaults?.userTimezone,
+      nowMs,
+      agentId,
+    });
+    return decision.allowed;
+  };
+
+  const enqueueDeferredRun = (
+    agent: HeartbeatAgentState,
+    deferred: Omit<DeferredHeartbeatRun, "queuedAtMs"> & { queuedAtMs?: number },
+  ) => {
+    agent.deferredRuns.push({
+      reason: deferred.reason,
+      sessionKey: deferred.sessionKey,
+      queuedAtMs: deferred.queuedAtMs ?? Date.now(),
+    });
+  };
+
+  const shouldAdvanceScheduleAfterResult = (res: HeartbeatRunResult) =>
+    res.status !== "skipped" || res.reason !== "disabled";
+
+  const executeForAgent = async (params: {
+    agent: HeartbeatAgentState;
+    reason?: string;
+    sessionKey?: string;
+  }): Promise<HeartbeatRunResult> => {
+    try {
+      return await runOnce({
+        cfg: state.cfg,
+        agentId: params.agent.agentId,
+        heartbeat: params.agent.heartbeat,
+        reason: params.reason,
+        sessionKey: params.sessionKey,
+        deps: { runtime: state.runtime },
+      });
+    } catch (err) {
+      const errMsg = formatErrorMessage(err);
+      log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+      return { status: "failed", reason: errMsg };
+    }
+  };
+
+  const replayDeferredRuns = async (
+    agent: HeartbeatAgentState,
+    now: number,
+  ): Promise<{
+    ran: boolean;
+    blocked: boolean;
+    earlyReturn?: HeartbeatRunResult;
+  }> => {
+    let ran = false;
+    while (agent.deferredRuns.length > 0) {
+      const head = agent.deferredRuns[0];
+      if (!head) {
+        break;
+      }
+      if (!isMaintenanceAllowedForAgent(agent.agentId, Date.now())) {
+        return { ran, blocked: true };
+      }
+      const res = await executeForAgent({
+        agent,
+        reason: head.reason ?? "maintenance-replay",
+        sessionKey: head.sessionKey,
+      });
+      if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        return { ran, blocked: false, earlyReturn: res };
+      }
+      if (shouldAdvanceScheduleAfterResult(res)) {
+        advanceAgentSchedule(agent, now);
+      }
+      agent.deferredRuns.shift();
+      if (res.status === "ran") {
+        ran = true;
+      }
+    }
+    return { ran, blocked: false };
   };
 
   const scheduleNext = () => {
@@ -1003,6 +1095,19 @@ export function startHeartbeatRunner(opts: {
     for (const agent of state.agents.values()) {
       if (agent.nextDueMs < nextDue) {
         nextDue = agent.nextDueMs;
+      }
+    }
+    const deferredAgents = [...state.agents.values()].filter(
+      (agent) => agent.deferredRuns.length > 0,
+    );
+    if (deferredAgents.length > 0) {
+      const hasReplayReady = deferredAgents.some((agent) =>
+        isMaintenanceAllowedForAgent(agent.agentId, now),
+      );
+      const deferredDue =
+        now + (hasReplayReady ? DEFERRED_READY_RECHECK_MS : DEFERRED_BLOCKED_RECHECK_MS);
+      if (deferredDue < nextDue) {
+        nextDue = deferredDue;
       }
     }
     if (!Number.isFinite(nextDue)) {
@@ -1039,6 +1144,7 @@ export function startHeartbeatRunner(opts: {
         intervalMs,
         lastRunMs: prevState?.lastRunMs,
         nextDueMs,
+        deferredRuns: [...(prevState?.deferredRuns ?? [])],
       });
     }
 
@@ -1090,6 +1196,7 @@ export function startHeartbeatRunner(opts: {
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
+    let maintenanceBlocked = false;
 
     if (requestedSessionKey || requestedAgentId) {
       const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
@@ -1098,53 +1205,86 @@ export function startHeartbeatRunner(opts: {
         scheduleNext();
         return { status: "skipped", reason: "disabled" };
       }
-      try {
-        const res = await runOnce({
-          cfg: state.cfg,
-          agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
+      if (!isMaintenanceAllowedForAgent(targetAgent.agentId, now)) {
+        enqueueDeferredRun(targetAgent, {
           reason,
           sessionKey: requestedSessionKey,
-          deps: { runtime: state.runtime },
+          queuedAtMs: now,
         });
-        if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(targetAgent, now);
-        }
         scheduleNext();
-        return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
-      } catch (err) {
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
-          error: errMsg,
-        });
-        advanceAgentSchedule(targetAgent, now);
-        scheduleNext();
-        return { status: "failed", reason: errMsg };
+        return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
       }
+      const replay = await replayDeferredRuns(targetAgent, now);
+      ran = ran || replay.ran;
+      if (replay.earlyReturn) {
+        scheduleNext();
+        return replay.earlyReturn;
+      }
+      if (replay.blocked) {
+        scheduleNext();
+        return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
+      }
+
+      const res = await executeForAgent({
+        agent: targetAgent,
+        reason,
+        sessionKey: requestedSessionKey,
+      });
+      if (res.status === "skipped" && res.reason === "requests-in-flight") {
+        scheduleNext();
+        return res;
+      }
+      if (shouldAdvanceScheduleAfterResult(res)) {
+        advanceAgentSchedule(targetAgent, now);
+      }
+      if (res.status === "ran") {
+        ran = true;
+      }
+      scheduleNext();
+      return ran ? { status: "ran", durationMs: Date.now() - startedAt } : res;
     }
 
     for (const agent of state.agents.values()) {
+      const hasDeferredRuns = agent.deferredRuns.length > 0;
+      const dueByInterval = now >= agent.nextDueMs;
+      if (isInterval && !dueByInterval && !hasDeferredRuns) {
+        continue;
+      }
+
+      const maintenanceAllowed = isMaintenanceAllowedForAgent(agent.agentId, now);
+      if (!maintenanceAllowed) {
+        maintenanceBlocked = true;
+        if (!isInterval || dueByInterval) {
+          enqueueDeferredRun(agent, { reason, queuedAtMs: now });
+        }
+        if (isInterval && dueByInterval) {
+          // The interval wake was due but role-gated; move the schedule forward.
+          // The deferred run queue preserves lossless replay ordering.
+          advanceAgentSchedule(agent, now);
+        }
+        continue;
+      }
+
+      if (hasDeferredRuns) {
+        const replay = await replayDeferredRuns(agent, now);
+        ran = ran || replay.ran;
+        if (replay.earlyReturn) {
+          return replay.earlyReturn;
+        }
+        if (replay.blocked) {
+          maintenanceBlocked = true;
+          continue;
+        }
+      }
+
       if (isInterval && now < agent.nextDueMs) {
         continue;
       }
 
-      let res: HeartbeatRunResult;
-      try {
-        res = await runOnce({
-          cfg: state.cfg,
-          agentId: agent.agentId,
-          heartbeat: agent.heartbeat,
-          reason,
-          deps: { runtime: state.runtime },
-        });
-      } catch (err) {
-        // If runOnce throws (e.g. during session compaction), we must still
-        // advance the timer and call scheduleNext so heartbeats keep firing.
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-        advanceAgentSchedule(agent, now);
-        continue;
-      }
+      const res = await executeForAgent({
+        agent,
+        reason,
+      });
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
         // Do not advance the schedule — the main lane is busy and the wake
         // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
@@ -1152,7 +1292,7 @@ export function startHeartbeatRunner(opts: {
         // the wake layer's 1 s retry and wins, bypassing the cooldown.
         return res;
       }
-      if (res.status !== "skipped" || res.reason !== "disabled") {
+      if (shouldAdvanceScheduleAfterResult(res)) {
         advanceAgentSchedule(agent, now);
       }
       if (res.status === "ran") {
@@ -1163,6 +1303,9 @@ export function startHeartbeatRunner(opts: {
     scheduleNext();
     if (ran) {
       return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+    if (maintenanceBlocked) {
+      return { status: "skipped", reason: MAINTENANCE_BLOCKED_REASON };
     }
     return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };

@@ -1,5 +1,6 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { MaintenancePhase, MaintenanceWindowResolved } from "../../infra/maintenance-phase.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -42,6 +43,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** User timezone override used for maintenance window evaluation. */
+  userTimezone?: string;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve session store path for a given agent id. */
@@ -150,6 +153,14 @@ export type CronStatusSummary = {
   storePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
+  maintenance?: {
+    enabled: boolean;
+    phase: MaintenancePhase;
+    window: MaintenanceWindowResolved | null;
+    maintenanceAgents: string[];
+    deferredJobs: number;
+    deferredRuns: number;
+  };
 };
 
 export type CronRunResult =
@@ -157,6 +168,7 @@ export type CronRunResult =
   | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
+  | { ok: true; ran: false; reason: "maintenance-blocked" }
   | { ok: false };
 
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };

@@ -98,6 +98,7 @@ per-job offset in a 0-5 minute window.
 - **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
+- **Role isolation windows**: Optional `cron.maintenance` can hard-gate which agents run during maintenance vs normal phases.
 
 ### Cron example: Daily morning briefing
 

@@ -125,6 +125,13 @@ const TARGET_KEYS = [
   "cron.runLog",
   "cron.runLog.maxBytes",
   "cron.runLog.keepLines",
+  "cron.maintenance",
+  "cron.maintenance.enabled",
+  "cron.maintenance.window",
+  "cron.maintenance.window.start",
+  "cron.maintenance.window.end",
+  "cron.maintenance.window.timezone",
+  "cron.maintenance.maintenanceAgents",
   "session",
   "session.scope",
   "session.dmScope",
@@ -724,6 +731,25 @@ describe("config help copy quality", () => {
 
     const keepLines = FIELD_HELP["cron.runLog.keepLines"];
     expect(keepLines.includes("2000")).toBe(true);
+  });
+
+  it("documents cron maintenance-window controls", () => {
+    const maintenance = FIELD_HELP["cron.maintenance"];
+    expect(/role isolation|maintenance/i.test(maintenance)).toBe(true);
+
+    const enabled = FIELD_HELP["cron.maintenance.enabled"];
+    expect(/maintenanceAgents/i.test(enabled)).toBe(true);
+
+    const window = FIELD_HELP["cron.maintenance.window"];
+    expect(window.includes("23:00")).toBe(true);
+    expect(window.includes("02:00")).toBe(true);
+
+    const timezone = FIELD_HELP["cron.maintenance.window.timezone"];
+    expect(timezone.includes('"user"')).toBe(true);
+    expect(timezone.includes("America/Los_Angeles")).toBe(true);
+
+    const agents = FIELD_HELP["cron.maintenance.maintenanceAgents"];
+    expect(agents.includes("ops-maint")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

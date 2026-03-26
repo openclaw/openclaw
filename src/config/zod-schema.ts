@@ -541,6 +541,21 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        maintenance: z
+          .object({
+            enabled: z.boolean().optional(),
+            window: z
+              .object({
+                start: z.string().optional(),
+                end: z.string().optional(),
+                timezone: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            maintenanceAgents: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),
@@ -563,6 +578,28 @@ export const OpenClawSchema = z
       })
       .strict()
       .superRefine((val, ctx) => {
+        const parseMaintenanceTime = (raw: string | undefined, allow24: boolean): number | null => {
+          if (!raw) {
+            return null;
+          }
+          if (!/^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/.test(raw)) {
+            return null;
+          }
+          const [hourStr, minuteStr] = raw.split(":");
+          const hour = Number(hourStr);
+          const minute = Number(minuteStr);
+          if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+            return null;
+          }
+          if (hour === 24) {
+            if (!allow24 || minute !== 0) {
+              return null;
+            }
+            return 24 * 60;
+          }
+          return hour * 60 + minute;
+        };
+
         if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
           try {
             parseDurationMs(String(val.sessionRetention).trim(), { defaultUnit: "h" });
@@ -583,6 +620,75 @@ export const OpenClawSchema = z
               path: ["runLog", "maxBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
+          }
+        }
+        if (val.maintenance) {
+          const startRaw = val.maintenance.window?.start?.trim();
+          const endRaw = val.maintenance.window?.end?.trim();
+          if (val.maintenance.enabled === true && !val.maintenance.window) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["maintenance", "window"],
+              message: "window is required when maintenance.enabled is true",
+            });
+          }
+          if (startRaw || endRaw || val.maintenance.enabled === true) {
+            const startMin = parseMaintenanceTime(startRaw, false);
+            const endMin = parseMaintenanceTime(endRaw, true);
+            if (!startRaw) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window", "start"],
+                message: "maintenance window start is required (HH:MM)",
+              });
+            } else if (startMin === null) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window", "start"],
+                message: 'invalid time (use "HH:MM" 24h format; start cannot be 24:00)',
+              });
+            }
+            if (!endRaw) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window", "end"],
+                message: "maintenance window end is required (HH:MM)",
+              });
+            } else if (endMin === null) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window", "end"],
+                message: 'invalid time (use "HH:MM" 24h format; 24:00 allowed only for end)',
+              });
+            }
+            if (startMin !== null && endMin !== null && startMin === endMin) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window"],
+                message: "maintenance window start and end must differ",
+              });
+            }
+          }
+          const timezoneRaw = val.maintenance.window?.timezone?.trim();
+          if (timezoneRaw && timezoneRaw !== "user" && timezoneRaw !== "local") {
+            try {
+              new Intl.DateTimeFormat("en-US", { timeZone: timezoneRaw }).format(new Date());
+            } catch {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "window", "timezone"],
+                message: 'invalid timezone (use "user", "local", or IANA timezone id)',
+              });
+            }
+          }
+          for (const [index, entry] of (val.maintenance.maintenanceAgents ?? []).entries()) {
+            if (!entry.trim()) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["maintenance", "maintenanceAgents", index],
+                message: "maintenance agent id must not be empty",
+              });
+            }
           }
         }
       })
