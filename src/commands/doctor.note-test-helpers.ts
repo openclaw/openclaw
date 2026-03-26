@@ -8,6 +8,9 @@ vi.mock("../terminal/note.js", () => ({
 
 export async function loadDoctorCommandForTest(params?: { unmockModules?: string[] }) {
   vi.resetModules();
+  vi.doMock("../terminal/note.js", () => ({
+    note: (...args: unknown[]) => terminalNoteMock(...args),
+  }));
   for (const modulePath of params?.unmockModules ?? []) {
     vi.doUnmock(modulePath);
   }
