@@ -1,3 +1,4 @@
+import anthropicPlugin from "../extensions/anthropic/index.js";
 import bravePlugin from "../extensions/brave/index.js";
 import duckduckgoPlugin from "../extensions/duckduckgo/index.js";
 import exaPlugin from "../extensions/exa/index.js";
@@ -71,5 +72,11 @@ export const bundledWebSearchPluginRegistrations: ReadonlyArray<{
       return xaiPlugin;
     },
     credentialValue: "xai-test",
+  },
+  {
+    get plugin() {
+      return anthropicPlugin;
+    },
+    credentialValue: "sk-ant-test",
   },
 ];
