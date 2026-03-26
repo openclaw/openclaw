@@ -162,7 +162,7 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("filters outbound bot replies in self-chat mode to prevent echo loop (#55174)", async () => {
+  it("allows self-chat messages through to let monitor-level echo tracking handle suppression (#55209)", async () => {
     setAccessControlTestConfig({
       channels: {
         whatsapp: {
@@ -172,6 +172,9 @@ describe("WhatsApp dmPolicy precedence", () => {
       },
     });
 
+    // In self-chat mode, both the user's own messages and bot echoes arrive with
+    // isFromMe=true. Access control must allow them through; the narrower
+    // isRecentOutboundMessage check in monitor.ts handles bot echo suppression.
     const result = await checkInboundAccessControl({
       accountId: "default",
       from: "+15550009999",
@@ -180,34 +183,6 @@ describe("WhatsApp dmPolicy precedence", () => {
       group: false,
       pushName: "Owner",
       isFromMe: true,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550009999@s.whatsapp.net",
-    });
-
-    expect(result.allowed).toBe(false);
-    expect(result.isSelfChat).toBe(true);
-    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
-    expect(sendMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("allows inbound user messages in self-chat mode when isFromMe is false", async () => {
-    setAccessControlTestConfig({
-      channels: {
-        whatsapp: {
-          selfChatMode: true,
-          allowFrom: ["+15550009999"],
-        },
-      },
-    });
-
-    const result = await checkInboundAccessControl({
-      accountId: "default",
-      from: "+15550009999",
-      selfE164: "+15550009999",
-      senderE164: "+15550009999",
-      group: false,
-      pushName: "Owner",
-      isFromMe: false,
       sock: { sendMessage: sendMessageMock },
       remoteJid: "15550009999@s.whatsapp.net",
     });

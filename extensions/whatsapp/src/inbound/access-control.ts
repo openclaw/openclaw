@@ -157,17 +157,6 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    // In self-chat mode, the bot's outbound replies arrive back via messages.upsert
-    // with isFromMe=true and isSamePhone=true. Filter them to prevent an echo loop.
-    if (params.isFromMe && isSamePhone && isSelfChat) {
-      logVerbose("Skipping outbound self-chat reply (fromMe + selfChat) to prevent echo loop.");
-      return {
-        allowed: false,
-        shouldMarkRead: false,
-        isSelfChat,
-        resolvedAccountId: account.accountId,
-      };
-    }
     if (access.decision === "block" && access.reason === "dmPolicy=disabled") {
       logVerbose("Blocked dm (dmPolicy: disabled)");
       return {
