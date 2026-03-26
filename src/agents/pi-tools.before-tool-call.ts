@@ -1,4 +1,6 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { GuardrailProvider } from "../guardrails/types.js";
+import { evaluateGuardrail } from "../guardrails/index.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -8,6 +10,16 @@ import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+// Guardrail state — set once during bootstrap via configureGuardrails().
+let guardrailProvider: GuardrailProvider | undefined;
+let guardrailFailClosed = true;
+
+/** Call once at startup if guardrails.enabled is true. */
+export function configureGuardrails(provider: GuardrailProvider | undefined, failClosed = true): void {
+  guardrailProvider = provider;
+  guardrailFailClosed = failClosed;
+}
 
 export type HookContext = {
   agentId?: string;
@@ -145,6 +157,22 @@ export async function runBeforeToolCallHook(args: {
     }
 
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
+  }
+
+  // Guardrail evaluation: runs before plugin hooks when configured.
+  if (guardrailProvider) {
+    const normalizedParams = isPlainObject(params) ? (params as Record<string, unknown>) : {};
+    const result = await evaluateGuardrail(guardrailProvider, {
+      toolName,
+      params: normalizedParams,
+      agentId: args.ctx?.agentId,
+      sessionId: args.ctx?.sessionId,
+      runId: args.ctx?.runId,
+      toolCallId: args.toolCallId,
+    }, guardrailFailClosed);
+    if (result.block) {
+      return { blocked: true, reason: result.blockReason || "Blocked by guardrail policy" };
+    }
   }
 
   const hookRunner = getGlobalHookRunner();
