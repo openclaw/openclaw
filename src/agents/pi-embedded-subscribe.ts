@@ -582,8 +582,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // "Checking files" IS a prefix of "Checking files done".
     const rawPrior = state.lastStreamedReasoningRaw ?? "";
     const isRawAccumulated = text.startsWith(rawPrior);
-    // rawDelta: new incremental raw content
-    const rawDelta = isRawAccumulated ? text.slice(rawPrior.length) : text;
     // rawAccumulated: monotonically growing raw text
     const rawAccumulated = isRawAccumulated ? text : rawPrior + text;
     state.lastStreamedReasoningRaw = rawAccumulated;
@@ -596,6 +594,13 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     state.lastStreamedReasoning = formatted;
+
+    // Compute delta from the last actually emitted raw text, not from the
+    // accumulated raw. This ensures whitespace-only updates that were skipped
+    // by formatting dedupe are correctly included in the next emitted delta.
+    const lastEmittedRaw = state.lastEmittedReasoningRaw ?? "";
+    const rawDelta = rawAccumulated.slice(lastEmittedRaw.length);
+    state.lastEmittedReasoningRaw = rawAccumulated;
 
     // Broadcast thinking event to WebSocket clients in real-time.
     // This runs unconditionally (even without onReasoningStream) so that
