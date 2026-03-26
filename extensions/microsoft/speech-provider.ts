@@ -8,7 +8,8 @@ import {
 import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/core";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/llm-task";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-import { edgeTTS, inferEdgeExtension, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 

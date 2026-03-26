@@ -15,6 +15,9 @@ export type PluginManifest = {
   kind?: PluginKind;
   channels?: string[];
   providers?: string[];
+  speechProviders?: string[];
+  mediaUnderstandingProviders?: string[];
+  imageGenerationProviders?: string[];
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
@@ -205,6 +208,9 @@ export function loadPluginManifest(
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const speechProviders = normalizeStringList(raw.speechProviders);
+  const mediaUnderstandingProviders = normalizeStringList(raw.mediaUnderstandingProviders);
+  const imageGenerationProviders = normalizeStringList(raw.imageGenerationProviders);
   const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -224,6 +230,9 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      speechProviders,
+      mediaUnderstandingProviders,
+      imageGenerationProviders,
       cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,

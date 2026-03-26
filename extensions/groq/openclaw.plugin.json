@@ -1,5 +1,6 @@
 {
   "id": "groq",
+  "mediaUnderstandingProviders": ["groq"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

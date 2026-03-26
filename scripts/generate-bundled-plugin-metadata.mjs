@@ -103,6 +103,15 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.providers)
       ? { providers: normalizeStringList(raw.providers) }
       : {}),
+    ...(normalizeStringList(raw.speechProviders)
+      ? { speechProviders: normalizeStringList(raw.speechProviders) }
+      : {}),
+    ...(normalizeStringList(raw.mediaUnderstandingProviders)
+      ? { mediaUnderstandingProviders: normalizeStringList(raw.mediaUnderstandingProviders) }
+      : {}),
+    ...(normalizeStringList(raw.imageGenerationProviders)
+      ? { imageGenerationProviders: normalizeStringList(raw.imageGenerationProviders) }
+      : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
       : {}),

@@ -1,5 +1,6 @@
 import type { SpeechProviderPlugin } from "openclaw/plugin-sdk/core";
-import { elevenLabsTTS, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { elevenLabsTTS } from "./tts.js";
 
 const ELEVENLABS_TTS_MODELS = [
   "eleven_multilingual_v2",
