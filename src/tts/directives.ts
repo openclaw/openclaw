@@ -4,7 +4,6 @@ import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "./provider-types.js";
@@ -13,7 +12,6 @@ type ParseTtsDirectiveOptions = {
   cfg?: OpenClawConfig;
   providers?: readonly SpeechProviderPlugin[];
   providerConfigs?: Record<string, SpeechProviderConfig>;
-  openaiBaseUrl?: string;
 };
 
 function buildProviderOrder(left: SpeechProviderPlugin, right: SpeechProviderPlugin): number {
@@ -36,49 +34,18 @@ function resolveDirectiveProviderConfig(
   provider: SpeechProviderPlugin,
   options?: ParseTtsDirectiveOptions,
 ): SpeechProviderConfig | undefined {
-  const explicit = options?.providerConfigs?.[provider.id];
-  if (explicit) {
-    return explicit;
-  }
-  if (provider.id === "openai" && options?.openaiBaseUrl) {
-    return { baseUrl: options.openaiBaseUrl };
-  }
-  return undefined;
-}
-
-function mergeProviderOverrides(
-  target: TtsDirectiveOverrides,
-  providerId: string,
-  next: SpeechProviderOverrides,
-): void {
-  target.providerOverrides = {
-    ...target.providerOverrides,
-    [providerId]: {
-      ...target.providerOverrides?.[providerId],
-      ...next,
-    },
-  };
-}
-
-function resolveLegacyOptions(
-  optionsOrOpenaiBaseUrl?: ParseTtsDirectiveOptions | string,
-): ParseTtsDirectiveOptions | undefined {
-  if (typeof optionsOrOpenaiBaseUrl === "string") {
-    return { openaiBaseUrl: optionsOrOpenaiBaseUrl };
-  }
-  return optionsOrOpenaiBaseUrl;
+  return options?.providerConfigs?.[provider.id];
 }
 
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
-  optionsOrOpenaiBaseUrl?: ParseTtsDirectiveOptions | string,
+  options?: ParseTtsDirectiveOptions,
 ): TtsDirectiveParseResult {
   if (!policy.enabled) {
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
-  const options = resolveLegacyOptions(optionsOrOpenaiBaseUrl);
   const providers = resolveDirectiveProviders(options);
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
@@ -135,7 +102,13 @@ export function parseTtsDirectives(
         }
         handled = true;
         if (parsed.overrides) {
-          mergeProviderOverrides(overrides, provider.id, parsed.overrides);
+          overrides.providerOverrides = {
+            ...overrides.providerOverrides,
+            [provider.id]: {
+              ...overrides.providerOverrides?.[provider.id],
+              ...parsed.overrides,
+            },
+          };
         }
         if (parsed.warnings?.length) {
           warnings.push(...parsed.warnings);
