@@ -173,9 +173,19 @@ function sortSpeechProvidersForAutoSelection(cfg?: OpenClawConfig) {
   });
 }
 
+function resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvider {
+  return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
+}
+
 function asProviderConfig(value: unknown): SpeechProviderConfig {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as SpeechProviderConfig)
+    : {};
+}
+
+function asProviderConfigMap(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -185,13 +195,18 @@ function resolveSpeechProviderConfigs(
   timeoutMs: number,
 ): Record<string, SpeechProviderConfig> {
   const providerConfigs: Record<string, SpeechProviderConfig> = {};
+  const rawProviders = asProviderConfigMap(raw.providers);
   for (const provider of listSpeechProviders(cfg)) {
     providerConfigs[provider.id] =
       provider.resolveConfig?.({
         cfg,
-        rawConfig: raw as Record<string, unknown>,
+        rawConfig: {
+          ...(raw as Record<string, unknown>),
+          providers: rawProviders,
+        },
         timeoutMs,
-      }) ?? asProviderConfig((raw as Record<string, unknown>)[provider.id]);
+      }) ??
+      asProviderConfig(rawProviders[provider.id] ?? (raw as Record<string, unknown>)[provider.id]);
   }
   return providerConfigs;
 }
@@ -214,7 +229,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
   return {
     auto,
     mode: raw.mode ?? "final",
-    provider: canonicalizeSpeechProviderId(raw.provider, cfg) ?? "microsoft",
+    provider:
+      canonicalizeSpeechProviderId(raw.provider, cfg) ??
+      resolveRegistryDefaultSpeechProviderId(cfg),
     providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
@@ -362,7 +379,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
       return provider.id;
     }
   }
-  return "microsoft";
+  return config.provider;
 }
 
 export function setTtsProvider(prefsPath: string, provider: TtsProvider): void {
