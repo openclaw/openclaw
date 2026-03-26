@@ -3,6 +3,10 @@
  */
 
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  isToolResultContentType,
+  resolveToolBlockArgs,
+} from "../../../../src/chat/tool-content.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
 /**
@@ -22,8 +26,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     Array.isArray(contentItems) &&
     contentItems.some((item) => {
       const x = item as Record<string, unknown>;
-      const t = (typeof x.type === "string" ? x.type : "").toLowerCase();
-      return t === "toolresult" || t === "tool_result";
+      return isToolResultContentType(x.type);
     });
 
   const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
@@ -42,7 +45,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       type: (item.type as MessageContentItem["type"]) || "text",
       text: item.text as string | undefined,
       name: item.name as string | undefined,
-      args: item.args || item.arguments || item.input,
+      args: resolveToolBlockArgs(item),
     }));
   } else if (typeof m.text === "string") {
     content = [{ type: "text", text: m.text }];
