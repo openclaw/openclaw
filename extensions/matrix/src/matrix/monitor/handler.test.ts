@@ -8,6 +8,7 @@ import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,
+  createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -402,6 +403,29 @@ describe("matrix monitor handler pairing account scope", () => {
     );
 
     expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("processes room messages mentioned via displayName in formatted_body", async () => {
+    const recordInboundSession = vi.fn(async () => {});
+    const { handler } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      getMemberDisplayName: async () => "Tom Servo",
+      recordInboundSession,
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixRoomMessageEvent({
+        eventId: "$display-name-mention",
+        content: {
+          msgtype: "m.text",
+          body: "Tom Servo: hello",
+          formatted_body: '<a href="https://matrix.to/#/@bot:example.org">Tom Servo</a>: hello',
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
   });
 
   it("drops forged metadata-only mentions before agent routing", async () => {
