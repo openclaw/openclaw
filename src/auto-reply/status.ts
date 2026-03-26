@@ -55,6 +55,10 @@ type AgentConfig = Partial<AgentDefaults> & {
 
 export const formatTokenCount = formatTokenCountShared;
 
+function formatThinkLabel(thinkLevel: string): string {
+  return thinkLevel === "adaptive" ? "adaptive (runtime: medium)" : thinkLevel;
+}
+
 type QueueStatus = {
   mode?: string;
   depth?: number;
@@ -695,7 +699,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const optionParts = [
     `Runtime: ${runtime.label}`,
-    `Think: ${thinkLevel}`,
+    `Think: ${formatThinkLabel(thinkLevel)}`,
     fastMode ? "Fast: on" : null,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
