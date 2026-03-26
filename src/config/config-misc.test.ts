@@ -29,6 +29,14 @@ describe("$schema key in config (#14998)", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
   });
+
+  it("accepts $schema during full config validation", () => {
+    const result = validateConfigObject({
+      $schema: "./schema.json",
+      gateway: { port: 18789 },
+    });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {
@@ -84,6 +92,40 @@ describe("plugins.entries.*.hooks.allowPromptInjection", () => {
           "voice-call": {
             hooks: {
               allowPromptInjection: "no",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("plugins.entries.*.subagent", () => {
+  it("accepts trusted subagent override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["anthropic/claude-haiku-4-5"],
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid trusted subagent override settings", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            subagent: {
+              allowModelOverride: "yes",
+              allowedModels: [1],
             },
           },
         },

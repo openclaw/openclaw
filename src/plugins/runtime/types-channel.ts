@@ -1,3 +1,10 @@
+/**
+ * Runtime helpers for native channel plugins.
+ *
+ * This surface exposes core and channel-specific helpers used by bundled
+ * plugins. Prefer hooks unless you need tight in-process coupling with the
+ * OpenClaw messaging/runtime stack.
+ */
 type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
@@ -87,29 +94,29 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
   };
   discord: {
-    messageActions: typeof import("../../../extensions/discord/src/channel-actions.js").discordMessageActions;
-    auditChannelPermissions: typeof import("../../../extensions/discord/src/audit.js").auditDiscordChannelPermissions;
-    listDirectoryGroupsLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryGroupsLive;
-    listDirectoryPeersLive: typeof import("../../../extensions/discord/src/directory-live.js").listDiscordDirectoryPeersLive;
-    probeDiscord: typeof import("../../../extensions/discord/src/probe.js").probeDiscord;
-    resolveChannelAllowlist: typeof import("../../../extensions/discord/src/resolve-channels.js").resolveDiscordChannelAllowlist;
-    resolveUserAllowlist: typeof import("../../../extensions/discord/src/resolve-users.js").resolveDiscordUserAllowlist;
-    sendComponentMessage: typeof import("../../../extensions/discord/src/send.js").sendDiscordComponentMessage;
-    sendMessageDiscord: typeof import("../../../extensions/discord/src/send.js").sendMessageDiscord;
-    sendPollDiscord: typeof import("../../../extensions/discord/src/send.js").sendPollDiscord;
-    monitorDiscordProvider: typeof import("../../../extensions/discord/src/monitor.js").monitorDiscordProvider;
+    messageActions: typeof import("../../plugin-sdk/discord.js").discordMessageActions;
+    auditChannelPermissions: typeof import("../../plugin-sdk/discord.js").auditDiscordChannelPermissions;
+    listDirectoryGroupsLive: typeof import("../../plugin-sdk/discord.js").listDiscordDirectoryGroupsLive;
+    listDirectoryPeersLive: typeof import("../../plugin-sdk/discord.js").listDiscordDirectoryPeersLive;
+    probeDiscord: typeof import("../../plugin-sdk/discord.js").probeDiscord;
+    resolveChannelAllowlist: typeof import("../../plugin-sdk/discord.js").resolveDiscordChannelAllowlist;
+    resolveUserAllowlist: typeof import("../../plugin-sdk/discord.js").resolveDiscordUserAllowlist;
+    sendComponentMessage: typeof import("../../plugin-sdk/discord.js").sendDiscordComponentMessage;
+    sendMessageDiscord: typeof import("../../plugin-sdk/discord.js").sendMessageDiscord;
+    sendPollDiscord: typeof import("../../plugin-sdk/discord.js").sendPollDiscord;
+    monitorDiscordProvider: typeof import("../../plugin-sdk/discord.js").monitorDiscordProvider;
     threadBindings: {
-      getManager: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").getThreadBindingManager;
-      resolveIdleTimeoutMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingIdleTimeoutMs;
-      resolveInactivityExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingInactivityExpiresAt;
-      resolveMaxAgeMs: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeMs;
-      resolveMaxAgeExpiresAt: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").resolveThreadBindingMaxAgeExpiresAt;
-      setIdleTimeoutBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingIdleTimeoutBySessionKey;
-      setMaxAgeBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").setThreadBindingMaxAgeBySessionKey;
-      unbindBySessionKey: typeof import("../../../extensions/discord/src/monitor/thread-bindings.js").unbindThreadBindingsBySessionKey;
+      getManager: typeof import("../../plugin-sdk/discord.js").getThreadBindingManager;
+      resolveIdleTimeoutMs: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingIdleTimeoutMs;
+      resolveInactivityExpiresAt: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingInactivityExpiresAt;
+      resolveMaxAgeMs: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingMaxAgeMs;
+      resolveMaxAgeExpiresAt: typeof import("../../plugin-sdk/discord.js").resolveThreadBindingMaxAgeExpiresAt;
+      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/discord.js").setThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/discord.js").setThreadBindingMaxAgeBySessionKey;
+      unbindBySessionKey: typeof import("../../plugin-sdk/discord.js").unbindThreadBindingsBySessionKey;
     };
     typing: {
-      pulse: typeof import("../../../extensions/discord/src/send.js").sendTypingDiscord;
+      pulse: typeof import("../../plugin-sdk/discord.js").sendTypingDiscord;
       start: (params: {
         channelId: string;
         accountId?: string;
@@ -121,39 +128,39 @@ export type PluginRuntimeChannel = {
       }>;
     };
     conversationActions: {
-      editMessage: typeof import("../../../extensions/discord/src/send.js").editMessageDiscord;
-      deleteMessage: typeof import("../../../extensions/discord/src/send.js").deleteMessageDiscord;
-      pinMessage: typeof import("../../../extensions/discord/src/send.js").pinMessageDiscord;
-      unpinMessage: typeof import("../../../extensions/discord/src/send.js").unpinMessageDiscord;
-      createThread: typeof import("../../../extensions/discord/src/send.js").createThreadDiscord;
-      editChannel: typeof import("../../../extensions/discord/src/send.js").editChannelDiscord;
+      editMessage: typeof import("../../plugin-sdk/discord.js").editMessageDiscord;
+      deleteMessage: typeof import("../../plugin-sdk/discord.js").deleteMessageDiscord;
+      pinMessage: typeof import("../../plugin-sdk/discord.js").pinMessageDiscord;
+      unpinMessage: typeof import("../../plugin-sdk/discord.js").unpinMessageDiscord;
+      createThread: typeof import("../../plugin-sdk/discord.js").createThreadDiscord;
+      editChannel: typeof import("../../plugin-sdk/discord.js").editChannelDiscord;
     };
   };
   slack: {
-    listDirectoryGroupsLive: typeof import("../../../extensions/slack/src/directory-live.js").listSlackDirectoryGroupsLive;
-    listDirectoryPeersLive: typeof import("../../../extensions/slack/src/directory-live.js").listSlackDirectoryPeersLive;
-    probeSlack: typeof import("../../../extensions/slack/src/probe.js").probeSlack;
-    resolveChannelAllowlist: typeof import("../../../extensions/slack/src/resolve-channels.js").resolveSlackChannelAllowlist;
-    resolveUserAllowlist: typeof import("../../../extensions/slack/src/resolve-users.js").resolveSlackUserAllowlist;
-    sendMessageSlack: typeof import("../../../extensions/slack/src/send.js").sendMessageSlack;
-    monitorSlackProvider: typeof import("../../../extensions/slack/src/index.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../agents/tools/slack-actions.js").handleSlackAction;
+    listDirectoryGroupsLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryGroupsLive;
+    listDirectoryPeersLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryPeersLive;
+    probeSlack: typeof import("../../plugin-sdk/slack.js").probeSlack;
+    resolveChannelAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackChannelAllowlist;
+    resolveUserAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackUserAllowlist;
+    sendMessageSlack: typeof import("../../plugin-sdk/slack.js").sendMessageSlack;
+    monitorSlackProvider: typeof import("../../plugin-sdk/slack.js").monitorSlackProvider;
+    handleSlackAction: typeof import("../../plugin-sdk/slack.js").handleSlackAction;
   };
   telegram: {
-    auditGroupMembership: typeof import("../../../extensions/telegram/src/audit.js").auditTelegramGroupMembership;
-    collectUnmentionedGroupIds: typeof import("../../../extensions/telegram/src/audit.js").collectTelegramUnmentionedGroupIds;
-    probeTelegram: typeof import("../../../extensions/telegram/src/probe.js").probeTelegram;
-    resolveTelegramToken: typeof import("../../../extensions/telegram/src/token.js").resolveTelegramToken;
-    sendMessageTelegram: typeof import("../../../extensions/telegram/src/send.js").sendMessageTelegram;
-    sendPollTelegram: typeof import("../../../extensions/telegram/src/send.js").sendPollTelegram;
-    monitorTelegramProvider: typeof import("../../../extensions/telegram/src/monitor.js").monitorTelegramProvider;
-    messageActions: typeof import("../../../extensions/telegram/src/channel-actions.js").telegramMessageActions;
+    auditGroupMembership: typeof import("../../plugin-sdk/telegram.js").auditTelegramGroupMembership;
+    collectUnmentionedGroupIds: typeof import("../../plugin-sdk/telegram.js").collectTelegramUnmentionedGroupIds;
+    probeTelegram: typeof import("../../plugin-sdk/telegram.js").probeTelegram;
+    resolveTelegramToken: typeof import("../../plugin-sdk/telegram.js").resolveTelegramToken;
+    sendMessageTelegram: typeof import("../../plugin-sdk/telegram.js").sendMessageTelegram;
+    sendPollTelegram: typeof import("../../plugin-sdk/telegram.js").sendPollTelegram;
+    monitorTelegramProvider: typeof import("../../plugin-sdk/telegram.js").monitorTelegramProvider;
+    messageActions: typeof import("../../plugin-sdk/telegram.js").telegramMessageActions;
     threadBindings: {
-      setIdleTimeoutBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingIdleTimeoutBySessionKey;
-      setMaxAgeBySessionKey: typeof import("../../../extensions/telegram/src/thread-bindings.js").setTelegramThreadBindingMaxAgeBySessionKey;
+      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/telegram.js").setTelegramThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/telegram.js").setTelegramThreadBindingMaxAgeBySessionKey;
     };
     typing: {
-      pulse: typeof import("../../../extensions/telegram/src/send.js").sendTypingTelegram;
+      pulse: typeof import("../../plugin-sdk/telegram.js").sendTypingTelegram;
       start: (params: {
         to: string;
         accountId?: string;
@@ -166,8 +173,8 @@ export type PluginRuntimeChannel = {
       }>;
     };
     conversationActions: {
-      editMessage: typeof import("../../../extensions/telegram/src/send.js").editMessageTelegram;
-      editReplyMarkup: typeof import("../../../extensions/telegram/src/send.js").editMessageReplyMarkupTelegram;
+      editMessage: typeof import("../../plugin-sdk/telegram.js").editMessageTelegram;
+      editReplyMarkup: typeof import("../../plugin-sdk/telegram.js").editMessageReplyMarkupTelegram;
       clearReplyMarkup: (
         chatIdInput: string | number,
         messageIdInput: string | number,
@@ -175,59 +182,65 @@ export type PluginRuntimeChannel = {
           token?: string;
           accountId?: string;
           verbose?: boolean;
-          api?: Partial<import("grammy").Bot["api"]>;
+          api?: import("../../plugin-sdk/telegram.js").TelegramApiOverride;
           retry?: import("../../infra/retry.js").RetryConfig;
           cfg?: ReturnType<typeof import("../../config/config.js").loadConfig>;
         },
       ) => Promise<{ ok: true; messageId: string; chatId: string }>;
-      deleteMessage: typeof import("../../../extensions/telegram/src/send.js").deleteMessageTelegram;
-      renameTopic: typeof import("../../../extensions/telegram/src/send.js").renameForumTopicTelegram;
-      pinMessage: typeof import("../../../extensions/telegram/src/send.js").pinMessageTelegram;
-      unpinMessage: typeof import("../../../extensions/telegram/src/send.js").unpinMessageTelegram;
+      deleteMessage: typeof import("../../plugin-sdk/telegram.js").deleteMessageTelegram;
+      renameTopic: typeof import("../../plugin-sdk/telegram.js").renameForumTopicTelegram;
+      pinMessage: typeof import("../../plugin-sdk/telegram.js").pinMessageTelegram;
+      unpinMessage: typeof import("../../plugin-sdk/telegram.js").unpinMessageTelegram;
+    };
+  };
+  matrix: {
+    threadBindings: {
+      setIdleTimeoutBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingIdleTimeoutBySessionKey;
+      setMaxAgeBySessionKey: typeof import("../../plugin-sdk/matrix.js").setMatrixThreadBindingMaxAgeBySessionKey;
     };
   };
   signal: {
-    probeSignal: typeof import("../../../extensions/signal/src/probe.js").probeSignal;
-    sendMessageSignal: typeof import("../../../extensions/signal/src/send.js").sendMessageSignal;
-    monitorSignalProvider: typeof import("../../../extensions/signal/src/index.js").monitorSignalProvider;
-    messageActions: typeof import("../../channels/plugins/actions/signal.js").signalMessageActions;
+    probeSignal: typeof import("../../plugin-sdk/signal.js").probeSignal;
+    sendMessageSignal: typeof import("../../plugin-sdk/signal.js").sendMessageSignal;
+    monitorSignalProvider: typeof import("../../plugin-sdk/signal.js").monitorSignalProvider;
+    messageActions: typeof import("../../plugin-sdk/signal.js").signalMessageActions;
   };
   imessage: {
-    monitorIMessageProvider: typeof import("../../../extensions/imessage/src/monitor.js").monitorIMessageProvider;
-    probeIMessage: typeof import("../../../extensions/imessage/src/probe.js").probeIMessage;
-    sendMessageIMessage: typeof import("../../../extensions/imessage/src/send.js").sendMessageIMessage;
+    monitorIMessageProvider: typeof import("../../plugin-sdk/imessage.js").monitorIMessageProvider;
+    probeIMessage: typeof import("../../plugin-sdk/imessage.js").probeIMessage;
+    sendMessageIMessage: typeof import("../../plugin-sdk/imessage.js").sendMessageIMessage;
   };
   whatsapp: {
-    getActiveWebListener: typeof import("../../../extensions/whatsapp/src/active-listener.js").getActiveWebListener;
-    getWebAuthAgeMs: typeof import("../../../extensions/whatsapp/src/auth-store.js").getWebAuthAgeMs;
-    logoutWeb: typeof import("../../../extensions/whatsapp/src/auth-store.js").logoutWeb;
-    logWebSelfId: typeof import("../../../extensions/whatsapp/src/auth-store.js").logWebSelfId;
-    readWebSelfId: typeof import("../../../extensions/whatsapp/src/auth-store.js").readWebSelfId;
-    webAuthExists: typeof import("../../../extensions/whatsapp/src/auth-store.js").webAuthExists;
-    sendMessageWhatsApp: typeof import("../../../extensions/whatsapp/src/send.js").sendMessageWhatsApp;
-    sendPollWhatsApp: typeof import("../../../extensions/whatsapp/src/send.js").sendPollWhatsApp;
-    loginWeb: typeof import("../../../extensions/whatsapp/src/login.js").loginWeb;
-    startWebLoginWithQr: typeof import("../../../extensions/whatsapp/src/login-qr.js").startWebLoginWithQr;
-    waitForWebLogin: typeof import("../../../extensions/whatsapp/src/login-qr.js").waitForWebLogin;
-    monitorWebChannel: typeof import("../../channels/web/index.js").monitorWebChannel;
-    handleWhatsAppAction: typeof import("../../agents/tools/whatsapp-actions.js").handleWhatsAppAction;
-    createLoginTool: typeof import("../../channels/plugins/agent-tools/whatsapp-login.js").createWhatsAppLoginTool;
+    getActiveWebListener: typeof import("./runtime-whatsapp-boundary.js").getActiveWebListener;
+    getWebAuthAgeMs: typeof import("./runtime-whatsapp-boundary.js").getWebAuthAgeMs;
+    logoutWeb: typeof import("./runtime-whatsapp-boundary.js").logoutWeb;
+    logWebSelfId: typeof import("./runtime-whatsapp-boundary.js").logWebSelfId;
+    readWebSelfId: typeof import("./runtime-whatsapp-boundary.js").readWebSelfId;
+    webAuthExists: typeof import("./runtime-whatsapp-boundary.js").webAuthExists;
+    sendMessageWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendMessageWhatsApp;
+    sendPollWhatsApp: typeof import("./runtime-whatsapp-boundary.js").sendPollWhatsApp;
+    loginWeb: typeof import("./runtime-whatsapp-boundary.js").loginWeb;
+    startWebLoginWithQr: typeof import("./runtime-whatsapp-boundary.js").startWebLoginWithQr;
+    waitForWebLogin: typeof import("./runtime-whatsapp-boundary.js").waitForWebLogin;
+    monitorWebChannel: typeof import("./runtime-whatsapp-boundary.js").monitorWebChannel;
+    handleWhatsAppAction: typeof import("./runtime-whatsapp-boundary.js").handleWhatsAppAction;
+    createLoginTool: typeof import("./runtime-whatsapp-login-tool.js").createRuntimeWhatsAppLoginTool;
   };
   line: {
-    listLineAccountIds: typeof import("../../line/accounts.js").listLineAccountIds;
-    resolveDefaultLineAccountId: typeof import("../../line/accounts.js").resolveDefaultLineAccountId;
-    resolveLineAccount: typeof import("../../line/accounts.js").resolveLineAccount;
-    normalizeAccountId: typeof import("../../line/accounts.js").normalizeAccountId;
-    probeLineBot: typeof import("../../line/probe.js").probeLineBot;
-    sendMessageLine: typeof import("../../line/send.js").sendMessageLine;
-    pushMessageLine: typeof import("../../line/send.js").pushMessageLine;
-    pushMessagesLine: typeof import("../../line/send.js").pushMessagesLine;
-    pushFlexMessage: typeof import("../../line/send.js").pushFlexMessage;
-    pushTemplateMessage: typeof import("../../line/send.js").pushTemplateMessage;
-    pushLocationMessage: typeof import("../../line/send.js").pushLocationMessage;
-    pushTextMessageWithQuickReplies: typeof import("../../line/send.js").pushTextMessageWithQuickReplies;
-    createQuickReplyItems: typeof import("../../line/send.js").createQuickReplyItems;
-    buildTemplateMessageFromPayload: typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
-    monitorLineProvider: typeof import("../../line/monitor.js").monitorLineProvider;
+    listLineAccountIds: typeof import("../../plugin-sdk/line.js").listLineAccountIds;
+    resolveDefaultLineAccountId: typeof import("../../plugin-sdk/line.js").resolveDefaultLineAccountId;
+    resolveLineAccount: typeof import("../../plugin-sdk/line.js").resolveLineAccount;
+    normalizeAccountId: typeof import("../../plugin-sdk/line.js").normalizeAccountId;
+    probeLineBot: typeof import("../../plugin-sdk/line-runtime.js").probeLineBot;
+    sendMessageLine: typeof import("../../plugin-sdk/line-runtime.js").sendMessageLine;
+    pushMessageLine: typeof import("../../plugin-sdk/line-runtime.js").pushMessageLine;
+    pushMessagesLine: typeof import("../../plugin-sdk/line-runtime.js").pushMessagesLine;
+    pushFlexMessage: typeof import("../../plugin-sdk/line-runtime.js").pushFlexMessage;
+    pushTemplateMessage: typeof import("../../plugin-sdk/line-runtime.js").pushTemplateMessage;
+    pushLocationMessage: typeof import("../../plugin-sdk/line-runtime.js").pushLocationMessage;
+    pushTextMessageWithQuickReplies: typeof import("../../plugin-sdk/line-runtime.js").pushTextMessageWithQuickReplies;
+    createQuickReplyItems: typeof import("../../plugin-sdk/line-runtime.js").createQuickReplyItems;
+    buildTemplateMessageFromPayload: typeof import("../../plugin-sdk/line-runtime.js").buildTemplateMessageFromPayload;
+    monitorLineProvider: typeof import("../../plugin-sdk/line-runtime.js").monitorLineProvider;
   };
 };

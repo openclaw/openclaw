@@ -1,6 +1,6 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
-import { loadConfig } from "../../../src/config/config.js";
-import { logVerbose } from "../../../src/globals.js";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
@@ -161,6 +161,8 @@ export async function sendSlackMessage(
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
     threadTs?: string;
+    uploadFileName?: string;
+    uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
   } = {},
 ) {
@@ -171,6 +173,8 @@ export async function sendSlackMessage(
     mediaLocalRoots: opts.mediaLocalRoots,
     client: opts.client,
     threadTs: opts.threadTs,
+    ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
+    ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
   });
 }

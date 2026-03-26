@@ -1,18 +1,20 @@
-import { resolveMessagePrefix } from "../../../../../src/agents/identity.js";
+import { resolveMessagePrefix } from "openclaw/plugin-sdk/agent-runtime";
 import {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
-} from "../../../../../src/auto-reply/envelope.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getPrimaryIdentityId, getReplyContext, getSenderIdentity } from "../../identity.js";
 import type { WebInboundMsg } from "../types.js";
 
 export function formatReplyContext(msg: WebInboundMsg) {
-  if (!msg.replyToBody) {
+  const replyTo = getReplyContext(msg);
+  if (!replyTo?.body) {
     return null;
   }
-  const sender = msg.replyToSender ?? "unknown sender";
-  const idPart = msg.replyToId ? ` id:${msg.replyToId}` : "";
-  return `[Replying to ${sender}${idPart}]\n${msg.replyToBody}\n[/Replying]`;
+  const sender = replyTo.sender?.label ?? replyTo.sender?.e164 ?? "unknown sender";
+  const idPart = replyTo.id ? ` id:${replyTo.id}` : "";
+  return `[Replying to ${sender}${idPart}]\n${replyTo.body}\n[/Replying]`;
 }
 
 export function buildInboundLine(params: {
@@ -31,6 +33,7 @@ export function buildInboundLine(params: {
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
   const replyContext = formatReplyContext(msg);
   const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
+  const sender = getSenderIdentity(msg);
 
   // Wrap with standardized envelope for the agent.
   return formatInboundEnvelope({
@@ -40,9 +43,9 @@ export function buildInboundLine(params: {
     body: baseLine,
     chatType: msg.chatType,
     sender: {
-      name: msg.senderName,
-      e164: msg.senderE164,
-      id: msg.senderJid,
+      name: sender.name ?? undefined,
+      e164: sender.e164 ?? undefined,
+      id: getPrimaryIdentityId(sender) ?? undefined,
     },
     previousTimestamp,
     envelope,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import anthropicPlugin from "../../extensions/anthropic/index.js";
+import chutesPlugin from "../../extensions/chutes/index.js";
 import cloudflareAiGatewayPlugin from "../../extensions/cloudflare-ai-gateway/index.js";
 import googlePlugin from "../../extensions/google/index.js";
 import huggingfacePlugin from "../../extensions/huggingface/index.js";
@@ -15,7 +16,6 @@ import opencodeGoPlugin from "../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../extensions/opencode/index.js";
 import openrouterPlugin from "../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../extensions/qwen-portal-auth/index.js";
 import syntheticPlugin from "../../extensions/synthetic/index.js";
 import togetherPlugin from "../../extensions/together/index.js";
 import venicePlugin from "../../extensions/venice/index.js";
@@ -26,16 +26,16 @@ import { setDetectZaiEndpointForTesting } from "../../extensions/zai/detect.js";
 import zaiPlugin from "../../extensions/zai/index.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import { createCapturedPluginRegistration } from "../test-utils/plugin-registration.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import {
   MINIMAX_CN_API_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
-} from "./onboard-auth.js";
+} from "../plugins/provider-model-definitions.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import { registerProviderPlugins } from "../test-utils/plugin-registration.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
@@ -49,7 +49,7 @@ import {
 
 type DetectZaiEndpoint = typeof import("./zai-endpoint-detect.js").detectZaiEndpoint;
 
-vi.mock("../providers/github-copilot-auth.js", () => ({
+vi.mock("../../extensions/github-copilot/login.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
@@ -61,9 +61,14 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/providers.js", () => ({
-  resolvePluginProviders,
-}));
+vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>();
+  return {
+    ...actual,
+    resolvePluginProviders,
+  };
+});
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
 vi.mock("./zai-endpoint-detect.js", () => ({
@@ -82,9 +87,9 @@ type StoredAuthProfile = {
 };
 
 function createDefaultProviderPlugins() {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of [
+  return registerProviderPlugins(
     anthropicPlugin,
+    chutesPlugin,
     cloudflareAiGatewayPlugin,
     googlePlugin,
     huggingfacePlugin,
@@ -98,7 +103,6 @@ function createDefaultProviderPlugins() {
     opencodePlugin,
     openrouterPlugin,
     qianfanPlugin,
-    qwenPortalAuthPlugin,
     syntheticPlugin,
     togetherPlugin,
     venicePlugin,
@@ -106,10 +110,7 @@ function createDefaultProviderPlugins() {
     xaiPlugin,
     xiaomiPlugin,
     zaiPlugin,
-  ]) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
+  );
 }
 
 describe("applyAuthChoice", () => {
@@ -520,9 +521,9 @@ describe("applyAuthChoice", () => {
       {
         tokenProvider: "KIMI-CODING",
         token: "sk-kimi-token-provider-test",
-        profileId: "kimi-coding:default",
-        provider: "kimi-coding",
-        expectedModelPrefix: "kimi-coding/",
+        profileId: "kimi:default",
+        provider: "kimi",
+        expectedModelPrefix: "kimi/",
       },
       {
         tokenProvider: " GOOGLE  ",
@@ -600,9 +601,9 @@ describe("applyAuthChoice", () => {
     {
       authChoice: "kimi-code-api-key",
       tokenProvider: "kimi-code",
-      profileId: "kimi-coding:default",
-      provider: "kimi-coding",
-      modelPrefix: "kimi-coding/",
+      profileId: "kimi:default",
+      provider: "kimi",
+      modelPrefix: "kimi/",
     },
     {
       authChoice: "xiaomi-api-key",
@@ -1349,7 +1350,7 @@ describe("applyAuthChoice", () => {
 
     const runtime = createExitThrowingRuntime();
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
-      if (params.message === "Paste the redirect URL") {
+      if (params.message.startsWith("Paste the redirect URL")) {
         const runtimeLog = runtime.log as ReturnType<typeof vi.fn>;
         const lastLog = runtimeLog.mock.calls.at(-1)?.[0];
         const urlLine = typeof lastLog === "string" ? lastLog : String(lastLog ?? "");
@@ -1374,7 +1375,7 @@ describe("applyAuthChoice", () => {
 
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Paste the redirect URL",
+        message: expect.stringContaining("Paste the redirect URL"),
       }),
     );
     expect(result.config.auth?.profiles?.["chutes:remote-user"]).toMatchObject({
@@ -1392,7 +1393,7 @@ describe("applyAuthChoice", () => {
 
   it("writes portal OAuth credentials for plugin providers", async () => {
     const scenarios: Array<{
-      authChoice: "qwen-portal" | "minimax-global-oauth";
+      authChoice: "minimax-global-oauth";
       label: string;
       authId: string;
       authLabel: string;
@@ -1405,18 +1406,6 @@ describe("applyAuthChoice", () => {
       selectValue?: string;
     }> = [
       {
-        authChoice: "qwen-portal",
-        label: "Qwen",
-        authId: "device",
-        authLabel: "Qwen OAuth",
-        providerId: "qwen-portal",
-        profileId: "qwen-portal:default",
-        baseUrl: "https://portal.qwen.ai/v1",
-        api: "openai-completions",
-        defaultModel: "qwen-portal/coder-model",
-        apiKey: "qwen-oauth", // pragma: allowlist secret
-      },
-      {
         authChoice: "minimax-global-oauth",
         label: "MiniMax",
         authId: "oauth",
@@ -1425,7 +1414,7 @@ describe("applyAuthChoice", () => {
         profileId: "minimax-portal:default",
         baseUrl: "https://api.minimax.io/anthropic",
         api: "anthropic-messages",
-        defaultModel: "minimax-portal/MiniMax-M2.5",
+        defaultModel: "minimax-portal/MiniMax-M2.7",
         apiKey: "minimax-oauth", // pragma: allowlist secret
       },
     ];
@@ -1513,7 +1502,6 @@ describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps known and unknown auth choices", async () => {
     const scenarios = [
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
-      { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
       { authChoice: "ollama" as const, expectedProvider: "ollama" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },

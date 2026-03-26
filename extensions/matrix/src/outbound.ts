@@ -1,6 +1,5 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/matrix";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
+import { resolveOutboundSendDep, type ChannelOutboundAdapter } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
@@ -8,7 +7,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId }) => {
+  sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId, audioAsVoice }) => {
     const send =
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
     const resolvedThreadId =
@@ -18,6 +17,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
+      audioAsVoice,
     });
     return {
       channel: "matrix",
@@ -25,7 +25,18 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       roomId: result.roomId,
     };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, deps, replyToId, threadId, accountId }) => {
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    deps,
+    replyToId,
+    threadId,
+    accountId,
+    audioAsVoice,
+  }) => {
     const send =
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
     const resolvedThreadId =
@@ -33,9 +44,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     const result = await send(to, text, {
       cfg,
       mediaUrl,
+      mediaLocalRoots,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
+      audioAsVoice,
     });
     return {
       channel: "matrix",

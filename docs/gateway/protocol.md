@@ -181,6 +181,13 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
+- Operators may call `tools.effective` (`operator.read`) to fetch the runtime-effective tool
+  inventory for a session.
+  - `sessionKey` is required.
+  - The gateway derives trusted runtime context from the session server-side instead of accepting
+    caller-supplied auth or delivery context.
+  - The response is session-scoped and reflects what the active conversation can use right now,
+    including core, plugin, and channel tools.
 
 ## Exec approvals
 

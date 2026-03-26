@@ -1,2 +1,9 @@
-export { resolveProviderPluginChoice } from "../../../plugins/provider-wizard.js";
-export { resolvePluginProviders } from "../../../plugins/providers.js";
+import { resolveProviderPluginChoice } from "../../../plugins/provider-wizard.js";
+import { resolveOwningPluginIdsForProvider } from "../../../plugins/providers.js";
+import { resolvePluginProviders } from "../../../plugins/providers.runtime.js";
+
+export const authChoicePluginProvidersRuntime = {
+  resolveOwningPluginIdsForProvider,
+  resolveProviderPluginChoice,
+  resolvePluginProviders,
+};

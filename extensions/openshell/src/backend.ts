@@ -11,13 +11,13 @@ import type {
   SandboxBackendHandle,
   SandboxBackendManager,
   SshSandboxSession,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/sandbox";
 import {
   createRemoteShellSandboxFsBridge,
   disposeSshSandboxSession,
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/sandbox";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -421,6 +421,9 @@ class OpenShellSandboxBackendImpl {
       await replaceDirectoryContents({
         sourceDir: tmpDir,
         targetDir: this.params.createParams.workspaceDir,
+        // Never sync hooks/ from the remote sandbox — mirrored content must not
+        // become trusted workspace hook code on the host.
+        excludeDirs: ["hooks"],
       });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });

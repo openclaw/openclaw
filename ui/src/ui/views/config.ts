@@ -1,17 +1,27 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
+import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
   humanize,
+  isSensitiveConfigPath,
   pathKey,
   REDACTED_PLACEHOLDER,
   schemaType,
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+
+const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
+  0: "None",
+  25: "Slight",
+  50: "Default",
+  75: "Round",
+  100: "Full",
+};
 
 export type ConfigProps = {
   raw: string;
@@ -49,6 +59,8 @@ export type ConfigProps = {
   themeMode: ThemeMode;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  borderRadius: number;
+  setBorderRadius: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -56,6 +68,7 @@ export type ConfigProps = {
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
+  onRequestUpdate?: () => void;
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -278,6 +291,40 @@ const sidebarIcons = {
       <path d="m19.07 10.93-4.24 4.24"></path>
     </svg>
   `,
+  diagnostics: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+    </svg>
+  `,
+  cli: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polyline points="4 17 10 11 4 5"></polyline>
+      <line x1="12" y1="19" x2="20" y2="19"></line>
+    </svg>
+  `,
+  secrets: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path
+        d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"
+      ></path>
+    </svg>
+  `,
+  acp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+      <circle cx="9" cy="7" r="4"></circle>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+    </svg>
+  `,
+  mcp: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+      <line x1="6" y1="6" x2="6.01" y2="6"></line>
+      <line x1="6" y1="18" x2="6.01" y2="18"></line>
+    </svg>
+  `,
   __appearance__: html`
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="12" cy="12" r="5"></circle>
@@ -316,6 +363,9 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "update", label: "Updates" },
       { key: "meta", label: "Meta" },
       { key: "logging", label: "Logging" },
+      { key: "diagnostics", label: "Diagnostics" },
+      { key: "cli", label: "Cli" },
+      { key: "secrets", label: "Secrets" },
     ],
   },
   {
@@ -364,13 +414,15 @@ const SECTION_CATEGORIES: SectionCategory[] = [
       { key: "canvasHost", label: "CanvasHost" },
       { key: "discovery", label: "Discovery" },
       { key: "media", label: "Media" },
+      { key: "acp", label: "Acp" },
+      { key: "mcp", label: "Mcp" },
     ],
   },
   {
     id: "appearance",
     label: "Appearance",
     sections: [
-      { key: "__appearance__", label: "Appearance" },
+      { key: "__appearance__", label: "Theme" },
       { key: "ui", label: "UI" },
       { key: "wizard", label: "Setup Wizard" },
     ],
@@ -503,28 +555,20 @@ function truncateValue(value: unknown, maxLen = 40): string {
 }
 
 function renderDiffValue(path: string, value: unknown, _uiHints: ConfigUiHints): string {
+  if (isSensitiveConfigPath(path) && value != null && truncateValue(value).trim() !== "") {
+    return REDACTED_PLACEHOLDER;
+  }
   return truncateValue(value);
 }
 
 type ThemeOption = { id: ThemeName; label: string; description: string; icon: TemplateResult };
 const THEME_OPTIONS: ThemeOption[] = [
   { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Knot family", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Field family", icon: icons.barChart },
+  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
+  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
 function renderAppearanceSection(props: ConfigProps) {
-  const MODE_OPTIONS: Array<{
-    id: ThemeMode;
-    label: string;
-    description: string;
-    icon: TemplateResult;
-  }> = [
-    { id: "system", label: "System", description: "Follow OS light or dark", icon: icons.monitor },
-    { id: "light", label: "Light", description: "Force light mode", icon: icons.sun },
-    { id: "dark", label: "Dark", description: "Force dark mode", icon: icons.moon },
-  ];
-
   return html`
     <div class="settings-appearance">
       <div class="settings-appearance__section">
@@ -559,33 +603,26 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Mode</h3>
-        <p class="settings-appearance__hint">Choose light or dark mode for the selected theme.</p>
-        <div class="settings-theme-grid">
-          ${MODE_OPTIONS.map(
-            (opt) => html`
-              <button
-                class="settings-theme-card ${opt.id === props.themeMode ? "settings-theme-card--active" : ""}"
-                title=${opt.description}
-                @click=${(e: Event) => {
-                  if (opt.id !== props.themeMode) {
-                    const context: ThemeTransitionContext = {
-                      element: (e.currentTarget as HTMLElement) ?? undefined,
-                    };
-                    props.setThemeMode(opt.id, context);
-                  }
-                }}
-              >
-                <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
-                <span class="settings-theme-card__label">${opt.label}</span>
-                ${
-                  opt.id === props.themeMode
-                    ? html`<span class="settings-theme-card__check" aria-hidden="true">${icons.check}</span>`
-                    : nothing
-                }
-              </button>
-            `,
-          )}
+        <h3 class="settings-appearance__heading">Roundness</h3>
+        <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
+        <div class="settings-roundness">
+          <div class="settings-roundness__options">
+            ${BORDER_RADIUS_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-roundness__btn ${stop === props.borderRadius ? "active" : ""}"
+                  @click=${() => props.setBorderRadius(stop)}
+                >
+                  <span
+                    class="settings-roundness__swatch"
+                    style="border-radius: ${Math.round(10 * (stop / 50))}px"
+                  ></span>
+                  <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
+                </button>
+              `,
+            )}
+          </div>
         </div>
       </div>
 
@@ -672,6 +709,7 @@ export function renderConfig(props: ConfigProps) {
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const formMode = showModeToggle ? props.formMode : "form";
   const envSensitiveVisible = cvs.envRevealed;
+  const requestUpdate = props.onRequestUpdate ?? (() => props.onRawChange(props.raw));
 
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
@@ -746,6 +784,28 @@ export function renderConfig(props: ConfigProps) {
       <main class="config-main">
         <div class="config-actions">
           <div class="config-actions__left">
+            ${
+              showModeToggle
+                ? html`
+                    <div class="config-mode-toggle">
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                        ?disabled=${props.schemaLoading || !props.schema}
+                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
+                        @click=${() => props.onFormModeChange("form")}
+                      >
+                        Form
+                      </button>
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                        @click=${() => props.onFormModeChange("raw")}
+                      >
+                        Raw
+                      </button>
+                    </div>
+                  `
+                : nothing
+            }
             ${
               hasChanges
                 ? html`
@@ -827,6 +887,7 @@ export function renderConfig(props: ConfigProps) {
                         type="text"
                         class="config-search__input"
                         placeholder="Search settings..."
+                        aria-label="Search settings"
                         .value=${props.searchQuery}
                         @input=${(e: Event) =>
                           props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -836,6 +897,7 @@ export function renderConfig(props: ConfigProps) {
                           ? html`
                               <button
                                 class="config-search__clear"
+                                aria-label="Clear search"
                                 @click=${() => props.onSearchChange("")}
                               >
                                 ×
@@ -865,30 +927,6 @@ export function renderConfig(props: ConfigProps) {
             )}
           </div>
 
-          <div class="config-top-tabs__right">
-            ${
-              showModeToggle
-                ? html`
-                    <div class="config-mode-toggle">
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                        ?disabled=${props.schemaLoading || !props.schema}
-                        title=${formUnsafe ? "Form view can't safely edit some fields" : ""}
-                        @click=${() => props.onFormModeChange("form")}
-                      >
-                        Form
-                      </button>
-                      <button
-                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                        @click=${() => props.onFormModeChange("raw")}
-                      >
-                        Raw
-                      </button>
-                    </div>
-                  `
-                : nothing
-            }
-          </div>
         </div>
 
         ${
@@ -905,7 +943,7 @@ export function renderConfig(props: ConfigProps) {
                   class="btn btn--sm"
                   @click=${() => {
                     cvs.validityDismissed = true;
-                    props.onRawChange(props.raw);
+                    requestUpdate();
                   }}
                 >Don't remind again</button>
               </div>
@@ -982,7 +1020,7 @@ export function renderConfig(props: ConfigProps) {
                         title=${envSensitiveVisible ? "Hide env values" : "Reveal env values"}
                         @click=${() => {
                           cvs.envRevealed = !cvs.envRevealed;
-                          props.onRawChange(props.raw);
+                          requestUpdate();
                         }}
                       >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
@@ -1031,7 +1069,7 @@ export function renderConfig(props: ConfigProps) {
                         isSensitivePathRevealed,
                         onToggleSensitivePath: (path) => {
                           toggleSensitivePathReveal(path);
-                          props.onRawChange(props.raw);
+                          requestUpdate();
                         },
                       })
                 }
@@ -1054,16 +1092,15 @@ export function renderConfig(props: ConfigProps) {
                           `
                         : nothing
                     }
-                    <label class="field config-raw-field">
+                    <div class="field config-raw-field">
                       <span style="display:flex;align-items:center;gap:8px;">
-                        Raw JSON5
+                        Raw config (JSON/JSON5)
                         ${
                           sensitiveCount > 0
                             ? html`
                               <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
                               <button
-                                class="btn btn--icon ${blurred ? "" : "active"}"
-                                style="width:28px;height:28px;padding:0;"
+                                class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
                                 title=${
                                   blurred ? "Reveal sensitive values" : "Hide sensitive values"
                                 }
@@ -1071,7 +1108,7 @@ export function renderConfig(props: ConfigProps) {
                                 aria-pressed=${!blurred}
                                 @click=${() => {
                                   cvs.rawRevealed = !cvs.rawRevealed;
-                                  props.onRawChange(props.raw);
+                                  requestUpdate();
                                 }}
                               >
                                 ${blurred ? icons.eyeOff : icons.eye}
@@ -1082,7 +1119,7 @@ export function renderConfig(props: ConfigProps) {
                       </span>
                       <textarea
                         class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw JSON5 config"}
+                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
                         .value=${blurred ? "" : props.raw}
                         ?readonly=${blurred}
                         @input=${(e: Event) => {
@@ -1092,7 +1129,7 @@ export function renderConfig(props: ConfigProps) {
                           props.onRawChange((e.target as HTMLTextAreaElement).value);
                         }}
                       ></textarea>
-                    </label>
+                    </div>
                   `;
                   })()
           }

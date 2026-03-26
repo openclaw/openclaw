@@ -7,29 +7,24 @@ const loadCronStore = vi.fn();
 const resolveCronStorePath = vi.fn();
 const saveCronStore = vi.fn();
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
   return {
     ...actual,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
-  };
-});
-
-vi.mock("../../../src/cron/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/cron/store.js")>();
-  return {
-    ...actual,
     loadCronStore,
     resolveCronStorePath,
     saveCronStore,
   };
 });
 
-const { maybePersistResolvedTelegramTarget } = await import("./target-writeback.js");
-
 describe("maybePersistResolvedTelegramTarget", () => {
-  beforeEach(() => {
+  let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
     readConfigFileSnapshotForWrite.mockReset();
     writeConfigFile.mockReset();
     loadCronStore.mockReset();
@@ -49,7 +44,39 @@ describe("maybePersistResolvedTelegramTarget", () => {
     expect(loadCronStore).not.toHaveBeenCalled();
   });
 
-  it("writes back matching config and cron targets", async () => {
+  it("skips config and cron writeback for gateway callers missing operator.admin", async () => {
+    await maybePersistResolvedTelegramTarget({
+      cfg: {
+        cron: { store: "/tmp/cron/jobs.json" },
+      } as OpenClawConfig,
+      rawTarget: "t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(loadCronStore).not.toHaveBeenCalled();
+    expect(saveCronStore).not.toHaveBeenCalled();
+  });
+
+  it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
+    await maybePersistResolvedTelegramTarget({
+      cfg: {
+        cron: { store: "/tmp/cron/jobs.json" },
+      } as OpenClawConfig,
+      rawTarget: "t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: [],
+    });
+
+    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(loadCronStore).not.toHaveBeenCalled();
+    expect(saveCronStore).not.toHaveBeenCalled();
+  });
+
+  it("writes back matching config and cron targets for gateway callers with operator.admin", async () => {
     readConfigFileSnapshotForWrite.mockResolvedValue({
       snapshot: {
         config: {
@@ -81,6 +108,7 @@ describe("maybePersistResolvedTelegramTarget", () => {
       } as OpenClawConfig,
       rawTarget: "t.me/mychannel",
       resolvedChatId: "-100123",
+      gatewayClientScopes: ["operator.admin"],
     });
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);

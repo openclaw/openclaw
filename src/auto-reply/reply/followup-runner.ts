@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -15,13 +19,14 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
 } from "./origin-routing.js";
-import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -81,13 +86,12 @@ export function createFollowupRunner(params: {
     }
 
     for (const payload of payloads) {
-      if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
+      if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
       }
       if (
         isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
-        !payload.mediaUrl &&
-        !payload.mediaUrls?.length
+        !resolveSendableOutboundReplyParts(payload).hasMedia
       ) {
         continue;
       }
@@ -149,8 +153,20 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
+      let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      activeSessionEntry = await runPreflightCompactionIfNeeded({
+        cfg: queued.run.config,
+        followupRun: queued,
+        promptForEstimate: queued.prompt,
+        defaultModel,
+        agentCfgContextTokens,
+        sessionEntry: activeSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: opts?.isHeartbeat === true,
+      });
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
@@ -171,6 +187,7 @@ export function createFollowupRunner(params: {
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
+                allowGatewaySubagentBinding: true,
                 sessionId: queued.run.sessionId,
                 sessionKey: queued.run.sessionKey,
                 agentId: queued.run.agentId,
@@ -267,6 +284,7 @@ export function createFollowupRunner(params: {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
+          cfg: queued.run.config,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
@@ -288,7 +306,7 @@ export function createFollowupRunner(params: {
           return [payload];
         }
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
         if (stripped.shouldSkip && !hasMedia) {
           return [];
         }
@@ -340,6 +358,7 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCount > 0) {
+        const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
@@ -348,7 +367,21 @@ export function createFollowupRunner(params: {
           amount: autoCompactionCount,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
+          newSessionId: runResult.meta?.agentMeta?.sessionId,
         });
+        const refreshedSessionEntry =
+          sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
+        if (refreshedSessionEntry) {
+          const queueKey = queued.run.sessionKey ?? sessionKey;
+          if (queueKey) {
+            refreshQueuedFollowupSession({
+              key: queueKey,
+              previousSessionId,
+              nextSessionId: refreshedSessionEntry.sessionId,
+              nextSessionFile: refreshedSessionEntry.sessionFile,
+            });
+          }
+        }
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({

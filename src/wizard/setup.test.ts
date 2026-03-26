@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
@@ -88,6 +89,12 @@ const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: tru
 const runTui = vi.hoisted(() => vi.fn(async (_options: unknown) => {}));
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const buildPluginCompatibilityNotices = vi.hoisted(() =>
+  vi.fn((): PluginCompatibilityNotice[] => []),
+);
+const formatPluginCompatibilityNotice = vi.hoisted(() =>
+  vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
+);
 
 vi.mock("../commands/onboard-channels.js", () => ({
   setupChannels,
@@ -170,6 +177,11 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt,
+}));
+
+vi.mock("../plugins/status.js", () => ({
+  buildPluginCompatibilityNotices,
+  formatPluginCompatibilityNotice,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -396,6 +408,94 @@ describe("runSetupWizard", () => {
         process.env.BRAVE_API_KEY = prevBraveKey;
       }
     }
+  });
+
+  it("prompts for a model during explicit interactive Ollama setup", async () => {
+    promptDefaultModel.mockClear();
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "ollama",
+        installDaemon: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowKeep: false,
+      }),
+    );
+  });
+
+  it("shows plugin compatibility notices for an existing valid config", async () => {
+    buildPluginCompatibilityNotices.mockReturnValue([
+      {
+        pluginId: "legacy-plugin",
+        code: "legacy-before-agent-start",
+        severity: "warn",
+        message:
+          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+      },
+    ]);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {},
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const select = vi.fn(async (opts: WizardSelectParams<unknown>) => {
+      if (opts.message === "Config handling") {
+        return "keep";
+      }
+      return "quickstart";
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ note, select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.some((call) => call?.[1] === "Plugin compatibility")).toBe(true);
+    expect(
+      calls.some((call) => {
+        const body = call?.[0];
+        return typeof body === "string" && body.includes("legacy-plugin");
+      }),
+    ).toBe(true);
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
