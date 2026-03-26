@@ -62,7 +62,7 @@ function resolveBindingWorkspace(
   for (const binding of listRouteBindings(cfg)) {
     if (!binding.workspace || binding.agentId !== agentId) continue;
     const peer = binding.match?.peer;
-    if (peer?.id && sessionKey.includes(peer.id)) {
+    if (peer?.id && sessionKey.endsWith(`:${peer.id.toLowerCase()}`)) {
       return binding.workspace;
     }
   }
