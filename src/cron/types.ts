@@ -174,6 +174,12 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Number of deferred runs due to maintenance-window role gating. */
+  deferredMaintenanceRuns?: number;
+  /** Timestamp of the earliest deferred run due to maintenance gating. */
+  firstDeferredMaintenanceAtMs?: number;
+  /** Timestamp of the most recent deferred run due to maintenance gating. */
+  lastDeferredMaintenanceAtMs?: number;
 };
 
 export type CronJob = CronJobBase<

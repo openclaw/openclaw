@@ -28,6 +28,24 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+export type CronMaintenanceWindowConfig = {
+  /** Start time (24h, HH:MM). Inclusive. */
+  start?: string;
+  /** End time (24h, HH:MM). Exclusive. Use 24:00 for end-of-day. */
+  end?: string;
+  /** Timezone for maintenance window ("user", "local", or IANA TZ id). Default: "user". */
+  timezone?: string;
+};
+
+export type CronMaintenanceConfig = {
+  /** Enable maintenance-window scheduler phase isolation. */
+  enabled?: boolean;
+  /** Daily maintenance window definition. */
+  window?: CronMaintenanceWindowConfig;
+  /** Agent ids that run only during maintenance windows. */
+  maintenanceAgents?: string[];
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -55,6 +73,8 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  /** Maintenance-window execution controls for cron + heartbeat schedulers. */
+  maintenance?: CronMaintenanceConfig;
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;
