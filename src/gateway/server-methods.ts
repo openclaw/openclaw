@@ -37,7 +37,9 @@ import { nodeHandlers } from "./server-methods/nodes.js";
 import { onboardingHandlers } from "./server-methods/onboarding.js";
 import { personasHandlers } from "./server-methods/personas.js";
 import { pluginsHandlers } from "./server-methods/plugins.js";
+import { portabilityHandlers } from "./server-methods/portability.js";
 import { projectsHandlers } from "./server-methods/projects.js";
+import { routinesHandlers } from "./server-methods/routines.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
@@ -59,6 +61,7 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { wakeupHandlers } from "./server-methods/wakeup.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
+import { workspaceSkillsHandlers } from "./server-methods/workspace-skills.js";
 import { workspacesHandlers } from "./server-methods/workspaces.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
@@ -147,6 +150,9 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...wakeupHandlers,
   ...dashboardHandlers,
   ...delegationsHandlers,
+  ...routinesHandlers,
+  ...workspaceSkillsHandlers,
+  ...portabilityHandlers,
 };
 
 export async function handleGatewayRequest(
