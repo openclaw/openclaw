@@ -228,9 +228,7 @@ export class PersistentMcpManager {
   private async _doStartServer(serverName: string, rawServer: unknown): Promise<void> {
     const launch = resolveStdioMcpServerLaunchConfig(rawServer);
     if (!launch.ok) {
-      this.log.warn(
-        `persistent-mcp: skipped server "${serverName}" because ${launch.reason}.`,
-      );
+      this.log.warn(`persistent-mcp: skipped server "${serverName}" because ${launch.reason}.`);
       return;
     }
     const launchConfig = launch.config;

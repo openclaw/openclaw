@@ -46,8 +46,8 @@ const bundleMcpRuntimeFactory = async () => ({
           mcpTool: "bundle_probe",
         },
       }),
-      },
-    ],
+    },
+  ],
   dispose: async () => {},
 });
 
