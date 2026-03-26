@@ -11231,6 +11231,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   format: "uri",
                 },
+                persistent: {
+                  type: "boolean",
+                },
               },
               additionalProperties: {},
             },
@@ -16128,6 +16131,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "plugins.installs.*.marketplacePlugin": {
       label: "Plugin Marketplace Plugin",
       help: "Plugin entry name inside the source marketplace, used for later updates.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.persistent": {
+      help: "When true, keeps the MCP server process alive at gateway level and shares it across all agent sessions. Only supported for stdio servers (requires command). Enables browser state, cookies, and login sessions to persist across conversations. Explicit opt-in — shared process state is visible to all sessions.",
       tags: ["advanced"],
     },
     "models.providers.*.headers.*": {

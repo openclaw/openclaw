@@ -19780,6 +19780,19 @@
       "hasChildren": false
     },
     {
+      "path": "mcp.servers.*.persistent",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "help": "When true, keeps the MCP server process alive at gateway level and shares it across all agent sessions. Only supported for stdio servers (requires command). Enables browser state, cookies, and login sessions to persist across conversations. Explicit opt-in — shared process state is visible to all sessions.",
+      "hasChildren": false
+    },
+    {
       "path": "mcp.servers.*.url",
       "kind": "core",
       "type": "string",
@@ -41324,6 +41337,21 @@
       ],
       "label": "Web Fetch Max Redirects",
       "help": "Maximum redirects allowed for web_fetch (default: 3).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.maxResponseBytes",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Web Fetch Max Download Size (bytes)",
+      "help": "Max download size before truncation.",
       "hasChildren": false
     },
     {
