@@ -37,6 +37,7 @@ function fakeMsg(role: string, content: string): AgentMessage {
 
 describe("before_llm_call hook", () => {
   const baseEvent: PluginHookBeforeLlmCallEvent = {
+    runId: "test-run-id",
     messages: [fakeMsg("user", "hello")],
     systemPrompt: "You are helpful.",
     model: "gpt-4",
@@ -179,6 +180,7 @@ describe("before_llm_call hook", () => {
 
 describe("after_llm_call hook", () => {
   const baseEvent: PluginHookAfterLlmCallEvent = {
+    runId: "test-run-id",
     response: {
       role: "assistant",
       content: [] as Array<{ type: string; text: string }>,
