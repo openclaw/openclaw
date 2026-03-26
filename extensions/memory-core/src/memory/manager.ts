@@ -477,17 +477,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       return episodicResults
         .filter((r) => r.score >= minScore)
-        .map((r) => ({
-          path: `episodic:${r.episode.id}`,
-          startLine: 0,
-          endLine: 0,
-          score: r.score,
-          snippet: r.episode.details
+        .map((r) => {
+          const snippet = r.episode.details
             ? `${r.episode.summary}\n${r.episode.details}`
-            : r.episode.summary,
-          source: "episodes" as const,
-          citation: r.episode.created_at,
-        }));
+            : r.episode.summary;
+          return {
+            // Use "episodes/<id>" so downstream citation rendering produces a
+            // human-readable label rather than a bare UUID, and avoids the
+            // "episodic:<id>" prefix being mistaken for a file path by memory_get.
+            path: `episodes/${r.episode.id}`,
+            // Episodes are atomic records, not line-addressable files.
+            // Use startLine: 1 / endLine: 1 so citation formatters produce
+            // "#L1" rather than the invalid "#L0".
+            startLine: 1,
+            endLine: 1,
+            score: r.score,
+            snippet,
+            source: "episodes" as const,
+            citation: r.episode.created_at,
+          };
+        });
     } finally {
       store.close();
     }
