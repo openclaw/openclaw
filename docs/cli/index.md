@@ -872,6 +872,13 @@ Policy note: this is technical compatibility. Anthropic has blocked some
 subscription usage outside Claude Code in the past; verify current Anthropic
 terms before relying on setup-token in production.
 
+Anthropic Claude CLI migration:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw onboard --auth-choice anthropic-cli
+```
+
 ### `models` (root)
 
 `openclaw models` is an alias for `models status`.
