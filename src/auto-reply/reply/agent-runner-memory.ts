@@ -708,6 +708,7 @@ export async function runMemoryFlushIfNeeded(params: {
             nowMs: memoryFlushNowMs,
           }),
           extraSystemPrompt: flushSystemPrompt,
+          isFallback: runOptions?.isFallback ?? false,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],

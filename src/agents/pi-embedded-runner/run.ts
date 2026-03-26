@@ -981,7 +981,7 @@ export async function runEmbeddedPiAgent(
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
             runId: params.runId,
-            isFallback: runLoopIterations > 1,
+            isFallback: params.isFallback,
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
