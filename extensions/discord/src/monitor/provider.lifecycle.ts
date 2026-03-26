@@ -23,10 +23,10 @@ const DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS = 5_000;
 type GatewaySocketListener = (...args: unknown[]) => void;
 
 type DiscordGatewaySocket = {
-  once: (event: "close", listener: GatewaySocketListener) => unknown;
-  on: (event: "error", listener: GatewaySocketListener) => unknown;
+  on: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
   listeners: (event: "close" | "error") => GatewaySocketListener[];
   removeListener: (event: "close" | "error", listener: GatewaySocketListener) => unknown;
+  terminate?: () => void;
 };
 
 type MutableGateway = GatewayPlugin & {
@@ -213,35 +213,84 @@ export async function runDiscordGatewayLifecycle(params: {
       socket.removeListener("error", listener);
     }
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const finish = () => {
+      const ignoreSocketError = () => {};
+      const cleanup = () => {
+        socket.removeListener("close", onClose);
+        socket.removeListener("error", ignoreSocketError);
+      };
+      const resolveClose = () => {
+        if (settled) {
+          cleanup();
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        cleanup();
+        resolve();
+      };
+      const onClose = () => {
+        resolveClose();
+      };
+      const timeout = setTimeout(() => {
         if (settled) {
           return;
         }
         settled = true;
-        resolve();
-      };
-      const timeout = setTimeout(finish, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
+        params.runtime.error?.(
+          danger(
+            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; force-stopping instead of opening a parallel socket`,
+          ),
+        );
+        try {
+          socket.terminate?.();
+        } catch {
+          // Best-effort only: lifecycle callers treat this as fatal and stop
+          // instead of opening another socket on top of an unknown old one.
+        }
+        reject(
+          new Error(
+            `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
+          ),
+        );
+      }, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
       timeout.unref?.();
-      socket.on("error", () => {});
-      socket.once("close", () => {
-        clearTimeout(timeout);
-        finish();
-      });
+      socket.on("error", ignoreSocketError);
+      socket.on("close", onClose);
       gateway.disconnect();
     });
   };
-  const reconnectGateway = async (resume: boolean) => {
-    await disconnectGatewaySocketWithoutAutoReconnect();
-    gateway?.connect(resume);
+  let reconnectInFlight: Promise<void> | undefined;
+  const reconnectGateway = async (reconnectParams: {
+    resume: boolean;
+    forceFreshIdentify?: boolean;
+  }) => {
+    if (reconnectInFlight) {
+      return await reconnectInFlight;
+    }
+    reconnectInFlight = (async () => {
+      if (reconnectParams.forceFreshIdentify) {
+        // Carbon still sends RESUME on HELLO when session state is populated,
+        // even after connect(false). Clear cached session data first so this
+        // path truly forces a fresh IDENTIFY.
+        clearResumeState();
+      }
+      if (lifecycleStopping || params.abortSignal?.aborted) {
+        return;
+      }
+      await disconnectGatewaySocketWithoutAutoReconnect();
+      if (lifecycleStopping || params.abortSignal?.aborted) {
+        return;
+      }
+      gateway?.connect(reconnectParams.resume);
+    })().finally(() => {
+      reconnectInFlight = undefined;
+    });
+    return await reconnectInFlight;
   };
   const reconnectGatewayFresh = async () => {
-    // Carbon still sends RESUME on HELLO when session state is populated, even
-    // after connect(false). Clear cached session data first so this path truly
-    // forces a fresh IDENTIFY.
-    clearResumeState();
-    await reconnectGateway(false);
+    await reconnectGateway({ resume: false, forceFreshIdentify: true });
   };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
@@ -337,7 +386,7 @@ export async function runDiscordGatewayLifecycle(params: {
             await reconnectGatewayFresh();
             return;
           }
-          await reconnectGateway(true);
+          await reconnectGateway({ resume: true });
         } catch (err) {
           params.runtime.error?.(
             danger(`discord: failed to restart stalled gateway socket: ${String(err)}`),

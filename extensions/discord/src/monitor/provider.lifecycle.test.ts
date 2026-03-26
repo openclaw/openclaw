@@ -362,6 +362,65 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
+  it("fails closed when the old socket does not drain before a forced reconnect", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } =
+        createLifecycleHarness({ gateway });
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      lifecyclePromise.catch(() => {});
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_000);
+      await expect(lifecyclePromise).rejects.toThrow(
+        "discord gateway socket did not close within 5000ms before reconnect",
+      );
+
+      expect(gateway.connect).not.toHaveBeenCalled();
+      expectLifecycleCleanup({
+        start,
+        stop,
+        threadStop,
+        waitCalls: 0,
+        gatewaySupervisor,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reconnect after lifecycle shutdown begins during socket drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+      const socket = new EventEmitter();
+      const { emitter, gateway } = createGatewayHarness({ ws: socket });
+      getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+      gateway.disconnect.mockImplementation(() => {
+        setTimeout(() => {
+          socket.emit("close", 1000, "");
+        }, 1_000);
+      });
+
+      const abortController = new AbortController();
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
+      lifecycleParams.abortSignal = abortController.signal;
+
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_100);
+      abortController.abort();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(gateway.connect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails fast when startup never reaches READY after a forced reconnect", async () => {
     vi.useFakeTimers();
     try {
