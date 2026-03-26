@@ -287,7 +287,8 @@ export function wrapStreamFnWithReActFallback(
                 }
               }
             }
-          } catch {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } catch (err: any) {
             wrappedStream.push({
               type: "error",
               reason: "error",
@@ -295,10 +296,11 @@ export function wrapStreamFnWithReActFallback(
                 role: "assistant",
                 content: [],
                 stopReason: "error",
-                api: "",
-                provider: "",
-                model: "",
-                usage: {
+                api: err?.api || config.providerType,
+                provider: err?.provider || config.providerId,
+                model: err?.model || config.modelId,
+                errorMessage: err?.message || String(err),
+                usage: err?.usage || {
                   input: 0,
                   output: 0,
                   cacheRead: 0,
@@ -385,7 +387,8 @@ export function wrapStreamFnWithReActFallback(
           }
         }
         wrappedStream.end();
-      } catch {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } catch (err: any) {
         wrappedStream.push({
           type: "error",
           reason: "error",
@@ -393,10 +396,11 @@ export function wrapStreamFnWithReActFallback(
             role: "assistant",
             content: [],
             stopReason: "error",
-            api: "",
-            provider: "",
-            model: "",
-            usage: {
+            api: err?.api || config.providerType,
+            provider: err?.provider || config.providerId,
+            model: err?.model || config.modelId,
+            errorMessage: err?.message || String(err),
+            usage: err?.usage || {
               input: 0,
               output: 0,
               cacheRead: 0,

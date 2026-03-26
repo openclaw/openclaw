@@ -481,4 +481,51 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
       .text;
     expect(textPart).toBe(textWithAction);
   });
+
+  it("should propagate provider errors with full metadata through the fallback wrapper", async () => {
+    const errorWithMetadata = new Error("Context window exceeded");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (errorWithMetadata as any).api = "ollama";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (errorWithMetadata as any).provider = "ollama-instance-1";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (errorWithMetadata as any).model = "llama3-70b";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (errorWithMetadata as any).usage = { input: 100, output: 5, totalTokens: 105 };
+
+    const nativeStreamFn: StreamFn = async () => {
+      throw errorWithMetadata;
+    };
+
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(nativeStreamFn, {
+      modelId: "llama3-70b",
+      providerId: "ollama-instance-1",
+      providerType: "ollama",
+      toolFallback: "react",
+    });
+
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: "llama3-70b", api: "ollama", provider: "ollama-instance-1" } as unknown as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { tools: [{ name: "test", description: "test" }] } as unknown as any,
+      {},
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    for await (const chunk of stream) {
+      events.push(chunk as Record<string, unknown>);
+    }
+
+    expect(events).toHaveLength(1);
+    const errorChunk = events[0];
+    expect(errorChunk.type).toBe("error");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const err = errorChunk.error as any;
+    expect(err.errorMessage).toBe("Context window exceeded");
+    expect(err.api).toBe("ollama");
+    expect(err.provider).toBe("ollama-instance-1");
+    expect(err.model).toBe("llama3-70b");
+    expect(err.usage.totalTokens).toBe(105);
+  });
 });
