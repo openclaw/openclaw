@@ -77,6 +77,31 @@ describe("tool display details", () => {
     expect(editDetail).toBe("in /tmp/a.txt (4 chars)");
   });
 
+  it("formats read/write/edit when file alias is used", () => {
+    const readDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "read",
+        args: { file: "/tmp/b.txt", offset: 4, limit: 1 },
+      }),
+    );
+    const writeDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "write",
+        args: { file: "/tmp/b.txt", content: "abcd" },
+      }),
+    );
+    const editDetail = formatToolDetail(
+      resolveToolDisplay({
+        name: "edit",
+        args: { file: "/tmp/b.txt", newText: "abcde" },
+      }),
+    );
+
+    expect(readDetail).toBe("line 4-4 from /tmp/b.txt");
+    expect(writeDetail).toBe("to /tmp/b.txt (4 chars)");
+    expect(editDetail).toBe("in /tmp/b.txt (5 chars)");
+  });
+
   it("formats web_search query with quotes", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
