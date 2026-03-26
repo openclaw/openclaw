@@ -226,8 +226,9 @@ export function wrapStreamFnWithReActFallback(
         ? await getModelCapability(configDir, config.providerId, config.modelId)
         : "unknown";
 
-      if (currentStatus === "unknown" && configDir && config.toolFallback !== "none") {
-        // Trigger background probe for all new models unless explicitly disabled
+      const hasTools = (context.tools?.length ?? 0) > 0;
+      if (currentStatus === "unknown" && !hasTools && configDir && config.toolFallback !== "none") {
+        // Trigger background probe for all new models unless we can learn from this turn (has tools)
         queueMicrotask(() =>
           runBackgroundCapabilityProbe({
             streamFn: nativeStreamFn,
