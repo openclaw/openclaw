@@ -124,6 +124,7 @@ class LocationCaptureManager(private val context: Context) {
               }
             }
           }
+          @Suppress("DEPRECATION")
           manager.requestSingleUpdate(resolved, listener, context.mainLooper)
           cont.invokeOnCancellation {
             manager.removeUpdates(listener)
