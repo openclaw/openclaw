@@ -213,7 +213,7 @@ export async function runDiscordGatewayLifecycle(params: {
       socket.removeListener("error", listener);
     }
 
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
       let settled = false;
       const ignoreSocketError = () => {};
       const cleanup = () => {
@@ -237,23 +237,18 @@ export async function runDiscordGatewayLifecycle(params: {
         if (settled) {
           return;
         }
-        settled = true;
         params.runtime.error?.(
           danger(
-            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; force-stopping instead of opening a parallel socket`,
+            `discord: gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect; attempting forced terminate and reconnect`,
           ),
         );
         try {
           socket.terminate?.();
         } catch {
-          // Best-effort only: lifecycle callers treat this as fatal and stop
-          // instead of opening another socket on top of an unknown old one.
+          // Best-effort only: if terminate is unavailable or fails, continue
+          // with the reconnect attempt rather than hard-stopping the monitor.
         }
-        reject(
-          new Error(
-            `discord gateway socket did not close within ${DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS}ms before reconnect`,
-          ),
-        );
+        resolveClose();
       }, DISCORD_GATEWAY_DISCONNECT_DRAIN_TIMEOUT_MS);
       timeout.unref?.();
       socket.on("error", ignoreSocketError);

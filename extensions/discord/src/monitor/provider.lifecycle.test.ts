@@ -69,7 +69,7 @@ describe("runDiscordGatewayLifecycle", () => {
       };
       sequence?: number | null;
       emitter?: EventEmitter;
-      ws?: EventEmitter;
+      ws?: EventEmitter & { terminate?: () => void };
     };
   }) => {
     const start = vi.fn(params?.start ?? (async () => undefined));
@@ -153,7 +153,7 @@ describe("runDiscordGatewayLifecycle", () => {
       sequence?: number | null;
     };
     sequence?: number | null;
-    ws?: EventEmitter;
+    ws?: EventEmitter & { terminate?: () => void };
   }) {
     const emitter = new EventEmitter();
     const gateway = {
@@ -362,31 +362,30 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("fails closed when the old socket does not drain before a forced reconnect", async () => {
+  it("force-terminates stale sockets and continues reconnecting after drain timeout", async () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-      const socket = new EventEmitter();
+      const socket = Object.assign(new EventEmitter(), { terminate: vi.fn() });
       const { emitter, gateway } = createGatewayHarness({ ws: socket });
       getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
-      const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } =
-        createLifecycleHarness({ gateway });
-
-      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-      lifecyclePromise.catch(() => {});
-      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_000);
-      await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway socket did not close within 5000ms before reconnect",
-      );
-
-      expect(gateway.connect).not.toHaveBeenCalled();
-      expectLifecycleCleanup({
-        start,
-        stop,
-        threadStop,
-        waitCalls: 0,
-        gatewaySupervisor,
+      gateway.connect.mockImplementation((_resume?: boolean) => {
+        setTimeout(() => {
+          gateway.isConnected = true;
+        }, 1_000);
       });
+
+      const { lifecycleParams, runtimeError } = createLifecycleHarness({ gateway });
+      const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+      await vi.advanceTimersByTimeAsync(15_000 + 5_000 + 1_000);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+
+      expect(socket.terminate).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.connect).toHaveBeenCalledWith(false);
+      expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("attempting forced terminate and reconnect"),
+      );
     } finally {
       vi.useRealTimers();
     }
