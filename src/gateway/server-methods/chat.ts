@@ -1439,12 +1439,70 @@ export const chatHandlers: GatewayRequestHandlers = {
         // When the image model lives on a different provider than the agent default,
         // fallbacks like "gpt-4.1" should be resolved against the image model's provider,
         // not the agent's default provider.
-        const imageModelResolved = resolveModelRefFromString({
-          raw: imageModelPrimary.trim(),
-          defaultProvider,
-          aliasIndex,
-        });
-        const imageModelProvider = imageModelResolved?.ref.provider;
+        //
+        // This logic mirrors collectImageModelKeys in model-selection.ts to ensure
+        // consistent provider inference for mixed-provider fallback-only configs.
+        let imageModelProvider: string | undefined;
+
+        // Check if primary has an explicit provider (contains "/")
+        const primaryTrimmed = imageModelPrimary.trim();
+        const primaryHasProvider = primaryTrimmed.includes("/");
+
+        if (primaryHasProvider) {
+          // Primary has explicit provider - resolve it directly
+          const imageModelResolved = resolveModelRefFromString({
+            raw: primaryTrimmed,
+            defaultProvider,
+            aliasIndex,
+          });
+          imageModelProvider = imageModelResolved?.ref.provider;
+        } else if (usedPrimaryFromFallback) {
+          // Primary was promoted from fallback without an explicit provider.
+          // Scan the fallback chain to find the first entry with an explicit provider.
+          // This handles configs like: fallbacks: ["gpt-4o", "openai/gpt-4.1", "gpt-4.1-mini"]
+          // where "gpt-4o" is promoted to primary, but the provider context should come from
+          // "openai/gpt-4.1" so subsequent providerless fallbacks resolve correctly.
+
+          // First pass: find first fallback with explicit provider prefix
+          for (const fb of imageModelConfigFallbacks) {
+            if (!fb?.trim()) {
+              continue;
+            }
+            const slash = fb.indexOf("/");
+            if (slash > 0) {
+              imageModelProvider = fb.slice(0, slash).trim();
+              break;
+            }
+          }
+
+          // Second pass: if no fallback had explicit provider, try alias resolution
+          if (!imageModelProvider) {
+            for (const fb of imageModelConfigFallbacks) {
+              if (!fb?.trim()) {
+                continue;
+              }
+              const resolved = resolveModelRefFromString({
+                raw: fb.trim(),
+                defaultProvider,
+                aliasIndex,
+              });
+              if (resolved?.ref.provider) {
+                imageModelProvider = resolved.ref.provider;
+                break;
+              }
+            }
+          }
+        }
+
+        // Final fallback: resolve primary with defaultProvider if still not determined
+        if (!imageModelProvider) {
+          const imageModelResolved = resolveModelRefFromString({
+            raw: primaryTrimmed,
+            defaultProvider,
+            aliasIndex,
+          });
+          imageModelProvider = imageModelResolved?.ref.provider;
+        }
 
         // Build a separate alias index for image fallback resolution using the image model's provider.
         // This ensures providerless aliases in agents.defaults.models are resolved against the
