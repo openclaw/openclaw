@@ -1,6 +1,7 @@
 import {
   DEFAULT_ACCOUNT_ID,
   createChannelPairingController,
+  evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   readStoreAllowFromForDmPolicy,
   resolveDefaultGroupPolicy,
@@ -92,6 +93,18 @@ export async function resolveMSTeamsSenderAccess(params: {
         allowNameMatching,
       }).allowed,
   });
+  const senderGroupAccess = evaluateSenderGroupAccessForPolicy({
+    groupPolicy,
+    groupAllowFrom: effectiveGroupAllowFrom,
+    senderId,
+    isSenderAllowed: (_senderId, allowFrom) =>
+      resolveMSTeamsAllowlistMatch({
+        allowFrom,
+        senderId,
+        senderName,
+        allowNameMatching,
+      }).allowed,
+  });
 
   return {
     msteamsCfg,
@@ -103,6 +116,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     dmPolicy,
     channelGate,
     access,
+    senderGroupAccess,
     configuredDmAllowFrom,
     effectiveDmAllowFrom: access.effectiveAllowFrom,
     effectiveGroupAllowFrom,

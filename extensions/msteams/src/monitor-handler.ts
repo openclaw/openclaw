@@ -81,7 +81,7 @@ async function isFeedbackInvokeAuthorized(
     return false;
   }
 
-  if (!isDirectMessage && resolved.access.decision !== "allow") {
+  if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
     deps.log.debug?.("dropping feedback invoke (group sender not allowlisted)", {
       sender: senderId,
       conversationId,
