@@ -35,7 +35,6 @@ const webhookRateLimiter = createFixedWindowRateLimiter({
 });
 const webhookInFlightLimiter = createWebhookInFlightLimiter();
 const debounceRegistry = createBlueBubblesDebounceRegistry({ processMessage });
-const LOOPBACK_TRUSTED_PROXY_CIDRS = ["127.0.0.0/8", "::1/128", "::ffff:127.0.0.0/104"];
 
 export function clearBlueBubblesWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
@@ -131,17 +130,26 @@ function safeEqualSecret(aRaw: string, bRaw: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-function resolveWebhookClientIp(req: IncomingMessage): string {
+function collectTrustedProxies(targets: readonly WebhookTarget[]): string[] {
+  const proxies = new Set<string>();
+  for (const target of targets) {
+    for (const proxy of target.config.gateway?.trustedProxies ?? []) {
+      const normalized = proxy.trim();
+      if (normalized) {
+        proxies.add(normalized);
+      }
+    }
+  }
+  return [...proxies];
+}
+
+function resolveWebhookClientIp(req: IncomingMessage, trustedProxies: readonly string[]): string {
   if (!req.headers["x-forwarded-for"]) {
     return req.socket.remoteAddress ?? "unknown";
   }
 
-  // Only trust forwarded client IPs from local reverse proxies.
-  return (
-    resolveRequestClientIp(req, LOOPBACK_TRUSTED_PROXY_CIDRS) ??
-    req.socket.remoteAddress ??
-    "unknown"
-  );
+  // Mirror gateway client-IP trust rules so limiter buckets follow configured proxy hops.
+  return resolveRequestClientIp(req, [...trustedProxies]) ?? req.socket.remoteAddress ?? "unknown";
 }
 
 export async function handleBlueBubblesWebhookRequest(
@@ -150,7 +158,9 @@ export async function handleBlueBubblesWebhookRequest(
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
   const normalizedPath = normalizeWebhookPath(requestUrl.pathname);
-  const clientIp = resolveWebhookClientIp(req);
+  const pathTargets = webhookTargets.get(normalizedPath) ?? [];
+  const trustedProxies = collectTrustedProxies(pathTargets);
+  const clientIp = resolveWebhookClientIp(req, trustedProxies);
   const rateLimitKey = `${normalizedPath}:${clientIp}`;
   return await withResolvedWebhookRequestPipeline({
     req,

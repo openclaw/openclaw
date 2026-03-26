@@ -440,11 +440,16 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
-    it("keeps forwarded clients behind loopback proxies in separate auth buckets", async () => {
+    it("keeps forwarded clients behind configured trusted proxies in separate auth buckets", async () => {
       setupWebhookTarget({
         account: createMockAccount({
           password: "99999999",
         }),
+        config: {
+          gateway: {
+            trustedProxies: ["10.0.0.0/8"],
+          },
+        } as OpenClawConfig,
       });
 
       let saw429 = false;
@@ -457,7 +462,7 @@ describe("BlueBubbles webhook monitor", () => {
               guid: `proxy-msg-${i}`,
               text: `hello proxy ${i}`,
             }),
-            remoteAddress: "127.0.0.1",
+            remoteAddress: "10.0.0.5",
             overrides: {
               headers: {
                 host: "localhost",
@@ -484,7 +489,7 @@ describe("BlueBubbles webhook monitor", () => {
             guid: "proxy-msg-other-client",
             text: "hello other proxy client",
           }),
-          remoteAddress: "127.0.0.1",
+          remoteAddress: "10.0.0.5",
           overrides: {
             headers: {
               host: "localhost",
