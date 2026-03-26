@@ -533,6 +533,7 @@ export function registerSubagentRun(params: {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterMessageId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -546,6 +547,7 @@ export function registerSubagentRun(params: {
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
 }) {
+
   subagentRunManager.registerSubagentRun(params);
 }
 
