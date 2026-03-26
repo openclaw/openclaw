@@ -5,6 +5,7 @@ const PREFIX = "openclaw:deleted:";
 export class DeletedMessages {
   private key: string;
   private _keys = new Set<string>();
+  private _version = 0;
 
   constructor(sessionKey: string) {
     this.key = PREFIX + sessionKey;
@@ -13,6 +14,10 @@ export class DeletedMessages {
 
   has(key: string): boolean {
     return this._keys.has(key);
+  }
+
+  get version(): number {
+    return this._version;
   }
 
   delete(key: string): void {
@@ -43,6 +48,7 @@ export class DeletedMessages {
     } catch {
       // ignore
     }
+    this.bumpVersion();
   }
 
   private save(): void {
@@ -51,5 +57,10 @@ export class DeletedMessages {
     } catch {
       // ignore
     }
+    this.bumpVersion();
+  }
+
+  private bumpVersion(): void {
+    this._version += 1;
   }
 }
