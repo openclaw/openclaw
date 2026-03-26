@@ -9,7 +9,7 @@ import {
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
-import type { BlueBubblesSendTarget } from "./types.js";
+import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
@@ -59,6 +59,33 @@ function mockNewChatSendResponse(guid: string) {
           }),
         ),
     });
+}
+
+function installSsrFPolicyCapture(policies: unknown[]) {
+  _setFetchGuardForTesting(async (params) => {
+    policies.push(params.policy);
+    const raw = await globalThis.fetch(params.url, params.init);
+    let body: ArrayBuffer;
+    if (typeof raw.arrayBuffer === "function") {
+      body = await raw.arrayBuffer();
+    } else {
+      const text =
+        typeof (raw as { text?: () => Promise<string> }).text === "function"
+          ? await (raw as { text: () => Promise<string> }).text()
+          : typeof (raw as { json?: () => Promise<unknown> }).json === "function"
+            ? JSON.stringify(await (raw as { json: () => Promise<unknown> }).json())
+            : "";
+      body = new TextEncoder().encode(text).buffer;
+    }
+    return {
+      response: new Response(body, {
+        status: (raw as { status?: number }).status ?? 200,
+        headers: (raw as { headers?: HeadersInit }).headers,
+      }),
+      release: async () => {},
+      finalUrl: params.url,
+    };
+  });
 }
 
 describe("send", () => {
@@ -446,6 +473,44 @@ describe("send", () => {
       expect(body.chatGuid).toBe("iMessage;-;+15551234567");
       expect(body.message).toBe("Hello world!");
       expect(body.method).toBeUndefined();
+    });
+
+    it("auto-enables private-network fetches for loopback serverUrl when allowPrivateNetwork is not set", async () => {
+      const policies: unknown[] = [];
+      installSsrFPolicyCapture(policies);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-loopback" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-loopback");
+        expect(policies).toEqual([{ allowPrivateNetwork: true }, { allowPrivateNetwork: true }]);
+      } finally {
+        _setFetchGuardForTesting(null);
+      }
+    });
+
+    it("auto-enables private-network fetches for private IP serverUrl when allowPrivateNetwork is not set", async () => {
+      const policies: unknown[] = [];
+      installSsrFPolicyCapture(policies);
+      mockResolvedHandleTarget();
+      mockSendResponse({ data: { guid: "msg-private-ip" } });
+
+      try {
+        const result = await sendMessageBlueBubbles("+15551234567", "Hello world!", {
+          serverUrl: "http://192.168.1.5:1234",
+          password: "test",
+        });
+
+        expect(result.messageId).toBe("msg-private-ip");
+        expect(policies).toEqual([{ allowPrivateNetwork: true }, { allowPrivateNetwork: true }]);
+      } finally {
+        _setFetchGuardForTesting(null);
+      }
     });
 
     it("strips markdown formatting from outbound messages", async () => {
