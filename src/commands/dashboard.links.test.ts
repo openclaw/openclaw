@@ -70,10 +70,12 @@ function mockSnapshot(token: unknown = "abc", gateway: Record<string, unknown> =
     legacyIssues: [],
   });
   resolveGatewayPortMock.mockReturnValue(18789);
-  resolveControlUiLinksMock.mockReturnValue({
-    httpUrl: "http://127.0.0.1:18789/",
-    wsUrl: "ws://127.0.0.1:18789",
-  });
+  resolveControlUiLinksMock.mockImplementation(
+    ({ bind }: { bind?: string; port: number; customBindHost?: string; basePath?: string }) => ({
+      httpUrl: bind === "custom" ? "http://10.0.0.5:18789/" : "http://127.0.0.1:18789/",
+      wsUrl: bind === "custom" ? "ws://10.0.0.5:18789" : "ws://127.0.0.1:18789",
+    }),
+  );
   resolveSecretRefValuesMock.mockReset();
   resolveGatewayProbeAuthResolutionMock.mockResolvedValue({ auth: { token: "abc" } });
   probeGatewayMock.mockResolvedValue({
@@ -155,11 +157,37 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
+    expect(probeGatewayMock).not.toHaveBeenCalled();
     expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );
+  });
+
+  it("uses loopback for local preflight even when the dashboard URL keeps custom bind", async () => {
+    mockSnapshot("abc123", { bind: "custom", customBindHost: "10.0.0.5" });
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    expect(resolveControlUiLinksMock).toHaveBeenNthCalledWith(1, {
+      port: 18789,
+      bind: "custom",
+      customBindHost: "10.0.0.5",
+      basePath: undefined,
+    });
+    expect(resolveControlUiLinksMock).toHaveBeenNthCalledWith(2, {
+      port: 18789,
+      bind: "loopback",
+      basePath: undefined,
+    });
+    expect(probeGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(openUrlMock).toHaveBeenCalledWith("http://10.0.0.5:18789/#token=abc123");
   });
 
   it("prints non-tokenized URL with guidance when token SecretRef is unresolved", async () => {
@@ -255,12 +283,68 @@ describe("dashboardCommand", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       "Gateway is not reachable at ws://127.0.0.1:18789 (connect failed: ECONNREFUSED 127.0.0.1:18789).",
     );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
     expect(runtime.log).toHaveBeenCalledWith(
-      "Gateway mode is unset; local gateway start is blocked. Run openclaw config set gateway.mode local.",
+      expect.stringContaining("Gateway service is not installed"),
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Gateway service is not installed. Run openclaw daemon install.",
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Fix reachability first"));
+  });
+
+  it("treats device-identity close as reachable during local preflight", async () => {
+    mockSnapshot("abc123");
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+    probeGatewayMock.mockResolvedValue({
+      ok: false,
+      close: { code: 1008, reason: "device identity required" },
+      error: "device identity required",
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("avoids the mode-unset hint when the config file is missing", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      exists: false,
+      raw: "",
+      parsed: null,
+      valid: false,
+      config: {},
+      issues: [],
+      legacyIssues: [],
+    });
+    resolveGatewayPortMock.mockReturnValue(18789);
+    resolveControlUiLinksMock.mockImplementation(
+      ({ bind }: { bind?: string; port: number; customBindHost?: string; basePath?: string }) => ({
+        httpUrl: "http://127.0.0.1:18789/",
+        wsUrl: bind === "loopback" ? "ws://127.0.0.1:18789" : "ws://10.0.0.5:18789",
+      }),
     );
-    expect(runtime.log).toHaveBeenCalledWith("Fix reachability first: openclaw gateway probe");
+    resolveGatewayProbeAuthResolutionMock.mockResolvedValue({ auth: {} });
+    probeGatewayMock.mockResolvedValue({
+      ok: false,
+      close: null,
+      error: "connect failed: ECONNREFUSED 127.0.0.1:18789",
+    });
+    getDaemonStatusSummaryMock.mockResolvedValue({
+      label: "LaunchAgent",
+      installed: false,
+      loaded: false,
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtimeShort: null,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Missing config"));
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
   });
 });

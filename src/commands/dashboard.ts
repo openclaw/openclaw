@@ -20,7 +20,10 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
-function looksLikeGatewayAuthClose(code: number | undefined, reason: string | undefined): boolean {
+function looksLikeGatewayReachableClose(
+  code: number | undefined,
+  reason: string | undefined,
+): boolean {
   if (code !== 1008) {
     return false;
   }
@@ -30,14 +33,15 @@ function looksLikeGatewayAuthClose(code: number | undefined, reason: string | un
     normalized.includes("token") ||
     normalized.includes("password") ||
     normalized.includes("scope") ||
-    normalized.includes("role")
+    normalized.includes("role") ||
+    normalized.includes("device identity")
   );
 }
 
 async function shouldBlockOnUnreachableGateway(params: {
   cfg: OpenClawConfig;
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  wsUrl: string;
+  probeWsUrl: string;
   runtime: RuntimeEnv;
 }): Promise<boolean> {
   if (params.cfg.gateway?.mode === "remote") {
@@ -46,7 +50,7 @@ async function shouldBlockOnUnreachableGateway(params: {
 
   const authResolution = await resolveGatewayProbeAuthResolution(params.cfg);
   const probe = await probeGateway({
-    url: params.wsUrl,
+    url: params.probeWsUrl,
     auth: authResolution.auth,
     timeoutMs: 1_500,
     includeDetails: false,
@@ -55,17 +59,16 @@ async function shouldBlockOnUnreachableGateway(params: {
   if (!probe) {
     return false;
   }
-  if (probe.ok || looksLikeGatewayAuthClose(probe.close?.code, probe.close?.reason)) {
+  if (probe.ok || looksLikeGatewayReachableClose(probe.close?.code, probe.close?.reason)) {
     return false;
   }
 
   const detail = probe.error ? ` (${probe.error})` : "";
-  params.runtime.error(`Gateway is not reachable at ${params.wsUrl}${detail}.`);
+  params.runtime.error(`Gateway is not reachable at ${params.probeWsUrl}${detail}.`);
 
   if (!params.snapshot.exists) {
     params.runtime.log(`Missing config: run ${formatCliCommand("openclaw setup")}.`);
-  }
-  if (!params.cfg.gateway?.mode) {
+  } else if (!params.cfg.gateway?.mode) {
     params.runtime.log(
       `Gateway mode is unset; local gateway start is blocked. Run ${formatCliCommand("openclaw config set gateway.mode local")}.`,
     );
@@ -162,15 +165,22 @@ export async function dashboardCommand(
     );
   }
 
-  if (
-    await shouldBlockOnUnreachableGateway({
-      cfg,
-      snapshot,
-      wsUrl: links.wsUrl,
-      runtime,
-    })
-  ) {
-    return;
+  if (!options.noOpen) {
+    const localProbeWsUrl = resolveControlUiLinks({
+      port,
+      bind: "loopback",
+      basePath,
+    }).wsUrl;
+    if (
+      await shouldBlockOnUnreachableGateway({
+        cfg,
+        snapshot,
+        probeWsUrl: localProbeWsUrl,
+        runtime,
+      })
+    ) {
+      return;
+    }
   }
 
   const copied = await copyToClipboard(dashboardUrl).catch(() => false);
