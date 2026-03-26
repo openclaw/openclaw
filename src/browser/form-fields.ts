@@ -1,1 +1,1 @@
-export * from "../compat/browser/form-fields.js";
+export * from "../../extensions/browser/src/browser/form-fields.js";

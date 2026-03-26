@@ -1,1 +1,1 @@
-export * from "../compat/browser/chrome.profile-decoration.js";
+export * from "../../extensions/browser/src/browser/chrome.profile-decoration.js";

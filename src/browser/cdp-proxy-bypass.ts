@@ -1,1 +1,1 @@
-export * from "../compat/browser/cdp-proxy-bypass.js";
+export * from "../../extensions/browser/src/browser/cdp-proxy-bypass.js";

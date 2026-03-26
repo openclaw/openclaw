@@ -1,1 +1,1 @@
-export * from "../../compat/browser/cli/browser-cli-actions-input/shared.js";
+export * from "../../../extensions/browser/src/cli/browser-cli-actions-input/shared.js";

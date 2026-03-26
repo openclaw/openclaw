@@ -1,1 +1,1 @@
-export * from "../../compat/browser/routes/utils.js";
+export * from "../../../extensions/browser/src/browser/routes/utils.js";
