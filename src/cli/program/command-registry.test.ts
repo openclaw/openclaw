@@ -74,7 +74,6 @@ describe("command-registry", () => {
     expect(names).toContain("config");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
-    expect(names).toContain("browser");
     expect(names).toContain("sessions");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("status");

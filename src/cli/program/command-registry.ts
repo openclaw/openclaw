@@ -203,19 +203,6 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerStatusHealthSessionsCommands(program);
     },
   },
-  {
-    commands: [
-      {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
-    },
-  },
 ];
 
 export function getCoreCliCommandNames(): string[] {

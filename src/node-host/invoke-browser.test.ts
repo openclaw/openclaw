@@ -26,15 +26,17 @@ const browserConfigMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../browser/control-service.js", () => controlServiceMocks);
-vi.mock("../browser/routes/dispatcher.js", () => dispatcherMocks);
-vi.mock("../config/config.js", () => configMocks);
-vi.mock("../browser/config.js", () => browserConfigMocks);
-vi.mock("../media/mime.js", () => ({
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
+  createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
+  createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
   detectMime: vi.fn(async () => "image/png"),
+  loadConfig: configMocks.loadConfig,
+  resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
+  startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
-let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
+let runBrowserProxyCommand: typeof import("../../extensions/browser/src/node-host/invoke-browser.js").runBrowserProxyCommand;
 
 describe("runBrowserProxyCommand", () => {
   beforeEach(async () => {
@@ -56,7 +58,8 @@ describe("runBrowserProxyCommand", () => {
       enabled: true,
       defaultProfile: "openclaw",
     });
-    ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
+    ({ runBrowserProxyCommand } =
+      await import("../../extensions/browser/src/node-host/invoke-browser.js"));
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },

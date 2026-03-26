@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserStateCommands } from "./browser-cli-state.js";
+import { registerBrowserStateCommands } from "../../extensions/browser/src/cli/browser-cli-state.js";
 import {
   createBrowserProgram as createBrowserProgramShared,
   getBrowserCliRuntime,
@@ -11,19 +11,19 @@ const mocks = vi.hoisted(() => ({
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
 }));
 
-vi.mock("./browser-cli-shared.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-shared.js", () => ({
   callBrowserRequest: mocks.callBrowserRequest,
 }));
 
-vi.mock("./browser-cli-resize.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-resize.js", () => ({
   runBrowserResizeWithOutput: mocks.runBrowserResizeWithOutput,
 }));
 
-vi.mock(
-  "../runtime.js",
-  async () =>
-    await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule(),
-);
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule()),
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliUtilsMockModule()),
+}));
 
 describe("browser state option collisions", () => {
   const createStateProgram = ({ withGatewayUrl = false } = {}) => {

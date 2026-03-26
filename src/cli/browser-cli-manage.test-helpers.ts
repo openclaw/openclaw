@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { registerBrowserManageCommands } from "./browser-cli-manage.js";
+import { registerBrowserManageCommands } from "../../extensions/browser/src/cli/browser-cli-manage.js";
 import { createBrowserProgram } from "./browser-cli-test-helpers.js";
 
 type BrowserRequest = { path?: string };
@@ -31,19 +31,15 @@ const browserManageMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./browser-cli-shared.js", () => ({
+vi.mock("../../extensions/browser/src/cli/browser-cli-shared.js", () => ({
   callBrowserRequest: browserManageMocks.callBrowserRequest,
 }));
 
-vi.mock("./cli-utils.js", async () => ({
+vi.mock("../../extensions/browser/src/core-api.js", async () => ({
+  ...(await vi.importActual<object>("../../extensions/browser/src/core-api.js")),
+  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule()),
   ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliUtilsMockModule()),
 }));
-
-vi.mock(
-  "../runtime.js",
-  async () =>
-    await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule(),
-);
 
 export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }) {
   const { program, browser, parentOpts } = createBrowserProgram();
