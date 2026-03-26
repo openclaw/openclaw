@@ -1,0 +1,82 @@
+{
+  "active_upgrade": null,
+  "blocked_versions": [],
+  "upstream": {
+    "latest_stable": "v2026.3.24",
+    "latest_checked": "2026-03-25T00:00:00Z",
+    "tracking_branch": "main"
+  },
+  "fleet": {
+    "gateway": {
+      "current_version": null,
+      "target_version": "v2026.3.24",
+      "last_upgraded": null,
+      "status": "pending_migration",
+      "locked_by": null
+    },
+    "kubuntu": {
+      "current_version": null,
+      "target_version": "v2026.3.24",
+      "last_upgraded": null,
+      "status": "pending_migration",
+      "locked_by": null
+    },
+    "pop-os": {
+      "current_version": null,
+      "target_version": "v2026.3.24",
+      "last_upgraded": null,
+      "status": "pending_migration",
+      "locked_by": null
+    },
+    "mac": {
+      "current_version": null,
+      "target_version": "v2026.3.24",
+      "last_upgraded": null,
+      "status": "pending_migration",
+      "locked_by": null
+    },
+    "home": {
+      "current_version": null,
+      "target_version": null,
+      "last_upgraded": null,
+      "status": "decommissioned",
+      "locked_by": null
+    }
+  },
+  "plugins": {
+    "fleet-coordinator": {
+      "path": "extensions/fleet-coordinator/",
+      "type": "custom",
+      "replaces_upstream": null,
+      "compatible_through": null,
+      "last_tested": null,
+      "status": "pending_migration"
+    },
+    "telegram-agentic": {
+      "path": "extensions/telegram-agentic/",
+      "type": "hybrid",
+      "replaces_upstream": "channels.telegram (partial)",
+      "compatible_through": null,
+      "last_tested": null,
+      "status": "pending_migration"
+    },
+    "observability-aop": {
+      "path": "extensions/observability-aop/",
+      "type": "hybrid",
+      "replaces_upstream": "plugin hooks (session_start/end, diagnostic events)",
+      "compatible_through": null,
+      "last_tested": null,
+      "status": "pending_migration"
+    },
+    "distributed-workers": {
+      "path": "extensions/distributed-workers/",
+      "type": "custom",
+      "replaces_upstream": null,
+      "compatible_through": null,
+      "last_tested": null,
+      "status": "pending_migration"
+    }
+  },
+  "pending_upgrades": [],
+  "history": []
+}

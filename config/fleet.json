@@ -1,0 +1,153 @@
+{
+  "nodes": {
+    "gateway": {
+      "name": "Gateway VPS",
+      "tailscaleIp": "100.69.32.10",
+      "sshUser": "appbox",
+      "roles": ["web", "production", "gateway", "archon"],
+      "capabilities": ["docker", "nginx", "supabase", "archon"],
+      "hardware": {
+        "cpuCores": 8,
+        "ramGb": 16
+      },
+      "scheduling": {
+        "availableHours": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+        "timezone": "America/Chicago"
+      },
+      "services": {
+        "openclaw-upstream": {
+          "port": 18789,
+          "healthEndpoint": "/healthz",
+          "healthProtocol": "http"
+        },
+        "supabase": {
+          "port": 54321,
+          "healthEndpoint": "/rest/v1/",
+          "healthProtocol": "http"
+        },
+        "archon": {
+          "port": 8181,
+          "healthEndpoint": "/health",
+          "healthProtocol": "http"
+        },
+        "archon-ui": {
+          "port": 3737,
+          "healthProtocol": "http"
+        },
+        "aop-server": {
+          "port": 3010,
+          "healthEndpoint": "/health",
+          "healthProtocol": "http"
+        }
+      },
+      "active": true
+    },
+    "kubuntu": {
+      "name": "Kubuntu",
+      "tailscaleIp": "100.93.214.109",
+      "sshUser": "jeff",
+      "roles": ["gpu", "brain", "ollama", "worker"],
+      "capabilities": ["docker", "gpu", "ollama", "cuda"],
+      "hardware": {
+        "gpuVram": 24,
+        "cpuCores": 24,
+        "ramGb": 64
+      },
+      "scheduling": {
+        "availableHours": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+        "timezone": "America/Chicago"
+      },
+      "services": {
+        "ollama": {
+          "port": 11434,
+          "healthEndpoint": "/api/tags",
+          "healthProtocol": "http"
+        },
+        "fleet-redis": {
+          "port": 6380,
+          "healthProtocol": "tcp"
+        },
+        "humbleforge-comfyui": {
+          "port": 8188,
+          "healthProtocol": "http",
+          "lifecycle": {
+            "startCmd": "docker compose -f ~/humbleforge/docker-compose.yml up -d comfyui",
+            "stopCmd": "docker compose -f ~/humbleforge/docker-compose.yml stop comfyui",
+            "startTimeoutMs": 30000
+          }
+        }
+      },
+      "active": true
+    },
+    "popos": {
+      "name": "Pop!_OS",
+      "tailscaleIp": "100.119.126.67",
+      "sshUser": "jeff",
+      "roles": ["utility", "obsidian", "knowledge", "worker"],
+      "capabilities": ["docker", "obsidian", "knowledge-api"],
+      "hardware": {
+        "cpuCores": 8,
+        "ramGb": 32
+      },
+      "scheduling": {
+        "availableHours": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+        "timezone": "America/Chicago"
+      },
+      "services": {
+        "obsidian-organizer": {
+          "port": 8888,
+          "healthEndpoint": "/health",
+          "healthProtocol": "http"
+        },
+        "knowledge-api": {
+          "port": 8890,
+          "healthEndpoint": "/search?q=test&limit=1",
+          "healthProtocol": "http"
+        }
+      },
+      "active": true
+    },
+    "mac": {
+      "name": "Mac",
+      "tailscaleIp": "100.96.154.112",
+      "sshUser": "jeff",
+      "roles": ["dev"],
+      "capabilities": ["docker", "xcode", "claude-code"],
+      "hardware": {
+        "cpuCores": 12,
+        "ramGb": 36
+      },
+      "scheduling": {
+        "availableHours": [23, 0, 1, 2, 3, 4, 5, 6],
+        "timezone": "America/Chicago"
+      },
+      "services": {},
+      "active": true
+    },
+    "home": {
+      "name": "Home (Old VPS)",
+      "tailscaleIp": "100.85.159.3",
+      "sshUser": "jeff",
+      "roles": [],
+      "capabilities": [],
+      "hardware": {},
+      "scheduling": {},
+      "services": {},
+      "active": false
+    }
+  },
+  "routing": {
+    "coding_project": { "primary": "mac", "fallback": ["kubuntu", "popos"] },
+    "automated_coding": { "primary": "kubuntu", "fallback": ["popos", "mac"] },
+    "docker_ops": { "primary": "kubuntu", "fallback": ["gateway"] },
+    "web_deploy": { "primary": "gateway" },
+    "gpu_work": { "primary": "kubuntu" },
+    "obsidian_ops": { "primary": "popos", "fallback": ["kubuntu"] },
+    "vault_write": { "primary": "popos", "fallback": ["kubuntu"] },
+    "youtube_data": { "primary": "popos" },
+    "art_pipeline": { "primary": "kubuntu" },
+    "3d_asset": { "primary": "kubuntu" },
+    "texture_gen": { "primary": "kubuntu" },
+    "image_gen": { "primary": "kubuntu" }
+  }
+}
