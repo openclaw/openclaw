@@ -131,7 +131,7 @@ openclaw pairing approve telegram <CODE>
 ### WhatsApp
 
 ```bash
-openclaw channels login whatsapp
+openclaw channels login --channel whatsapp
 # Scan QR code
 ```
 
