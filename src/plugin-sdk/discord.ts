@@ -155,3 +155,4 @@ export {
   uploadStickerDiscord,
 } from "../../extensions/discord/runtime-api.js";
 export { discordMessageActions } from "../../extensions/discord/runtime-api.js";
+export { resolveDiscordOutboundSessionRoute } from "../../extensions/discord/runtime-api.js";
