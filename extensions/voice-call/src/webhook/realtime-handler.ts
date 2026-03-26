@@ -45,6 +45,11 @@ export class RealtimeCallHandler {
     { expiry: number; from?: string; to?: string; direction?: "inbound" | "outbound" }
   >();
 
+  /** Public origin (scheme + host) used for the WebSocket URL in TwiML responses.
+   * Set via setPublicUrl() once the tunnel/proxy URL is resolved at startup.
+   * Falls back to req.headers.host when not set. */
+  private publicOrigin: string | null = null;
+
   constructor(
     private config: VoiceCallRealtimeConfig,
     private manager: CallManager,
@@ -53,6 +58,17 @@ export class RealtimeCallHandler {
     /** Pre-resolved OpenAI API key (falls back to OPENAI_API_KEY env at call time) */
     private openaiApiKey?: string,
   ) {}
+
+  /** Set the canonical public URL so TwiML stream URLs use the correct host
+   * even when the local Host header is an internal address. */
+  setPublicUrl(url: string): void {
+    try {
+      const parsed = new URL(url);
+      this.publicOrigin = parsed.host;
+    } catch {
+      // malformed URL — fall back to req.headers.host
+    }
+  }
 
   /**
    * Handle a WebSocket upgrade request from Twilio for a realtime media stream.
@@ -123,7 +139,7 @@ export class RealtimeCallHandler {
    *                 so registerCallInManager can populate caller fields).
    */
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
-    const host = req.headers.host || "localhost:8443";
+    const host = this.publicOrigin || req.headers.host || "localhost:8443";
     const rawDirection = params?.get("Direction");
     const token = this.issueStreamToken({
       from: params?.get("From") ?? undefined,

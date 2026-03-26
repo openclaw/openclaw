@@ -230,6 +230,10 @@ export async function createVoiceCallRuntime(params: {
       (provider as TwilioProvider).setPublicUrl(publicUrl);
     }
 
+    if (publicUrl && realtimeHandler) {
+      realtimeHandler.setPublicUrl(publicUrl);
+    }
+
     if (provider.name === "twilio" && config.streaming?.enabled) {
       const twilioProvider = provider as TwilioProvider;
       if (ttsRuntime?.textToSpeechTelephony) {

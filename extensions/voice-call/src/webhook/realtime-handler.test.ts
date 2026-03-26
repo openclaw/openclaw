@@ -119,6 +119,22 @@ describe("RealtimeCallHandler", () => {
       );
     });
 
+    it("uses publicOrigin over req host when setPublicUrl is called", () => {
+      const handler = new RealtimeCallHandler(
+        baseRealtimeConfig,
+        makeManager(),
+        makeProvider(),
+        null,
+      );
+      handler.setPublicUrl("https://my-gateway.ts.net");
+      const req = makeRequest("/voice/webhook", "127.0.0.1:3334");
+      const payload = handler.buildTwiMLPayload(req);
+
+      expect(payload.body).toMatch(
+        /wss:\/\/my-gateway\.ts\.net\/voice\/stream\/realtime\/[0-9a-f-]{36}/,
+      );
+    });
+
     it("embeds a unique token on each call", () => {
       const handler = new RealtimeCallHandler(
         baseRealtimeConfig,
