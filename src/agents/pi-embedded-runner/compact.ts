@@ -107,8 +107,6 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-
-const memLog = createSubsystemLogger("memory");
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
@@ -125,6 +123,8 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
+
+const memLog = createSubsystemLogger("memory");
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -264,6 +264,7 @@ function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessag
     contributors: contributors.toSorted((a, b) => b.chars - a.chars).slice(0, 3),
   };
 }
+
 
 
 function containsRealConversationMessages(messages: AgentMessage[]): boolean {

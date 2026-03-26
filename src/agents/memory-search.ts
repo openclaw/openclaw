@@ -86,6 +86,12 @@ export type ResolvedMemorySearchConfig = {
     enabled: boolean;
     maxEntries?: number;
   };
+  episodic: {
+    enabled: boolean;
+    encoderModel?: string;
+    minConversationTurns: number;
+    importanceThreshold: number;
+  };
 };
 
 const DEFAULT_CHUNK_TOKENS = 400;
@@ -285,6 +291,14 @@ function mergeConfig(
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
+  const episodic = {
+    enabled: overrides?.episodic?.enabled ?? defaults?.episodic?.enabled ?? false,
+    encoderModel: overrides?.episodic?.encoderModel ?? defaults?.episodic?.encoderModel,
+    minConversationTurns:
+      overrides?.episodic?.minConversationTurns ?? defaults?.episodic?.minConversationTurns ?? 3,
+    importanceThreshold:
+      overrides?.episodic?.importanceThreshold ?? defaults?.episodic?.importanceThreshold ?? 0.3,
+  };
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
@@ -355,6 +369,12 @@ function mergeConfig(
         typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
           ? Math.max(1, Math.floor(cache.maxEntries))
           : undefined,
+    },
+    episodic: {
+      enabled: Boolean(episodic.enabled),
+      encoderModel: episodic.encoderModel,
+      minConversationTurns: Math.max(1, Math.floor(episodic.minConversationTurns)),
+      importanceThreshold: clampNumber(episodic.importanceThreshold, 0, 1),
     },
   };
 }

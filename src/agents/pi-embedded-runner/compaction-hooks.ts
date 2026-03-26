@@ -92,9 +92,7 @@ async function runPostCompactionEpisodicEncoding(params: {
   sessionFile: string;
 }): Promise<void> {
   const memSearch = resolveMemorySearchConfig(params.config, params.agentId);
-  const episodicCfg = (
-    memSearch as { episodic?: { enabled?: boolean; minConversationTurns?: number } } | null
-  )?.episodic;
+  const episodicCfg = memSearch?.episodic;
   if (!episodicCfg?.enabled) {
     return;
   }
@@ -104,7 +102,8 @@ async function runPostCompactionEpisodicEncoding(params: {
     return;
   }
 
-  const minTurns = episodicCfg.minConversationTurns ?? 3;
+  // Check minimum turns (each "User:" or "Assistant:" prefix is a turn)
+  const minTurns = episodicCfg.minConversationTurns;
   const turnCount = (entry.content.match(/^(User|Assistant):/gm) ?? []).length;
   if (turnCount < minTurns) {
     return;
@@ -122,6 +121,15 @@ async function runPostCompactionEpisodicEncoding(params: {
   try {
     const sessionKey = path.basename(params.sessionFile, ".jsonl");
     for (const ep of episodes) {
+      // Generate embedding for the episode so semantic search works immediately
+      let embedding: Float32Array | undefined;
+      try {
+        embedding = await encoder.generateEmbedding(
+          ep.summary + (ep.details ? ` ${ep.details}` : ""),
+        );
+      } catch {
+        // Embedding generation is best-effort; store episode without it
+      }
       store.create({
         agent_id: params.agentId,
         session_key: sessionKey,
@@ -133,6 +141,7 @@ async function runPostCompactionEpisodicEncoding(params: {
         emotional_valence: ep.emotional_valence,
         emotional_arousal: ep.emotional_arousal,
         topic_tags: ep.topic_tags,
+        embedding,
       });
     }
     memLog.info(

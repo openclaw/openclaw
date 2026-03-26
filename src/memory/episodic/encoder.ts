@@ -4,28 +4,28 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import type { EncodedEpisode } from "./types.js";
 
-const ENCODER_SYSTEM_PROMPT = `你是一个情节记忆编码器。从以下对话中提取值得记住的情节。
+const ENCODER_SYSTEM_PROMPT = `You are an episodic memory encoder. Extract memorable episodes from the following conversation.
 
-## 提取规则
-1. 只提取有长期价值的信息（决策、偏好、承诺、重要发现）
-2. 忽略纯操作性内容（"帮我搜索X"→不记，但"搜索后发现X很重要"→记）
-3. 情绪强烈的互动优先提取（惊喜、沮丧、兴奋）
-4. 用户的明确表态/偏好必须提取
+## Extraction rules
+1. Only extract information with long-term value (decisions, preferences, commitments, important findings)
+2. Ignore purely operational content ("search for X" → skip, but "searched and found X is important" → keep)
+3. Prioritize emotionally significant interactions (surprise, frustration, excitement)
+4. Explicitly stated user preferences and opinions must always be extracted
 
-## 输出格式（JSON）
+## Output format (JSON)
 {
   "episodes": [
     {
-      "summary": "一句话描述发生了什么",
-      "details": "关键细节，保留具体数据/数字",
-      "importance": 0.0到1.0之间的数值,
-      "emotional_valence": -1.0到1.0之间的数值（负面到正面）,
-      "emotional_arousal": 0.0到1.0之间的数值（平静到激动）,
+      "summary": "One-sentence description of what happened",
+      "details": "Key details, preserve specific data/numbers",
+      "importance": <number between 0.0 and 1.0>,
+      "emotional_valence": <number between -1.0 (negative) and 1.0 (positive)>,
+      "emotional_arousal": <number between 0.0 (calm) and 1.0 (excited)>,
       "topic_tags": ["tag1", "tag2"],
-      "participants": ["用户", "助手"]
+      "participants": ["user", "assistant"]
     }
   ],
-  "no_episodes_reason": "如果没有值得记录的情节，说明原因"
+  "no_episodes_reason": "If no memorable episodes exist, explain why"
 }
 
 Respond ONLY with valid JSON, no markdown fences.`;
@@ -73,8 +73,35 @@ export class EpisodeEncoder {
     });
   }
 
+  /**
+   * Strip tool calls, XML blocks, system metadata, and other non-conversational
+   * content from a raw session transcript before passing to the LLM encoder.
+   * This prevents reasoning models from treating tool-call XML as instructions.
+   */
+  private sanitizeTranscript(text: string): string {
+    return (
+      text
+        // Remove XML-style tool call blocks (MiniMax, custom agents, etc.)
+        .replace(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/g, "[tool call]")
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "[tool call]")
+        .replace(/<invoke[\s\S]*?<\/invoke>/g, "[tool call]")
+        // Remove JSON tool result blocks (often large/noisy)
+        .replace(/```json\n\{[\s\S]{500,}?\}\n```/g, "[tool result omitted]")
+        // Remove long code blocks (>200 chars) that aren't conversation
+        .replace(/```[\s\S]{200,}?```/g, "[code block omitted]")
+        // Remove ANSI escape codes (ESC char — eslint-disable-next-line no-control-regex)
+        // eslint-disable-next-line no-control-regex
+        .replace(/\u001b\[[0-9;]*m/g, "")
+        // Collapse 3+ blank lines to 2
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    );
+  }
+
   async encode(conversationText: string, _agentId: string = "default"): Promise<EncodedEpisode[]> {
-    if (conversationText.length < this.config.minConversationLength) {
+    const cleanedText = this.sanitizeTranscript(conversationText);
+
+    if (cleanedText.length < this.config.minConversationLength) {
       return [];
     }
 
@@ -83,30 +110,65 @@ export class EpisodeEncoder {
         model: this.config.model,
         messages: [
           { role: "system", content: ENCODER_SYSTEM_PROMPT },
-          { role: "user", content: `以下是对话内容，请提取情节记忆：\n\n${conversationText}` },
+          {
+            role: "user",
+            content: `Extract episodic memories from the following conversation:\n\n${cleanedText}`,
+          },
         ],
         temperature: 0.3,
         max_tokens: 2048,
       });
 
-      const content = response.choices[0]?.message?.content;
+      const rawMessage = response.choices[0]?.message as
+        | { content?: string | null; reasoning_content?: string | null }
+        | undefined;
+      // Some reasoning models (MiniMax-M2.5 via sglang) mix CoT into content.
+      // If reasoning_content is populated, content is the clean answer; otherwise scan content.
+      const answerContent = rawMessage?.reasoning_content
+        ? rawMessage.content // reasoning separated → use content directly
+        : rawMessage?.content; // reasoning mixed in → still use content, but scan smarter
+      const content = answerContent;
       if (!content) {
         return [];
       }
 
-      // Robustly extract JSON: strip markdown fences, then find outermost {...}
+      // Robustly extract JSON: strip markdown fences, then find outermost {"episodes":[...]}
+      // Also handles reasoning models (MiniMax, DeepSeek) that prepend chain-of-thought
+      // before the final JSON answer. We scan all { positions from the end.
       const cleaned = content
         .replace(/^```(?:json)?\s*\n?/gm, "") // opening fence
         .replace(/\n?```\s*$/gm, "") // closing fence
         .trim();
 
-      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        return [];
+      // Find all '{' positions and scan from end to find last valid JSON with "episodes"
+      let jsonStr: string | null = null;
+      let scanIdx = cleaned.length - 1;
+      while (scanIdx >= 0) {
+        const braceIdx = cleaned.lastIndexOf("{", scanIdx);
+        if (braceIdx === -1) {
+          break;
+        }
+        scanIdx = braceIdx - 1;
+        const slice = cleaned.slice(braceIdx);
+        const match = slice.match(/^\{[\s\S]*\}/);
+        if (!match) {
+          continue;
+        }
+        const candidate = match[0].replace(/,\s*([\]}])/g, "$1"); // trailing commas
+        try {
+          const parsed = JSON.parse(candidate) as Record<string, unknown>;
+          if (Array.isArray(parsed["episodes"])) {
+            jsonStr = candidate;
+            break;
+          }
+        } catch {
+          // try next position
+        }
       }
 
-      // Sanitize common LLM JSON issues: trailing commas, control chars
-      const jsonStr = jsonMatch[0].replace(/,\s*([\]}])/g, "$1"); // trailing commas
+      if (!jsonStr) {
+        return [];
+      }
 
       const parsed = JSON.parse(jsonStr) as { episodes?: EncodedEpisode[] };
       const episodes: EncodedEpisode[] = (parsed.episodes ?? []).filter(
@@ -159,13 +221,22 @@ export function createEpisodeEncoder(cfg: OpenClawConfig, agentId: string): Epis
     memSearch as { episodic?: { encoderModel?: string; importanceThreshold?: number } } | undefined
   )?.episodic;
 
-  // Try to get OpenAI API key from provider config (plain string only; SecretRef requires runtime resolution)
-  const rawKey = (cfg.models?.providers?.["openai"] as { apiKey?: unknown } | undefined)?.apiKey;
+  // Try to get OpenAI API key + baseUrl from provider config (plain string only; SecretRef requires runtime resolution)
+  const openaiProvider = cfg.models?.providers?.["openai"] as
+    | { apiKey?: unknown; baseUrl?: string }
+    | undefined;
+  const rawKey = openaiProvider?.apiKey;
   const apiKey = normalizeSecretInputString(rawKey) ?? undefined;
+  const chatBaseUrl = openaiProvider?.baseUrl;
+
+  // embeddingBaseUrl: use EMBEDDING_BASE_URL env var if set, otherwise same as chatBaseUrl
+  const embeddingBaseUrl = process.env["EMBEDDING_BASE_URL"] ?? chatBaseUrl;
 
   return new EpisodeEncoder({
     model: episodicCfg?.encoderModel,
     importanceThreshold: episodicCfg?.importanceThreshold,
     apiKey,
+    chatBaseUrl,
+    embeddingBaseUrl,
   });
 }

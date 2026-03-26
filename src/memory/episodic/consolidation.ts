@@ -166,14 +166,15 @@ export class ConsolidationEngine {
             confidence: p.confidence,
           });
         }
+
+        // Mark episodes as consolidated only on successful LLM processing
+        for (const ep of cluster) {
+          this.store.updateStatus(ep.id, "consolidated");
+          consolidatedIds.push(ep.id);
+        }
       } catch (err) {
         console.error("[Consolidation] Error processing cluster:", err);
-      }
-
-      // Mark episodes as consolidated
-      for (const ep of cluster) {
-        this.store.updateStatus(ep.id, "consolidated");
-        consolidatedIds.push(ep.id);
+        // Episodes remain in 'raw'/'reviewed' state and will be retried next cycle
       }
     }
 

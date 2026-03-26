@@ -29,6 +29,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { EpisodeEncoder } from "./episodic/encoder.js";
+import { EpisodicSearch } from "./episodic/search.js";
 import { EpisodicStore } from "./episodic/store.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -323,12 +324,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
+    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const base = await this.searchCore(query, opts);
     const episodic = await this.searchEpisodic(query, opts).catch((err) => {
       log.warn(`episodic search skipped: ${String(err)}`);
       return [] as MemorySearchResult[];
     });
-    return [...base, ...episodic];
+    // Merge both result sets, globally re-rank by score, and cap at maxResults
+    return [...base, ...episodic].toSorted((a, b) => b.score - a.score).slice(0, maxResults);
   }
 
   private async searchCore(
@@ -453,8 +456,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     opts?: { maxResults?: number; minScore?: number },
   ): Promise<MemorySearchResult[]> {
     const memSearch = resolveMemorySearchConfig(this.cfg, this.agentId);
-    // Type-cast to access episodic field added in types.tools.ts
-    const episodicCfg = (memSearch as { episodic?: { enabled?: boolean } } | null)?.episodic;
+    const episodicCfg = memSearch?.episodic;
     if (!episodicCfg?.enabled) {
       return [];
     }
@@ -464,55 +466,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const store = new EpisodicStore(dbPath);
     try {
       const encoder = new EpisodeEncoder();
-      let queryEmbedding: Float32Array | undefined;
-      try {
-        queryEmbedding = await encoder.generateEmbedding(query);
-      } catch {
-        // Embedding unavailable — fall back to keyword matching in store.getAll()
-      }
-
       const minScore = opts?.minScore ?? this.settings.query.minScore;
       const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
-      const episodes = store.getAll(this.agentId);
-      const queryWords = query.toLowerCase().split(/\s+/);
 
-      const results: MemorySearchResult[] = [];
-      for (const ep of episodes) {
-        let score: number;
-        if (queryEmbedding && ep.embedding && ep.embedding.length > 0) {
-          // Cosine similarity
-          let dot = 0,
-            normA = 0,
-            normB = 0;
-          for (let i = 0; i < queryEmbedding.length; i++) {
-            dot += queryEmbedding[i] * ep.embedding[i];
-            normA += queryEmbedding[i] * queryEmbedding[i];
-            normB += ep.embedding[i] * ep.embedding[i];
-          }
-          score = normA > 0 && normB > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
-        } else {
-          // Keyword fallback
-          const text = (ep.summary + " " + (ep.details ?? "")).toLowerCase();
-          const matches = queryWords.filter((w) => text.includes(w)).length;
-          score = (matches / Math.max(queryWords.length, 1)) * 0.5;
-        }
+      const searcher = new EpisodicSearch(store, encoder);
+      const episodicResults = await searcher.search({
+        query,
+        limit: maxResults,
+      });
 
-        if (score < minScore) {
-          continue;
-        }
-
-        results.push({
-          path: `episodic:${ep.id}`,
+      return episodicResults
+        .filter((r) => r.score >= minScore)
+        .map((r) => ({
+          path: `episodic:${r.episode.id}`,
           startLine: 0,
           endLine: 0,
-          score,
-          snippet: ep.details ? `${ep.summary}\n${ep.details}` : ep.summary,
-          source: "episodes",
-          citation: ep.created_at,
-        });
-      }
-
-      return results.toSorted((a, b) => b.score - a.score).slice(0, maxResults);
+          score: r.score,
+          snippet: r.episode.details
+            ? `${r.episode.summary}\n${r.episode.details}`
+            : r.episode.summary,
+          source: "episodes" as const,
+          citation: r.episode.created_at,
+        }));
     } finally {
       store.close();
     }
