@@ -10,13 +10,25 @@ import {
 
 const hoisted = createDiscordOutboundHoisted();
 
-vi.mock("./send.js", async (importOriginal) => {
-  return await createDiscordSendModuleMock(hoisted, importOriginal);
-});
+const sendModule = await import("./send.js");
+const mockedSendModule = await createDiscordSendModuleMock(hoisted, async () => sendModule);
+vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(mockedSendModule.sendMessageDiscord);
+vi.spyOn(sendModule, "sendDiscordComponentMessage").mockImplementation(
+  mockedSendModule.sendDiscordComponentMessage,
+);
+vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
+vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
+  mockedSendModule.sendWebhookMessageDiscord,
+);
 
-vi.mock("./monitor/thread-bindings.js", async (importOriginal) => {
-  return await createDiscordThreadBindingsModuleMock(hoisted, importOriginal);
-});
+const threadBindingsModule = await import("./monitor/thread-bindings.js");
+const mockedThreadBindingsModule = await createDiscordThreadBindingsModuleMock(
+  hoisted,
+  async () => threadBindingsModule,
+);
+vi.spyOn(threadBindingsModule, "getThreadBindingManager").mockImplementation(
+  mockedThreadBindingsModule.getThreadBindingManager,
+);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
