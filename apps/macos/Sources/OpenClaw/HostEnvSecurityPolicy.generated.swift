@@ -84,6 +84,10 @@ enum HostEnvSecurityPolicy {
         "OPENCLAW_"
     ]
 
+    static let blockedOverridePrefixes: [String] = [
+
+    ]
+
     static let blockedPrefixes: [String] = [
         "DYLD_",
         "LD_",
