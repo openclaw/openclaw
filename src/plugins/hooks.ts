@@ -985,20 +985,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "before_llm_call",
       event,
       ctx,
-      (acc, next) => ({
-        // First-writer-wins for messages/systemPrompt: once a higher-priority
-        // security plugin sanitizes inputs, later plugins cannot override them.
-        messages: acc?.messages ?? next.messages,
-        systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
-        // Intersection latch: if both handlers provide tools, only keep tools
-        // present in both lists. Prevents a later handler from widening the allowlist.
-        tools:
-          acc?.tools !== undefined && next.tools !== undefined
-            ? next.tools.filter((t) => acc.tools!.some((a) => a.name === t.name))
-            : (next.tools ?? acc?.tools),
-        block: next.block || acc?.block,
-        blockReason: acc?.blockReason ?? next.blockReason,
-      }),
+      {
+        mergeResults: (acc, next) => ({
+          // First-writer-wins for messages/systemPrompt: once a higher-priority
+          // security plugin sanitizes inputs, later plugins cannot override them.
+          messages: acc?.messages ?? next.messages,
+          systemPrompt: acc?.systemPrompt ?? next.systemPrompt,
+          // Intersection latch: if both handlers provide tools, only keep tools
+          // present in both lists. Prevents a later handler from widening the allowlist.
+          tools:
+            acc?.tools !== undefined && next.tools !== undefined
+              ? next.tools.filter((t) => acc.tools!.some((a) => a.name === t.name))
+              : (next.tools ?? acc?.tools),
+          block: next.block || acc?.block,
+          blockReason: acc?.blockReason ?? next.blockReason,
+        }),
+      },
     );
   }
 
@@ -1017,15 +1019,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "after_llm_call",
       event,
       ctx,
-      (acc, next) => ({
-        block: next.block || acc?.block,
-        blockReason: acc?.blockReason ?? next.blockReason,
-        // Intersection: if both handlers provide tool lists, keep only tools in both.
-        toolCalls:
-          acc?.toolCalls !== undefined && next.toolCalls !== undefined
-            ? next.toolCalls.filter((t) => acc.toolCalls!.some((a) => a.id === t.id))
-            : (next.toolCalls ?? acc?.toolCalls),
-      }),
+      {
+        mergeResults: (acc, next) => ({
+          block: next.block || acc?.block,
+          blockReason: acc?.blockReason ?? next.blockReason,
+          // Intersection: if both handlers provide tool lists, keep only tools in both.
+          toolCalls:
+            acc?.toolCalls !== undefined && next.toolCalls !== undefined
+              ? next.toolCalls.filter((t) => acc.toolCalls!.some((a) => a.id === t.id))
+              : (next.toolCalls ?? acc?.toolCalls),
+        }),
+      },
     );
   }
 
