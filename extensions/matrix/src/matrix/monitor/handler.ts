@@ -37,6 +37,7 @@ import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 import { deliverMatrixReplies } from "./replies.js";
+import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
@@ -178,6 +179,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   } | null = null;
   const pairingReplySentAtMsBySender = new Map<string, number>();
   const resolveThreadContext = createMatrixThreadContextResolver({
+    client,
+    getMemberDisplayName,
+    logVerboseMessage,
+  });
+  const resolveReplyContext = createMatrixReplyContextResolver({
     client,
     getMemberDisplayName,
     logVerboseMessage,
@@ -707,6 +713,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
         : undefined;
 
+      // Resolve the body and sender of the replied-to message so the agent
+      // can see what is being replied to, not just the event ID.
+      const replyContext =
+        replyToEventId && !threadTarget
+          ? await resolveReplyContext({ roomId, eventId: replyToEventId })
+          : undefined;
+
       if (_configuredBinding) {
         const ensured = await ensureConfiguredAcpBindingReady({
           cfg,
@@ -766,6 +779,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: _messageId,
         ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
+        ReplyToBody: replyContext?.replyToBody,
+        ReplyToSender: replyContext?.replyToSender,
         MessageThreadId: threadTarget,
         ThreadStarterBody: threadContext?.threadStarterBody,
         Timestamp: eventTs ?? undefined,
