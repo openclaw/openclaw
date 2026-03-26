@@ -168,7 +168,7 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
                 // SSH transport — set connecting and kick ensure task
                 SetState(new GatewayEndpointState.Connecting(ConnectionMode.Remote, RemoteConnectingDetail));
                 await _ensureLock.WaitAsync(ct).ConfigureAwait(false);
-                try { KickRemoteEnsureIfNeeded(settings); }
+                try { KickRemoteEnsureIfNeeded(settings, root); }
                 finally { _ensureLock.Release(); }
                 break;
             }
@@ -562,15 +562,33 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
     }
 
     // Must be called while holding _ensureLock
-    private void KickRemoteEnsureIfNeeded(AppSettings settings)
+    private void KickRemoteEnsureIfNeeded(AppSettings settings, Dictionary<string, object?> root)
     {
         if (_remoteEnsure is not null) return; // already in flight
 
         var token       = Guid.NewGuid();
         var sshEndpoint = settings.RemoteTarget?.Trim() ?? "";
         var desiredPort = GatewayEnvironment.GatewayPort();
-        var task        = _tunnel.EnsureControlTunnelAsync(sshEndpoint, desiredPort, CancellationToken.None);
+        var remotePort  = ResolveRemoteGatewayPort(root, settings);
+        var task        = _tunnel.EnsureControlTunnelAsync(sshEndpoint, desiredPort, remotePort, CancellationToken.None);
         _remoteEnsure   = (token, task);
+    }
+
+    private static int ResolveRemoteGatewayPort(Dictionary<string, object?> root, AppSettings settings)
+    {
+        var cfgUrl = GatewayRemoteConfig.ResolveGatewayUrl(root);
+        if (cfgUrl is not null)
+        {
+            var p = GatewayRemoteConfig.DefaultPort(cfgUrl);
+            if (p is not null) return p.Value;
+        }
+        var settingsUrl = GatewayRemoteConfig.NormalizeGatewayUrl(settings.RemoteUrl);
+        if (settingsUrl is not null)
+        {
+            var p = GatewayRemoteConfig.DefaultPort(settingsUrl);
+            if (p is not null) return p.Value;
+        }
+        return GatewayEnvironment.GatewayPort();
     }
 
     private async Task RequireRemoteModeAsync(CancellationToken ct)
@@ -603,7 +621,7 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
         await _ensureLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            KickRemoteEnsureIfNeeded(settings);
+            KickRemoteEnsureIfNeeded(settings, root);
             ensure = _remoteEnsure;
         }
         finally { _ensureLock.Release(); }

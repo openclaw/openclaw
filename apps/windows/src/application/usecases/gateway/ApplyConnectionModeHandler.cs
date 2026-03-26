@@ -67,7 +67,7 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
                         ? target
                         : $"{identity}@{target}";
 
-                    var result = await _tunnel.ConnectAsync(tunnelEndpoint, LocalTunnelPort, ct);
+                    var result = await _tunnel.ConnectAsync(tunnelEndpoint, LocalTunnelPort, LocalTunnelPort, ct);
                     if (result.IsError)
                         // Non-fatal: coordinator will retry; tunnel may succeed after GAP-023
                         _logger.LogWarning("SSH tunnel connect failed: {Error}", result.FirstError.Description);

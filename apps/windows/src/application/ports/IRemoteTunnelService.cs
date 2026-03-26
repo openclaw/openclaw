@@ -7,6 +7,6 @@ public interface IRemoteTunnelService
 {
     bool IsConnected { get; }
 
-    Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, CancellationToken ct);
+    Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, int remotePort, CancellationToken ct);
     Task DisconnectAsync(CancellationToken ct);
 }

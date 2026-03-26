@@ -109,7 +109,7 @@ internal sealed class GatewayExecApprovalOrchestrator : IHostedService
         var tcs = new TaskCompletionSource<ExecApprovalDecision>();
         var vm  = BuildViewModel(req);
 
-        _dispatcherQueue?.TryEnqueue(async () =>
+        var enqueued = _dispatcherQueue?.TryEnqueue(async () =>
         {
             try
             {
@@ -138,7 +138,12 @@ internal sealed class GatewayExecApprovalOrchestrator : IHostedService
                 _logger.LogError(ex, "Exec approval dialog error");
                 tcs.TrySetResult(ExecApprovalDecision.Deny);
             }
-        });
+        }) ?? false;
+
+        // If the dispatcher is unavailable or the queue is full, resolve immediately so the
+        // semaphore gate is never left permanently blocked.
+        if (!enqueued)
+            tcs.TrySetResult(ExecApprovalDecision.Deny);
 
         return tcs.Task;
     }

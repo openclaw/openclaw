@@ -31,7 +31,7 @@ internal sealed class RemoteTunnelManager : IDisposable
     /// Returns the active local port, or an error if the tunnel could not be established.
     /// </summary>
     public async Task<ErrorOr<int>> EnsureControlTunnelAsync(
-        string tunnelEndpoint, int desiredPort, CancellationToken ct)
+        string tunnelEndpoint, int desiredPort, int remotePort, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         bool alreadyRunning;
@@ -56,7 +56,7 @@ internal sealed class RemoteTunnelManager : IDisposable
         _logger.LogInformation(
             "ensure SSH tunnel endpoint={Ep} localPort={Port}", tunnelEndpoint, desiredPort);
 
-        var result = await _tunnel.ConnectAsync(tunnelEndpoint, desiredPort, ct).ConfigureAwait(false);
+        var result = await _tunnel.ConnectAsync(tunnelEndpoint, desiredPort, remotePort, ct).ConfigureAwait(false);
 
         await _gate.WaitAsync().ConfigureAwait(false);
         try

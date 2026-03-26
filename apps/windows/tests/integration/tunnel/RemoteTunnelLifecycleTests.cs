@@ -27,7 +27,7 @@ public sealed class RemoteTunnelLifecycleTests
     {
         var tunnel = new NullRemoteTunnelService();
 
-        var result = await tunnel.ConnectAsync("user@host", 18789, CancellationToken.None);
+        var result = await tunnel.ConnectAsync("user@host", 18789, 18789, CancellationToken.None);
 
         result.IsError.Should().BeTrue();
         result.FirstError.Code.Should().Be("tunnel.not_implemented");
@@ -117,7 +117,7 @@ public sealed class RemoteTunnelLifecycleTests
         await tunnel.Received(1).DisconnectAsync(Arg.Any<CancellationToken>());
         // Direct mode — tunnel.ConnectAsync must NOT be called
         await tunnel.DidNotReceive().ConnectAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ── ApplyConnectionModeHandler — Remote SSH ───────────────────────────────
@@ -127,7 +127,7 @@ public sealed class RemoteTunnelLifecycleTests
     {
         var mediator = Substitute.For<IMediator>();
         var tunnel = Substitute.For<IRemoteTunnelService>();
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         var handler = new ApplyConnectionModeHandler(
@@ -143,7 +143,7 @@ public sealed class RemoteTunnelLifecycleTests
 
         result.IsError.Should().BeFalse();
         await tunnel.Received(1).ConnectAsync(
-            "myserver.example.com", 18789, Arg.Any<CancellationToken>());
+            "myserver.example.com", 18789, 18789, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public sealed class RemoteTunnelLifecycleTests
     {
         var mediator = Substitute.For<IMediator>();
         var tunnel = Substitute.For<IRemoteTunnelService>();
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ErrorOr<Success>>(
                 Error.Failure("tunnel.failed", "SSH rejected")));
 

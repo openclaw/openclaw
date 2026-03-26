@@ -5,7 +5,7 @@ internal sealed class NullRemoteTunnelService : IRemoteTunnelService
 {
     public bool IsConnected => false;
 
-    public Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, CancellationToken ct)
+    public Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, int remotePort, CancellationToken ct)
         => Task.FromResult<ErrorOr<Success>>(Error.Failure("tunnel.not_implemented",
             "Remote tunnel not yet implemented (GAP-023)"));
 

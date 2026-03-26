@@ -15,7 +15,6 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
     private const int StartupProbeDelayMs = 150;      // wait after ssh spawn before checking HasExited
     private const int ServerAliveInterval  = 15;       // -o ServerAliveInterval=15
     private const int ServerAliveCountMax  = 3;        // -o ServerAliveCountMax=3
-    private const int DefaultRemotePort    = 18789;    // gateway port forwarded on the remote host
 
     private readonly ILogger<SshRemoteTunnelService> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
@@ -33,7 +32,7 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
         _logger = logger;
     }
 
-    public async Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, CancellationToken ct)
+    public async Task<ErrorOr<Success>> ConnectAsync(string tunnelEndpoint, int localPort, int remotePort, CancellationToken ct)
     {
         await _lock.WaitAsync(ct);
         try
@@ -64,7 +63,7 @@ internal sealed class SshRemoteTunnelService : IRemoteTunnelService, IDisposable
                 return Error.Failure("SSH.NOT_FOUND",
                     "ssh.exe not found. Enable the Windows OpenSSH client optional feature.");
 
-            var args = BuildArguments(destination, localPort, DefaultRemotePort, identityFile, sshPort);
+            var args = BuildArguments(destination, localPort, remotePort, identityFile, sshPort);
 
             _logger.LogInformation("Starting SSH tunnel: {Exe} {Args}",
                 sshExe, string.Join(" ", args));

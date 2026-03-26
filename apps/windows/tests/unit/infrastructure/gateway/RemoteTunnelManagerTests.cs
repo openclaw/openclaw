@@ -20,18 +20,18 @@ public sealed class RemoteTunnelManagerTests
         // Second call: IsConnected=true → ConnectAsync is NOT called again (reuse).
         var tunnel = Substitute.For<IRemoteTunnelService>();
         tunnel.IsConnected.Returns(false, true); // false on first read, true on subsequent
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
               .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         using var mgr = Make(tunnel);
-        await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None); // connects
-        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None); // reuse
+        await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None); // connects
+        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None); // reuse
 
         Assert.False(result.IsError);
         Assert.Equal(18789, result.Value);
         // ConnectAsync called only once (on the first call, not the second)
         await tunnel.Received(1).ConnectAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ── EnsureControlTunnelAsync — connect when not running ───────────────────
@@ -42,15 +42,15 @@ public sealed class RemoteTunnelManagerTests
         // Swift: await RemotePortTunnel.create(…) → ConnectAsync
         var tunnel = Substitute.For<IRemoteTunnelService>();
         tunnel.IsConnected.Returns(false);
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
               .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         using var mgr = Make(tunnel);
-        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None);
+        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None);
 
         Assert.False(result.IsError);
         Assert.Equal(18789, result.Value);
-        await tunnel.Received(1).ConnectAsync("user@host", 18789, Arg.Any<CancellationToken>());
+        await tunnel.Received(1).ConnectAsync("user@host", 18789, 18789, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -58,11 +58,11 @@ public sealed class RemoteTunnelManagerTests
     {
         var tunnel = Substitute.For<IRemoteTunnelService>();
         tunnel.IsConnected.Returns(false);
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
               .Returns(Task.FromResult<ErrorOr<Success>>(Error.Failure("SSH.ERROR", "fail")));
 
         using var mgr = Make(tunnel);
-        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None);
+        var result = await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None);
 
         Assert.True(result.IsError);
     }
@@ -88,16 +88,16 @@ public sealed class RemoteTunnelManagerTests
         // After StopAll, IsConnected is false → next EnsureControlTunnel calls ConnectAsync again.
         var tunnel = Substitute.For<IRemoteTunnelService>();
         tunnel.IsConnected.Returns(false); // after disconnect, still false
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
               .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
         tunnel.DisconnectAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         using var mgr = Make(tunnel);
         await mgr.StopAllAsync();
-        await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None);
+        await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None);
 
         await tunnel.Received(1).ConnectAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ── RestartBackoffSeconds constant ────────────────────────────────────────
@@ -109,12 +109,12 @@ public sealed class RemoteTunnelManagerTests
         // No lastRestartAt on a fresh manager → WaitForRestartBackoffIfNeeded returns immediately.
         var tunnel = Substitute.For<IRemoteTunnelService>();
         tunnel.IsConnected.Returns(false);
-        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        tunnel.ConnectAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
               .Returns(Task.FromResult<ErrorOr<Success>>(Result.Success));
 
         using var mgr = Make(tunnel);
         var sw = global::System.Diagnostics.Stopwatch.StartNew();
-        await mgr.EnsureControlTunnelAsync("user@host", 18789, CancellationToken.None);
+        await mgr.EnsureControlTunnelAsync("user@host", 18789, 18789, CancellationToken.None);
         sw.Stop();
 
         // No lastRestartAt → no backoff → should complete well under 1 s

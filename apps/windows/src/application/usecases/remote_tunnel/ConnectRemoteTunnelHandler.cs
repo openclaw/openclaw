@@ -27,7 +27,7 @@ internal sealed class ConnectRemoteTunnelHandler
         _logger.LogInformation("Connecting remote tunnel: endpoint={Endpoint} localPort={Port}",
             cmd.TunnelEndpoint, cmd.LocalPort);
 
-        var result = await _tunnelService.ConnectAsync(cmd.TunnelEndpoint, cmd.LocalPort, ct);
+        var result = await _tunnelService.ConnectAsync(cmd.TunnelEndpoint, cmd.LocalPort, cmd.LocalPort, ct);
         if (result.IsError)
             return Error.Failure("RT.CONNECT_FAILED", result.FirstError.Description);
 
