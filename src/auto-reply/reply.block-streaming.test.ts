@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
 
 const mocks = vi.hoisted(() => ({
@@ -62,16 +63,7 @@ vi.mock("./reply/stage-sandbox-media.js", () => ({
   stageSandboxMedia: vi.fn(async () => undefined),
 }));
 vi.mock("./reply/typing.js", () => ({
-  createTypingController: vi.fn(() => ({
-    onReplyStart: async () => undefined,
-    startTypingLoop: async () => undefined,
-    startTypingOnText: async () => undefined,
-    refreshTypingTtl: () => undefined,
-    isActive: () => false,
-    markRunComplete: () => undefined,
-    markDispatchIdle: () => undefined,
-    cleanup: () => undefined,
-  })),
+  createTypingController: vi.fn(() => createMockTypingController()),
 }));
 
 vi.mock("./reply/get-reply-directives.js", () => ({
