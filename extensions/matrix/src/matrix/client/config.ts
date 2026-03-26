@@ -35,8 +35,13 @@ function clean(value: unknown, path: string): string {
     (value as Record<string, unknown>).source === "env" &&
     "id" in value
   ) {
+    const keys = Object.keys(value as object);
     const envId = (value as Record<string, unknown>).id;
-    if (typeof envId === "string") {
+    if (
+      typeof envId === "string" &&
+      /^[A-Z][A-Z0-9_]{0,127}$/.test(envId) &&
+      (keys.length === 2 || keys.length === 3)
+    ) {
       const resolved = process.env[envId];
       if (resolved !== undefined) {
         value = resolved;
