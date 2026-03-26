@@ -123,9 +123,13 @@ async function switchChatAgent(host: ChatHost, targetAgentId: string): Promise<b
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
   );
-  // Clear any residual run state after the abort so the new session starts clean.
+  // Clear any residual run state and queued messages after the abort so the
+  // new session starts clean. Without clearing the queue, messages queued
+  // for the previous session could flush under the new sessionKey and be
+  // sent to the wrong agent.
   host.chatRunId = null;
   host.chatSending = false;
+  host.chatQueue = [];
   return true;
 }
 
