@@ -5,6 +5,7 @@ export const de: TranslationMap = {
     version: "Version",
     health: "Status",
     ok: "OK",
+    online: "Online",
     offline: "Offline",
     connect: "Verbinden",
     refresh: "Aktualisieren",
@@ -126,6 +127,6 @@ export const de: TranslationMap = {
     ptBR: "Português (Brasilianisches Portugiesisch)",
     de: "Deutsch",
     es: "Spanisch (Español)",
-    tr: "Türkçe (Türkisch)",
+    tr: "Türkçe",
   },
 };

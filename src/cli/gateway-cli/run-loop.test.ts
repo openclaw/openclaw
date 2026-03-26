@@ -8,6 +8,15 @@ const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
+const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
+  ok: true,
+  pid: process.pid,
+  signal: "SIGUSR1" as const,
+  delayMs: 0,
+  mode: "emit" as const,
+  coalesced: false,
+  cooldownMsApplied: 0,
+}));
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
@@ -35,6 +44,8 @@ vi.mock("../../infra/restart.js", () => ({
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
+  scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
+    scheduleGatewaySigusr1Restart(opts),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -59,13 +70,12 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => gatewayLog,
 }));
 
-type SignalListener = (...args: unknown[]) => void;
 const LOOP_SIGNALS = ["SIGTERM", "SIGINT", "SIGUSR1"] as const;
 type LoopSignal = (typeof LOOP_SIGNALS)[number];
 
-function removeNewSignalListeners(signal: LoopSignal, existing: Set<SignalListener>) {
+function removeNewSignalListeners(signal: LoopSignal, existing: Set<(...args: unknown[]) => void>) {
   for (const listener of process.listeners(signal)) {
-    const fn = listener as SignalListener;
+    const fn = listener as (...args: unknown[]) => void;
     if (!existing.has(fn)) {
       process.removeListener(signal, fn);
     }
@@ -74,9 +84,9 @@ function removeNewSignalListeners(signal: LoopSignal, existing: Set<SignalListen
 
 function addedSignalListener(
   signal: LoopSignal,
-  existing: Set<SignalListener>,
+  existing: Set<(...args: unknown[]) => void>,
 ): (() => void) | null {
-  const listeners = process.listeners(signal) as SignalListener[];
+  const listeners = process.listeners(signal) as Array<(...args: unknown[]) => void>;
   for (let i = listeners.length - 1; i >= 0; i -= 1) {
     const listener = listeners[i];
     if (listener && !existing.has(listener)) {
@@ -90,8 +100,11 @@ async function withIsolatedSignals(
   run: (helpers: { captureSignal: (signal: LoopSignal) => () => void }) => Promise<void>,
 ) {
   const existingListeners = Object.fromEntries(
-    LOOP_SIGNALS.map((signal) => [signal, new Set(process.listeners(signal) as SignalListener[])]),
-  ) as Record<LoopSignal, Set<SignalListener>>;
+    LOOP_SIGNALS.map((signal) => [
+      signal,
+      new Set(process.listeners(signal) as Array<(...args: unknown[]) => void>),
+    ]),
+  ) as Record<LoopSignal, Set<(...args: unknown[]) => void>>;
   const captureSignal = (signal: LoopSignal) => {
     const listener = addedSignalListener(signal, existingListeners[signal]);
     if (!listener) {
@@ -290,6 +303,28 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+        delayMs: 0,
+        reason: "SIGUSR1",
+      });
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
 
@@ -299,6 +334,7 @@ describe("runGatewayLoop", () => {
         release: lockRelease,
       });
 
+      // Override process-respawn to return "spawned" mode
       restartGatewayProcessWithFreshPid.mockReturnValueOnce({
         mode: "spawned",
         pid: 9999,
@@ -392,6 +428,7 @@ describe("gateway discover routing helpers", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       host: "10.0.0.2",
+      port: 18789,
       lanHost: "evil.example.com",
       tailnetDns: "evil.example.com",
     };
@@ -408,13 +445,13 @@ describe("gateway discover routing helpers", () => {
     expect(pickGatewayPort(beacon)).toBe(18789);
   });
 
-  it("falls back to TXT host/port when resolve data is missing", () => {
+  it("fails closed when resolve data is missing", () => {
     const beacon: GatewayBonjourBeacon = {
       instanceName: "Test",
       lanHost: "test-host.local",
       gatewayPort: 18789,
     };
-    expect(pickBeaconHost(beacon)).toBe("test-host.local");
-    expect(pickGatewayPort(beacon)).toBe(18789);
+    expect(pickBeaconHost(beacon)).toBeNull();
+    expect(pickGatewayPort(beacon)).toBeNull();
   });
 });

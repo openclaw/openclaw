@@ -221,7 +221,8 @@ export const tr: TranslationMap = {
       timezoneOptional: "Saat dilimi (isteğe bağlı)",
       timezonePlaceholder: "America/Los_Angeles",
       timezoneHelp: "Yaygın bir saat dilimi seçin veya geçerli bir IANA saat dilimi girin.",
-      jitterHelp: "Dağıtım penceresi / Dağıtım birimi alanları için Gelişmiş bölümünü açın.",
+      jitterHelp:
+        "Jitter gerekiyorsa Gelişmiş bölümünü açıp Dağıtım penceresi / Dağıtım birimi alanlarını kullanın.",
       execution: "Çalıştırma",
       executionSub: "Ne zaman uyandırılacağını ve bu görevin ne yapacağını seçin.",
       session: "Oturum",
