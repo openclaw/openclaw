@@ -291,32 +291,13 @@ async function runVitestBatch(params) {
 }
 
 function printUsage() {
-  console.log(
-    [
-      "Usage: pnpm test:extension <extension-name|path> [vitest args...]",
-      "       node scripts/test-extension.mjs [extension-name|path] [vitest args...]",
-      "       node scripts/test-extension.mjs --list [--json]",
-      "       node scripts/test-extension.mjs --list-changed --base <git-ref> [--head <git-ref>] [--json]",
-      "       node scripts/test-extension.mjs <extension> --require-tests [--dry-run] [--json]",
-      "",
-      "Runs extension tests using the right Vitest config and isolation behavior.",
-      "",
-      "Options:",
-      "  --list             Print all extension ids",
-      "  --list-changed     Print changed extension ids relative to --base/--head",
-      "  --base <git-ref>   Base ref for --list-changed",
-      "  --head <git-ref>   Head ref for --list-changed (default: HEAD)",
-      "  --dry-run          Print the resolved test plan instead of running it",
-      "  --json             Emit JSON for list/list-changed/dry-run output",
-      "  --require-tests    Fail instead of skipping when no tests are found",
-      "  --help             Show this help text",
-      "",
-      "Examples:",
-      "  pnpm test:extension slack",
-      "  node scripts/test-extension.mjs extensions/slack --dry-run",
-      "  node scripts/test-extension.mjs --list-changed --base origin/main --json",
-    ].join("\n"),
+  console.error("Usage: pnpm test:extension <extension-name|path> [vitest args...]");
+  console.error("       node scripts/test-extension.mjs [extension-name|path] [vitest args...]");
+  console.error("       node scripts/test-extension.mjs --list");
+  console.error(
+    "       node scripts/test-extension.mjs --list-changed --base <git-ref> [--head <git-ref>]",
   );
+  console.error("       node scripts/test-extension.mjs <extension> --require-tests");
 }
 
 function printNoTestsMessage(plan, requireTests) {
@@ -331,10 +312,6 @@ function printNoTestsMessage(plan, requireTests) {
 
 async function run() {
   const rawArgs = process.argv.slice(2);
-  if (rawArgs.includes("--help")) {
-    printUsage();
-    return;
-  }
   const dryRun = rawArgs.includes("--dry-run");
   const requireTests =
     rawArgs.includes("--require-tests") ||
