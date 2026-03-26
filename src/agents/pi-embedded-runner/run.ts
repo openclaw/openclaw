@@ -63,6 +63,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { clampRuntimeAuthRefreshDelayMs } from "../runtime-auth-refresh.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
@@ -507,7 +508,11 @@ export async function runEmbeddedPiAgent(
         clearRuntimeAuthRefreshTimer();
         const now = Date.now();
         const refreshAt = runtimeAuthState.expiresAt - RUNTIME_AUTH_REFRESH_MARGIN_MS;
-        const delayMs = Math.max(RUNTIME_AUTH_REFRESH_MIN_DELAY_MS, refreshAt - now);
+        const delayMs = clampRuntimeAuthRefreshDelayMs({
+          refreshAt,
+          now,
+          minDelayMs: RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
+        });
         const timer = setTimeout(() => {
           if (runtimeAuthRefreshCancelled) {
             return;
