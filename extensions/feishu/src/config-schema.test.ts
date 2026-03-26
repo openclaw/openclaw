@@ -240,6 +240,65 @@ describe("FeishuConfigSchema actions", () => {
   });
 });
 
+describe("FeishuConfigSchema tool policies", () => {
+  it("keeps dm tools optional for existing configs", () => {
+    const enabledOnly = FeishuConfigSchema.safeParse({
+      dms: {
+        ou_owner: {
+          enabled: true,
+        },
+      },
+    });
+    const promptOnly = FeishuConfigSchema.safeParse({
+      dms: {
+        ou_owner: {
+          systemPrompt: "Use the shared DM prompt.",
+        },
+      },
+    });
+
+    expect(enabledOnly.success).toBe(true);
+    expect(promptOnly.success).toBe(true);
+  });
+
+  it("accepts dms tool policies", () => {
+    const result = FeishuConfigSchema.parse({
+      dms: {
+        "*": {
+          tools: { allow: ["read"], deny: ["exec"] },
+        },
+        ou_owner: {
+          tools: { alsoAllow: ["fd_*"] },
+          toolsBySender: {
+            "id:ou_owner": { alsoAllow: ["gateway"] },
+          },
+        },
+      },
+    });
+
+    expect(result.dms?.["*"]?.tools).toEqual({ allow: ["read"], deny: ["exec"] });
+    expect(result.dms?.ou_owner?.tools).toEqual({ alsoAllow: ["fd_*"] });
+    expect(result.dms?.ou_owner?.toolsBySender?.["id:ou_owner"]).toEqual({
+      alsoAllow: ["gateway"],
+    });
+  });
+
+  it("rejects allow and alsoAllow in the same dm tools scope", () => {
+    const result = FeishuConfigSchema.safeParse({
+      dms: {
+        ou_owner: {
+          tools: {
+            allow: ["read"],
+            alsoAllow: ["exec"],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("FeishuConfigSchema defaultAccount", () => {
   it("accepts defaultAccount when it matches an account key", () => {
     const result = FeishuConfigSchema.safeParse({
