@@ -875,20 +875,20 @@ export async function runEmbeddedPiAgent(
       const isEphemeralSession = isProbeSession || params.sessionId.startsWith("slug-generator-");
       const mcpCacheKey = isEphemeralSession ? null : params.sessionId;
       let sharedMcpRuntime = mcpCacheKey ? sessionMcpRuntimes.get(mcpCacheKey) : undefined;
-      if (!sharedMcpRuntime) {
-        // Note: reservedToolNames (built-in tool names) are not passed here because
-        // the built-in tool list is assembled later in attempt.ts and varies per attempt.
-        // MCP-to-MCP name dedup is still enforced inside createEmbeddedBundleMcpRuntime.
-        // MCP-to-built-in collisions are handled by attempt.ts when it merges the tool lists.
-        sharedMcpRuntime = await createEmbeddedBundleMcpRuntime({
-          workspaceDir: resolvedWorkspace,
-          cfg: params.config,
-        });
-        if (mcpCacheKey) {
-          sessionMcpRuntimes.set(mcpCacheKey, sharedMcpRuntime);
-        }
-      }
       try {
+        if (!sharedMcpRuntime) {
+          // Note: reservedToolNames (built-in tool names) are not passed here because
+          // the built-in tool list is assembled later in attempt.ts and varies per attempt.
+          // MCP-to-MCP name dedup is still enforced inside createEmbeddedBundleMcpRuntime.
+          // MCP-to-built-in collisions are handled by attempt.ts when it merges the tool lists.
+          sharedMcpRuntime = await createEmbeddedBundleMcpRuntime({
+            workspaceDir: resolvedWorkspace,
+            cfg: params.config,
+          });
+          if (mcpCacheKey) {
+            sessionMcpRuntimes.set(mcpCacheKey, sharedMcpRuntime);
+          }
+        }
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
         // subscribers like memory extensions and usage trackers.
@@ -1909,7 +1909,7 @@ export async function runEmbeddedPiAgent(
         // by disposeSessionMcpRuntime() on /new or /reset, or when the process exits.
         // Uncached (ephemeral) runtimes must be disposed here to avoid resource leaks.
         if (!mcpCacheKey) {
-          await sharedMcpRuntime.dispose().catch(() => {});
+          await sharedMcpRuntime?.dispose().catch(() => {});
         }
         stopRuntimeAuthRefreshTimer();
       }

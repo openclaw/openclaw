@@ -17,7 +17,7 @@ import { resolveNestedAgentLane } from "../../agents/lanes.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { disposeSessionMcpRuntime, runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   countActiveDescendantRuns,
   listDescendantRunsForRequester,
@@ -248,6 +248,11 @@ export async function runCronIsolatedAgentTurn(params: {
     forceNew: params.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
+  // On session rollover, release the cached MCP runtime for the old session so
+  // that its transient MCP subprocesses are not kept alive indefinitely.
+  if (cronSession.previousSessionId) {
+    disposeSessionMcpRuntime(cronSession.previousSessionId);
+  }
   const runSessionKey = baseSessionKey.startsWith("cron:")
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;

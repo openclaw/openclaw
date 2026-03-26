@@ -85,5 +85,13 @@ export function resolveCronSession(params: {
       deliveryContext: undefined,
     }),
   };
-  return { storePath, store, sessionEntry, systemSent, isNewSession };
+  return {
+    storePath,
+    store,
+    sessionEntry,
+    systemSent,
+    isNewSession,
+    /** The previous sessionId when isNewSession is true; undefined otherwise. */
+    previousSessionId: isNewSession ? entry?.sessionId : undefined,
+  };
 }

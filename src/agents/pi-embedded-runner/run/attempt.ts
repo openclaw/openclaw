@@ -1839,7 +1839,10 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const injectedMcpRuntime = params.bundleMcpRuntime;
+    // Only use the injected (cached) runtime when tools are supported; injecting it
+    // for tool-disabled models would send MCP tool schemas to providers that can't
+    // handle them and trigger unnecessary MCP startup work.
+    const injectedMcpRuntime = toolsEnabled ? params.bundleMcpRuntime : undefined;
     const bundleMcpRuntime =
       injectedMcpRuntime ??
       (toolsEnabled
