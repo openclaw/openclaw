@@ -31,6 +31,11 @@ export async function callGatewayFromCli(
       label: `Gateway ${method}`,
       indeterminate: true,
       enabled: showProgress,
+      // Defer spinner rendering to avoid blocking the event loop during the
+      // WebSocket handshake (connect.challenge → connect → helloOk).
+      // Without this delay the @clack/prompts spinner can starve the event
+      // loop and cause the server-side handshake timeout to trip.  See #49405.
+      delayMs: 150,
     },
     async () =>
       await callGateway({

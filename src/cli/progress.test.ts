@@ -43,4 +43,28 @@ describe("cli progress", () => {
 
     expect(write).not.toHaveBeenCalled();
   });
+
+  it("does not start rendering before delayMs elapses", () => {
+    const writes: string[] = [];
+    const stream = {
+      isTTY: false,
+      write: vi.fn((chunk: string) => {
+        writes.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+
+    const progress = createCliProgress({
+      label: "Delayed",
+      total: 5,
+      delayMs: 5_000,
+      stream,
+      fallback: "log",
+    });
+
+    // Immediately after creation the spinner should not have written anything
+    // because delayMs has not elapsed yet.
+    expect(writes).toHaveLength(0);
+
+    progress.done();
+  });
 });
