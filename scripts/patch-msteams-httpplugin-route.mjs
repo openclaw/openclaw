@@ -17,8 +17,12 @@ function listJsFilesRecursively(rootDir) {
         stack.push(fullPath);
         continue;
       }
-      if (!dirent.isFile()) continue;
-      if (!dirent.name.endsWith(".js")) continue;
+      if (!dirent.isFile()) {
+        continue;
+      }
+      if (!dirent.name.endsWith(".js")) {
+        continue;
+      }
       out.push(fullPath);
     }
   }
@@ -42,8 +46,12 @@ export function patchMSTeamsHttpPluginApiRoute(params = {}) {
 
   for (const filePath of jsFiles) {
     const src = fs.readFileSync(filePath, "utf8");
-    if (src.includes(REPLACEMENT)) sawReplacement = true;
-    if (!src.includes(NEEDLE)) continue;
+    if (src.includes(REPLACEMENT)) {
+      sawReplacement = true;
+    }
+    if (!src.includes(NEEDLE)) {
+      continue;
+    }
 
     matchedFiles++;
 
