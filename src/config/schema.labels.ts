@@ -816,6 +816,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.slack.commands.native": "Slack Native Commands",
   "channels.slack.commands.nativeSkills": "Slack Native Skill Commands",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
+  "channels.slack.suppressAssistantText": "Slack Suppress Assistant Text",
   "channels.discord.allowBots": "Discord Allow Bot Messages",
   "channels.matrix.allowBots": "Matrix Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",

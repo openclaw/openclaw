@@ -15809,6 +15809,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Allow bot-authored messages to trigger Slack replies (default: false).",
       tags: ["access", "network", "channels"],
     },
+    "channels.slack.suppressAssistantText": {
+      label: "Slack Suppress Assistant Text",
+      tags: ["network", "channels"],
+    },
     "channels.discord.allowBots": {
       label: "Discord Allow Bot Messages",
       help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
