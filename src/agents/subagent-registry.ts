@@ -41,6 +41,7 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
   runOutcomesEqual,
 } from "./subagent-registry-completion.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -64,7 +65,6 @@ import { resolveAgentTimeoutMs } from "./timeout.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry");
 
-const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
