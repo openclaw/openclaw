@@ -65,10 +65,10 @@ returns results. Results are cached by query for 15 minutes (configurable).
     AI-synthesized answers with citations via xAI web grounding.
   </Card>
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
-    AI-synthesized answers with citations via Moonshot web search.
+    Grounded answer-first responses with citations via Moonshot web search.
   </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
-    Structured results with content extraction controls and domain filtering.
+    Native Search API results, or synthesized Sonar/OpenRouter answers in compatibility mode.
   </Card>
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
@@ -77,17 +77,24 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                          | API key                                     |
-| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
-| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
-| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| Provider                               | Output style                              | Filters                                                                  | Best for                                           | API key                                     |
+| -------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- | ------------------------------------------- |
+| [Brave](/tools/brave-search)           | Structured result list                    | Country, language, time, `llm-context` mode                              | Discovery, filtering, search-engine style results  | `BRAVE_API_KEY`                             |
+| [DuckDuckGo](/tools/duckduckgo-search) | Structured result list                    | --                                                                       | Key-free fallback                                  | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured results + extracted content    | Neural/keyword mode, date, content extraction                            | Research-heavy search with summaries/highlights    | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)          | Structured result list                    | Via `firecrawl_search` tool                                              | Search paired with scraping/extraction workflows   | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | Grounded answer + citations               | `query`, `count`                                                         | Answer-first search with Google grounding          | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | Grounded answer + citations               | `query`, `count`                                                         | Answer-first search with xAI grounding             | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | Grounded answer + citations               | `query`, `count`                                                         | Answer-first search via Moonshot grounding         | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured Search API or synthesized chat | Country/language/time/domains/content limits on Search API path only     | Native Search API results or Sonar compatibility   | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured result list                    | Via `tavily_search` tool                                                 | Search with Tavily-specific extraction             | `TAVILY_API_KEY`                            |
+
+<Note>
+  Providers are not interchangeable even though they share the same
+  `web_search` tool surface. If you need a traditional result list or
+  country/language filtering, prefer Brave or native Perplexity Search API.
+  If you want a grounded answer with citations, prefer Gemini, Grok, or Kimi.
+</Note>
 
 ## Auto-detection
 
@@ -191,6 +198,8 @@ examples.
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
   rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  Gemini, Grok, and Kimi are answer-first providers and only support `query`
+  and `count`.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>
