@@ -32,7 +32,13 @@ import type { MediaUnderstandingProvider } from "../media-understanding/types.js
 import type { RuntimeEnv } from "../runtime.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import type {
+  SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
+  SpeechProviderConfig,
+  SpeechProviderResolveConfigContext,
+  SpeechProviderResolveTalkConfigContext,
+  SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderId,
   SpeechSynthesisRequest,
@@ -939,8 +945,15 @@ export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
   aliases?: string[];
+  autoSelectOrder?: number;
   models?: readonly string[];
   voices?: readonly string[];
+  resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
+  parseDirectiveToken?: (ctx: SpeechDirectiveTokenParseContext) => SpeechDirectiveTokenParseResult;
+  resolveTalkConfig?: (ctx: SpeechProviderResolveTalkConfigContext) => SpeechProviderConfig;
+  resolveTalkOverrides?: (
+    ctx: SpeechProviderResolveTalkOverridesContext,
+  ) => SpeechProviderConfig | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
   synthesizeTelephony?: (

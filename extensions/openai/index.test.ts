@@ -137,31 +137,13 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
       allowNormalization: true,
       allowSeed: true,
     },
-    elevenlabs: {
-      baseUrl: "https://api.elevenlabs.io",
-      voiceId: "",
-      modelId: "eleven_multilingual_v2",
-      voiceSettings: {
-        stability: 0.5,
-        similarityBoost: 0.75,
-        style: 0,
-        useSpeakerBoost: true,
-        speed: 1,
+    providerConfigs: {
+      openai: {
+        apiKey: OPENAI_API_KEY,
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
       },
-    },
-    openai: {
-      apiKey: OPENAI_API_KEY,
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini-tts",
-      voice: "alloy",
-    },
-    edge: {
-      enabled: false,
-      voice: "en-US-AriaNeural",
-      lang: "en-US",
-      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-      outputFormatConfigured: false,
-      saveSubtitles: false,
     },
     maxTextLength: 4_000,
     timeoutMs: 30_000,
@@ -358,8 +340,9 @@ describeLive("openai plugin live", () => {
     const audioFile = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
+      timeoutMs: ttsConfig.timeoutMs,
     });
     expect(audioFile.outputFormat).toBe("mp3");
     expect(audioFile.fileExtension).toBe(".mp3");
@@ -368,7 +351,8 @@ describeLive("openai plugin live", () => {
     const telephony = await speechProvider.synthesizeTelephony?.({
       text: "Telephony check OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
+      timeoutMs: ttsConfig.timeoutMs,
     });
     expect(telephony?.outputFormat).toBe("pcm");
     expect(telephony?.sampleRate).toBe(24_000);
@@ -386,8 +370,9 @@ describeLive("openai plugin live", () => {
     const synthesized = await speechProvider.synthesize({
       text: "OpenClaw integration test OK.",
       cfg,
-      config: ttsConfig,
+      providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
+      timeoutMs: ttsConfig.timeoutMs,
     });
 
     const transcription = await mediaProvider.transcribeAudio?.({
