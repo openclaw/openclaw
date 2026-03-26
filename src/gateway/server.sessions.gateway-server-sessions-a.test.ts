@@ -1011,6 +1011,12 @@ describe("gateway server sessions", () => {
         "subagent:child": {
           sessionId: "sess-owned-child",
           updatedAt: Date.now(),
+          chatType: "group",
+          channel: "discord",
+          groupId: "group-1",
+          subject: "Ops Thread",
+          groupChannel: "dev",
+          space: "hq",
           spawnedBy: "agent:main:main",
           spawnedWorkspaceDir: "/tmp/child-workspace",
           parentSessionKey: "agent:main:main",
@@ -1053,6 +1059,12 @@ describe("gateway server sessions", () => {
       ok: true;
       key: string;
       entry: {
+        chatType?: string;
+        channel?: string;
+        groupId?: string;
+        subject?: string;
+        groupChannel?: string;
+        space?: string;
         spawnedBy?: string;
         spawnedWorkspaceDir?: string;
         parentSessionKey?: string;
@@ -1090,6 +1102,12 @@ describe("gateway server sessions", () => {
     }>(ws, "sessions.reset", { key: "subagent:child" });
 
     expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.chatType).toBe("group");
+    expect(reset.payload?.entry.channel).toBe("discord");
+    expect(reset.payload?.entry.groupId).toBe("group-1");
+    expect(reset.payload?.entry.subject).toBe("Ops Thread");
+    expect(reset.payload?.entry.groupChannel).toBe("dev");
+    expect(reset.payload?.entry.space).toBe("hq");
     expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
     expect(reset.payload?.entry.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
     expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
@@ -1127,6 +1145,12 @@ describe("gateway server sessions", () => {
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       {
+        chatType?: string;
+        channel?: string;
+        groupId?: string;
+        subject?: string;
+        groupChannel?: string;
+        space?: string;
         spawnedBy?: string;
         spawnedWorkspaceDir?: string;
         parentSessionKey?: string;
@@ -1162,6 +1186,12 @@ describe("gateway server sessions", () => {
         label?: string;
       }
     >;
+    expect(store["agent:main:subagent:child"]?.chatType).toBe("group");
+    expect(store["agent:main:subagent:child"]?.channel).toBe("discord");
+    expect(store["agent:main:subagent:child"]?.groupId).toBe("group-1");
+    expect(store["agent:main:subagent:child"]?.subject).toBe("Ops Thread");
+    expect(store["agent:main:subagent:child"]?.groupChannel).toBe("dev");
+    expect(store["agent:main:subagent:child"]?.space).toBe("hq");
     expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
     expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
     expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
