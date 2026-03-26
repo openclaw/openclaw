@@ -19,6 +19,25 @@ const REPLY_TAG_RE = /\[\[\s*(?:reply_to_current|reply_to\s*:\s*([^\]\n]+))\s*\]
 const INLINE_DIRECTIVE_TAG_WITH_PADDING_RE =
   /\s*(?:\[\[\s*audio_as_voice\s*\]\]|\[\[\s*(?:reply_to_current|reply_to\s*:\s*[^\]\n]+)\s*\]\])\s*/gi;
 
+// Catches malformed/partial directive tags that bypass the precise regexes above.
+// Targets reply_to*, replyReturn*, audio_as_voice variants with missing or partial
+// closing brackets — a safety net so corrupted output never reaches the user.
+const LEAKED_DIRECTIVE_TAG_RE =
+  /\[\[\s*(?:reply[\w]*(?:\s*:\s*\S+)?|audio_as_voice)(?:\s*\]\]?)?/gi;
+
+/**
+ * Defensive sanitization for directive tag fragments that survive the precise
+ * strip passes (e.g. `[[replyReturn_current` with no closing `]]`).
+ * Safe for arbitrary text — only matches `[[` followed by known directive
+ * keywords, so normal bracket content like `[[1,2,3]]` passes through.
+ */
+export function sanitizeLeakedDirectiveTags(text: string): string {
+  if (!text || !text.includes("[[")) {
+    return text;
+  }
+  return text.replace(LEAKED_DIRECTIVE_TAG_RE, "");
+}
+
 function normalizeDirectiveWhitespace(text: string): string {
   return text
     .replace(/[ \t]+/g, " ")

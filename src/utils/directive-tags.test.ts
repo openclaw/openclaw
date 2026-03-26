@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  sanitizeLeakedDirectiveTags,
   stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   stripInlineDirectiveTagsFromMessageForDisplay,
@@ -48,6 +49,56 @@ describe("stripInlineDirectiveTagsForDelivery", () => {
     const result = stripInlineDirectiveTagsForDelivery(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
+  });
+});
+
+describe("sanitizeLeakedDirectiveTags", () => {
+  test("strips malformed reply tag with no closing brackets", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[replyReturn_current world")).toBe("hello  world");
+  });
+
+  test("strips partial reply_to_current with no closing brackets", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[reply_to_current world")).toBe("hello  world");
+  });
+
+  test("strips partial reply_to: with no closing brackets", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[ reply_to : 123 world")).toBe("hello  world");
+  });
+
+  test("strips partial audio_as_voice with no closing brackets", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[audio_as_voice world")).toBe("hello  world");
+  });
+
+  test("strips malformed tag with only one closing bracket", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[reply_to_current] world")).toBe("hello  world");
+  });
+
+  test("still strips well-formed tags as a safety net", () => {
+    expect(sanitizeLeakedDirectiveTags("hello [[reply_to_current]] world")).toBe("hello  world");
+  });
+
+  test("does not strip normal double-bracket content", () => {
+    expect(sanitizeLeakedDirectiveTags("array [[1,2,3]] here")).toBe("array [[1,2,3]] here");
+  });
+
+  test("does not strip unrelated double-bracket text", () => {
+    expect(sanitizeLeakedDirectiveTags("see [[wikipedia]] for details")).toBe(
+      "see [[wikipedia]] for details",
+    );
+  });
+
+  test("returns empty string unchanged", () => {
+    expect(sanitizeLeakedDirectiveTags("")).toBe("");
+  });
+
+  test("handles text with no brackets at all", () => {
+    expect(sanitizeLeakedDirectiveTags("just normal text")).toBe("just normal text");
+  });
+
+  test("handles multiple malformed tags in one string", () => {
+    expect(sanitizeLeakedDirectiveTags("a [[replyReturn_current b [[audio_as_voice c")).toBe(
+      "a  b  c",
+    );
   });
 });
 

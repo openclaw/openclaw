@@ -1,5 +1,6 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { sanitizeLeakedDirectiveTags } from "../../utils/directive-tags.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
@@ -89,6 +90,11 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    // Safety net: strip malformed/partial directive tags that survived the
+    // precise regex passes (e.g. corrupted `[[replyReturn_current` with no
+    // closing `]]`).  Runs after sanitizeUserFacingText so it catches any
+    // fragments that other passes left behind.  (#55019)
+    text = sanitizeLeakedDirectiveTags(text);
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");
