@@ -396,9 +396,11 @@ async function withDirectOutboundDedupe(
   }
   const now = Date.now();
   pruneDirectOutboundDedupe(now);
-  const recent = recentDirectOutboundDeliveries.get(dedupeKey);
-  if (recent && recent.expiresAt > now) {
-    return recent.results;
+  if (!params.bestEffort) {
+    const recent = recentDirectOutboundDeliveries.get(dedupeKey);
+    if (recent && recent.expiresAt > now) {
+      return recent.results;
+    }
   }
   const inflight = inflightDirectOutboundDeliveries.get(dedupeKey);
   if (inflight) {
@@ -407,10 +409,12 @@ async function withDirectOutboundDedupe(
   const promise = (async () => {
     try {
       const results = await run();
-      recentDirectOutboundDeliveries.set(dedupeKey, {
-        results,
-        expiresAt: Date.now() + DIRECT_OUTBOUND_DEDUPE_WINDOW_MS,
-      });
+      if (!params.bestEffort) {
+        recentDirectOutboundDeliveries.set(dedupeKey, {
+          results,
+          expiresAt: Date.now() + DIRECT_OUTBOUND_DEDUPE_WINDOW_MS,
+        });
+      }
       return results;
     } finally {
       inflightDirectOutboundDeliveries.delete(dedupeKey);

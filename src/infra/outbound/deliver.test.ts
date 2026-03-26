@@ -1110,6 +1110,41 @@ describe("deliverOutboundPayloads", () => {
     expect(sendTelegram).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache best-effort mirrored outbound deliveries after a partial failure", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" })
+      .mockResolvedValueOnce({ messageId: "w3", toJid: "jid" })
+      .mockResolvedValueOnce({ messageId: "w4", toJid: "jid" });
+    const onError = vi.fn();
+
+    const params = {
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp" as const,
+      to: "+1555",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "a\n\nb",
+      },
+    };
+
+    const first = await deliverOutboundPayloads(params);
+    const second = await deliverOutboundPayloads(params);
+
+    expect(first).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
+    expect(second).toEqual([
+      { channel: "whatsapp", messageId: "w3", toJid: "jid" },
+      { channel: "whatsapp", messageId: "w4", toJid: "jid" },
+    ]);
+    expect(sendWhatsApp).toHaveBeenCalledTimes(4);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
   it("does not dedupe mirrored outbound deliveries across different reply targets", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
