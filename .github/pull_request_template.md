@@ -65,6 +65,18 @@ For bug fixes or regressions, name the smallest reliable test coverage that shou
 List user-visible changes (including defaults/config).  
 If none, write `None`.
 
+## Diagram (if applicable)
+
+For UI changes or non-trivial logic flows, include a small ASCII diagram reviewers can scan quickly. Otherwise write `N/A`.
+
+```text
+Before:
+[user action] -> [old state]
+
+After:
+[user action] -> [new state] -> [result]
+```
+
 ## Security Impact (required)
 
 - New permissions/capabilities? (`Yes/No`)
@@ -128,12 +140,6 @@ If a bot review conversation is addressed by this PR, resolve that conversation 
 - Config/env changes? (`Yes/No`)
 - Migration needed? (`Yes/No`)
 - If yes, exact upgrade steps:
-
-## Failure Recovery (if this breaks)
-
-- How to disable/revert this change quickly:
-- Files/config to restore:
-- Known bad symptoms reviewers should watch for:
 
 ## Risks and Mitigations
 

@@ -67,6 +67,23 @@ describe("readResponseWithLimit", () => {
     }
   }, 5_000);
 
+  it("uses a custom idle-timeout error when provided", async () => {
+    vi.useFakeTimers();
+    try {
+      const body = makeStallingStream([new Uint8Array([1, 2])]);
+      const res = new Response(body);
+      const readPromise = readResponseWithLimit(res, 1024, {
+        chunkTimeoutMs: 50,
+        onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`custom idle ${chunkTimeoutMs}`),
+      });
+      const rejection = expect(readPromise).rejects.toThrow("custom idle 50");
+      await vi.advanceTimersByTimeAsync(60);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 5_000);
+
   it("does not time out while chunks keep arriving", async () => {
     vi.useFakeTimers();
     try {
