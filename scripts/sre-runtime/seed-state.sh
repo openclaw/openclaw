@@ -504,9 +504,12 @@ required_bundled_skills=(
   argocd-diff
   eks-troubleshoot
   foundry-evm-debug
+  frontend-design
   grafana-metrics-best-practices
   go-memory-profiling
+  nextjs-app-router-patterns
   terraform-ci-review
+  typescript-advanced-types
   sre-incident-triage
   sre-db-evidence
   sre-api-wrappers
@@ -515,6 +518,12 @@ required_bundled_skills=(
   sre-sentinel
   sre-verify
   vercel
+  vercel-composition-patterns
+  vercel-react-best-practices
+  vite
+  vitest
+  webapp-testing
+  web-design-guidelines
 )
 
 for skill_name in "${required_bundled_skills[@]}"; do
