@@ -59,6 +59,7 @@ export async function runDiscordGatewayLifecycle(params: {
   pendingGatewayErrors?: unknown[];
   releaseEarlyGatewayErrorGuard?: () => void;
   statusSink?: DiscordMonitorStatusSink;
+  onReconnected?: () => void;
 }) {
   const HELLO_TIMEOUT_MS = 30000;
   const HELLO_CONNECTED_POLL_MS = 250;
@@ -76,6 +77,7 @@ export async function runDiscordGatewayLifecycle(params: {
   let lifecycleStopping = false;
   let forceStopHandler: ((err: unknown) => void) | undefined;
   let queuedForceStopError: unknown;
+  let hadDisconnect = false;
 
   const pushStatus = (patch: Parameters<DiscordMonitorStatusSink>[0]) => {
     params.statusSink?.(patch);
@@ -192,6 +194,7 @@ export async function runDiscordGatewayLifecycle(params: {
       if (gateway?.isConnected) {
         resetHelloStallCounter();
       }
+      hadDisconnect = true;
       reconnectStallWatchdog.arm(at);
       pushStatus({
         connected: false,
@@ -215,6 +218,10 @@ export async function runDiscordGatewayLifecycle(params: {
         ...createConnectedChannelStatusPatch(at),
         lastDisconnect: null,
       });
+      if (hadDisconnect) {
+        hadDisconnect = false;
+        params.onReconnected?.();
+      }
     }
     helloConnectedPollId = setInterval(() => {
       if (!gateway?.isConnected) {
@@ -228,6 +235,10 @@ export async function runDiscordGatewayLifecycle(params: {
         ...createConnectedChannelStatusPatch(connectedAt),
         lastDisconnect: null,
       });
+      if (hadDisconnect) {
+        hadDisconnect = false;
+        params.onReconnected?.();
+      }
       if (helloConnectedPollId) {
         clearInterval(helloConnectedPollId);
         helloConnectedPollId = undefined;

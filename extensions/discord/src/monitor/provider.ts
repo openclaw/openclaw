@@ -10,7 +10,7 @@ import {
 } from "@buape/carbon";
 import { GatewayCloseCodes, type GatewayPlugin } from "@buape/carbon/gateway";
 import { VoicePlugin } from "@buape/carbon/voice";
-import { Routes } from "discord-api-types/v10";
+import { Routes, type APIMessage } from "discord-api-types/v10";
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
@@ -82,6 +82,12 @@ import {
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
+import {
+  buildCatchupEvent,
+  collectMonitoredChannelIds,
+  filterMissedMessages,
+  resolveChannelRequireMention,
+} from "./reconnect-catchup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
@@ -945,12 +951,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordRestFetch,
     });
     deactivateMessageHandler = messageHandler.deactivate;
+    let lastMessageReceivedAt: number = Date.now();
     const trackInboundEvent = opts.setStatus
       ? () => {
-          const at = Date.now();
+          lastMessageReceivedAt = Date.now();
+          const at = lastMessageReceivedAt;
           opts.setStatus?.({ lastEventAt: at, lastInboundAt: at });
         }
-      : undefined;
+      : () => {
+          lastMessageReceivedAt = Date.now();
+        };
 
     registerDiscordListener(
       client.listeners,
@@ -1008,6 +1018,55 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     lifecycleStarted = true;
     earlyGatewayEmitter?.removeListener("debug", onEarlyGatewayDebug);
     onEarlyGatewayDebug = undefined;
+
+    const onReconnected = () => {
+      void (async () => {
+        try {
+          const disconnectDurationMs = Date.now() - lastMessageReceivedAt;
+          // Only catch up for meaningful gaps (>5s) that aren't too stale (< 10min)
+          if (disconnectDurationMs < 5_000 || disconnectDurationMs > 600_000) return;
+
+          runtime.log?.(
+            `discord: reconnected — catching up missed messages (gap: ${Math.round(disconnectDurationMs / 1000)}s)`,
+          );
+
+          const channelIds = collectMonitoredChannelIds(guildEntries);
+
+          for (const channelId of channelIds) {
+            try {
+              const messages = (await client.rest.get(Routes.channelMessages(channelId), {
+                limit: 20,
+              })) as APIMessage[];
+
+              const requireMention = resolveChannelRequireMention(channelId, guildEntries);
+
+              const missed = filterMissedMessages(messages, {
+                botUserId,
+                afterTimestamp: lastMessageReceivedAt,
+                requireMention,
+              });
+
+              if (missed.length > 0) {
+                runtime.log?.(
+                  `discord: replaying ${missed.length} missed message(s) from channel ${channelId}`,
+                );
+                for (const msg of missed) {
+                  const event = buildCatchupEvent(msg, client);
+                  void messageHandler(event, client);
+                }
+              }
+            } catch (err) {
+              runtime.log?.(warn(`discord: failed to catch up channel ${channelId}: ${err}`));
+            }
+          }
+
+          lastMessageReceivedAt = Date.now();
+        } catch (err) {
+          runtime.log?.(warn(`discord: reconnect catch-up failed: ${err}`));
+        }
+      })();
+    };
+
     await runDiscordGatewayLifecycle({
       accountId: account.accountId,
       client,
@@ -1021,6 +1080,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       threadBindings,
       pendingGatewayErrors: earlyGatewayErrorGuard.pendingErrors,
       releaseEarlyGatewayErrorGuard,
+      onReconnected,
     });
   } finally {
     deactivateMessageHandler?.();
