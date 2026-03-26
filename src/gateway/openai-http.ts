@@ -148,6 +148,7 @@ function writeAssistantContentChunk(
         index: 0,
         delta: isLast ? {} : { content: params.content },
         ...(isLast ? { finish_reason: params.finishReason } : { finish_reason: null }),
+      },
     ],
   });
 }
