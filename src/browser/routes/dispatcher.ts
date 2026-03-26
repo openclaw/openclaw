@@ -1,1 +1,1 @@
-export * from "../../../extensions/browser/src/browser/routes/dispatcher.js";
+export * from "../../compat/browser/routes/dispatcher.js";
