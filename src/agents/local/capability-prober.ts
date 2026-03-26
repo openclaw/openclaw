@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { updateModelCapability } from "./capabilities-cache.js";
+import { updateModelCapability, type CapabilityStatus } from "./capabilities-cache.js";
 
 /**
  * Runs a background request to verify if a model supports native tool calling.
@@ -48,12 +48,15 @@ export async function runBackgroundCapabilityProbe(params: {
       {},
     );
 
-    let finalStatus: "native" | "react" = "react";
+    let finalStatus: CapabilityStatus = "unknown";
     for await (const chunk of stream) {
       if (chunk.type === "done") {
-        const content = chunk.message.content as unknown as Array<Record<string, unknown>>;
+        const content = chunk.message.content as unknown as Array<{ type: string }>;
         if (content.some((p) => p.type === "toolCall")) {
           finalStatus = "native";
+        } else {
+          // If we got clear assistant content but no tool call, it's effectively a fallback model
+          finalStatus = "react";
         }
       } else if (chunk.type === "error") {
         const error = chunk.error as unknown as Record<string, unknown>;
@@ -64,8 +67,10 @@ export async function runBackgroundCapabilityProbe(params: {
       }
     }
 
-    // Always update capability to either native or react to ensure convergence
-    await updateModelCapability(configDir, providerId, modelId, finalStatus);
+    // Only update if we got a definitive result (not unknown)
+    if (finalStatus !== "unknown") {
+      await updateModelCapability(configDir, providerId, modelId, finalStatus);
+    }
   } catch (err: unknown) {
     const error = err as Record<string, unknown>;
     const errorMessage = (error?.message as string) || String(err);
