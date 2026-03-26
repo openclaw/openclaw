@@ -544,6 +544,9 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
+    delete sessionEntry.cliSessionIds;
+    delete sessionEntry.cliSessionBindings;
+    delete sessionEntry.claudeCliSessionId;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
