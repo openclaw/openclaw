@@ -27,6 +27,9 @@ function appendClawHubHint(output: string, json?: boolean): string {
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
+  if (skill.parseError) {
+    return theme.error("⚠ parse error");
+  }
   if (skill.eligible) {
     return theme.success("✓ ready");
   }
@@ -113,6 +116,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
         missing: s.missing,
+        parseError: s.parseError,
       })),
     });
     return JSON.stringify(jsonReport, null, 2);
@@ -132,7 +136,9 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     return {
       Status: formatSkillStatus(skill),
       Skill: formatSkillName(skill),
-      Description: theme.muted(skill.description),
+      Description: skill.parseError
+        ? theme.error(`(${skill.parseError})`)
+        : theme.muted(skill.description),
       Source: skill.source ?? "",
       Missing: missing ? theme.warn(missing) : "",
     };
