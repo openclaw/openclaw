@@ -155,6 +155,21 @@ export async function startGatewaySidecars(params: {
     params.logHooks.error(`failed to load hooks: ${String(err)}`);
   }
 
+  // Register the persistent MCP manager singleton BEFORE starting channels so that
+  // any inbound message handled immediately after channel startup already sees the
+  // manager and uses persistent clients instead of falling back to transient spawns.
+  const stateDir = resolveStateDir(process.env);
+  const persistentMcpManager = new PersistentMcpManager({
+    cfg: params.cfg,
+    log: params.log,
+    stateDir,
+  });
+  setPersistentMcpManager(persistentMcpManager);
+  // Eager warmup — failures are non-fatal; manager will retry lazily on first use.
+  persistentMcpManager.ensureReady().catch((err) => {
+    params.log.warn(`persistent-mcp: eager warmup failed: ${String(err)}`);
+  });
+
   // Launch configured channels so gateway replies via the surface the message came from.
   // Tests can opt out via OPENCLAW_SKIP_CHANNELS (or legacy OPENCLAW_SKIP_PROVIDERS).
   const skipChannels =
@@ -197,19 +212,6 @@ export async function startGatewaySidecars(params: {
   } catch (err) {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
   }
-
-  // Start gateway-level persistent MCP manager (for mcp.servers with persistent: true).
-  const stateDir = resolveStateDir(process.env);
-  const persistentMcpManager = new PersistentMcpManager({
-    cfg: params.cfg,
-    log: params.log,
-    stateDir,
-  });
-  setPersistentMcpManager(persistentMcpManager);
-  // Eager warmup — failures are non-fatal; manager will retry lazily on first use.
-  persistentMcpManager.ensureReady().catch((err) => {
-    params.log.warn(`persistent-mcp: eager warmup failed: ${String(err)}`);
-  });
 
   if (params.cfg.acp?.enabled) {
     void getAcpSessionManager()

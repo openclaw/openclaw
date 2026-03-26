@@ -63,7 +63,7 @@ import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import { createEmbeddedBundleMcpRuntime } from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
@@ -1840,7 +1840,7 @@ export async function runEmbeddedAttempt(
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+      ? await createEmbeddedBundleMcpRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
