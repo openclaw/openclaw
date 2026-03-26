@@ -89,7 +89,7 @@ Common signatures:
 
 - `heartbeat skipped` with `reason=quiet-hours` → outside `activeHours`.
 - `requests-in-flight` → main lane busy; heartbeat deferred.
-- `empty-heartbeat-file` → `HEARTBEAT.md` exists but has no actionable content.
+- `empty-heartbeat-file` → interval heartbeat skipped because `HEARTBEAT.md` has no actionable content and no tagged cron event is queued.
 - `alerts-disabled` → visibility settings suppress outbound heartbeat messages.
 
 ## Timezone and activeHours gotchas
@@ -107,7 +107,7 @@ Quick rules:
 - `Config path not found: agents.defaults.userTimezone` means the key is unset; heartbeat falls back to host timezone (or `activeHours.timezone` if set).
 - Cron without `--tz` uses gateway host timezone.
 - Heartbeat `activeHours` uses configured timezone resolution (`user`, `local`, or explicit IANA tz).
-- ISO timestamps without timezone are treated as UTC for cron `at` schedules.
+- Cron `at` schedules treat ISO timestamps without timezone as UTC unless you used CLI `--at "<offset-less-iso>" --tz <iana>`.
 
 Common signatures:
 

@@ -19,7 +19,7 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
 
     expect(noteFn).toHaveBeenCalledTimes(1);
-    expect(getenv).toHaveBeenCalledTimes(6);
+    expect(getenv).toHaveBeenCalledTimes(2);
 
     const [message, title] = noteFn.mock.calls[0] ?? [];
     expect(title).toBe("Gateway (macOS)");
@@ -38,6 +38,31 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
 
     expect(getenv).not.toHaveBeenCalled();
     expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("treats SecretRef-backed credentials as configured", async () => {
+    const noteFn = vi.fn();
+    const getenv = vi.fn(async (name: string) =>
+      name === "OPENCLAW_GATEWAY_PASSWORD" ? "launchctl-password" : undefined,
+    );
+    const cfg = {
+      gateway: {
+        auth: {
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as OpenClawConfig;
+
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", getenv, noteFn });
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const [message] = noteFn.mock.calls[0] ?? [];
+    expect(message).toContain("OPENCLAW_GATEWAY_PASSWORD");
   });
 
   it("does nothing on non-darwin platforms", async () => {

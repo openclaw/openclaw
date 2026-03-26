@@ -1,0 +1,106 @@
+import { describe, expect, it, vi } from "vitest";
+import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
+import { readNextcloudTalkWebhookBody } from "./monitor.js";
+import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
+import { startWebhookServer } from "./monitor.test-harness.js";
+import type { NextcloudTalkInboundMessage } from "./types.js";
+
+describe("readNextcloudTalkWebhookBody", () => {
+  it("reads valid body within max bytes", async () => {
+    const req = createMockIncomingRequest(['{"type":"Create"}']);
+    const body = await readNextcloudTalkWebhookBody(req, 1024);
+    expect(body).toBe('{"type":"Create"}');
+  });
+
+  it("rejects when payload exceeds max bytes", async () => {
+    const req = createMockIncomingRequest(["x".repeat(300)]);
+    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow("PayloadTooLarge");
+  });
+});
+
+describe("createNextcloudTalkWebhookServer auth order", () => {
+  it("rejects missing signature headers before reading request body", async () => {
+    const readBody = vi.fn(async () => {
+      throw new Error("should not be called for missing signature headers");
+    });
+    const harness = await startWebhookServer({
+      path: "/nextcloud-auth-order",
+      maxBodyBytes: 128,
+      readBody,
+      onMessage: vi.fn(),
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Missing signature headers" });
+    expect(readBody).not.toHaveBeenCalled();
+  });
+});
+
+describe("createNextcloudTalkWebhookServer backend allowlist", () => {
+  it("rejects requests from unexpected backend origins", async () => {
+    const onMessage = vi.fn(async () => {});
+    const harness = await startWebhookServer({
+      path: "/nextcloud-backend-check",
+      isBackendAllowed: (backend) => backend === "https://nextcloud.expected",
+      onMessage,
+    });
+
+    const { body, headers } = createSignedCreateMessageRequest({
+      backend: "https://nextcloud.unexpected",
+    });
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Invalid backend" });
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("createNextcloudTalkWebhookServer replay handling", () => {
+  it("acknowledges replayed requests and skips onMessage side effects", async () => {
+    const seen = new Set<string>();
+    const onMessage = vi.fn(async () => {});
+    const shouldProcessMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
+      if (seen.has(message.messageId)) {
+        return false;
+      }
+      seen.add(message.messageId);
+      return true;
+    });
+    const harness = await startWebhookServer({
+      path: "/nextcloud-replay",
+      shouldProcessMessage,
+      onMessage,
+    });
+
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const first = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+    const second = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+});

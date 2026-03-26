@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
@@ -13,6 +14,7 @@ export type GatewayServiceCommand = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
+  environmentValueSources?: Record<string, "inline" | "file">;
   sourcePath?: string;
 } | null;
 
@@ -34,9 +36,12 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
+  gatewayTokenEmbedded: "gateway-token-embedded",
+  gatewayTokenMismatch: "gateway-token-mismatch",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  gatewayTokenDrift: "gateway-token-drift",
   launchdKeepAlive: "launchd-keep-alive",
   launchdRunAtLoad: "launchd-run-at-load",
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -200,14 +205,42 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
+function auditGatewayToken(
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  expectedGatewayToken?: string,
+) {
+  const serviceToken = readEmbeddedGatewayToken(command);
+  if (!serviceToken) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
+    message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
+    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
+    level: "recommended",
+  });
+  const expectedToken = expectedGatewayToken?.trim();
+  if (!expectedToken || serviceToken === expectedToken) {
+    return;
+  }
+  issues.push({
+    code: SERVICE_AUDIT_CODES.gatewayTokenMismatch,
+    message:
+      "Gateway service OPENCLAW_GATEWAY_TOKEN does not match gateway.auth.token in openclaw.json",
+    detail: "service token is stale",
+    level: "recommended",
+  });
 }
 
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
+export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+  if (command.environmentValueSources?.OPENCLAW_GATEWAY_TOKEN === "file") {
+    return undefined;
+  }
+  return command.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
 }
 
 function getPathModule(platform: NodeJS.Platform) {
@@ -329,7 +362,7 @@ async function auditGatewayRuntime(
         issues.push({
           code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
           message:
-            "System Node 22+ not found; install it before migrating away from version managers.",
+            "System Node 22 LTS (22.14+) or Node 24 not found; install it before migrating away from version managers.",
           level: "recommended",
         });
       }
@@ -337,15 +370,46 @@ async function auditGatewayRuntime(
   }
 }
 
+/**
+ * Check if the service's embedded token differs from the config file token.
+ * Returns an issue if drift is detected (service will use old token after restart).
+ */
+export function checkTokenDrift(params: {
+  serviceToken: string | undefined;
+  configToken: string | undefined;
+}): ServiceConfigIssue | null {
+  const serviceToken = params.serviceToken?.trim() || undefined;
+  const configToken = params.configToken?.trim() || undefined;
+
+  // Tokenless service units are canonical; no drift to report.
+  if (!serviceToken) {
+    return null;
+  }
+
+  if (configToken && serviceToken !== configToken) {
+    return {
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message:
+        "Config token differs from service token. The daemon will use the old token after restart.",
+      detail: "Run `openclaw gateway install --force` to sync the token.",
+      level: "recommended",
+    };
+  }
+
+  return null;
+}
+
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
   platform?: NodeJS.Platform;
+  expectedGatewayToken?: string;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayToken(params.command, issues, params.expectedGatewayToken);
   auditGatewayServicePath(params.command, issues, params.env, platform);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 

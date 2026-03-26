@@ -1,10 +1,10 @@
-import JSON5 from "json5";
 import fs from "node:fs/promises";
-import type { RuntimeEnv } from "../runtime.js";
+import JSON5 from "json5";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -50,14 +50,30 @@ export async function setupCommand(
         workspace,
       },
     },
+    gateway: {
+      ...cfg.gateway,
+      mode: cfg.gateway?.mode ?? "local",
+    },
   };
 
-  if (!existingRaw.exists || defaults.workspace !== workspace) {
+  if (
+    !existingRaw.exists ||
+    defaults.workspace !== workspace ||
+    cfg.gateway?.mode !== next.gateway?.mode
+  ) {
     await writeConfigFile(next);
     if (!existingRaw.exists) {
       runtime.log(`Wrote ${formatConfigPath(configPath)}`);
     } else {
-      logConfigUpdated(runtime, { path: configPath, suffix: "(set agents.defaults.workspace)" });
+      const updates: string[] = [];
+      if (defaults.workspace !== workspace) {
+        updates.push("set agents.defaults.workspace");
+      }
+      if (cfg.gateway?.mode !== next.gateway?.mode) {
+        updates.push("set gateway.mode");
+      }
+      const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
+      logConfigUpdated(runtime, { path: configPath, suffix });
     }
   } else {
     runtime.log(`Config OK: ${formatConfigPath(configPath)}`);

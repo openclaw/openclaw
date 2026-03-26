@@ -1,36 +1,228 @@
 import { spawn } from "node:child_process";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { formatCliCommand } from "../../cli/command-format.js";
-import { defaultRuntime } from "../../runtime.js";
-import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
-import { readRegistry, updateRegistry } from "./registry.js";
-import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../../plugin-sdk/windows-spawn.js";
+import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import type { EnvSanitizationOptions } from "./sanitize-env-vars.js";
 
-const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+type ExecDockerRawOptions = {
+  allowFailure?: boolean;
+  input?: Buffer | string;
+  signal?: AbortSignal;
+};
 
-export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
-    const child = spawn("docker", args, {
-      stdio: ["ignore", "pipe", "pipe"],
+export type ExecDockerRawResult = {
+  stdout: Buffer;
+  stderr: Buffer;
+  code: number;
+};
+
+type ExecDockerRawError = Error & {
+  code: number;
+  stdout: Buffer;
+  stderr: Buffer;
+};
+
+function createAbortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+type DockerSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_DOCKER_SPAWN_RUNTIME: DockerSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
+};
+
+export function resolveDockerSpawnInvocation(
+  args: string[],
+  runtime: DockerSpawnRuntime = DEFAULT_DOCKER_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: "docker",
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "docker",
+    allowShellFallback: false,
+  });
+  const resolved = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
+}
+
+export function execDockerRaw(
+  args: string[],
+  opts?: ExecDockerRawOptions,
+): Promise<ExecDockerRawResult> {
+  return new Promise<ExecDockerRawResult>((resolve, reject) => {
+    const spawnInvocation = resolveDockerSpawnInvocation(args);
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: spawnInvocation.shell,
+      windowsHide: spawnInvocation.windowsHide,
     });
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let aborted = false;
+
+    const signal = opts?.signal;
+    const handleAbort = () => {
+      if (aborted) {
+        return;
+      }
+      aborted = true;
+      child.kill("SIGTERM");
+    };
+    if (signal) {
+      if (signal.aborted) {
+        handleAbort();
+      } else {
+        signal.addEventListener("abort", handleAbort);
+      }
+    }
+
     child.stdout?.on("data", (chunk) => {
-      stdout += chunk.toString();
+      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+
+    child.on("error", (error) => {
+      if (signal) {
+        signal.removeEventListener("abort", handleAbort);
+      }
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        const friendly = Object.assign(
+          new Error(
+            'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.',
+          ),
+          { code: "INVALID_CONFIG", cause: error },
+        );
+        reject(friendly);
+        return;
+      }
+      reject(error);
+    });
+
     child.on("close", (code) => {
+      if (signal) {
+        signal.removeEventListener("abort", handleAbort);
+      }
+      const stdout = Buffer.concat(stdoutChunks);
+      const stderr = Buffer.concat(stderrChunks);
+      if (aborted || signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !opts?.allowFailure) {
-        reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
+        const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+        const error: ExecDockerRawError = Object.assign(
+          new Error(message || `docker ${args.join(" ")} failed`),
+          {
+            code: exitCode,
+            stdout,
+            stderr,
+          },
+        );
+        reject(error);
         return;
       }
       resolve({ stdout, stderr, code: exitCode });
     });
+
+    const stdin = child.stdin;
+    if (stdin) {
+      if (opts?.input !== undefined) {
+        stdin.end(opts.input);
+      } else {
+        stdin.end();
+      }
+    }
   });
+}
+
+import { formatCliCommand } from "../../cli/command-format.js";
+import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
+import { defaultRuntime } from "../../runtime.js";
+import { computeSandboxConfigHash } from "./config-hash.js";
+import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { readRegistry, updateRegistry } from "./registry.js";
+import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+
+const log = createSubsystemLogger("docker");
+
+const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+
+export type ExecDockerOptions = ExecDockerRawOptions;
+
+export async function execDocker(args: string[], opts?: ExecDockerOptions) {
+  const result = await execDockerRaw(args, opts);
+  return {
+    stdout: result.stdout.toString("utf8"),
+    stderr: result.stderr.toString("utf8"),
+    code: result.code,
+  };
+}
+
+export async function readDockerContainerLabel(
+  containerName: string,
+  label: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  const raw = result.stdout.trim();
+  if (!raw || raw === "<no value>") {
+    return null;
+  }
+  return raw;
+}
+
+export async function readDockerContainerEnvVar(
+  containerName: string,
+  envVar: string,
+): Promise<string | null> {
+  const result = await execDocker(
+    ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.startsWith(`${envVar}=`)) {
+      return line.slice(envVar.length + 1);
+    }
+  }
+  return null;
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -129,7 +321,28 @@ export function buildSandboxCreateArgs(params: {
   createdAtMs?: number;
   labels?: Record<string, string>;
   configHash?: string;
+  includeBinds?: boolean;
+  bindSourceRoots?: string[];
+  allowSourcesOutsideAllowedRoots?: boolean;
+  allowReservedContainerTargets?: boolean;
+  allowContainerNamespaceJoin?: boolean;
+  envSanitizationOptions?: EnvSanitizationOptions;
 }) {
+  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+  validateSandboxSecurity({
+    ...params.cfg,
+    allowedSourceRoots: params.bindSourceRoots,
+    allowSourcesOutsideAllowedRoots:
+      params.allowSourcesOutsideAllowedRoots ??
+      params.cfg.dangerouslyAllowExternalBindSources === true,
+    allowReservedContainerTargets:
+      params.allowReservedContainerTargets ??
+      params.cfg.dangerouslyAllowReservedContainerTargets === true,
+    dangerouslyAllowContainerNamespaceJoin:
+      params.allowContainerNamespaceJoin ??
+      params.cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
+
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
   args.push("--label", "openclaw.sandbox=1");
@@ -154,6 +367,16 @@ export function buildSandboxCreateArgs(params: {
   }
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
+  }
+  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {}, params.envSanitizationOptions);
+  if (envSanitization.blocked.length > 0) {
+    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
+  }
+  if (envSanitization.warnings.length > 0) {
+    log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
+  }
+  for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
+    args.push("--env", `${key}=${value}`);
   }
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
@@ -189,20 +412,27 @@ export function buildSandboxCreateArgs(params: {
   if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
     args.push("--cpus", String(params.cfg.cpus));
   }
-  for (const [name, value] of Object.entries(params.cfg.ulimits ?? {}) as Array<
-    [string, string | number | { soft?: number; hard?: number }]
-  >) {
+  for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);
     if (formatted) {
       args.push("--ulimit", formatted);
     }
   }
-  if (params.cfg.binds?.length) {
+  if (params.includeBinds !== false && params.cfg.binds?.length) {
     for (const bind of params.cfg.binds) {
       args.push("-v", bind);
     }
   }
   return args;
+}
+
+function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
+  if (!cfg.binds?.length) {
+    return;
+  }
+  for (const bind of cfg.binds) {
+    args.push("-v", bind);
+  }
 }
 
 async function createSandboxContainer(params: {
@@ -222,44 +452,30 @@ async function createSandboxContainer(params: {
     cfg,
     scopeKey,
     configHash: params.configHash,
+    includeBinds: false,
+    bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
   });
   args.push("--workdir", cfg.workdir);
-  const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
-  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
-  if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
-    const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
-    args.push(
-      "-v",
-      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-    );
-  }
+  appendWorkspaceMountArgs({
+    args,
+    workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workdir: cfg.workdir,
+    workspaceAccess: params.workspaceAccess,
+  });
+  appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
   await execDocker(["start", name]);
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "sh", "-lc", cfg.setupCommand]);
+    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
 }
 
 async function readContainerConfigHash(containerName: string): Promise<string | null> {
-  const readLabel = async (label: string) => {
-    const result = await execDocker(
-      ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
-      { allowFailure: true },
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    const raw = result.stdout.trim();
-    if (!raw || raw === "<no value>") {
-      return null;
-    }
-    return raw;
-  };
-  return await readLabel("openclaw.configHash");
+  return await readDockerContainerLabel(containerName, "openclaw.configHash");
 }
 
 function formatSandboxRecreateHint(params: { scope: SandboxConfig["scope"]; sessionKey: string }) {
@@ -341,10 +557,13 @@ export async function ensureSandboxContainer(params: {
   }
   await updateRegistry({
     containerName,
+    backendId: "docker",
+    runtimeLabel: containerName,
     sessionKey: scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
+    configLabelKind: "Image",
     configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
   });
   return containerName;

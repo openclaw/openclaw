@@ -1,6 +1,6 @@
-import type { CommandHandler } from "./commands-types.js";
-import { logVerbose } from "../../globals.js";
 import { handleBashChatCommand } from "./bash-command.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
+import type { CommandHandler } from "./commands-types.js";
 
 export const handleBashCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -13,9 +13,9 @@ export const handleBashCommand: CommandHandler = async (params, allowTextCommand
   if (!bashSlashRequested && !(bashBangRequested && command.isAuthorizedSender)) {
     return null;
   }
-  if (!command.isAuthorizedSender) {
-    logVerbose(`Ignoring /bash from unauthorized sender: ${command.senderId || "<unknown>"}`);
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/bash");
+  if (unauthorized) {
+    return unauthorized;
   }
   const reply = await handleBashChatCommand({
     ctx: params.ctx,

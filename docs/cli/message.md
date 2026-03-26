@@ -9,7 +9,7 @@ title: "message"
 # `openclaw message`
 
 Single outbound command for sending messages and channel actions
-(Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/MS Teams).
+(Discord/Google Chat/Slack/Mattermost (plugin)/Telegram/WhatsApp/Signal/iMessage/Microsoft Teams).
 
 ## Usage
 
@@ -33,7 +33,7 @@ Target formats (`--target`):
 - Mattermost (plugin): `channel:<id>`, `user:<id>`, or `@username` (bare ids are treated as channels)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle, `chat_id:<id>`, `chat_guid:<guid>`, or `chat_identifier:<id>`
-- MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
+- Microsoft Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
 Name lookup:
 
@@ -50,24 +50,36 @@ Name lookup:
 - `--dry-run`
 - `--verbose`
 
+## SecretRef behavior
+
+- `openclaw message` resolves supported channel SecretRefs before running the selected action.
+- Resolution is scoped to the active action target when possible:
+  - channel-scoped when `--channel` is set (or inferred from prefixed targets like `discord:...`)
+  - account-scoped when `--account` is set (channel globals + selected account surfaces)
+  - when `--account` is omitted, OpenClaw does not force a `default` account SecretRef scope
+- Unresolved SecretRefs on unrelated channels do not block a targeted message action.
+- If the selected channel/account SecretRef is unresolved, the command fails closed for that action.
+
 ## Actions
 
 ### Core
 
 - `send`
-  - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Microsoft Teams
   - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
+  - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
 
 - `poll`
-  - Channels: WhatsApp/Discord/MS Teams
+  - Channels: WhatsApp/Telegram/Discord/Matrix/Microsoft Teams
   - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
-  - Discord only: `--poll-duration-hours`, `--message`
+  - Discord only: `--poll-duration-hours`, `--silent`, `--message`
+  - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
   - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal
@@ -190,6 +202,16 @@ openclaw message send --channel discord \
   --target channel:123 --message "hi" --reply-to 456
 ```
 
+Send a Discord message with components:
+
+```
+openclaw message send --channel discord \
+  --target channel:123 --message "Choose:" \
+  --components '{"text":"Choose a path","blocks":[{"type":"actions","buttons":[{"label":"Approve","style":"success"},{"label":"Decline","style":"danger"}]}]}'
+```
+
+See [Discord components](/channels/discord#interactive-components) for the full schema.
+
 Create a Discord poll:
 
 ```
@@ -198,6 +220,16 @@ openclaw message poll --channel discord \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
   --poll-multi --poll-duration-hours 48
+```
+
+Create a Telegram poll (auto-close in 2 minutes):
+
+```
+openclaw message poll --channel telegram \
+  --target @mychat \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi \
+  --poll-duration-seconds 120 --silent
 ```
 
 Send a Teams proactive message:
@@ -236,4 +268,11 @@ Send Telegram inline buttons:
 ```
 openclaw message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+```
+
+Send a Telegram image as a document to avoid compression:
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --media ./diagram.png --force-document
 ```

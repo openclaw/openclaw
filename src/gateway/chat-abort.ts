@@ -1,4 +1,4 @@
-import { isAbortTrigger } from "../auto-reply/reply/abort.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
@@ -6,14 +6,12 @@ export type ChatAbortControllerEntry = {
   sessionKey: string;
   startedAtMs: number;
   expiresAtMs: number;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
 };
 
 export function isChatStopCommandText(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return trimmed.toLowerCase() === "/stop" || isAbortTrigger(trimmed);
+  return isAbortRequestText(text);
 }
 
 export function resolveChatRunExpiresAtMs(params: {
@@ -35,6 +33,7 @@ export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: (
     sessionId: string,
@@ -52,15 +51,23 @@ function broadcastChatAborted(
     runId: string;
     sessionKey: string;
     stopReason?: string;
+    partialText?: string;
   },
 ) {
-  const { runId, sessionKey, stopReason } = params;
+  const { runId, sessionKey, stopReason, partialText } = params;
   const payload = {
     runId,
     sessionKey,
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
+    message: partialText
+      ? {
+          role: "assistant",
+          content: [{ type: "text", text: partialText }],
+          timestamp: Date.now(),
+        }
+      : undefined,
   };
   ops.broadcast("chat", payload);
   ops.nodeSendToSession(sessionKey, "chat", payload);
@@ -83,13 +90,20 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
+  const bufferedText = ops.chatRunBuffers.get(runId);
+  const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
-  ops.removeChatRun(runId, runId, sessionKey);
-  broadcastChatAborted(ops, { runId, sessionKey, stopReason });
+  ops.chatDeltaLastBroadcastLen.delete(runId);
+  const removed = ops.removeChatRun(runId, runId, sessionKey);
+  broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
+  ops.agentRunSeq.delete(runId);
+  if (removed?.clientRunId) {
+    ops.agentRunSeq.delete(removed.clientRunId);
+  }
   return { aborted: true };
 }
 

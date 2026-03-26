@@ -1,14 +1,20 @@
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { resolveActionArgs } from "./helpers.js";
+import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
+import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { removeCommand, removeCommandByName } from "./command-tree.js";
+import {
+  getSubCliCommandsWithSubcommands,
+  getSubCliEntries as getSubCliEntryDescriptors,
+  type SubCliDescriptor,
+} from "./subcli-descriptors.js";
+
+export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
-type SubCliEntry = {
-  name: string;
-  description: string;
+type SubCliEntry = SubCliDescriptor & {
   register: SubCliRegistrar;
 };
 
@@ -26,15 +32,24 @@ const shouldEagerRegisterSubcommands = (_argv: string[]) => {
   return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<OpenClawConfig> => {
-  const mod = await import("../../config/config.js");
-  return mod.loadConfig();
-};
+export const loadValidatedConfigForPluginRegistration =
+  async (): Promise<OpenClawConfig | null> => {
+    const mod = await import("../../config/config.js");
+    const snapshot = await mod.readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      return null;
+    }
+    return mod.loadConfig();
+  };
 
+// Note for humans and agents:
+// If you update the list of commands, also check whether they have subcommands
+// and set the flag accordingly.
 const entries: SubCliEntry[] = [
   {
     name: "acp",
     description: "Agent Control Protocol tools",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../acp-cli.js");
       mod.registerAcpCli(program);
@@ -42,7 +57,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "gateway",
-    description: "Gateway control",
+    description: "Run, inspect, and query the WebSocket Gateway",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../gateway-cli.js");
       mod.registerGatewayCli(program);
@@ -51,6 +67,7 @@ const entries: SubCliEntry[] = [
   {
     name: "daemon",
     description: "Gateway service (legacy alias)",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../daemon-cli.js");
       mod.registerDaemonCli(program);
@@ -58,7 +75,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "logs",
-    description: "Gateway logs",
+    description: "Tail gateway file logs via RPC",
+    hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../logs-cli.js");
       mod.registerLogsCli(program);
@@ -67,6 +85,7 @@ const entries: SubCliEntry[] = [
   {
     name: "system",
     description: "System events, heartbeat, and presence",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../system-cli.js");
       mod.registerSystemCli(program);
@@ -74,7 +93,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "models",
-    description: "Model configuration",
+    description: "Discover, scan, and configure models",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../models-cli.js");
       mod.registerModelsCli(program);
@@ -82,7 +102,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "approvals",
-    description: "Exec approvals",
+    description: "Manage exec approvals (gateway or node host)",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../exec-approvals-cli.js");
       mod.registerExecApprovalsCli(program);
@@ -90,7 +111,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "nodes",
-    description: "Node commands",
+    description: "Manage gateway-owned node pairing and node commands",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../nodes-cli.js");
       mod.registerNodesCli(program);
@@ -99,6 +121,7 @@ const entries: SubCliEntry[] = [
   {
     name: "devices",
     description: "Device pairing + token management",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../devices-cli.js");
       mod.registerDevicesCli(program);
@@ -106,7 +129,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "node",
-    description: "Node control",
+    description: "Run and manage the headless node host service",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../node-cli.js");
       mod.registerNodeCli(program);
@@ -114,7 +138,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "sandbox",
-    description: "Sandbox tools",
+    description: "Manage sandbox containers for agent isolation",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../sandbox-cli.js");
       mod.registerSandboxCli(program);
@@ -122,7 +147,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "tui",
-    description: "Terminal UI",
+    description: "Open a terminal UI connected to the Gateway",
+    hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../tui-cli.js");
       mod.registerTuiCli(program);
@@ -130,7 +156,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "cron",
-    description: "Cron scheduler",
+    description: "Manage cron jobs via the Gateway scheduler",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../cron-cli.js");
       mod.registerCronCli(program);
@@ -138,7 +165,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "dns",
-    description: "DNS helpers",
+    description: "DNS helpers for wide-area discovery (Tailscale + CoreDNS)",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../dns-cli.js");
       mod.registerDnsCli(program);
@@ -146,7 +174,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "docs",
-    description: "Docs helpers",
+    description: "Search the live OpenClaw docs",
+    hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../docs-cli.js");
       mod.registerDocsCli(program);
@@ -154,7 +183,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "hooks",
-    description: "Hooks tooling",
+    description: "Manage internal agent hooks",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../hooks-cli.js");
       mod.registerHooksCli(program);
@@ -162,38 +192,66 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "webhooks",
-    description: "Webhook helpers",
+    description: "Webhook helpers and integrations",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../webhooks-cli.js");
       mod.registerWebhooksCli(program);
     },
   },
   {
+    name: "qr",
+    description: "Generate iOS pairing QR/setup code",
+    hasSubcommands: false,
+    register: async (program) => {
+      const mod = await import("../qr-cli.js");
+      mod.registerQrCli(program);
+    },
+  },
+  {
+    name: "clawbot",
+    description: "Legacy clawbot command aliases",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../clawbot-cli.js");
+      mod.registerClawbotCli(program);
+    },
+  },
+  {
     name: "pairing",
-    description: "Pairing helpers",
+    description: "Secure DM pairing (approve inbound requests)",
+    hasSubcommands: true,
     register: async (program) => {
       // Initialize plugins before registering pairing CLI.
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        registerPluginCliCommands(program, config);
+      }
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
   },
   {
     name: "plugins",
-    description: "Plugin management",
+    description: "Manage OpenClaw plugins and extensions",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        registerPluginCliCommands(program, config);
+      }
     },
   },
   {
     name: "channels",
-    description: "Channel management",
+    description: "Manage connected chat channels (Telegram, Discord, etc.)",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../channels-cli.js");
       mod.registerChannelsCli(program);
@@ -201,7 +259,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "directory",
-    description: "Directory commands",
+    description: "Lookup contact and group IDs (self, peers, groups) for supported chat channels",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../directory-cli.js");
       mod.registerDirectoryCli(program);
@@ -209,15 +268,26 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "security",
-    description: "Security helpers",
+    description: "Security tools and local config audits",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../security-cli.js");
       mod.registerSecurityCli(program);
     },
   },
   {
+    name: "secrets",
+    description: "Secrets runtime reload controls",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../secrets-cli.js");
+      mod.registerSecretsCli(program);
+    },
+  },
+  {
     name: "skills",
-    description: "Skills management",
+    description: "List and inspect available skills",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../skills-cli.js");
       mod.registerSkillsCli(program);
@@ -225,7 +295,8 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "update",
-    description: "CLI update helpers",
+    description: "Update OpenClaw and inspect update channel status",
+    hasSubcommands: true,
     register: async (program) => {
       const mod = await import("../update-cli.js");
       mod.registerUpdateCli(program);
@@ -234,6 +305,7 @@ const entries: SubCliEntry[] = [
   {
     name: "completion",
     description: "Generate shell completion script",
+    hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../completion-cli.js");
       mod.registerCompletionCli(program);
@@ -241,16 +313,8 @@ const entries: SubCliEntry[] = [
   },
 ];
 
-export function getSubCliEntries(): SubCliEntry[] {
-  return entries;
-}
-
-function removeCommand(program: Command, command: Command) {
-  const commands = program.commands as Command[];
-  const index = commands.indexOf(command);
-  if (index >= 0) {
-    commands.splice(index, 1);
-  }
+export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
+  return getSubCliEntryDescriptors();
 }
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
@@ -258,10 +322,7 @@ export async function registerSubCliByName(program: Command, name: string): Prom
   if (!entry) {
     return false;
   }
-  const existing = program.commands.find((cmd) => cmd.name() === entry.name);
-  if (existing) {
-    removeCommand(program, existing);
-  }
+  removeCommandByName(program, entry.name);
   await entry.register(program);
   return true;
 }
@@ -273,19 +334,7 @@ function registerLazyCommand(program: Command, entry: SubCliEntry) {
   placeholder.action(async (...actionArgs) => {
     removeCommand(program, placeholder);
     await entry.register(program);
-    const actionCommand = actionArgs.at(-1) as Command | undefined;
-    const root = actionCommand?.parent ?? program;
-    const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
-    const actionArgsList = resolveActionArgs(actionCommand);
-    const fallbackArgv = actionCommand?.name()
-      ? [actionCommand.name(), ...actionArgsList]
-      : actionArgsList;
-    const parseArgv = buildParseArgv({
-      programName: program.name(),
-      rawArgs,
-      fallbackArgv,
-    });
-    await program.parseAsync(parseArgv);
+    await reparseProgramFromActionArgs(program, actionArgs);
   });
 }
 

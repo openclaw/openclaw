@@ -12,7 +12,7 @@ OpenClaw uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to disco
 an active Gateway (WebSocket endpoint). It is best‑effort and does **not** replace SSH or
 Tailnet-based connectivity.
 
-## Wide‑area Bonjour (Unicast DNS‑SD) over Tailscale
+## Wide-area Bonjour (Unicast DNS-SD) over Tailscale
 
 If the node and gateway are on different networks, multicast mDNS won’t cross the
 boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD**
@@ -38,7 +38,7 @@ iOS/Android nodes browse both `local.` and your configured wide‑area domain.
 }
 ```
 
-### One‑time DNS server setup (gateway host)
+### One-time DNS server setup (gateway host)
 
 ```bash
 openclaw dns setup --apply
@@ -84,7 +84,7 @@ Only the Gateway advertises `_openclaw-gw._tcp`.
 
 - `_openclaw-gw._tcp` — gateway transport beacon (used by macOS/iOS/Android nodes).
 
-## TXT keys (non‑secret hints)
+## TXT keys (non-secret hints)
 
 The Gateway advertises small non‑secret hints to make UI flows convenient:
 
@@ -94,11 +94,18 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayPort=<port>` (Gateway WS + HTTP)
 - `gatewayTls=1` (only when TLS is enabled)
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
-- `canvasPort=<port>` (only when the canvas host is enabled; default `18793`)
+- `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `transport=gateway`
 - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+
+Security notes:
+
+- Bonjour/mDNS TXT records are **unauthenticated**. Clients must not treat TXT as authoritative routing.
+- Clients should route using the resolved service endpoint (SRV + A/AAAA). Treat `lanHost`, `tailnetDns`, `gatewayPort`, and `gatewayTlsSha256` as hints only.
+- TLS pinning must never allow an advertised `gatewayTlsSha256` to override a previously stored pin.
+- iOS/Android nodes should treat discovery-based direct connects as **TLS-only** and require explicit user confirmation before trusting a first-time fingerprint.
 
 ## Debugging on macOS
 

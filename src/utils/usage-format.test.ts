@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  __resetGatewayModelPricingCacheForTest,
+  __setGatewayModelPricingForTest,
+} from "../gateway/model-pricing-cache.js";
+import {
+  __resetUsageFormatCachesForTest,
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
@@ -8,10 +16,33 @@ import {
 } from "./usage-format.js";
 
 describe("usage-format", () => {
+  const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  let agentDir: string;
+
+  beforeEach(async () => {
+    agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    __resetUsageFormatCachesForTest();
+    __resetGatewayModelPricingCacheForTest();
+  });
+
+  afterEach(async () => {
+    if (originalAgentDir === undefined) {
+      delete process.env.OPENCLAW_AGENT_DIR;
+    } else {
+      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
+    }
+    __resetUsageFormatCachesForTest();
+    __resetGatewayModelPricingCacheForTest();
+    await fs.rm(agentDir, { recursive: true, force: true });
+  });
+
   it("formats token counts", () => {
     expect(formatTokenCount(999)).toBe("999");
     expect(formatTokenCount(1234)).toBe("1.2k");
     expect(formatTokenCount(12000)).toBe("12k");
+    expect(formatTokenCount(999_499)).toBe("999k");
+    expect(formatTokenCount(999_500)).toBe("1.0m");
     expect(formatTokenCount(2_500_000)).toBe("2.5m");
   });
 
@@ -35,7 +66,7 @@ describe("usage-format", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const cost = resolveModelCostConfig({
       provider: "test",
@@ -56,5 +87,140 @@ describe("usage-format", () => {
     });
 
     expect(total).toBeCloseTo(0.003);
+  });
+
+  it("returns undefined when model pricing is not configured", () => {
+    expect(
+      resolveModelCostConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("prefers models.json pricing over openclaw config and cached pricing", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 20, output: 21, cacheRead: 22, cacheWrite: 23 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify(
+        {
+          providers: {
+            openai: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  cost: { input: 10, output: 11, cacheRead: 12, cacheWrite: 13 },
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    __setGatewayModelPricingForTest([
+      {
+        provider: "openai",
+        model: "gpt-5.4",
+        pricing: { input: 30, output: 31, cacheRead: 32, cacheWrite: 33 },
+      },
+    ]);
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        config,
+      }),
+    ).toEqual({
+      input: 10,
+      output: 11,
+      cacheRead: 12,
+      cacheWrite: 13,
+    });
+  });
+
+  it("falls back to openclaw config pricing when models.json is absent", () => {
+    const config = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                cost: { input: 9, output: 19, cacheRead: 0.9, cacheWrite: 1.9 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    __setGatewayModelPricingForTest([
+      {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        pricing: { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4 },
+      },
+    ]);
+
+    expect(
+      resolveModelCostConfig({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        config,
+      }),
+    ).toEqual({
+      input: 9,
+      output: 19,
+      cacheRead: 0.9,
+      cacheWrite: 1.9,
+    });
+  });
+
+  it("falls back to cached gateway pricing when no configured cost exists", () => {
+    __setGatewayModelPricingForTest([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        pricing: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+      },
+    ]);
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      }),
+    ).toEqual({
+      input: 2.5,
+      output: 15,
+      cacheRead: 0.25,
+      cacheWrite: 0,
+    });
   });
 });

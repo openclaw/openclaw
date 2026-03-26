@@ -1,66 +1,38 @@
-import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { CoreConfig } from "../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import { getActiveMatrixClient } from "../active-client.js";
-import {
-  createMatrixClient,
-  isBunRuntime,
-  resolveMatrixAuth,
-  resolveSharedMatrixClient,
-} from "../client.js";
+import type { CoreConfig } from "../../types.js";
+import { resolveMatrixAccountConfig } from "../accounts.js";
+import { withResolvedRuntimeMatrixClient } from "../client-bootstrap.js";
+import type { MatrixClient } from "../sdk.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function ensureNodeRuntime() {
-  if (isBunRuntime()) {
-    throw new Error("Matrix support requires Node (bun runtime not supported)");
-  }
-}
-
-export function resolveMediaMaxBytes(): number | undefined {
-  const cfg = getCore().config.loadConfig() as CoreConfig;
-  if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
-    return cfg.channels.matrix.mediaMaxMb * 1024 * 1024;
+export function resolveMediaMaxBytes(
+  accountId?: string | null,
+  cfg?: CoreConfig,
+): number | undefined {
+  const resolvedCfg = cfg ?? (getCore().config.loadConfig() as CoreConfig);
+  const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
+  const mediaMaxMb = typeof matrixCfg.mediaMaxMb === "number" ? matrixCfg.mediaMaxMb : undefined;
+  if (typeof mediaMaxMb === "number") {
+    return mediaMaxMb * 1024 * 1024;
   }
   return undefined;
 }
 
-export async function resolveMatrixClient(opts: {
-  client?: MatrixClient;
-  timeoutMs?: number;
-}): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
-  ensureNodeRuntime();
-  if (opts.client) {
-    return { client: opts.client, stopOnDone: false };
-  }
-  const active = getActiveMatrixClient();
-  if (active) {
-    return { client: active, stopOnDone: false };
-  }
-  const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
-  if (shouldShareClient) {
-    const client = await resolveSharedMatrixClient({
-      timeoutMs: opts.timeoutMs,
-    });
-    return { client, stopOnDone: false };
-  }
-  const auth = await resolveMatrixAuth();
-  const client = await createMatrixClient({
-    homeserver: auth.homeserver,
-    userId: auth.userId,
-    accessToken: auth.accessToken,
-    encryption: auth.encryption,
-    localTimeoutMs: opts.timeoutMs,
-  });
-  if (auth.encryption && client.crypto) {
-    try {
-      const joinedRooms = await client.getJoinedRooms();
-      await client.crypto.prepare(joinedRooms);
-    } catch {
-      // Ignore crypto prep failures for one-off sends; normal sync will retry.
-    }
-  }
-  // @vector-im/matrix-bot-sdk uses start() instead of startClient()
-  await client.start();
-  return { client, stopOnDone: true };
+export async function withResolvedMatrixClient<T>(
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    timeoutMs?: number;
+    accountId?: string | null;
+  },
+  run: (client: MatrixClient) => Promise<T>,
+): Promise<T> {
+  return await withResolvedRuntimeMatrixClient(
+    {
+      ...opts,
+      readiness: "prepared",
+    },
+    run,
+  );
 }

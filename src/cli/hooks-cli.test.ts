@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import { formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
+import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/workspace",
@@ -16,28 +17,15 @@ const report: HookStatusReport = {
       handlerPath: "/tmp/hooks/session-memory/handler.js",
       hookKey: "session-memory",
       emoji: "💾",
-      homepage: "https://docs.openclaw.ai/hooks#session-memory",
+      homepage: "https://docs.openclaw.ai/automation/hooks#session-memory",
       events: ["command:new"],
       always: false,
-      disabled: false,
-      eligible: true,
+      enabledByConfig: true,
+      requirementsSatisfied: true,
+      loadable: true,
+      blockedReason: undefined,
       managedByPlugin: false,
-      requirements: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      missing: {
-        bins: [],
-        anyBins: [],
-        env: [],
-        config: [],
-        os: [],
-      },
-      configChecks: [],
-      install: [],
+      ...createEmptyInstallChecks(),
     },
   ],
 };
@@ -72,30 +60,50 @@ describe("hooks cli formatting", () => {
           homepage: undefined,
           events: ["command:new"],
           always: false,
-          disabled: false,
-          eligible: true,
+          enabledByConfig: true,
+          requirementsSatisfied: true,
+          loadable: true,
+          blockedReason: undefined,
           managedByPlugin: true,
-          requirements: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-          configChecks: [],
-          install: [],
+          ...createEmptyInstallChecks(),
         },
       ],
     };
 
     const output = formatHooksList(pluginReport, {});
     expect(output).toContain("plugin:voice-call");
+  });
+
+  it("shows plugin-managed details in hook info", () => {
+    const pluginReport: HookStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedHooksDir: "/tmp/hooks",
+      hooks: [
+        {
+          name: "plugin-hook",
+          description: "Hook from plugin",
+          source: "openclaw-plugin",
+          pluginId: "voice-call",
+          filePath: "/tmp/hooks/plugin-hook/HOOK.md",
+          baseDir: "/tmp/hooks/plugin-hook",
+          handlerPath: "/tmp/hooks/plugin-hook/handler.js",
+          hookKey: "plugin-hook",
+          emoji: "🔗",
+          homepage: undefined,
+          events: ["command:new"],
+          always: false,
+          enabledByConfig: true,
+          requirementsSatisfied: true,
+          loadable: true,
+          blockedReason: undefined,
+          managedByPlugin: true,
+          ...createEmptyInstallChecks(),
+        },
+      ],
+    };
+
+    const output = formatHookInfo(pluginReport, "plugin-hook", {});
+    expect(output).toContain("voice-call");
+    expect(output).toContain("Managed by plugin");
   });
 });

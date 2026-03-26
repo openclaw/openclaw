@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type SandboxDockerSettings = {
   /** Docker image to use for sandbox containers. */
   image?: string;
@@ -17,7 +19,7 @@ export type SandboxDockerSettings = {
   capDrop?: string[];
   /** Extra environment variables for sandbox exec. */
   env?: Record<string, string>;
-  /** Optional setup command run once after container creation. */
+  /** Optional setup command run once after container creation (array entries are joined by newline). */
   setupCommand?: string;
   /** Limit container PIDs (0 = Docker default). */
   pidsLimit?: number;
@@ -42,13 +44,32 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
+  /**
+   * Dangerous override: allow bind mounts that target reserved container paths
+   * like /workspace or /agent.
+   */
+  dangerouslyAllowReservedContainerTargets?: boolean;
+  /**
+   * Dangerous override: allow bind mount sources outside runtime allowlisted roots
+   * (workspace + agent workspace roots).
+   */
+  dangerouslyAllowExternalBindSources?: boolean;
+  /**
+   * Dangerous override: allow Docker `network: "container:<id>"` namespace joins.
+   * Default behavior blocks container namespace joins to preserve sandbox isolation.
+   */
+  dangerouslyAllowContainerNamespaceJoin?: boolean;
 };
 
 export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
   containerPrefix?: string;
+  /** Docker network for sandbox browser containers (default: openclaw-sandbox-browser). */
+  network?: string;
   cdpPort?: number;
+  /** Optional CIDR allowlist for CDP ingress at the container edge (for example: 172.21.0.1/32). */
+  cdpSourceRange?: string;
   vncPort?: number;
   noVncPort?: number;
   headless?: boolean;
@@ -65,6 +86,8 @@ export type SandboxBrowserSettings = {
   autoStart?: boolean;
   /** Max time to wait for CDP to become reachable after auto-start (ms). */
   autoStartTimeoutMs?: number;
+  /** Additional bind mounts for the browser container only. When set, replaces docker.binds for the browser container. */
+  binds?: string[];
 };
 
 export type SandboxPruneSettings = {
@@ -72,4 +95,29 @@ export type SandboxPruneSettings = {
   idleHours?: number;
   /** Prune if older than N days (0 disables). */
   maxAgeDays?: number;
+};
+
+export type SandboxSshSettings = {
+  /** SSH target in user@host[:port] form. */
+  target?: string;
+  /** SSH client command. Default: "ssh". */
+  command?: string;
+  /** Absolute remote root used for per-scope workspaces. */
+  workspaceRoot?: string;
+  /** Enforce host-key verification. Default: true. */
+  strictHostKeyChecking?: boolean;
+  /** Allow OpenSSH host-key updates. Default: true. */
+  updateHostKeys?: boolean;
+  /** Existing private key path on the host. */
+  identityFile?: string;
+  /** Existing SSH certificate path on the host. */
+  certificateFile?: string;
+  /** Existing known_hosts file path on the host. */
+  knownHostsFile?: string;
+  /** Inline or SecretRef-backed private key contents. */
+  identityData?: SecretInput;
+  /** Inline or SecretRef-backed SSH certificate contents. */
+  certificateData?: SecretInput;
+  /** Inline or SecretRef-backed known_hosts contents. */
+  knownHostsData?: SecretInput;
 };

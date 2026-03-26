@@ -1,5 +1,9 @@
-import type { ChannelsState } from "./channels.types.ts";
 import { ChannelsStatusSnapshot } from "../types.ts";
+import type { ChannelsState } from "./channels.types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type { ChannelsState };
 
@@ -20,7 +24,12 @@ export async function loadChannels(state: ChannelsState, probe: boolean) {
     state.channelsSnapshot = res;
     state.channelsLastSuccess = Date.now();
   } catch (err) {
-    state.channelsError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.channelsSnapshot = null;
+      state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
+    } else {
+      state.channelsError = String(err);
+    }
   } finally {
     state.channelsLoading = false;
   }

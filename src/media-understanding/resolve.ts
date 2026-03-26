@@ -5,7 +5,6 @@ import type {
   MediaUnderstandingModelConfig,
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
-import type { MediaUnderstandingCapability } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -13,8 +12,9 @@ import {
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
 } from "./defaults.js";
-import { normalizeMediaProviderId } from "./providers/index.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;

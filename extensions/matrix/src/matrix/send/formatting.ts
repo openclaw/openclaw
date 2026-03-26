@@ -77,13 +77,17 @@ export function resolveMatrixVoiceDecision(opts: {
   if (!opts.wantsVoice) {
     return { useVoice: false };
   }
-  if (
-    getCore().media.isVoiceCompatibleAudio({
-      contentType: opts.contentType,
-      fileName: opts.fileName,
-    })
-  ) {
+  if (isMatrixVoiceCompatibleAudio(opts)) {
     return { useVoice: true };
   }
   return { useVoice: false };
+}
+
+function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
+  // Matrix currently shares the core voice compatibility policy.
+  // Keep this wrapper as the seam if Matrix policy diverges later.
+  return getCore().media.isVoiceCompatibleAudio({
+    contentType: opts.contentType,
+    fileName: opts.fileName,
+  });
 }

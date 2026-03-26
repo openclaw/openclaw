@@ -1,13 +1,14 @@
 import type { HealthSummary } from "../commands/health.js";
-import type { ChatRunEntry } from "./server-chat.js";
-import type { DedupeEntry } from "./server-shared.js";
+import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
+import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 
@@ -30,6 +31,7 @@ export function startGatewayMaintenanceTimers(params: {
   chatRunState: { abortedRuns: Map<string, number> };
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -37,10 +39,12 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  mediaCleanupTtlMs?: number;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  mediaCleanup: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -73,6 +77,7 @@ export function startGatewayMaintenanceTimers(params: {
 
   // dedupe cache cleanup
   const dedupeCleanup = setInterval(() => {
+    const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
     for (const [k, v] of params.dedupe) {
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -86,6 +91,18 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
+    if (params.agentRunSeq.size > AGENT_RUN_SEQ_MAX) {
+      const excess = params.agentRunSeq.size - AGENT_RUN_SEQ_MAX;
+      let removed = 0;
+      for (const runId of params.agentRunSeq.keys()) {
+        params.agentRunSeq.delete(runId);
+        removed += 1;
+        if (removed >= excess) {
+          break;
+        }
+      }
+    }
+
     for (const [runId, entry] of params.chatAbortControllers) {
       if (now <= entry.expiresAtMs) {
         continue;
@@ -95,6 +112,7 @@ export function startGatewayMaintenanceTimers(params: {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
           chatDeltaSentAt: params.chatDeltaSentAt,
+          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
@@ -113,8 +131,55 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+      params.chatDeltaLastBroadcastLen.delete(runId);
+    }
+
+    // Sweep stale buffers for runs that were never explicitly aborted.
+    // Only reap orphaned buffers after the abort controller is gone; active
+    // runs can legitimately sit idle while tools/models work.
+    for (const [runId, lastSentAt] of params.chatDeltaSentAt) {
+      if (params.chatRunState.abortedRuns.has(runId)) {
+        continue; // already handled above
+      }
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      params.chatRunBuffers.delete(runId);
+      params.chatDeltaSentAt.delete(runId);
+      params.chatDeltaLastBroadcastLen.delete(runId);
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  if (typeof params.mediaCleanupTtlMs !== "number") {
+    return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup: null };
+  }
+
+  let mediaCleanupInFlight: Promise<void> | null = null;
+  const runMediaCleanup = () => {
+    if (mediaCleanupInFlight) {
+      return mediaCleanupInFlight;
+    }
+    mediaCleanupInFlight = cleanOldMedia(params.mediaCleanupTtlMs, {
+      recursive: true,
+      pruneEmptyDirs: true,
+    })
+      .catch((err) => {
+        params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        mediaCleanupInFlight = null;
+      });
+    return mediaCleanupInFlight;
+  };
+
+  const mediaCleanup = setInterval(() => {
+    void runMediaCleanup();
+  }, 60 * 60_000);
+
+  void runMediaCleanup();
+
+  return { tickInterval, healthInterval, dedupeCleanup, mediaCleanup };
 }

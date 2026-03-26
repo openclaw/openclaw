@@ -16,9 +16,9 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 
 1. [https://exe.new/openclaw](https://exe.new/openclaw)
 2. Fill in your auth key/token as needed
-3. Click on "Agent" next to your VM, and wait...
-4. ???
-5. Profit
+3. Click on "Agent" next to your VM and wait for Shelley to finish provisioning
+4. Open `https://<vm-name>.exe.xyz/` and paste your gateway token to authenticate
+5. Approve any pending device pairing requests with `openclaw devices approve <requestId>`
 
 ## What you need
 
@@ -31,7 +31,7 @@ Shelley, [exe.dev](https://exe.dev)'s agent, can install OpenClaw instantly with
 prompt. The prompt used is as below:
 
 ```
-Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw device approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
+Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw devices approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
 ```
 
 ## Manual installation

@@ -1,7 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
+import { createFixtureSuite } from "../test-utils/fixture-suite.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { writeSkill } from "./skills.e2e-test-helpers.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -10,46 +17,71 @@ import {
   buildWorkspaceSkillSnapshot,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
+import { getActiveSkillEnvKeys } from "./skills/env-overrides.js";
 
-type SkillFixture = {
-  dir: string;
-  name: string;
-  description: string;
-  metadata?: string;
-  body?: string;
-  frontmatterExtra?: string;
+const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
+let tempHome: TempHomeEnv | null = null;
+
+const resolveTestSkillDirs = (workspaceDir: string) => ({
+  managedSkillsDir: path.join(workspaceDir, ".managed"),
+  bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+});
+
+const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
+const apiKeyField = ["api", "Key"].join("");
+
+const withClearedEnv = <T>(
+  keys: string[],
+  run: (original: Record<string, string | undefined>) => T,
+): T => {
+  const original: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    original[key] = process.env[key];
+    delete process.env[key];
+  }
+
+  try {
+    return run(original);
+  } finally {
+    for (const key of keys) {
+      const value = original[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 };
 
-const tempDirs: string[] = [];
+async function writeEnvSkill(workspaceDir: string) {
+  const skillDir = path.join(workspaceDir, "skills", "env-skill");
+  await writeSkill({
+    dir: skillDir,
+    name: "env-skill",
+    description: "Needs env",
+    metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+  });
+}
 
-const makeWorkspace = async () => {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-  tempDirs.push(workspaceDir);
-  return workspaceDir;
-};
+beforeAll(async () => {
+  await fixtureSuite.setup();
+  tempHome = await createTempHomeEnv("openclaw-skills-home-");
+  await fs.mkdir(path.join(tempHome.home, ".openclaw", "agents", "main", "sessions"), {
+    recursive: true,
+  });
+});
 
-const writeSkill = async (params: SkillFixture) => {
-  const { dir, name, description, metadata, body, frontmatterExtra } = params;
-  await fs.mkdir(dir, { recursive: true });
-  const frontmatter = [
-    `name: ${name}`,
-    `description: ${description}`,
-    metadata ? `metadata: ${metadata}` : "",
-    frontmatterExtra ?? "",
-  ]
-    .filter((line) => line.trim().length > 0)
-    .join("\n");
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\n${frontmatter}\n---\n\n${body ?? `# ${name}\n`}`,
-    "utf-8",
-  );
-};
+afterAll(async () => {
+  if (tempHome) {
+    await tempHome.restore();
+    tempHome = null;
+  }
+  await fixtureSuite.cleanup();
+});
 
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -78,8 +110,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      ...resolveTestSkillDirs(workspaceDir),
       reservedNames: new Set(["help"]),
     });
 
@@ -103,10 +134,10 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       description: "Short description",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const commands = buildWorkspaceSkillCommandSpecs(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
 
     const longCmd = commands.find((entry) => entry.skillName === "long-desc");
     const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
@@ -125,9 +156,61 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       frontmatterExtra: "command-dispatch: tool\ncommand-tool: sessions_send",
     });
 
-    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir);
+    const commands = buildWorkspaceSkillCommandSpecs(
+      workspaceDir,
+      resolveTestSkillDirs(workspaceDir),
+    );
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+  });
+
+  it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
+    const workspaceDir = await makeWorkspace();
+    const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
+      [
+        "---",
+        "name: workflows:review",
+        "description: Review code with a structured checklist",
+        "---",
+        "Review the branch carefully.",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        plugins: {
+          entries: {
+            "compound-bundle": { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "workflows_review",
+          skillName: "workflows:review",
+          description: "Review code with a structured checklist",
+          promptTemplate: "Review the branch carefully.",
+        }),
+      ]),
+    );
+    expect(
+      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
+    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
   });
 });
 
@@ -135,10 +218,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("returns empty prompt when skills dirs are missing", async () => {
     const workspaceDir = await makeWorkspace();
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
     expect(prompt).toBe("");
   });
@@ -218,9 +298,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       body: "# Demo Skill\n",
     });
 
-    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
@@ -230,70 +308,240 @@ describe("buildWorkspaceSkillsPrompt", () => {
 describe("applySkillEnvOverrides", () => {
   it("sets and restores env vars", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    });
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
 
-    const originalEnv = process.env.ENV_KEY;
-    delete process.env.ENV_KEY;
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } }, // pragma: allowlist secret
+      });
 
-    const restore = applySkillEnvOverrides({
-      skills: entries,
-      config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } },
-    });
-
-    try {
-      expect(process.env.ENV_KEY).toBe("injected");
-    } finally {
-      restore();
-      if (originalEnv === undefined) {
+      try {
+        expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+      } finally {
+        restore();
         expect(process.env.ENV_KEY).toBeUndefined();
-      } else {
-        expect(process.env.ENV_KEY).toBe(originalEnv);
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
       }
-    }
+    });
+  });
+
+  it("keeps env keys tracked until all overlapping overrides restore", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const config = { skills: { entries: { "env-skill": { [apiKeyField]: "injected" } } } }; // pragma: allowlist secret
+      const restoreFirst = applySkillEnvOverrides({ skills: entries, config });
+      const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+
+        restoreFirst();
+        expect(process.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
+      } finally {
+        restoreSecond();
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(false);
+      }
+    });
   });
 
   it("applies env overrides from snapshots", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillDir = path.join(workspaceDir, "skills", "env-skill");
-    await writeSkill({
-      dir: skillDir,
-      name: "env-skill",
-      description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
-    });
+    await writeEnvSkill(workspaceDir);
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
+      ...resolveTestSkillDirs(workspaceDir),
+      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
     });
 
-    const originalEnv = process.env.ENV_KEY;
-    delete process.env.ENV_KEY;
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } }, // pragma: allowlist secret
+      });
 
-    const restore = applySkillEnvOverridesFromSnapshot({
-      snapshot,
-      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
-    });
-
-    try {
-      expect(process.env.ENV_KEY).toBe("snap-key");
-    } finally {
-      restore();
-      if (originalEnv === undefined) {
+      try {
+        expect(process.env.ENV_KEY).toBe("snap-key");
+      } finally {
+        restore();
         expect(process.env.ENV_KEY).toBeUndefined();
-      } else {
-        expect(process.env.ENV_KEY).toBe(originalEnv);
       }
-    }
+    });
+  });
+
+  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: sourceConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks unsafe env overrides but allows declared secrets", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "unsafe-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "unsafe-env-skill",
+      description: "Needs env",
+      metadata:
+        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["OPENAI_API_KEY", "NODE_OPTIONS"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "unsafe-env-skill": {
+                env: {
+                  OPENAI_API_KEY: "sk-test", // pragma: allowlist secret
+                  NODE_OPTIONS: "--require /tmp/evil.js",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.OPENAI_API_KEY).toBe("sk-test");
+        expect(process.env.NODE_OPTIONS).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        expect(process.env.NODE_OPTIONS).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks dangerous host env overrides even when declared", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "dangerous-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "dangerous-env-skill",
+      description: "Needs env",
+      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    withClearedEnv(["BASH_ENV", "SHELL"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: {
+          skills: {
+            entries: {
+              "dangerous-env-skill": {
+                env: {
+                  BASH_ENV: "/tmp/pwn.sh",
+                  SHELL: "/tmp/evil-shell",
+                },
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        expect(process.env.BASH_ENV).toBeUndefined();
+        expect(process.env.SHELL).toBeUndefined();
+      } finally {
+        restore();
+        expect(process.env.BASH_ENV).toBeUndefined();
+        expect(process.env.SHELL).toBeUndefined();
+      }
+    });
+  });
+
+  it("allows required env overrides from snapshots", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "snapshot-env-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "snapshot-env-skill",
+      description: "Needs env",
+      metadata: '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]}}}',
+    });
+
+    const config = {
+      skills: {
+        entries: {
+          "snapshot-env-skill": {
+            env: {
+              OPENAI_API_KEY: "snap-secret", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    };
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config,
+    });
+
+    withClearedEnv(["OPENAI_API_KEY"], () => {
+      const restore = applySkillEnvOverridesFromSnapshot({
+        snapshot,
+        config,
+      });
+
+      try {
+        expect(process.env.OPENAI_API_KEY).toBe("snap-secret");
+      } finally {
+        restore();
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+      }
+    });
   });
 });

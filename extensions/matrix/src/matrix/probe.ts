@@ -1,9 +1,9 @@
+import type { SsrFPolicy } from "../runtime-api.js";
+import type { BaseProbeResult } from "../runtime-api.js";
 import { createMatrixClient, isBunRuntime } from "./client.js";
 
-export type MatrixProbe = {
-  ok: boolean;
+export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
-  error?: string | null;
   elapsedMs: number;
   userId?: string | null;
 };
@@ -13,6 +13,9 @@ export async function probeMatrix(params: {
   accessToken: string;
   userId?: string;
   timeoutMs: number;
+  accountId?: string | null;
+  allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<MatrixProbe> {
   const started = Date.now();
   const result: MatrixProbe = {
@@ -43,13 +46,17 @@ export async function probeMatrix(params: {
     };
   }
   try {
+    const inputUserId = params.userId?.trim() || undefined;
     const client = await createMatrixClient({
       homeserver: params.homeserver,
-      userId: params.userId ?? "",
+      userId: inputUserId,
       accessToken: params.accessToken,
       localTimeoutMs: params.timeoutMs,
+      accountId: params.accountId,
+      allowPrivateNetwork: params.allowPrivateNetwork,
+      ssrfPolicy: params.ssrfPolicy,
     });
-    // @vector-im/matrix-bot-sdk uses getUserId() which calls whoami internally
+    // The client wrapper resolves user ID via whoami when needed.
     const userId = await client.getUserId();
     result.ok = true;
     result.userId = userId ?? null;

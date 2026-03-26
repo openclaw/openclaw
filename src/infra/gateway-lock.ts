@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
+const DEFAULT_PORT_PROBE_TIMEOUT_MS = 1000;
 
 type LockPayload = {
   pid: number;
@@ -28,6 +32,10 @@ export type GatewayLockOptions = {
   staleMs?: number;
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
+  port?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  lockDir?: string;
 };
 
 export class GatewayLockError extends Error {
@@ -41,50 +49,6 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-
-function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeProcArg(arg: string): string {
-  return arg.replaceAll("\\", "/").toLowerCase();
-}
-
-function parseProcCmdline(raw: string): string[] {
-  return raw
-    .split("\0")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function isGatewayArgv(args: string[]): boolean {
-  const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) {
-    return false;
-  }
-
-  const entryCandidates = [
-    "dist/index.js",
-    "dist/entry.js",
-    "openclaw.mjs",
-    "scripts/run-node.mjs",
-    "src/index.ts",
-  ];
-  if (normalized.some((arg) => entryCandidates.some((entry) => arg.endsWith(entry)))) {
-    return true;
-  }
-
-  const exe = normalized[0] ?? "";
-  return exe.endsWith("/openclaw") || exe === "openclaw";
-}
 
 function readLinuxCmdline(pid: number): string[] | null {
   try {
@@ -111,12 +75,48 @@ function readLinuxStartTime(pid: number): number | null {
   }
 }
 
-function resolveGatewayOwnerStatus(
+async function checkPortFree(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ port, host });
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      // Conservative for liveness checks: timeout usually means no responsive
+      // local listener, so treat the lock owner as stale.
+      finish(true);
+    }, DEFAULT_PORT_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => {
+      finish(false);
+    });
+    socket.once("error", () => {
+      finish(true);
+    });
+  });
+}
+
+async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
-): LockOwnerStatus {
-  if (!isAlive(pid)) {
+  port: number | undefined,
+): Promise<LockOwnerStatus> {
+  if (port != null) {
+    const portFree = await checkPortFree(port);
+    if (portFree) {
+      return "dead";
+    }
+  }
+
+  if (!isPidAlive(pid)) {
     return "dead";
   }
   if (platform !== "linux") {
@@ -164,11 +164,10 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   }
 }
 
-function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
+function resolveGatewayLockPath(env: NodeJS.ProcessEnv, lockDir = resolveGatewayLockDir()) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
-  const lockDir = resolveGatewayLockDir();
+  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
 }
@@ -189,19 +188,23 @@ export async function acquireGatewayLock(
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
   const platform = opts.platform ?? process.platform;
-  const { lockPath, configPath } = resolveGatewayLockPath(env);
+  const port = opts.port;
+  const now = opts.now ?? Date.now;
+  const sleep =
+    opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
+  const { lockPath, configPath } = resolveGatewayLockPath(env, opts.lockDir);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
-  const startedAt = Date.now();
+  const startedAt = now();
   let lastPayload: LockPayload | null = null;
 
-  while (Date.now() - startedAt < timeoutMs) {
+  while (now() - startedAt < timeoutMs) {
     try {
       const handle = await fs.open(lockPath, "wx");
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
-        createdAt: new Date().toISOString(),
+        createdAt: new Date(now()).toISOString(),
         configPath,
       };
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
@@ -225,7 +228,7 @@ export async function acquireGatewayLock(
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
       const ownerStatus = ownerPid
-        ? resolveGatewayOwnerStatus(ownerPid, lastPayload, platform)
+        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
@@ -235,14 +238,18 @@ export async function acquireGatewayLock(
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);
-          stale = Number.isFinite(createdAt) ? Date.now() - createdAt > staleMs : false;
+          stale = Number.isFinite(createdAt) ? now() - createdAt > staleMs : false;
         }
         if (!stale) {
           try {
             const st = await fs.stat(lockPath);
-            stale = Date.now() - st.mtimeMs > staleMs;
+            stale = now() - st.mtimeMs > staleMs;
           } catch {
-            stale = true;
+            // On Windows or locked filesystems we may be unable to stat the
+            // lock file even though the existing gateway is still healthy.
+            // Treat the lock as non-stale so we keep waiting instead of
+            // forcefully removing another gateway's lock.
+            stale = false;
           }
         }
         if (stale) {
@@ -251,7 +258,7 @@ export async function acquireGatewayLock(
         }
       }
 
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      await sleep(pollIntervalMs);
     }
   }
 
