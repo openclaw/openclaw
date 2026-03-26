@@ -1004,6 +1004,43 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset preserves spawned session ownership metadata", async () => {
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-owned-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          label: "owned child",
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { spawnedBy?: string; parentSessionKey?: string; label?: string };
+    }>(ws, "sessions.reset", { key: "subagent:child" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
+    expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
+    expect(reset.payload?.entry.label).toBe("owned child");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { spawnedBy?: string; parentSessionKey?: string; label?: string }
+    >;
+    expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
+    expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
+
+    ws.close();
+  });
+
   test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
