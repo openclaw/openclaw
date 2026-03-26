@@ -167,6 +167,36 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectUnauthorizedReply(interaction);
   });
 
+  it("authorizes guild slash commands when commands.allowFrom.discord contains a matching guild: entry", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          allowFrom: {
+            discord: ["guild:345678901234567890"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when commands.allowFrom.discord has a guild: entry that does not match", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          allowFrom: {
+            discord: ["guild:000000000000000000"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
   it("uses the root discord maxLinesPerMessage when runtime discordConfig omits it", async () => {
     const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
     const { interaction } = await runGuildSlashCommand({
