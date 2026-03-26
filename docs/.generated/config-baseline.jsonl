@@ -746,7 +746,7 @@
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.dmHistoryLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.dmPolicy","kind":"channel","type":"string","required":false,"enumValues":["pairing","allowlist","open","disabled"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.bluebubbles.accounts.*.enrichGroupParticipantsFromContacts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.bluebubbles.accounts.*.enrichGroupParticipantsFromContacts","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.groupAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.groupAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.accounts.*.groupPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","disabled","allowlist"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
@@ -796,7 +796,7 @@
 {"recordType":"path","path":"channels.bluebubbles.dmHistoryLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.dmPolicy","kind":"channel","type":"string","required":false,"enumValues":["pairing","allowlist","open","disabled"],"deprecated":false,"sensitive":false,"tags":["access","channels","network"],"label":"BlueBubbles DM Policy","help":"Direct message access control (\"pairing\" recommended). \"open\" requires channels.bluebubbles.allowFrom=[\"*\"].","hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.enabled","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.bluebubbles.enrichGroupParticipantsFromContacts","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
+{"recordType":"path","path":"channels.bluebubbles.enrichGroupParticipantsFromContacts","kind":"channel","type":"boolean","required":true,"defaultValue":true,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.groupAllowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.bluebubbles.groupAllowFrom.*","kind":"channel","type":["number","string"],"required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.bluebubbles.groupPolicy","kind":"channel","type":"string","required":false,"enumValues":["open","disabled","allowlist"],"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
