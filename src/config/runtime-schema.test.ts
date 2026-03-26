@@ -38,6 +38,19 @@ function makeSnapshot(params: { valid: boolean; config?: OpenClawConfig }): Conf
   };
 }
 
+async function readSchemaNodes() {
+  const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
+  const result = await readBestEffortRuntimeConfigSchema();
+  const schema = result.schema as { properties?: Record<string, unknown> };
+  const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
+  const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
+  const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
+  const pluginProps = pluginsNode?.properties as Record<string, unknown> | undefined;
+  const entriesNode = pluginProps?.entries as Record<string, unknown> | undefined;
+  const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
+  return { channelProps, entryProps };
+}
+
 describe("readBestEffortRuntimeConfigSchema", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,15 +103,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
       channelSetups: [],
     });
 
-    const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
-    const result = await readBestEffortRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
-    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
-    const pluginProps = pluginsNode?.properties as Record<string, unknown> | undefined;
-    const entriesNode = pluginProps?.entries as Record<string, unknown> | undefined;
-    const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
+    const { channelProps, entryProps } = await readSchemaNodes();
 
     expect(mockLoadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,15 +162,7 @@ describe("readBestEffortRuntimeConfigSchema", () => {
       ],
     });
 
-    const { readBestEffortRuntimeConfigSchema } = await import("./runtime-schema.js");
-    const result = await readBestEffortRuntimeConfigSchema();
-    const schema = result.schema as { properties?: Record<string, unknown> };
-    const channelsNode = schema.properties?.channels as Record<string, unknown> | undefined;
-    const channelProps = channelsNode?.properties as Record<string, unknown> | undefined;
-    const pluginsNode = schema.properties?.plugins as Record<string, unknown> | undefined;
-    const pluginProps = pluginsNode?.properties as Record<string, unknown> | undefined;
-    const entriesNode = pluginProps?.entries as Record<string, unknown> | undefined;
-    const entryProps = entriesNode?.properties as Record<string, unknown> | undefined;
+    const { channelProps, entryProps } = await readSchemaNodes();
 
     expect(mockLoadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({

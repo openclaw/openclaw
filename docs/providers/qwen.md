@@ -1,53 +1,33 @@
 ---
-summary: "Use Qwen OAuth (free tier) in OpenClaw"
+summary: "Use Qwen models via Alibaba Cloud Model Studio"
 read_when:
   - You want to use Qwen with OpenClaw
-  - You want free-tier OAuth access to Qwen Coder
+  - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
 # Qwen
 
-Qwen provides a free-tier OAuth flow for Qwen Coder and Qwen Vision models
-(2,000 requests/day, subject to Qwen rate limits).
+<Warning>
 
-## Enable the plugin
+**Qwen OAuth has been removed.** The free-tier OAuth integration
+(`qwen-portal`) that used `portal.qwen.ai` endpoints is no longer available.
+See [Issue #49557](https://github.com/openclaw/openclaw/issues/49557) for
+background.
 
-```bash
-openclaw plugins enable qwen-portal-auth
-```
+</Warning>
 
-Restart the Gateway after enabling.
+## Recommended: Model Studio (Alibaba Cloud Coding Plan)
 
-## Authenticate
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-This runs the Qwen device-code OAuth flow and writes a provider entry to your
-`models.json` (plus a `qwen` alias for quick switching).
-
-## Model IDs
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-Switch models with:
+Use [Model Studio](/providers/modelstudio) for officially supported access to
+Qwen models (Qwen 3.5 Plus, GLM-4.7, Kimi K2.5, MiniMax M2.5, and more).
 
 ```bash
-openclaw models set qwen-portal/coder-model
+# Global endpoint
+openclaw onboard --auth-choice modelstudio-api-key
+
+# China endpoint
+openclaw onboard --auth-choice modelstudio-api-key-cn
 ```
 
-## Reuse Qwen Code CLI login
-
-If you already logged in with the Qwen Code CLI, OpenClaw will sync credentials
-from `~/.qwen/oauth_creds.json` when it loads the auth store. You still need a
-`models.providers.qwen-portal` entry (use the login command above to create one).
-
-## Notes
-
-- Tokens auto-refresh; re-run the login command if refresh fails or access is revoked.
-- Default base URL: `https://portal.qwen.ai/v1` (override with
-  `models.providers.qwen-portal.baseUrl` if Qwen provides a different endpoint).
-- See [Model providers](/concepts/model-providers) for provider-wide rules.
+See [Model Studio](/providers/modelstudio) for full setup details.

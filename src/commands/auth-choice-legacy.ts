@@ -24,3 +24,29 @@ export function isDeprecatedAuthChoice(
 ): authChoice is "claude-cli" | "codex-cli" {
   return authChoice === "claude-cli" || authChoice === "codex-cli";
 }
+
+export function resolveDeprecatedAuthChoiceReplacement(authChoice: "claude-cli" | "codex-cli"): {
+  normalized: AuthChoice;
+  message: string;
+} {
+  if (authChoice === "claude-cli") {
+    return {
+      normalized: "setup-token",
+      message: 'Auth choice "claude-cli" is deprecated; using setup-token flow instead.',
+    };
+  }
+  return {
+    normalized: "openai-codex",
+    message: 'Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.',
+  };
+}
+
+export function formatDeprecatedNonInteractiveAuthChoiceError(
+  authChoice: "claude-cli" | "codex-cli",
+): string {
+  const replacement =
+    authChoice === "claude-cli"
+      ? '"--auth-choice token" (Anthropic setup-token)'
+      : '"--auth-choice openai-codex"';
+  return [`Auth choice "${authChoice}" is deprecated.`, `Use ${replacement}.`].join("\n");
+}
