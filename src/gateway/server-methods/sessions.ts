@@ -149,6 +149,7 @@ function emitSessionsChanged(
             sessionId: sessionRow.sessionId,
             kind: sessionRow.kind,
             channel: sessionRow.channel,
+            spawnedBy: sessionRow.spawnedBy,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
