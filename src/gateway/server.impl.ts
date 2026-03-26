@@ -903,23 +903,6 @@ export async function startGatewayServer(
             agentRunSeq,
             chatRunState,
             resolveSessionKeyForRun,
-            hasNewerSessionActivity: ({ sessionKey, clientRunId }) => {
-              for (const [activeRunId, active] of chatAbortControllers) {
-                if (activeRunId === clientRunId) {
-                  continue;
-                }
-                let activeSessionKey = active.sessionKey;
-                try {
-                  activeSessionKey = loadSessionEntry(active.sessionKey).canonicalKey;
-                } catch {
-                  // Keep the originally registered key when the session lookup fails.
-                }
-                if (activeSessionKey === sessionKey) {
-                  return true;
-                }
-              }
-              return false;
-            },
             clearAgentRunContext,
             toolEventRecipients,
             sessionEventSubscribers,
@@ -1185,6 +1168,9 @@ export async function startGatewayServer(
       chatDeltaSentAt: chatRunState.deltaSentAt,
       chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
       addChatRun,
+      markLatestSessionRun: (sessionKey: string, runId: string) => {
+        chatRunState.latestSessionRuns.set(sessionKey, runId);
+      },
       removeChatRun,
       subscribeSessionEvents: sessionEventSubscribers.subscribe,
       unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,

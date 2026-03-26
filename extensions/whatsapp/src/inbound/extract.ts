@@ -69,9 +69,7 @@ function fallbackNormalizeMessageContent(
 function normalizeMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
   if (typeof normalizeMessageContent === "function") {
     const normalized = normalizeMessageContent(message);
-    return fallbackNormalizeMessageContent(
-      (normalized as proto.IMessage | undefined) ?? message,
-    );
+    return fallbackNormalizeMessageContent((normalized as proto.IMessage | undefined) ?? message);
   }
   return fallbackNormalizeMessageContent(message);
 }

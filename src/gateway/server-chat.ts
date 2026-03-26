@@ -216,6 +216,7 @@ export type ChatRunState = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
+  latestSessionRuns: Map<string, string>;
   clear: () => void;
 };
 
@@ -225,6 +226,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const latestSessionRuns = new Map<string, string>();
 
   const clear = () => {
     registry.clear();
@@ -232,6 +234,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     deltaLastBroadcastLen.clear();
     abortedRuns.clear();
+    latestSessionRuns.clear();
   };
 
   return {
@@ -240,6 +243,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     deltaLastBroadcastLen,
     abortedRuns,
+    latestSessionRuns,
     clear,
   };
 }
@@ -456,10 +460,6 @@ export type AgentEventHandlerOptions = {
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
-  hasNewerSessionActivity?: (params: {
-    sessionKey: string;
-    clientRunId: string;
-  }) => boolean;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
@@ -472,7 +472,6 @@ export function createAgentEventHandler({
   agentRunSeq,
   chatRunState,
   resolveSessionKeyForRun,
-  hasNewerSessionActivity,
   clearAgentRunContext,
   toolEventRecipients,
   sessionEventSubscribers,
@@ -487,8 +486,6 @@ export function createAgentEventHandler({
       isControlUiVisible: boolean;
     }
   >();
-  const sessionLatestRuns = new Map<string, string>();
-
   const clearPendingLifecycleError = (runId: string) => {
     const pending = pendingLifecycleErrors.get(runId);
     if (!pending) {
@@ -788,15 +785,10 @@ export function createAgentEventHandler({
         return;
       }
       pendingLifecycleErrors.delete(params.evt.runId);
-      if (
-        pending.sessionKey &&
-        ((sessionLatestRuns.get(pending.sessionKey) &&
-          sessionLatestRuns.get(pending.sessionKey) !== pending.evt.runId) ||
-          hasNewerSessionActivity?.({
-            sessionKey: pending.sessionKey,
-            clientRunId: pending.clientRunId,
-          }))
-      ) {
+      const latestSessionRunId = pending.sessionKey
+        ? chatRunState.latestSessionRuns.get(pending.sessionKey)
+        : undefined;
+      if (latestSessionRunId && latestSessionRunId !== pending.clientRunId) {
         cleanupLifecycleTerminalState({
           runId: pending.evt.runId,
           clientRunId: pending.clientRunId,
@@ -857,7 +849,7 @@ export function createAgentEventHandler({
     const hasSeenRun = agentRunSeq.has(evt.runId);
     const last = agentRunSeq.get(evt.runId) ?? 0;
     if (sessionKey && (lifecyclePhase === "start" || !hasSeenRun)) {
-      sessionLatestRuns.set(sessionKey, evt.runId);
+      chatRunState.latestSessionRuns.set(sessionKey, clientRunId);
     }
     if (lifecyclePhase !== "error" && evt.seq > last) {
       clearPendingLifecycleError(evt.runId);

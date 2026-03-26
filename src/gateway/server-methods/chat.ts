@@ -1374,6 +1374,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
       });
+      context.markLatestSessionRun(sessionKey, clientRunId);
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,

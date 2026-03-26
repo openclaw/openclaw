@@ -63,6 +63,7 @@ export type GatewayRequestContext = {
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
+  markLatestSessionRun: (sessionKey: string, runId: string) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,

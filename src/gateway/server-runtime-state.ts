@@ -231,7 +231,10 @@ export async function createGatewayRuntimeState(params: {
     const chatRunBuffers = chatRunState.buffers;
     const chatDeltaSentAt = chatRunState.deltaSentAt;
     const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
-    const addChatRun = chatRunRegistry.add;
+    const addChatRun = (sessionId: string, entry: ChatRunEntry) => {
+      chatRunRegistry.add(sessionId, entry);
+      chatRunState.latestSessionRuns.set(entry.sessionKey, entry.clientRunId);
+    };
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
     const toolEventRecipients = createToolEventRecipientRegistry();
