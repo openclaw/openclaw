@@ -73,8 +73,8 @@ const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
  * Build a minimal environment object to pass to SSH subprocesses.
  *
  * Passing the full process.env to the SSH child process leaks every secret
- * that OpenClaw carries in its environment \u2014 API keys, auth tokens, internal
- * service credentials \u2014 into the remote sandbox (CWE-526).  An attacker who
+ * that OpenClaw carries in its environment — API keys, auth tokens, internal
+ * service credentials — into the remote sandbox (CWE-526).  An attacker who
  * gains code execution inside the sandbox can read those values via
  * /proc/self/environ or simply by printing them.
  *
@@ -84,9 +84,7 @@ const SAFE_ENV_KEYS: ReadonlySet<string> = new Set([
  */
 export function buildSshSubprocessEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([k]) => SAFE_ENV_KEYS.has(k) || k.startsWith("LC_"),
-    ),
+    Object.entries(process.env).filter(([k]) => SAFE_ENV_KEYS.has(k) || k.startsWith("LC_")),
   );
 }
 
@@ -474,7 +472,7 @@ class OpenShellSandboxBackendImpl {
       await replaceDirectoryContents({
         sourceDir: tmpDir,
         targetDir: this.params.createParams.workspaceDir,
-        // Never sync hooks/ from the remote sandbox \u2014 mirrored content must not
+        // Never sync hooks/ from the remote sandbox — mirrored content must not
         // become trusted workspace hook code on the host.
         excludeDirs: ["hooks"],
       });
