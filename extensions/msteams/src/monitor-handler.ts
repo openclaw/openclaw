@@ -68,7 +68,11 @@ async function isFeedbackInvokeAuthorized(
     return false;
   }
 
-  if (resolved.channelGate.allowlistConfigured && !resolved.channelGate.allowed) {
+  if (
+    !isDirectMessage &&
+    resolved.channelGate.allowlistConfigured &&
+    !resolved.channelGate.allowed
+  ) {
     deps.log.debug?.("dropping feedback invoke (not in team/channel allowlist)", {
       conversationId,
       teamKey: resolved.channelGate.teamKey ?? "none",

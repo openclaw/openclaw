@@ -230,6 +230,61 @@ describe("msteams feedback invoke authz", () => {
     }
   });
 
+  it("keeps DM feedback allowed when team route allowlists exist", async () => {
+    const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
+    try {
+      const originalRun = vi.fn(async () => undefined);
+      const handler = registerMSTeamsHandlers(
+        createActivityHandler(originalRun),
+        createDeps({
+          cfg: {
+            session: { store: tmpDir },
+            channels: {
+              msteams: {
+                dmPolicy: "allowlist",
+                allowFrom: ["owner-aad"],
+                teams: {
+                  team123: {
+                    channels: {
+                      "19:group@thread.tacv2": { requireMention: false },
+                    },
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ) as MSTeamsActivityHandler & {
+        run: NonNullable<MSTeamsActivityHandler["run"]>;
+      };
+
+      await handler.run(
+        createFeedbackInvokeContext({
+          reaction: "like",
+          conversationId: "a:personal-chat;messageid=bot-msg-1",
+          conversationType: "personal",
+          senderId: "owner-aad",
+          senderName: "Owner",
+          comment: "allowed dm feedback",
+        }),
+      );
+
+      const transcript = await readFile(
+        path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
+        "utf-8",
+      );
+      expect(JSON.parse(transcript.trim())).toMatchObject({
+        event: "feedback",
+        value: "positive",
+        comment: "allowed dm feedback",
+        sessionKey: "msteams:direct:owner-aad",
+      });
+      expect(originalRun).not.toHaveBeenCalled();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not record feedback for a DM sender outside allowFrom", async () => {
     const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
     try {

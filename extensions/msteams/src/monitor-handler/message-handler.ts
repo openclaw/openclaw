@@ -129,9 +129,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationId = normalizeMSTeamsConversationId(rawConversationId);
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
-    const isGroupChat = conversationType === "groupChat" || conversation?.isGroup === true;
-    const isChannel = conversationType === "channel";
-    const isDirectMessage = !isGroupChat && !isChannel;
     const teamId = activity.channelData?.team?.id;
 
     const {
@@ -139,6 +136,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       senderId,
       senderName,
       pairing,
+      isDirectMessage,
       channelGate,
       access,
       configuredDmAllowFrom,
@@ -151,6 +149,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       activity,
     });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+    const isChannel = conversationType === "channel";
 
     if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
       if (access.reason === "dmPolicy=disabled") {
