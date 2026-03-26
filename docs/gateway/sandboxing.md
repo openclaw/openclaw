@@ -149,7 +149,7 @@ INSTALL_FOUNDRY=1 scripts/sandbox-common-setup.sh
 Optional pinned release:
 
 ```bash
-INSTALL_FOUNDRY=1 FOUNDRY_VERSION=1.3.1 scripts/sandbox-common-setup.sh
+INSTALL_FOUNDRY=1 FOUNDRY_VERSION=<version> scripts/sandbox-common-setup.sh
 ```
 
 Sandboxed browser image:

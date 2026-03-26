@@ -56,8 +56,9 @@ assert_grep "seed-state missing grafana skill copy" -F 'grafana-metrics-best-pra
 assert_grep "seed-state missing foundry-evm-debug copy" -F 'foundry-evm-debug' "$SEED_STATE_SCRIPT"
 assert_grep "seed-state missing bundled helper skill list" -F 'required_bundled_skills=(' "$SEED_STATE_SCRIPT"
 assert_grep "runtime dockerfile missing acpx install" -F 'npm --prefix /usr/local/lib/node_modules/openclaw/extensions/acpx install --omit=dev --no-save "acpx@${ACPX_VERSION}"' "$RUNTIME_DOCKERFILE"
-assert_grep "runtime dockerfile missing foundry version arg" -F 'ARG OPENCLAW_FOUNDRY_VERSION=1.3.1' "$RUNTIME_DOCKERFILE"
-assert_grep "runtime dockerfile missing foundry install" -F '/opt/foundry/bin/foundryup --install "${OPENCLAW_FOUNDRY_VERSION}"' "$RUNTIME_DOCKERFILE"
+assert_grep "runtime dockerfile missing foundryup" -F '/opt/foundry/bin/foundryup' "$RUNTIME_DOCKERFILE"
+# Foundry version is no longer pinned; foundryup installs latest stable at build time.
+assert_grep "runtime dockerfile should not pin foundry version" -v -F 'OPENCLAW_FOUNDRY_VERSION' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing forge link" -F 'ln -sf /opt/foundry/bin/forge /usr/local/bin/forge' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing cast link" -F 'ln -sf /opt/foundry/bin/cast /usr/local/bin/cast' "$RUNTIME_DOCKERFILE"
 assert_grep "runtime dockerfile missing anvil link" -F 'ln -sf /opt/foundry/bin/anvil /usr/local/bin/anvil' "$RUNTIME_DOCKERFILE"

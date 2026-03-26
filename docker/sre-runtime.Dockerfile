@@ -7,7 +7,6 @@ ARG HELM_VERSION=v3.17.1
 ARG TERRAFORM_VERSION=1.14.5
 ARG OPENCLAW_VERSION=2026.3.9
 ARG OPENCLAW_LOCAL_TARBALL=openclaw-local.tgz
-ARG OPENCLAW_FOUNDRY_VERSION=1.3.1
 ARG QMD_VERSION=1.1.5
 ARG VAULT_VERSION=v1.21.2
 ARG BOUNDARY_VERSION=v0.20.1
@@ -50,7 +49,7 @@ RUN mkdir -p /srv/openclaw/repos/openclaw-sre \
 
 RUN export FOUNDRY_DIR=/opt/foundry \
   && curl -fsSL https://foundry.paradigm.xyz | bash \
-  && /opt/foundry/bin/foundryup --install "${OPENCLAW_FOUNDRY_VERSION}" \
+  && /opt/foundry/bin/foundryup \
   && chmod -R a+rX /opt/foundry \
   && ln -sf /opt/foundry/bin/forge /usr/local/bin/forge \
   && ln -sf /opt/foundry/bin/cast /usr/local/bin/cast \
