@@ -30,7 +30,7 @@ export async function readMemoryFile(params: {
     : path.resolve(params.workspaceDir, rawPath);
   const relPath = path.relative(params.workspaceDir, absPath).replace(/\\/g, "/");
   const inWorkspace = relPath.length > 0 && !relPath.startsWith("..") && !path.isAbsolute(relPath);
-  const allowedWorkspace = inWorkspace && isMemoryPath(relPath);
+  const allowedWorkspace = inWorkspace && isMemoryPath(relPath, params.userId);
   let allowedAdditional = false;
   if (!allowedWorkspace && (params.extraPaths?.length ?? 0) > 0) {
     const additionalPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths);
