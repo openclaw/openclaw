@@ -153,4 +153,26 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(budget.vitestMaxWorkers).toBe(2);
     expect(budget.topLevelParallelLimit).toBe(2);
   });
+
+  it("enables shared channel batching on high-memory local hosts", () => {
+    const runtime = resolveRuntimeCapabilities(
+      {
+        RUNNER_OS: "macOS",
+      },
+      {
+        cpuCount: 16,
+        totalMemoryBytes: 128 * 1024 ** 3,
+        platform: "darwin",
+        mode: "local",
+        loadAverage: [0.2, 0.2, 0.2],
+      },
+    );
+    const budget = resolveExecutionBudget(runtime);
+
+    expect(runtime.memoryBand).toBe("high");
+    expect(runtime.loadBand).toBe("idle");
+    expect(budget.channelsBatchTargetMs).toBe(30_000);
+    expect(budget.deferredRunConcurrency).toBe(8);
+    expect(budget.topLevelParallelLimitNoIsolate).toBe(14);
+  });
 });
