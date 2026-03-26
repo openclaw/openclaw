@@ -1,0 +1,13 @@
+diff --git a/dist/plugins/http/plugin.js b/dist/plugins/http/plugin.js
+index 1234567..abcdefg 100644
+--- a/dist/plugins/http/plugin.js
++++ b/dist/plugins/http/plugin.js
+@@ -96,7 +96,7 @@ class HttpPlugin {
+         this.route = this.express.route.bind(this.express);
+         this.use = this.express.use.bind(this.express);
+         this.express.use((0, cors_1.default)());
+-        this.express.use('/api*', express_1.default.json());
++        this.express.use('/api{*path}', express_1.default.json());
+     }
+     /**
+      * serve static files
