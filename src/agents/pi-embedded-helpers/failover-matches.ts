@@ -91,6 +91,7 @@ const ERROR_PATTERNS = {
     /\b403\b/,
     "no credentials found",
     "no api key found",
+    /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
   ],
   format: [
     "string should match pattern",
