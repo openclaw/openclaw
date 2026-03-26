@@ -25,6 +25,8 @@ describe("loadWorkspaceSkillEntries metadata validation", () => {
     const malformedBaseDir = path.join(workspaceDir, "skills", "malformed");
     await fs.mkdir(malformedBaseDir, { recursive: true });
     await fs.writeFile(path.join(malformedBaseDir, "SKILL.md"), "# placeholder\n", "utf-8");
+    const nonSkillFile = path.join(malformedBaseDir, "README.md");
+    await fs.writeFile(nonSkillFile, "# not a skill\n", "utf-8");
 
     vi.doMock("@mariozechner/pi-coding-agent", () => ({
       loadSkillsFromDir: () => ({
@@ -32,7 +34,7 @@ describe("loadWorkspaceSkillEntries metadata validation", () => {
           {
             name: "malformed",
             description: "Malformed metadata",
-            filePath: "/models",
+            filePath: nonSkillFile,
             baseDir: malformedBaseDir,
             source: "openclaw-workspace",
           },
