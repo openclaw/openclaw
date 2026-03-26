@@ -98,6 +98,19 @@ export interface RealtimeVoiceConfig {
   /** Realtime model (default: "gpt-4o-mini-realtime-preview") */
   model?: string;
 
+  // ---- Endpoint overrides (optional) ----
+  /**
+   * Azure OpenAI resource endpoint, e.g. https://myresource.cognitiveservices.azure.com
+   * When combined with azureDeployment, switches to Azure OpenAI auth (api-key header).
+   * When set alone, used as a generic base URL override with standard Bearer auth
+   * (useful for OpenAI-compatible proxies).
+   */
+  azureEndpoint?: string;
+  /** Azure OpenAI deployment name, e.g. gpt-realtime. Requires azureEndpoint. */
+  azureDeployment?: string;
+  /** Azure OpenAI API version (default: "2024-10-01-preview"). Requires azureEndpoint + azureDeployment. */
+  azureApiVersion?: string;
+
   // ---- VAD ----
   /** VAD speech detection threshold 0–1 (default: 0.5) */
   vadThreshold?: number;
@@ -314,16 +327,30 @@ export class OpenAIRealtimeVoiceBridge {
 
   private async doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.model)}`;
+      const cfg = this.config;
+      let url: string;
+      let headers: Record<string, string>;
+
+      if (cfg.azureEndpoint && cfg.azureDeployment) {
+        // Azure OpenAI Realtime — different URL shape and uses api-key auth
+        const base = cfg.azureEndpoint.replace(/\/$/, "").replace(/^https:/, "wss:");
+        const apiVersion = cfg.azureApiVersion ?? "2024-10-01-preview";
+        url = `${base}/openai/realtime?api-version=${apiVersion}&deployment=${encodeURIComponent(cfg.azureDeployment)}`;
+        headers = { "api-key": cfg.apiKey };
+      } else if (cfg.azureEndpoint) {
+        // Generic OpenAI-compatible proxy — custom base URL, standard Bearer auth
+        const base = cfg.azureEndpoint.replace(/\/$/, "").replace(/^https:/, "wss:");
+        url = `${base}/v1/realtime?model=${encodeURIComponent(this.model)}`;
+        headers = { Authorization: `Bearer ${cfg.apiKey}`, "OpenAI-Beta": "realtime=v1" };
+      } else {
+        // Default: OpenAI
+        url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.model)}`;
+        headers = { Authorization: `Bearer ${cfg.apiKey}`, "OpenAI-Beta": "realtime=v1" };
+      }
 
       console.log(`[RealtimeVoice] Connecting to ${url}`);
 
-      this.ws = new WebSocket(url, {
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      });
+      this.ws = new WebSocket(url, { headers });
 
       const connectTimeout = setTimeout(() => {
         if (!this.connected) {

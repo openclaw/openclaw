@@ -250,6 +250,16 @@ export const VoiceCallRealtimeConfigSchema = z
     prefixPaddingMs: z.number().int().nonnegative().optional(),
     /** Tool definitions (OpenAI function-call schema); execution wired via registerToolHandler */
     tools: z.array(RealtimeToolSchema).default([]),
+    /**
+     * Azure OpenAI resource endpoint, e.g. https://myresource.cognitiveservices.azure.com
+     * When combined with azureDeployment, uses Azure auth (api-key header).
+     * When set alone, used as a generic base URL for OpenAI-compatible proxies (Bearer auth).
+     */
+    azureEndpoint: z.string().url().optional(),
+    /** Azure OpenAI deployment name (e.g. gpt-realtime). Requires azureEndpoint. */
+    azureDeployment: z.string().optional(),
+    /** Azure OpenAI API version (default: "2024-10-01-preview"). Requires azureEndpoint + azureDeployment. */
+    azureApiVersion: z.string().optional(),
   })
   .strict()
   .default({ enabled: false, tools: [] });

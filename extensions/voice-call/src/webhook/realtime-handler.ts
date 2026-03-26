@@ -216,6 +216,9 @@ export class RealtimeCallHandler {
       silenceDurationMs: this.config.silenceDurationMs,
       prefixPaddingMs: this.config.prefixPaddingMs,
       tools: this.config.tools as RealtimeTool[],
+      azureEndpoint: this.config.azureEndpoint,
+      azureDeployment: this.config.azureDeployment,
+      azureApiVersion: this.config.azureApiVersion,
 
       onAudio: (muLaw) => {
         if (ws.readyState !== WebSocket.OPEN) return;
