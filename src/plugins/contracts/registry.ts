@@ -71,6 +71,7 @@ type ImageGenerationProviderContractEntry = CapabilityContractEntry<ImageGenerat
 
 type PluginRegistrationContractEntry = {
   pluginId: string;
+  cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
@@ -409,6 +410,7 @@ function upsertPluginRegistrationContractEntry(
     entries.push(next);
     return;
   }
+  existing.cliBackendIds = mergeIds(existing.cliBackendIds, next.cliBackendIds);
   existing.providerIds = mergeIds(existing.providerIds, next.providerIds);
   existing.speechProviderIds = mergeIds(existing.speechProviderIds, next.speechProviderIds);
   existing.mediaUnderstandingProviderIds = mergeIds(
@@ -439,6 +441,7 @@ function mergeProviderContractRegistrations(
   for (const [pluginId, providerIds] of byPluginId) {
     upsertPluginRegistrationContractEntry(registrationEntries, {
       pluginId,
+      cliBackendIds: [],
       providerIds: providerIds.toSorted((left, right) => left.localeCompare(right)),
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
@@ -456,6 +459,7 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
       const captured = captureRegistrations(plugin);
       upsertPluginRegistrationContractEntry(entries, {
         pluginId: plugin.id,
+        cliBackendIds: captured.cliBackends.map((backend) => backend.id),
         providerIds: captured.providers.map((provider) => provider.id),
         speechProviderIds: captured.speechProviders.map((provider) => provider.id),
         mediaUnderstandingProviderIds: captured.mediaUnderstandingProviders.map(

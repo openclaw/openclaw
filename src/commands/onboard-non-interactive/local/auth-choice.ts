@@ -5,6 +5,10 @@ import { applyAuthProfileConfig } from "../../../plugins/provider-auth-helpers.j
 import { setCloudflareAiGatewayConfig } from "../../../plugins/provider-auth-storage.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import {
+  formatDeprecatedNonInteractiveAuthChoiceError,
+  isDeprecatedAuthChoice,
+} from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import { applyCloudflareAiGatewayConfig } from "../../onboard-auth.config-gateways.js";
@@ -133,13 +137,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
-    runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
-    );
+  if (isDeprecatedAuthChoice(authChoice)) {
+    runtime.error(formatDeprecatedNonInteractiveAuthChoiceError(authChoice));
     runtime.exit(1);
     return null;
   }

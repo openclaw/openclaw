@@ -63,13 +63,13 @@ function injectMcpConfigArgs(args: string[] | undefined, mcpConfigPath: string):
 }
 
 export async function prepareCliBundleMcpConfig(params: {
-  backendId: string;
+  enabled: boolean;
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
   warn?: (message: string) => void;
 }): Promise<PreparedCliBundleMcpConfig> {
-  if (params.backendId !== "claude-cli") {
+  if (!params.enabled) {
     return { backend: params.backend };
   }
 

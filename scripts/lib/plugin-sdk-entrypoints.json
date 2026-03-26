@@ -37,6 +37,7 @@
   "gateway-runtime",
   "github-copilot-token",
   "cli-runtime",
+  "cli-backend",
   "hook-runtime",
   "process-runtime",
   "windows-spawn",
