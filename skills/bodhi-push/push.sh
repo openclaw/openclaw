@@ -39,5 +39,6 @@ if [ -n "$STEP_COMMITS" ]; then
 fi
 
 # --- 4. Final push (remaining commits) ---
-git push "$REMOTE" "$BRANCH"
+# Use --force-with-lease for safety (won't overwrite unexpected remote changes)
+git push "$REMOTE" "$BRANCH" || git push --force-with-lease "$REMOTE" "$BRANCH"
 echo "✅ Push complete → $REMOTE/$BRANCH"
