@@ -39,6 +39,7 @@ export function mergeSlackAccountConfig(
       | Record<string, Partial<SlackAccountConfig>>
       | undefined,
     accountId,
+    nestedObjectKeys: ["thread"],
   });
 }
 
