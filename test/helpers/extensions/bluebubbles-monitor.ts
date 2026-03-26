@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import type { BlueBubblesHistoryFetchResult } from "../../../extensions/bluebubbles/src/history.js";
-import { _resetBlueBubblesShortIdState } from "../../../extensions/bluebubbles/src/monitor.js";
+import {
+  _resetBlueBubblesShortIdState,
+  clearBlueBubblesWebhookSecurityStateForTest,
+} from "../../../extensions/bluebubbles/src/monitor.js";
 import type { PluginRuntime } from "../../../extensions/bluebubbles/src/runtime-api.js";
 import { setBlueBubblesRuntime } from "../../../extensions/bluebubbles/src/runtime.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
@@ -131,6 +134,7 @@ export function resetBlueBubblesMonitorTestState(params: {
 }) {
   vi.clearAllMocks();
   _resetBlueBubblesShortIdState();
+  clearBlueBubblesWebhookSecurityStateForTest();
   params.extraReset?.();
   params.fetchHistoryMock.mockResolvedValue({ entries: [], resolved: true });
   params.readAllowFromStoreMock.mockResolvedValue([]);

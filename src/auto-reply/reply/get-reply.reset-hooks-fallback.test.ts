@@ -1,21 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
+import "./get-reply.test-runtime-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
   handleInlineActions: vi.fn(),
   emitResetCommandHooks: vi.fn(),
   initSessionState: vi.fn(),
-}));
-
-registerGetReplyCommonMocks();
-
-vi.mock("../../link-understanding/apply.runtime.js", () => ({
-  applyLinkUnderstanding: vi.fn(async () => undefined),
-}));
-vi.mock("../../media-understanding/apply.runtime.js", () => ({
-  applyMediaUnderstanding: vi.fn(async () => undefined),
 }));
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),

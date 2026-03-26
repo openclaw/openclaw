@@ -93,6 +93,12 @@ type MockRunExit = {
   noOutputTimedOut: boolean;
 };
 
+type TestCliBackendConfig = {
+  command: string;
+  env?: Record<string, string>;
+  clearEnv?: string[];
+};
+
 function createManagedRun(exit: MockRunExit, pid = 1234) {
   return {
     runId: "run-supervisor",
@@ -102,6 +108,47 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
   };
+}
+
+function mockSuccessfulCliRun() {
+  supervisorSpawnMock.mockResolvedValueOnce(
+    createManagedRun({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 50,
+      stdout: "ok",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    }),
+  );
+}
+
+async function runCliAgentWithBackendConfig(params: {
+  backend: TestCliBackendConfig;
+  runId: string;
+}) {
+  await runCliAgent({
+    sessionId: "s1",
+    sessionFile: "/tmp/session.jsonl",
+    workspaceDir: "/tmp",
+    config: {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": params.backend,
+          },
+        },
+      },
+    } satisfies OpenClawConfig,
+    prompt: "hi",
+    provider: "codex-cli",
+    model: "gpt-5.2-codex",
+    timeoutMs: 1_000,
+    runId: params.runId,
+    cliSessionId: "thread-123",
+  });
 }
 
 describe("runCliAgent with process supervisor", () => {
@@ -168,47 +215,19 @@ describe("runCliAgent with process supervisor", () => {
     vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.stubEnv("HOME", "/tmp/trusted-home");
 
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                env: {
-                  NODE_OPTIONS: "--require ./malicious.js",
-                  LD_PRELOAD: "/tmp/pwn.so",
-                  PATH: "/tmp/evil",
-                  HOME: "/tmp/evil-home",
-                  SAFE_KEY: "ok",
-                },
-              },
-            },
-          },
+    mockSuccessfulCliRun();
+    await runCliAgentWithBackendConfig({
+      backend: {
+        command: "codex",
+        env: {
+          NODE_OPTIONS: "--require ./malicious.js",
+          LD_PRELOAD: "/tmp/pwn.so",
+          PATH: "/tmp/evil",
+          HOME: "/tmp/evil-home",
+          SAFE_KEY: "ok",
         },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
-      timeoutMs: 1_000,
+      },
       runId: "run-env-sanitized",
-      cliSessionId: "thread-123",
     });
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
@@ -225,44 +244,16 @@ describe("runCliAgent with process supervisor", () => {
     vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.stubEnv("SAFE_CLEAR", "from-base");
 
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                env: {
-                  SAFE_KEEP: "keep-me",
-                },
-                clearEnv: ["SAFE_CLEAR"],
-              },
-            },
-          },
+    mockSuccessfulCliRun();
+    await runCliAgentWithBackendConfig({
+      backend: {
+        command: "codex",
+        env: {
+          SAFE_KEEP: "keep-me",
         },
-      } satisfies OpenClawConfig,
-      prompt: "hi",
-      provider: "codex-cli",
-      model: "gpt-5.2-codex",
-      timeoutMs: 1_000,
+        clearEnv: ["SAFE_CLEAR"],
+      },
       runId: "run-clear-env",
-      cliSessionId: "thread-123",
     });
 
     const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
