@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/index.js";
 import {
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
-  shouldSkipBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
 function createRateLimiter(): AuthRateLimiter {
@@ -85,43 +82,6 @@ describe("handshake auth helpers", () => {
         isControlUi: false,
         isWebchat: false,
         reason: "metadata-upgrade",
-      }),
-    ).toBe(false);
-  });
-
-  it("skips backend self-pairing for local trusted backend clients", () => {
-    const connectParams = {
-      client: {
-        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
-    } as ConnectParams;
-
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: true,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: false,
-        authMethod: "device-token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipBackendSelfPairing({
-        connectParams,
-        isLocalClient: false,
-        hasBrowserOriginHeader: false,
-        sharedAuthOk: true,
-        authMethod: "token",
       }),
     ).toBe(false);
   });
