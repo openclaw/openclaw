@@ -3018,7 +3018,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 163,
+            "line": 161,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3054,7 +3054,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 437,
+            "line": 435,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3063,7 +3063,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 414,
+            "line": 412,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3072,7 +3072,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 246,
+            "line": 244,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3090,7 +3090,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 277,
+            "line": 275,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3288,7 +3288,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 143,
+            "line": 141,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3297,7 +3297,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 155,
+            "line": 153,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -3369,7 +3369,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 138,
+            "line": 136,
             "path": "src/plugin-sdk/core.ts"
           }
         },
