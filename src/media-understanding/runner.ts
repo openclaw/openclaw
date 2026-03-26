@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -10,6 +10,10 @@ import {
 } from "../agents/model-catalog.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -40,7 +44,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
-} from "./providers/index.js";
+} from "./provider-registry.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -71,8 +75,9 @@ export type RunCapabilityResult = {
 
 export function buildProviderRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,
+  cfg?: OpenClawConfig,
 ): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides);
+  return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
@@ -358,12 +363,16 @@ async function resolveKeyEntry(params: {
     if (capability === "video" && !provider.describeVideo) {
       return null;
     }
-    try {
-      await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
-      return { type: "provider" as const, provider: providerId, model };
-    } catch {
+    if (
+      !(await hasAvailableAuthForProvider({
+        provider: providerId,
+        cfg,
+        agentDir,
+      }))
+    ) {
       return null;
     }
+    return { type: "provider" as const, provider: providerId, model };
   };
 
   if (capability === "image") {
@@ -418,27 +427,18 @@ async function resolveKeyEntry(params: {
 }
 
 function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
-  const imageModel = cfg.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | string
-    | undefined;
-  if (!imageModel) {
-    return [];
-  }
   const refs: string[] = [];
-  if (typeof imageModel === "string") {
-    if (imageModel.trim()) {
-      refs.push(imageModel.trim());
+  const primary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel);
+  if (primary?.trim()) {
+    refs.push(primary.trim());
+  }
+  for (const fb of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
+    if (fb?.trim()) {
+      refs.push(fb.trim());
     }
-  } else {
-    if (imageModel.primary?.trim()) {
-      refs.push(imageModel.primary.trim());
-    }
-    for (const fb of imageModel.fallbacks ?? []) {
-      if (fb?.trim()) {
-        refs.push(fb.trim());
-      }
-    }
+  }
+  if (refs.length === 0) {
+    return [];
   }
   const entries: MediaUnderstandingModelConfig[] = [];
   for (const ref of refs) {
@@ -558,13 +558,12 @@ async function resolveActiveModelEntry(params: {
   if (params.capability === "video" && !provider.describeVideo) {
     return null;
   }
-  try {
-    await resolveApiKeyForProvider({
-      provider: providerId,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-    });
-  } catch {
+  const hasAuth = await hasAvailableAuthForProvider({
+    provider: providerId,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  });
+  if (!hasAuth) {
     return null;
   }
   return {

@@ -10,7 +10,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -125,7 +125,7 @@ export async function agentsAddCommand(
     const bindingResult =
       bindingParse.bindings.length > 0
         ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], skipped: [], conflicts: [] };
+        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
     if (!opts.json) {
@@ -145,6 +145,7 @@ export async function agentsAddCommand(
       model,
       bindings: {
         added: bindingResult.added.map(describeBinding),
+        updated: bindingResult.updated.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
         conflicts: bindingResult.conflicts.map(
           (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
@@ -152,7 +153,7 @@ export async function agentsAddCommand(
       },
     };
     if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+      writeRuntimeJson(runtime, payload);
     } else {
       runtime.log(`Agent: ${agentId}`);
       runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
@@ -265,6 +266,7 @@ export async function agentsAddCommand(
         prompter,
         store: authStore,
         includeSkip: true,
+        config: nextConfig,
       });
 
       const authResult = await applyAuthChoice({
@@ -354,7 +356,7 @@ export async function agentsAddCommand(
       agentDir,
     };
     if (opts.json) {
-      runtime.log(JSON.stringify(payload, null, 2));
+      writeRuntimeJson(runtime, payload);
     }
     await prompter.outro(`Agent "${agentId}" ready.`);
   } catch (err) {

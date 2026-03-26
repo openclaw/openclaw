@@ -1,21 +1,15 @@
-import { fetch as realFetch } from "undici";
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupBrowserControlServerTestContext,
   getBrowserControlServerBaseUrl,
-  getBrowserControlServerTestState,
-  getCdpMocks,
-  getFreePort,
   installBrowserControlServerHooks,
   makeResponse,
-  getPwMocks,
-  restoreGatewayPortEnv,
+  resetBrowserControlServerTestContext,
+  setBrowserControlServerReachable,
   startBrowserControlServerFromConfig,
-  stopBrowserControlServer,
 } from "./server.control-server.test-harness.js";
-
-const state = getBrowserControlServerTestState();
-const cdpMocks = getCdpMocks();
-const pwMocks = getPwMocks();
+import { getBrowserTestFetch } from "./test-fetch.js";
 
 describe("browser control server", () => {
   installBrowserControlServerHooks();
@@ -23,6 +17,7 @@ describe("browser control server", () => {
   it("POST /tabs/open?profile=unknown returns 404", async () => {
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const result = await realFetch(`${base}/tabs/open?profile=unknown`, {
       method: "POST",
@@ -35,8 +30,10 @@ describe("browser control server", () => {
   });
 
   it("POST /tabs/open returns 400 for invalid URLs", async () => {
+    setBrowserControlServerReachable(true);
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const result = await realFetch(`${base}/tabs/open`, {
       method: "POST",
@@ -51,20 +48,7 @@ describe("browser control server", () => {
 
 describe("profile CRUD endpoints", () => {
   beforeEach(async () => {
-    state.reachable = false;
-    state.cfgAttachOnly = false;
-
-    for (const fn of Object.values(pwMocks)) {
-      fn.mockClear();
-    }
-    for (const fn of Object.values(cdpMocks)) {
-      fn.mockClear();
-    }
-
-    state.testPort = await getFreePort();
-    state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
-    state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    await resetBrowserControlServerTestContext();
 
     vi.stubGlobal(
       "fetch",
@@ -79,15 +63,13 @@ describe("profile CRUD endpoints", () => {
   });
 
   afterEach(async () => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-    restoreGatewayPortEnv(state.prevGatewayPort);
-    await stopBrowserControlServer();
+    await cleanupBrowserControlServerTestContext();
   });
 
   it("validates profile create/delete endpoints", async () => {
     await startBrowserControlServerFromConfig();
     const base = getBrowserControlServerBaseUrl();
+    const realFetch = getBrowserTestFetch();
 
     const createMissingName = await realFetch(`${base}/profiles/create`, {
       method: "POST",
@@ -134,11 +116,72 @@ describe("profile CRUD endpoints", () => {
     const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
+      body: JSON.stringify({ name: "badremote", cdpUrl: "ftp://bad" }),
     });
     expect(createBadRemote.status).toBe(400);
     const createBadRemoteBody = (await createBadRemote.json()) as { error: string };
     expect(createBadRemoteBody.error).toContain("cdpUrl");
+
+    const createClawd = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacyclawd", driver: "clawd" }),
+    });
+    expect(createClawd.status).toBe(200);
+    const createClawdBody = (await createClawd.json()) as {
+      profile?: string;
+      transport?: string;
+      cdpPort?: number | null;
+      userDataDir?: string | null;
+    };
+    expect(createClawdBody.profile).toBe("legacyclawd");
+    expect(createClawdBody.transport).toBe("cdp");
+    expect(createClawdBody.cdpPort).toBeTypeOf("number");
+    expect(createClawdBody.userDataDir).toBeNull();
+
+    const explicitUserDataDir = "/tmp/openclaw-brave-profile";
+    await fs.promises.mkdir(explicitUserDataDir, { recursive: true });
+    const createExistingSession = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "brave-live",
+        driver: "existing-session",
+        userDataDir: explicitUserDataDir,
+      }),
+    });
+    expect(createExistingSession.status).toBe(200);
+    const createExistingSessionBody = (await createExistingSession.json()) as {
+      profile?: string;
+      transport?: string;
+      userDataDir?: string | null;
+    };
+    expect(createExistingSessionBody.profile).toBe("brave-live");
+    expect(createExistingSessionBody.transport).toBe("chrome-mcp");
+    expect(createExistingSessionBody.userDataDir).toBe(explicitUserDataDir);
+
+    const createBadExistingSession = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "bad-live",
+        userDataDir: explicitUserDataDir,
+      }),
+    });
+    expect(createBadExistingSession.status).toBe(400);
+    const createBadExistingSessionBody = (await createBadExistingSession.json()) as {
+      error: string;
+    };
+    expect(createBadExistingSessionBody.error).toContain("driver=existing-session is required");
+
+    const createLegacyDriver = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "legacy", driver: "extension" }),
+    });
+    expect(createLegacyDriver.status).toBe(400);
+    const createLegacyDriverBody = (await createLegacyDriver.json()) as { error: string };
+    expect(createLegacyDriverBody.error).toContain('unsupported profile driver "extension"');
 
     const deleteMissing = await realFetch(`${base}/profiles/nonexistent`, {
       method: "DELETE",

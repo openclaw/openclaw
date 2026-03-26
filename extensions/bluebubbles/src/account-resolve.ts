@@ -1,5 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+import { normalizeResolvedSecretInputString } from "./secret-input.js";
+import { normalizeBlueBubblesServerUrl } from "./types.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
@@ -12,18 +15,49 @@ export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolv
   baseUrl: string;
   password: string;
   accountId: string;
+  allowPrivateNetwork: boolean;
 } {
   const account = resolveBlueBubblesAccount({
     cfg: params.cfg ?? {},
     accountId: params.accountId,
   });
-  const baseUrl = params.serverUrl?.trim() || account.config.serverUrl?.trim();
-  const password = params.password?.trim() || account.config.password?.trim();
+  const baseUrl =
+    normalizeResolvedSecretInputString({
+      value: params.serverUrl,
+      path: "channels.bluebubbles.serverUrl",
+    }) ||
+    normalizeResolvedSecretInputString({
+      value: account.config.serverUrl,
+      path: `channels.bluebubbles.accounts.${account.accountId}.serverUrl`,
+    });
+  const password =
+    normalizeResolvedSecretInputString({
+      value: params.password,
+      path: "channels.bluebubbles.password",
+    }) ||
+    normalizeResolvedSecretInputString({
+      value: account.config.password,
+      path: `channels.bluebubbles.accounts.${account.accountId}.password`,
+    });
   if (!baseUrl) {
     throw new Error("BlueBubbles serverUrl is required");
   }
   if (!password) {
     throw new Error("BlueBubbles password is required");
   }
-  return { baseUrl, password, accountId: account.accountId };
+
+  let autoAllowPrivateNetwork = false;
+  try {
+    const hostname = new URL(normalizeBlueBubblesServerUrl(baseUrl)).hostname.trim();
+    autoAllowPrivateNetwork = Boolean(hostname) && isBlockedHostnameOrIp(hostname);
+  } catch {
+    autoAllowPrivateNetwork = false;
+  }
+
+  return {
+    baseUrl,
+    password,
+    accountId: account.accountId,
+    allowPrivateNetwork: account.config.allowPrivateNetwork === true || autoAllowPrivateNetwork,
+  };
 }

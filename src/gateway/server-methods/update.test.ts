@@ -77,14 +77,14 @@ vi.mock("./validation.js", () => ({
 
 beforeEach(() => {
   capturedPayload = undefined;
-  runGatewayUpdateMock.mockReset();
+  runGatewayUpdateMock.mockClear();
   runGatewayUpdateMock.mockResolvedValue({
     status: "ok",
     mode: "npm",
     steps: [],
     durationMs: 100,
   });
-  scheduleGatewaySigusr1RestartMock.mockReset();
+  scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
 });
 

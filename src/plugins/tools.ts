@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { getActivePluginRegistry, getActivePluginRegistryKey } from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -17,6 +18,13 @@ const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
+}
+
+export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): void {
+  const meta = pluginToolMeta.get(source);
+  if (meta) {
+    pluginToolMeta.set(target, meta);
+  }
 }
 
 function normalizeAllowlist(list?: string[]) {
@@ -46,20 +54,34 @@ export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
+  suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
-  const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, process.env);
+  const env = params.env ?? process.env;
+  const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
   if (!normalized.enabled) {
     return [];
   }
 
-  const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
-    workspaceDir: params.context.workspaceDir,
-    logger: createPluginLoaderLogger(log),
-  });
+  const activeRegistry = getActivePluginRegistry();
+  const registry =
+    getActivePluginRegistryKey() && activeRegistry
+      ? activeRegistry
+      : loadOpenClawPlugins({
+          config: effectiveConfig,
+          workspaceDir: params.context.workspaceDir,
+          runtimeOptions: params.allowGatewaySubagentBinding
+            ? {
+                allowGatewaySubagentBinding: true,
+              }
+            : undefined,
+          env,
+          logger: createPluginLoaderLogger(log),
+        });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
@@ -74,13 +96,15 @@ export function resolvePluginTools(params: {
     const pluginIdKey = normalizeToolName(entry.pluginId);
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
-      log.error(message);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: entry.pluginId,
-        source: entry.source,
-        message,
-      });
+      if (!params.suppressNameConflicts) {
+        log.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+      }
       blockedPlugins.add(entry.pluginId);
       continue;
     }
@@ -92,6 +116,11 @@ export function resolvePluginTools(params: {
       continue;
     }
     if (!resolved) {
+      if (entry.names.length > 0) {
+        log.debug(
+          `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
+        );
+      }
       continue;
     }
     const listRaw = Array.isArray(resolved) ? resolved : [resolved];
@@ -111,13 +140,15 @@ export function resolvePluginTools(params: {
     for (const tool of list) {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
-        log.error(message);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: entry.pluginId,
-          source: entry.source,
-          message,
-        });
+        if (!params.suppressNameConflicts) {
+          log.error(message);
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: entry.pluginId,
+            source: entry.source,
+            message,
+          });
+        }
         continue;
       }
       nameSet.add(tool.name);

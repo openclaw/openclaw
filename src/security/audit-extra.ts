@@ -14,8 +14,10 @@ export {
   collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
+  collectLikelyMultiUserSetupFindings,
   collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
@@ -27,10 +29,12 @@ export {
 
 // Async collectors
 export {
+  collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
   collectPluginsCodeSafetyFindings,
   collectPluginsTrustFindings,
   collectStateDeepFilesystemFindings,
+  collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";

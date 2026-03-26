@@ -1,0 +1,8 @@
+{
+  "id": "elevenlabs",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

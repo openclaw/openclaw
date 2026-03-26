@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleMode,
   GatewayTrustedProxyConfig,
 } from "../config/config.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
@@ -11,12 +12,13 @@ import {
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
+import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
+  isLocalishHost,
   isLoopbackAddress,
+  resolveRequestClientIp,
   isTrustedProxyAddress,
-  resolveHostName,
-  parseForwardedForClientIp,
-  resolveGatewayClientIp,
+  resolveClientIp,
 } from "./net.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
@@ -38,7 +40,14 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale" | "device-token" | "trusted-proxy";
+  method?:
+    | "none"
+    | "token"
+    | "password"
+    | "tailscale"
+    | "device-token"
+    | "bootstrap-token"
+    | "trusted-proxy";
   user?: string;
   reason?: string;
   /** Present when the request was blocked by the rate limiter. */
@@ -50,6 +59,29 @@ export type GatewayAuthResult = {
 type ConnectAuth = {
   token?: string;
   password?: string;
+};
+
+export type GatewayAuthSurface = "http" | "ws-control-ui";
+
+export type AuthorizeGatewayConnectParams = {
+  auth: ResolvedGatewayAuth;
+  connectAuth?: ConnectAuth | null;
+  req?: IncomingMessage;
+  trustedProxies?: string[];
+  tailscaleWhois?: TailscaleWhoisLookup;
+  /**
+   * Explicit auth surface. HTTP keeps Tailscale forwarded-header auth disabled.
+   * WS Control UI enables it intentionally for tokenless trusted-host login.
+   */
+  authSurface?: GatewayAuthSurface;
+  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
+  rateLimiter?: AuthRateLimiter;
+  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
+  clientIp?: string;
+  /** Optional limiter scope; defaults to shared-secret auth scope. */
+  rateLimitScope?: string;
+  /** Trust X-Real-IP only when explicitly enabled. */
+  allowRealIpFallback?: boolean;
 };
 
 type TailscaleUser = {
@@ -68,41 +100,31 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+const TAILSCALE_TRUSTED_PROXIES = ["127.0.0.1", "::1"] as const;
+
 function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
   if (!req) {
     return undefined;
   }
-  const forwardedFor = headerValue(req.headers?.["x-forwarded-for"]);
-  return forwardedFor ? parseForwardedForClientIp(forwardedFor) : undefined;
-}
-
-function resolveRequestClientIp(
-  req?: IncomingMessage,
-  trustedProxies?: string[],
-): string | undefined {
-  if (!req) {
-    return undefined;
-  }
-  return resolveGatewayClientIp({
+  return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    realIp: headerValue(req.headers?.["x-real-ip"]),
-    trustedProxies,
+    trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
   });
 }
 
-export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: string[]): boolean {
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  trustedProxies?: string[],
+  allowRealIpFallback = false,
+): boolean {
   if (!req) {
     return false;
   }
-  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "";
+  const clientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback) ?? "";
   if (!isLoopbackAddress(clientIp)) {
     return false;
   }
-
-  const host = resolveHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  const hostIsTailscaleServe = host.endsWith(".ts.net");
 
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
@@ -111,7 +133,7 @@ export function isLocalDirectRequest(req?: IncomingMessage, trustedProxies?: str
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -213,8 +235,17 @@ export function resolveGatewayAuth(params: {
     }
   }
   const env = params.env ?? process.env;
-  const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
-  const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
+  const tokenRef = resolveSecretInputRef({ value: authConfig.token }).ref;
+  const passwordRef = resolveSecretInputRef({ value: authConfig.password }).ref;
+  const resolvedCredentials = resolveGatewayCredentialsFromValues({
+    configToken: tokenRef ? undefined : authConfig.token,
+    configPassword: passwordRef ? undefined : authConfig.password,
+    env,
+    tokenPrecedence: "config-first",
+    passwordPrecedence: "config-first", // pragma: allowlist secret
+  });
+  const token = resolvedCredentials.token;
+  const password = resolvedCredentials.password;
   const trustedProxy = authConfig.trustedProxy;
 
   let mode: ResolvedGatewayAuth["mode"];
@@ -250,7 +281,10 @@ export function resolveGatewayAuth(params: {
   };
 }
 
-export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
+export function assertGatewayAuthConfigured(
+  auth: ResolvedGatewayAuth,
+  rawAuthConfig?: GatewayAuthConfig | null,
+): void {
   if (auth.mode === "token" && !auth.token) {
     if (auth.allowTailscale) {
       return;
@@ -260,6 +294,14 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     );
   }
   if (auth.mode === "password" && !auth.password) {
+    if (
+      rawAuthConfig?.password != null && // pragma: allowlist secret
+      typeof rawAuthConfig.password !== "string" // pragma: allowlist secret
+    ) {
+      throw new Error(
+        "gateway auth mode is password, but gateway.auth.password contains a provider reference object instead of a resolved string — bootstrap secrets (gateway.auth.password) must be plaintext strings or set via the OPENCLAW_GATEWAY_PASSWORD environment variable because the secrets provider system has not initialised yet at gateway startup", // pragma: allowlist secret
+      );
+    }
     throw new Error("gateway auth mode is password, but no password was configured");
   }
   if (auth.mode === "trusted-proxy") {
@@ -319,22 +361,22 @@ function authorizeTrustedProxy(params: {
   return { user };
 }
 
-export async function authorizeGatewayConnect(params: {
-  auth: ResolvedGatewayAuth;
-  connectAuth?: ConnectAuth | null;
-  req?: IncomingMessage;
-  trustedProxies?: string[];
-  tailscaleWhois?: TailscaleWhoisLookup;
-  /** Optional rate limiter instance; when provided, failed attempts are tracked per IP. */
-  rateLimiter?: AuthRateLimiter;
-  /** Client IP used for rate-limit tracking. Falls back to proxy-aware request IP resolution. */
-  clientIp?: string;
-  /** Optional limiter scope; defaults to shared-secret auth scope. */
-  rateLimitScope?: string;
-}): Promise<GatewayAuthResult> {
+function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
+  return authSurface === "ws-control-ui";
+}
+
+export async function authorizeGatewayConnect(
+  params: AuthorizeGatewayConnectParams,
+): Promise<GatewayAuthResult> {
   const { auth, connectAuth, req, trustedProxies } = params;
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
-  const localDirect = isLocalDirectRequest(req, trustedProxies);
+  const authSurface = params.authSurface ?? "http";
+  const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
+  const localDirect = isLocalDirectRequest(
+    req,
+    trustedProxies,
+    params.allowRealIpFallback === true,
+  );
 
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -362,7 +404,9 @@ export async function authorizeGatewayConnect(params: {
 
   const limiter = params.rateLimiter;
   const ip =
-    params.clientIp ?? resolveRequestClientIp(req, trustedProxies) ?? req?.socket?.remoteAddress;
+    params.clientIp ??
+    resolveRequestClientIp(req, trustedProxies, params.allowRealIpFallback === true) ??
+    req?.socket?.remoteAddress;
   const rateLimitScope = params.rateLimitScope ?? AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET;
   if (limiter) {
     const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
@@ -376,7 +420,7 @@ export async function authorizeGatewayConnect(params: {
     }
   }
 
-  if (auth.allowTailscale && !localDirect) {
+  if (allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -396,7 +440,9 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing_config" };
     }
     if (!connectAuth?.token) {
-      limiter?.recordFailure(ip, rateLimitScope);
+      // Don't burn rate-limit slots for missing credentials — the client
+      // simply hasn't provided a token yet (e.g. bare browser open).
+      // Only actual *wrong* credentials should count as failures.
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqualSecret(connectAuth.token, auth.token)) {
@@ -413,7 +459,7 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing_config" };
     }
     if (!password) {
-      limiter?.recordFailure(ip, rateLimitScope);
+      // Same as token_missing — don't penalize absent credentials.
       return { ok: false, reason: "password_missing" };
     }
     if (!safeEqualSecret(password, auth.password)) {
@@ -426,4 +472,22 @@ export async function authorizeGatewayConnect(params: {
 
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
+}
+
+export async function authorizeHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http",
+  });
+}
+
+export async function authorizeWsControlUiGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "ws-control-ui",
+  });
 }

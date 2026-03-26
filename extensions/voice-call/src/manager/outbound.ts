@@ -39,6 +39,7 @@ type ConversationContext = Pick<
   | "activeTurnCalls"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "initialMessageInFlight"
 >;
 
 type EndCallContext = Pick<
@@ -50,6 +51,57 @@ type EndCallContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
 >;
+
+type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
+
+type ConnectedCallLookup =
+  | { kind: "error"; error: string }
+  | { kind: "ended"; call: CallRecord }
+  | {
+      kind: "ok";
+      call: CallRecord;
+      providerCallId: string;
+      provider: NonNullable<ConnectedCallContext["provider"]>;
+    };
+
+type ConnectedCallResolution =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      call: CallRecord;
+      providerCallId: string;
+      provider: NonNullable<ConnectedCallContext["provider"]>;
+    };
+
+function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
+  const call = ctx.activeCalls.get(callId);
+  if (!call) {
+    return { kind: "error", error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { kind: "error", error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { kind: "ended", call };
+  }
+  return { kind: "ok", call, providerCallId: call.providerCallId, provider: ctx.provider };
+}
+
+function requireConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallResolution {
+  const lookup = lookupConnectedCall(ctx, callId);
+  if (lookup.kind === "error") {
+    return { ok: false, error: lookup.error };
+  }
+  if (lookup.kind === "ended") {
+    return { ok: false, error: "Call has ended" };
+  }
+  return {
+    ok: true,
+    call: lookup.call,
+    providerCallId: lookup.providerCallId,
+    provider: lookup.provider,
+  };
+}
 
 export async function initiateCall(
   ctx: InitiateContext,
@@ -149,32 +201,32 @@ export async function speak(
   callId: CallId,
   text: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const call = ctx.activeCalls.get(callId);
-  if (!call) {
-    return { success: false, error: "Call not found" };
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
   }
-  if (!ctx.provider || !call.providerCallId) {
-    return { success: false, error: "Call not connected" };
-  }
-  if (TerminalStates.has(call.state)) {
-    return { success: false, error: "Call has ended" };
-  }
+  const { call, providerCallId, provider } = connected;
+
   try {
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    addTranscriptEntry(call, "bot", text);
-
-    const voice = ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
-    await ctx.provider.playTts({
+    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    await provider.playTts({
       callId,
-      providerCallId: call.providerCallId,
+      providerCallId,
       text,
       voice,
     });
 
+    addTranscriptEntry(call, "bot", text);
+    persistCallRecord(ctx.storePath, call);
+
     return { success: true };
   } catch (err) {
+    // A failed playback should not leave the call stuck in speaking state.
+    transitionState(call, "listening");
+    persistCallRecord(ctx.storePath, call);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
@@ -201,29 +253,41 @@ export async function speakInitialMessage(
     return;
   }
 
-  // Clear so we don't speak it again if the provider reconnects.
-  if (call.metadata) {
-    delete call.metadata.initialMessage;
-    persistCallRecord(ctx.storePath, call);
-  }
-
-  console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
-  const result = await speak(ctx, call.callId, initialMessage);
-  if (!result.success) {
-    console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
+  if (ctx.initialMessageInFlight.has(call.callId)) {
+    console.log(
+      `[voice-call] speakInitialMessage: initial message already in flight for ${call.callId}`,
+    );
     return;
   }
+  ctx.initialMessageInFlight.add(call.callId);
 
-  if (mode === "notify") {
-    const delaySec = ctx.config.outbound.notifyHangupDelaySec;
-    console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-    setTimeout(async () => {
-      const currentCall = ctx.activeCalls.get(call.callId);
-      if (currentCall && !TerminalStates.has(currentCall.state)) {
-        console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-        await endCall(ctx, call.callId);
-      }
-    }, delaySec * 1000);
+  try {
+    console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
+    const result = await speak(ctx, call.callId, initialMessage);
+    if (!result.success) {
+      console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
+      return;
+    }
+
+    // Clear only after successful playback so transient provider failures can retry.
+    if (call.metadata) {
+      delete call.metadata.initialMessage;
+      persistCallRecord(ctx.storePath, call);
+    }
+
+    if (mode === "notify") {
+      const delaySec = ctx.config.outbound.notifyHangupDelaySec;
+      console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
+      setTimeout(async () => {
+        const currentCall = ctx.activeCalls.get(call.callId);
+        if (currentCall && !TerminalStates.has(currentCall.state)) {
+          console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
+          await endCall(ctx, call.callId);
+        }
+      }, delaySec * 1000);
+    }
+  } finally {
+    ctx.initialMessageInFlight.delete(call.callId);
   }
 }
 
@@ -232,22 +296,19 @@ export async function continueCall(
   callId: CallId,
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
-  const call = ctx.activeCalls.get(callId);
-  if (!call) {
-    return { success: false, error: "Call not found" };
+  const connected = requireConnectedCall(ctx, callId);
+  if (!connected.ok) {
+    return { success: false, error: connected.error };
   }
-  if (!ctx.provider || !call.providerCallId) {
-    return { success: false, error: "Call not connected" };
-  }
-  if (TerminalStates.has(call.state)) {
-    return { success: false, error: "Call has ended" };
-  }
+  const { call, providerCallId, provider } = connected;
+
   if (ctx.activeTurnCalls.has(callId) || ctx.transcriptWaiters.has(callId)) {
     return { success: false, error: "Already waiting for transcript" };
   }
   ctx.activeTurnCalls.add(callId);
 
   const turnStartedAt = Date.now();
+  const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
     await speak(ctx, callId, prompt);
@@ -256,13 +317,13 @@ export async function continueCall(
     persistCallRecord(ctx.storePath, call);
 
     const listenStartedAt = Date.now();
-    await ctx.provider.startListening({ callId, providerCallId: call.providerCallId });
+    await provider.startListening({ callId, providerCallId, turnToken });
 
-    const transcript = await waitForFinalTranscript(ctx, callId);
+    const transcript = await waitForFinalTranscript(ctx, callId, turnToken);
     const transcriptReceivedAt = Date.now();
 
     // Best-effort: stop listening after final transcript.
-    await ctx.provider.stopListening({ callId, providerCallId: call.providerCallId });
+    await provider.stopListening({ callId, providerCallId });
 
     const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
     const lastTurnListenWaitMs = transcriptReceivedAt - listenStartedAt;
@@ -302,21 +363,19 @@ export async function endCall(
   ctx: EndCallContext,
   callId: CallId,
 ): Promise<{ success: boolean; error?: string }> {
-  const call = ctx.activeCalls.get(callId);
-  if (!call) {
-    return { success: false, error: "Call not found" };
+  const lookup = lookupConnectedCall(ctx, callId);
+  if (lookup.kind === "error") {
+    return { success: false, error: lookup.error };
   }
-  if (!ctx.provider || !call.providerCallId) {
-    return { success: false, error: "Call not connected" };
-  }
-  if (TerminalStates.has(call.state)) {
+  if (lookup.kind === "ended") {
     return { success: true };
   }
+  const { call, providerCallId, provider } = lookup;
 
   try {
-    await ctx.provider.hangupCall({
+    await provider.hangupCall({
       callId,
-      providerCallId: call.providerCallId,
+      providerCallId,
       reason: "hangup-bot",
     });
 
@@ -329,9 +388,7 @@ export async function endCall(
     rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
 
     ctx.activeCalls.delete(callId);
-    if (call.providerCallId) {
-      ctx.providerCallIdMap.delete(call.providerCallId);
-    }
+    ctx.providerCallIdMap.delete(providerCallId);
 
     return { success: true };
   } catch (err) {

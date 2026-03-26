@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /**
  * Twitch-specific utility functions
  */
@@ -40,7 +42,7 @@ export function missingTargetError(provider: string, hint?: string): Error {
  * @returns A unique message ID
  */
 export function generateMessageId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+  return `${Date.now()}-${randomUUID()}`;
 }
 
 /**

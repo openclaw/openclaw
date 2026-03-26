@@ -1,7 +1,12 @@
 ---
 title: IRC
-description: Connect OpenClaw to IRC channels and direct messages.
+summary: "IRC plugin setup, access controls, and troubleshooting"
+read_when:
+  - You want to connect OpenClaw to IRC channels or DMs
+  - You are configuring IRC allowlists, group policy, or mention gating
 ---
+
+# IRC
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
 IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
@@ -11,18 +16,18 @@ IRC ships as an extension plugin, but it is configured in the main config under 
 1. Enable IRC config in `~/.openclaw/openclaw.json`.
 2. Set at least:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "enabled": true,
-      "host": "irc.libera.chat",
-      "port": 6697,
-      "tls": true,
-      "nick": "openclaw-bot",
-      "channels": ["#openclaw"]
-    }
-  }
+  channels: {
+    irc: {
+      enabled: true,
+      host: "irc.libera.chat",
+      port: 6697,
+      tls: true,
+      nick: "openclaw-bot",
+      channels: ["#openclaw"],
+    },
+  },
 }
 ```
 
@@ -53,7 +58,8 @@ Config keys:
 - Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]`
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
 
-Allowlist entries can use nick or `nick!user@host` forms.
+Allowlist entries should use stable sender identities (`nick!user@host`).
+Bare nick matching is mutable and only enabled when `channels.irc.dangerouslyAllowNameMatching: true`.
 
 ### Common gotcha: `allowFrom` is for DMs, not channels
 
@@ -159,7 +165,7 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
             "*": {
               deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
             },
-            eigen: {
+            "id:eigen": {
               deny: ["gateway", "nodes", "cron"],
             },
           },
@@ -172,7 +178,9 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 
 Notes:
 
-- `toolsBySender` keys can be a nick (e.g. `"eigen"`) or a full hostmask (`"eigen!~eigen@174.127.248.171"`) for stronger identity matching.
+- `toolsBySender` keys should use `id:` for IRC sender identity values:
+  `id:eigen` or `id:eigen!~eigen@174.127.248.171` for stronger matching.
+- Legacy unprefixed keys are still accepted and matched as `id:` only.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).
@@ -181,32 +189,32 @@ For more on group access vs mention-gating (and how they interact), see: [/chann
 
 To identify with NickServ after connect:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "nickserv": {
-        "enabled": true,
-        "service": "NickServ",
-        "password": "your-nickserv-password"
-      }
-    }
-  }
+  channels: {
+    irc: {
+      nickserv: {
+        enabled: true,
+        service: "NickServ",
+        password: "your-nickserv-password",
+      },
+    },
+  },
 }
 ```
 
 Optional one-time registration on connect:
 
-```json
+```json5
 {
-  "channels": {
-    "irc": {
-      "nickserv": {
-        "register": true,
-        "registerEmail": "bot@example.com"
-      }
-    }
-  }
+  channels: {
+    irc: {
+      nickserv: {
+        register: true,
+        registerEmail: "bot@example.com",
+      },
+    },
+  },
 }
 ```
 

@@ -8,24 +8,14 @@ type IncrementRunCompactionCountParams = Omit<
   Parameters<typeof incrementCompactionCount>[0],
   "tokensAfter"
 > & {
+  amount?: number;
   lastCallUsage?: NormalizedUsage;
   contextTokensUsed?: number;
+  newSessionId?: string;
 };
 
 export async function persistRunSessionUsage(params: PersistRunSessionUsageParams): Promise<void> {
-  await persistSessionUsageUpdate({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    usage: params.usage,
-    lastCallUsage: params.lastCallUsage,
-    promptTokens: params.promptTokens,
-    modelUsed: params.modelUsed,
-    providerUsed: params.providerUsed,
-    contextTokensUsed: params.contextTokensUsed,
-    systemPromptReport: params.systemPromptReport,
-    cliSessionId: params.cliSessionId,
-    logLabel: params.logLabel,
-  });
+  await persistSessionUsageUpdate(params);
 }
 
 export async function incrementRunCompactionCount(
@@ -42,6 +32,8 @@ export async function incrementRunCompactionCount(
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+    amount: params.amount,
     tokensAfter: tokensAfterCompaction,
+    newSessionId: params.newSessionId,
   });
 }

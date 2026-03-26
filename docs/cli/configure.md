@@ -24,10 +24,13 @@ Notes:
 
 - Choosing where the Gateway runs always updates `gateway.mode`. You can select "Continue" without other sections if that is all you need.
 - Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
+- If you run the daemon install step, token auth requires a token, and `gateway.auth.token` is SecretRef-managed, configure validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
+- If token auth requires a token and the configured token SecretRef is unresolved, configure blocks daemon install with actionable remediation guidance.
+- If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, configure blocks daemon install until mode is set explicitly.
 
 ## Examples
 
 ```bash
 openclaw configure
-openclaw configure --section models --section channels
+openclaw configure --section model --section channels
 ```

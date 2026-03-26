@@ -1,3 +1,6 @@
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -5,10 +8,13 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
@@ -28,6 +34,33 @@ import {
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
+
+async function prewarmConfiguredPrimaryModel(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
+  if (!explicitPrimary) {
+    return;
+  }
+  const { provider, model } = resolveConfiguredModelRef({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const agentDir = resolveOpenClawAgentDir();
+  try {
+    await ensureOpenClawModelsJson(params.cfg, agentDir);
+    const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
+      retryTransientProviderRuntimeMiss: true,
+    });
+    if (!resolved.model) {
+      throw new Error(resolved.error ?? `Unknown model: ${provider}/${model}`);
+    }
+  } catch (err) {
+    params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
+  }
+}
 
 export async function startGatewaySidecars(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -127,6 +160,10 @@ export async function startGatewaySidecars(params: {
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
   if (!skipChannels) {
     try {
+      await prewarmConfiguredPrimaryModel({
+        cfg: params.cfg,
+        log: params.log,
+      });
       await params.startChannels();
     } catch (err) {
       params.logChannels.error(`channel startup failed: ${String(err)}`);
@@ -159,6 +196,22 @@ export async function startGatewaySidecars(params: {
     params.log.warn(`plugin services failed to start: ${String(err)}`);
   }
 
+  if (params.cfg.acp?.enabled) {
+    void getAcpSessionManager()
+      .reconcilePendingSessionIdentities({ cfg: params.cfg })
+      .then((result) => {
+        if (result.checked === 0) {
+          return;
+        }
+        params.log.warn(
+          `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
+        );
+      })
+      .catch((err) => {
+        params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
+      });
+  }
+
   void startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }).catch((err) => {
     params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
   });
@@ -171,3 +224,7 @@ export async function startGatewaySidecars(params: {
 
   return { browserControl, pluginServices };
 }
+
+export const __testing = {
+  prewarmConfiguredPrimaryModel,
+};

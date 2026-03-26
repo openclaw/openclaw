@@ -1,10 +1,27 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDoctorRuntime, mockDoctorConfigSnapshot } from "./doctor.e2e-harness.js";
+import "./doctor.fast-path-mocks.js";
+
+const terminalNoteMock = vi.fn();
+
+vi.mock("../terminal/note.js", () => ({
+  note: (...args: unknown[]) => terminalNoteMock(...args),
+}));
+
+vi.doUnmock("./doctor-sandbox.js");
+
+let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ doctorCommand } = await import("./doctor.js"));
+    terminalNoteMock.mockClear();
+  });
+
   it("warns when per-agent sandbox docker/browser/prune overrides are ignored under shared scope", async () => {
     mockDoctorConfigSnapshot({
       config: {
@@ -32,13 +49,10 @@ describe("doctor command", () => {
       },
     });
 
-    note.mockClear();
-
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
     expect(
-      note.mock.calls.some(([message, title]) => {
+      terminalNoteMock.mock.calls.some(([message, title]) => {
         if (title !== "Sandbox" || typeof message !== "string") {
           return false;
         }
@@ -58,7 +72,6 @@ describe("doctor command", () => {
       },
     });
 
-    note.mockClear();
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
     const legacyPath = path.join("/Users/steipete", "openclaw");
@@ -74,10 +87,11 @@ describe("doctor command", () => {
       return realExists(value as never);
     });
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    expect(note.mock.calls.some(([_, title]) => title === "Extra workspace")).toBe(false);
+    expect(terminalNoteMock.mock.calls.some(([_, title]) => title === "Extra workspace")).toBe(
+      false,
+    );
 
     homedirSpy.mockRestore();
     existsSpy.mockRestore();

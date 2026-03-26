@@ -13,6 +13,18 @@
       "placeholder": "text-embedding-3-small",
       "help": "OpenAI embedding model to use"
     },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
+      "advanced": true
+    },
+    "embedding.dimensions": {
+      "label": "Dimensions",
+      "placeholder": "1536",
+      "help": "Vector dimensions for custom models (required for non-standard models)",
+      "advanced": true
+    },
     "dbPath": {
       "label": "Database Path",
       "placeholder": "~/.openclaw/memory/lancedb",
@@ -45,8 +57,13 @@
             "type": "string"
           },
           "model": {
-            "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number"
           }
         },
         "required": ["apiKey"]

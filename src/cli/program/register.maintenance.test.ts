@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const doctorCommand = vi.fn();
 const dashboardCommand = vi.fn();
@@ -32,10 +32,25 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
+const mockedModuleIds = [
+  "../../commands/doctor.js",
+  "../../commands/dashboard.js",
+  "../../commands/reset.js",
+  "../../commands/uninstall.js",
+  "../../runtime.js",
+];
+
 let registerMaintenanceCommands: typeof import("./register.maintenance.js").registerMaintenanceCommands;
 
 beforeAll(async () => {
   ({ registerMaintenanceCommands } = await import("./register.maintenance.js"));
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
+  vi.resetModules();
 });
 
 describe("registerMaintenanceCommands doctor action", () => {
@@ -72,5 +87,93 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.error).toHaveBeenCalledWith("Error: doctor failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(0);
+  });
+
+  it("maps --fix to repair=true", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--fix"]);
+
+    expect(doctorCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        repair: true,
+      }),
+    );
+  });
+
+  it("passes noOpen to dashboard command", async () => {
+    dashboardCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["dashboard", "--no-open"]);
+
+    expect(dashboardCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        noOpen: true,
+      }),
+    );
+  });
+
+  it("passes reset options to reset command", async () => {
+    resetCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "reset",
+      "--scope",
+      "full",
+      "--yes",
+      "--non-interactive",
+      "--dry-run",
+    ]);
+
+    expect(resetCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        scope: "full",
+        yes: true,
+        nonInteractive: true,
+        dryRun: true,
+      }),
+    );
+  });
+
+  it("passes uninstall options to uninstall command", async () => {
+    uninstallCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "uninstall",
+      "--service",
+      "--state",
+      "--workspace",
+      "--app",
+      "--all",
+      "--yes",
+      "--non-interactive",
+      "--dry-run",
+    ]);
+
+    expect(uninstallCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({
+        service: true,
+        state: true,
+        workspace: true,
+        app: true,
+        all: true,
+        yes: true,
+        nonInteractive: true,
+        dryRun: true,
+      }),
+    );
+  });
+
+  it("exits with code 1 when dashboard fails", async () => {
+    dashboardCommand.mockRejectedValue(new Error("dashboard failed"));
+
+    await runMaintenanceCli(["dashboard"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: dashboard failed");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

@@ -1,3 +1,11 @@
+---
+title: "Threat Model (MITRE ATLAS)"
+summary: "OpenClaw threat model mapped to the MITRE ATLAS framework"
+read_when:
+  - Reviewing security posture or threat scenarios
+  - Working on security features or audit responses
+---
+
 # OpenClaw Threat Model v1.0
 
 ## MITRE ATLAS Framework
@@ -21,7 +29,7 @@ This threat model is built on [MITRE ATLAS](https://atlas.mitre.org/), the indus
 
 ### Contributing to This Threat Model
 
-This is a living document maintained by the OpenClaw community. See [CONTRIBUTING-THREAT-MODEL.md](./CONTRIBUTING-THREAT-MODEL.md) for guidelines on contributing:
+This is a living document maintained by the OpenClaw community. See [CONTRIBUTING-THREAT-MODEL.md](/security/CONTRIBUTING-THREAT-MODEL) for guidelines on contributing:
 
 - Reporting new threats
 - Updating existing threats

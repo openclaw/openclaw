@@ -1,5 +1,4 @@
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
@@ -33,6 +32,20 @@ export function resolveAgentDeliveryPlan(params: {
   explicitThreadId?: string | number;
   accountId?: string;
   wantsDelivery: boolean;
+  /**
+   * The channel that originated the current agent turn.  When provided,
+   * overrides session-level `lastChannel` to prevent cross-channel reply
+   * routing in shared sessions (dmScope="main").
+   *
+   * @see https://github.com/openclaw/openclaw/issues/24152
+   */
+  turnSourceChannel?: string;
+  /** Turn-source `to` — paired with `turnSourceChannel`. */
+  turnSourceTo?: string;
+  /** Turn-source `accountId` — paired with `turnSourceChannel`. */
+  turnSourceAccountId?: string;
+  /** Turn-source `threadId` — paired with `turnSourceChannel`. */
+  turnSourceThreadId?: string | number;
 }): AgentDeliveryPlan {
   const requestedRaw =
     typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
@@ -44,11 +57,33 @@ export function resolveAgentDeliveryPlan(params: {
       ? params.explicitTo.trim()
       : undefined;
 
+  // Resolve turn-source channel for cross-channel safety.
+  const normalizedTurnSource = params.turnSourceChannel
+    ? normalizeMessageChannel(params.turnSourceChannel)
+    : undefined;
+  const turnSourceChannel =
+    normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
+      ? normalizedTurnSource
+      : undefined;
+  const turnSourceTo =
+    typeof params.turnSourceTo === "string" && params.turnSourceTo.trim()
+      ? params.turnSourceTo.trim()
+      : undefined;
+  const turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
+  const turnSourceThreadId =
+    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
+      ? params.turnSourceThreadId
+      : undefined;
+
   const baseDelivery = resolveSessionDeliveryTarget({
     entry: params.sessionEntry,
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
+    turnSourceChannel,
+    turnSourceTo,
+    turnSourceAccountId,
+    turnSourceThreadId,
   });
 
   const resolvedChannel = (() => {
@@ -59,7 +94,7 @@ export function resolveAgentDeliveryPlan(params: {
       if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
         return baseDelivery.channel;
       }
-      return params.wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
+      return INTERNAL_MESSAGE_CHANNEL;
     }
 
     if (isGatewayMessageChannel(requestedChannel)) {
@@ -69,7 +104,7 @@ export function resolveAgentDeliveryPlan(params: {
     if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
       return baseDelivery.channel;
     }
-    return params.wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
+    return INTERNAL_MESSAGE_CHANNEL;
   })();
 
   const deliveryTargetMode = explicitTo

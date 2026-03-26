@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, fetchMattermostMe, type MattermostClient } from "./client.js";
 
@@ -81,6 +81,7 @@ async function runMattermostReaction(
     baseUrl,
     botToken,
     fetchImpl: params.fetchImpl,
+    allowPrivateNetwork: resolved.config?.allowPrivateNetwork === true,
   });
 
   const cacheKey = `${baseUrl}:${botToken}`;

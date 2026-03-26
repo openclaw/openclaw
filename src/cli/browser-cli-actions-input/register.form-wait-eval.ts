@@ -2,7 +2,12 @@ import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
-import { callBrowserAct, readFields, resolveBrowserActionContext } from "./shared.js";
+import {
+  callBrowserAct,
+  logBrowserActionResult,
+  readFields,
+  resolveBrowserActionContext,
+} from "./shared.js";
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -30,11 +35,7 @@ export function registerBrowserFormWaitEvalCommands(
             targetId: opts.targetId?.trim() || undefined,
           },
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`filled ${fields.length} field(s)`);
+        logBrowserActionResult(parent, result, `filled ${fields.length} field(s)`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -83,11 +84,7 @@ export function registerBrowserFormWaitEvalCommands(
           },
           timeoutMs,
         });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("wait complete");
+        logBrowserActionResult(parent, result, "wait complete");
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -119,10 +116,10 @@ export function registerBrowserFormWaitEvalCommands(
           },
         });
         if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          defaultRuntime.writeJson(result);
           return;
         }
-        defaultRuntime.log(JSON.stringify(result.result ?? null, null, 2));
+        defaultRuntime.writeJson(result.result ?? null);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

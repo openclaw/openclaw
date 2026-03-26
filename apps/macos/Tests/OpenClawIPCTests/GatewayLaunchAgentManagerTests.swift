@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite struct GatewayLaunchAgentManagerTests {
-    @Test func launchAgentPlistSnapshotParsesArgsAndEnv() throws {
+struct GatewayLaunchAgentManagerTests {
+    @Test func `launch agent plist snapshot parses args and env`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [
@@ -24,7 +24,7 @@ import Testing
         #expect(snapshot.password == "pw")
     }
 
-    @Test func launchAgentPlistSnapshotAllowsMissingBind() throws {
+    @Test func `launch agent plist snapshot allows missing bind`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [

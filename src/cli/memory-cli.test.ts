@@ -2,11 +2,23 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  firstWrittenJsonArg,
+  spyRuntimeErrors,
+  spyRuntimeJson,
+  spyRuntimeLogs,
+} from "./test-runtime-capture.js";
 
-const getMemorySearchManager = vi.fn();
-const loadConfig = vi.fn(() => ({}));
-const resolveDefaultAgentId = vi.fn(() => "main");
+const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
+  vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  })),
+);
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -20,6 +32,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
 }));
 
+vi.mock("./command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway,
+}));
+
 let registerMemoryCli: typeof import("./memory-cli.js").registerMemoryCli;
 let defaultRuntime: typeof import("../runtime.js").defaultRuntime;
 let isVerbose: typeof import("../globals.js").isVerbose;
@@ -31,14 +47,25 @@ beforeAll(async () => {
   ({ isVerbose, setVerbose } = await import("../globals.js"));
 });
 
+beforeEach(() => {
+  getMemorySearchManager.mockReset();
+  loadConfig.mockReset().mockReturnValue({});
+  resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [] as string[],
+  }));
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
-  getMemorySearchManager.mockReset();
   process.exitCode = undefined;
   setVerbose(false);
 });
 
 describe("memory cli", () => {
+  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
+
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
     expect(sync).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
@@ -64,11 +91,53 @@ describe("memory cli", () => {
     getMemorySearchManager.mockResolvedValueOnce({ manager });
   }
 
+  function setupMemoryStatusWithInactiveSecretDiagnostics(close: ReturnType<typeof vi.fn>) {
+    resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig: {},
+      diagnostics: [inactiveMemorySecretDiagnostic] as string[],
+    });
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+  }
+
+  function hasLoggedInactiveSecretDiagnostic(spy: ReturnType<typeof vi.spyOn>) {
+    return spy.mock.calls.some(
+      (call: unknown[]) =>
+        typeof call[0] === "string" && call[0].includes(inactiveMemorySecretDiagnostic),
+    );
+  }
+
   async function runMemoryCli(args: string[]) {
     const program = new Command();
     program.name("test");
     registerMemoryCli(program);
     await program.parseAsync(["memory", ...args], { from: "user" });
+  }
+
+  function captureHelpOutput(command: Command | undefined) {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      output += String(chunk);
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      command?.outputHelp();
+      return output;
+    } finally {
+      writeSpy.mockRestore();
+    }
+  }
+
+  function getMemoryHelpText() {
+    const program = new Command();
+    registerMemoryCli(program);
+    const memoryCommand = program.commands.find((command) => command.name() === "memory");
+    return captureHelpOutput(memoryCommand);
   }
 
   async function withQmdIndexDb(content: string, run: (dbPath: string) => Promise<void>) {
@@ -92,7 +161,7 @@ describe("memory cli", () => {
     });
     mockManager({ ...params.manager, close });
 
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const error = spyRuntimeErrors(defaultRuntime);
     await runMemoryCli(params.args);
 
     params.beforeExpect?.();
@@ -123,7 +192,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
@@ -134,6 +203,59 @@ describe("memory cli", () => {
       expect.stringContaining("Embedding cache: enabled (123 entries)"),
     );
     expect(close).toHaveBeenCalled();
+  });
+
+  it("resolves configured memory SecretRefs through gateway snapshot", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          memorySearch: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    await runMemoryCli(["status"]);
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "memory status",
+        targetIds: new Set([
+          "agents.defaults.memorySearch.remote.apiKey",
+          "agents.list[].memorySearch.remote.apiKey",
+        ]),
+      }),
+    );
+  });
+
+  it("logs gateway secret diagnostics for non-json status output", async () => {
+    const close = vi.fn(async () => {});
+    setupMemoryStatusWithInactiveSecretDiagnostics(close);
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(hasLoggedInactiveSecretDiagnostic(log)).toBe(true);
+  });
+
+  it("documents memory help examples", () => {
+    const helpText = getMemoryHelpText();
+
+    expect(helpText).toContain("openclaw memory status --deep");
+    expect(helpText).toContain("Probe embedding provider readiness.");
+    expect(helpText).toContain('openclaw memory search "meeting notes"');
+    expect(helpText).toContain("Quick search using positional query.");
+    expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
+    expect(helpText).toContain("Limit results for focused troubleshooting.");
   });
 
   it("prints vector error when unavailable", async () => {
@@ -152,7 +274,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--agent", "main"]);
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
@@ -170,7 +292,7 @@ describe("memory cli", () => {
       close,
     });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--deep"]);
 
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
@@ -213,7 +335,7 @@ describe("memory cli", () => {
       close,
     });
 
-    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--index"]);
 
     expectCliSync(sync);
@@ -226,7 +348,7 @@ describe("memory cli", () => {
     const sync = vi.fn(async () => {});
     mockManager({ sync, close });
 
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
@@ -240,7 +362,7 @@ describe("memory cli", () => {
     await withQmdIndexDb("sqlite-bytes", async (dbPath) => {
       mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
 
-      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["index"]);
 
       expectCliSync(sync);
@@ -256,7 +378,7 @@ describe("memory cli", () => {
     await withQmdIndexDb("", async (dbPath) => {
       mockManager({ sync, status: () => ({ backend: "qmd", dbPath }), close });
 
-      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const error = spyRuntimeErrors(defaultRuntime);
       await runMemoryCli(["index"]);
 
       expectCliSync(sync);
@@ -305,12 +427,158 @@ describe("memory cli", () => {
     });
     mockManager({ search, close });
 
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const error = spyRuntimeErrors(defaultRuntime);
     await runMemoryCli(["search", "oops"]);
 
     expect(search).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
     expect(process.exitCode).toBe(1);
+  });
+
+  it("prints status json output when requested", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(["status", "--json"]);
+
+    const payload = firstWrittenJsonArg<unknown[]>(writeJson);
+    expect(payload).not.toBeNull();
+    if (!payload) {
+      throw new Error("expected json payload");
+    }
+    expect(Array.isArray(payload)).toBe(true);
+    expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("routes gateway secret diagnostics to stderr for json status output", async () => {
+    const close = vi.fn(async () => {});
+    setupMemoryStatusWithInactiveSecretDiagnostics(close);
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["status", "--json"]);
+
+    const payload = firstWrittenJsonArg<unknown[]>(writeJson);
+    expect(payload).not.toBeNull();
+    if (!payload) {
+      throw new Error("expected json payload");
+    }
+    expect(Array.isArray(payload)).toBe(true);
+    expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
+  });
+
+  it("logs default message when memory manager is missing", async () => {
+    getMemorySearchManager.mockResolvedValueOnce({ manager: null });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith("Memory search disabled.");
+  });
+
+  it("logs backend unsupported message when index has no sync", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["index"]);
+
+    expect(log).toHaveBeenCalledWith("Memory backend does not support manual reindex.");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints no matches for empty search results", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "hello"]);
+
+    expect(search).toHaveBeenCalledWith("hello", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("No matches.");
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("accepts --query for memory search", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "--query", "deployment notes"]);
+
+    expect(search).toHaveBeenCalledWith("deployment notes", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("No matches.");
+    expect(close).toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prefers --query when positional and flag are both provided", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["search", "positional", "--query", "flagged"]);
+
+    expect(search).toHaveBeenCalledWith("flagged", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("fails when neither positional query nor --query is provided", async () => {
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(["search"]);
+
+    expect(error).toHaveBeenCalledWith(
+      "Missing search query. Provide a positional query or use --query <text>.",
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints search results as json when requested", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => [
+      {
+        path: "memory/2026-01-12.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.5,
+        snippet: "Hello",
+      },
+    ]);
+    mockManager({ search, close });
+
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(["search", "hello", "--json"]);
+
+    const payload = firstWrittenJsonArg<{ results: unknown[] }>(writeJson);
+    expect(payload).not.toBeNull();
+    if (!payload) {
+      throw new Error("expected json payload");
+    }
+    expect(Array.isArray(payload.results)).toBe(true);
+    expect(payload.results).toHaveLength(1);
+    expect(close).toHaveBeenCalled();
   });
 });

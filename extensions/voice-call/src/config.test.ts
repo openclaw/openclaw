@@ -1,45 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { validateProviderConfig, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  validateProviderConfig,
+  normalizeVoiceCallConfig,
+  resolveVoiceCallConfig,
+  type VoiceCallConfig,
+} from "./config.js";
+import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
-  return {
-    enabled: true,
-    provider,
-    fromNumber: "+15550001234",
-    inboundPolicy: "disabled",
-    allowFrom: [],
-    outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
-    maxDurationSeconds: 300,
-    staleCallReaperSeconds: 600,
-    silenceTimeoutMs: 800,
-    transcriptTimeoutMs: 180000,
-    ringTimeoutMs: 30000,
-    maxConcurrentCalls: 1,
-    serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
-    tailscale: { mode: "off", path: "/voice/webhook" },
-    tunnel: { provider: "none", allowNgrokFreeTierLoopbackBypass: false },
-    webhookSecurity: {
-      allowedHosts: [],
-      trustForwardingHeaders: false,
-      trustedProxyIPs: [],
-    },
-    streaming: {
-      enabled: false,
-      sttProvider: "openai-realtime",
-      sttModel: "gpt-4o-transcribe",
-      silenceDurationMs: 800,
-      vadThreshold: 0.5,
-      streamPath: "/voice/stream",
-    },
-    skipSignatureVerification: false,
-    stt: { provider: "openai", model: "whisper-1" },
-    tts: {
-      provider: "openai",
-      openai: { model: "gpt-4o-mini-tts", voice: "coral" },
-    },
-    responseModel: "openai/gpt-4o-mini",
-    responseTimeoutMs: 30000,
-  };
+  return createVoiceCallBaseConfig({ provider });
+}
+
+function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
+  const tts = config.tts;
+  if (!tts?.elevenlabs) {
+    throw new Error("voice-call config did not preserve nested elevenlabs TTS config");
+  }
+  return { tts, elevenlabs: tts.elevenlabs };
 }
 
 describe("validateProviderConfig", () => {
@@ -200,5 +177,51 @@ describe("validateProviderConfig", () => {
       expect(result.valid).toBe(true);
       expect(result.errors).toEqual([]);
     });
+  });
+});
+
+describe("normalizeVoiceCallConfig", () => {
+  it("fills nested runtime defaults from a partial config boundary", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      streaming: {
+        enabled: true,
+        streamPath: "/custom-stream",
+      },
+    });
+
+    expect(normalized.serve.path).toBe("/voice/webhook");
+    expect(normalized.streaming.streamPath).toBe("/custom-stream");
+    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.tunnel.provider).toBe("none");
+    expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("accepts partial nested TTS overrides and preserves nested objects", () => {
+    const normalized = normalizeVoiceCallConfig({
+      tts: {
+        provider: "elevenlabs",
+        elevenlabs: {
+          apiKey: {
+            source: "env",
+            provider: "elevenlabs",
+            id: "ELEVENLABS_API_KEY",
+          },
+          voiceSettings: {
+            speed: 1.1,
+          },
+        },
+      },
+    });
+
+    const { tts, elevenlabs } = requireElevenLabsTtsConfig(normalized);
+    expect(tts.provider).toBe("elevenlabs");
+    expect(elevenlabs.apiKey).toEqual({
+      source: "env",
+      provider: "elevenlabs",
+      id: "ELEVENLABS_API_KEY",
+    });
+    expect(elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
   });
 });

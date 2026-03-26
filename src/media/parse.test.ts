@@ -8,40 +8,40 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("Hello world");
   });
 
-  it("accepts absolute media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:/Users/pete/My File.png");
-    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
-    expect(result.text).toBe("");
+  it("accepts supported media path variants", () => {
+    const pathCases = [
+      ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
+      ["/Users/pete/My File.png", 'MEDIA:"/Users/pete/My File.png"'],
+      ["./screenshots/image.png", "MEDIA:./screenshots/image.png"],
+      ["media/inbound/image.png", "MEDIA:media/inbound/image.png"],
+      ["./screenshot.png", "  MEDIA:./screenshot.png"],
+      ["C:\\Users\\pete\\Pictures\\snap.png", "MEDIA:C:\\Users\\pete\\Pictures\\snap.png"],
+      [
+        "/tmp/tts-fAJy8C/voice-1770246885083.opus",
+        "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus",
+      ],
+      ["image.png", "MEDIA:image.png"],
+    ] as const;
+    for (const [expectedPath, input] of pathCases) {
+      const result = splitMediaFromOutput(input);
+      expect(result.mediaUrls).toEqual([expectedPath]);
+      expect(result.text).toBe("");
+    }
   });
 
-  it("accepts quoted absolute media paths", () => {
-    const result = splitMediaFromOutput('MEDIA:"/Users/pete/My File.png"');
-    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts tilde media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:~/Pictures/My File.png");
-    expect(result.mediaUrls).toEqual(["~/Pictures/My File.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts traversal-like media paths (validated at load time)", () => {
-    const result = splitMediaFromOutput("MEDIA:../../etc/passwd");
-    expect(result.mediaUrls).toEqual(["../../etc/passwd"]);
-    expect(result.text).toBe("");
-  });
-
-  it("captures safe relative media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:./screenshots/image.png");
-    expect(result.mediaUrls).toEqual(["./screenshots/image.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts sandbox-relative media paths", () => {
-    const result = splitMediaFromOutput("MEDIA:media/inbound/image.png");
-    expect(result.mediaUrls).toEqual(["media/inbound/image.png"]);
-    expect(result.text).toBe("");
+  it("rejects traversal and home-dir paths and strips them from output", () => {
+    const traversalCases = [
+      "MEDIA:../../../etc/passwd",
+      "MEDIA:../../.env",
+      "MEDIA:~/.ssh/id_rsa",
+      "MEDIA:~/Pictures/My File.png",
+      "MEDIA:./foo/../../../etc/shadow",
+    ];
+    for (const input of traversalCases) {
+      const result = splitMediaFromOutput(input);
+      expect(result.mediaUrls, `should reject media: ${input}`).toBeUndefined();
+      expect(result.text, `should strip from text: ${input}`).toBe("");
+    }
   });
 
   it("keeps audio_as_voice detection stable across calls", () => {
@@ -57,30 +57,6 @@ describe("splitMediaFromOutput", () => {
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toBe(input);
-  });
-
-  it("parses MEDIA tags with leading whitespace", () => {
-    const result = splitMediaFromOutput("  MEDIA:./screenshot.png");
-    expect(result.mediaUrls).toEqual(["./screenshot.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts Windows-style paths", () => {
-    const result = splitMediaFromOutput("MEDIA:C:\\Users\\pete\\Pictures\\snap.png");
-    expect(result.mediaUrls).toEqual(["C:\\Users\\pete\\Pictures\\snap.png"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts TTS temp file paths", () => {
-    const result = splitMediaFromOutput("MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus");
-    expect(result.mediaUrls).toEqual(["/tmp/tts-fAJy8C/voice-1770246885083.opus"]);
-    expect(result.text).toBe("");
-  });
-
-  it("accepts bare filenames with extensions", () => {
-    const result = splitMediaFromOutput("MEDIA:image.png");
-    expect(result.mediaUrls).toEqual(["image.png"]);
-    expect(result.text).toBe("");
   });
 
   it("rejects bare words without file extensions", () => {

@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
+import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { escapeRegExp } from "../utils.js";
 import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
@@ -96,13 +97,19 @@ export function listChatCommands(params?: {
 
 export function isCommandEnabled(cfg: OpenClawConfig, commandKey: string): boolean {
   if (commandKey === "config") {
-    return cfg.commands?.config === true;
+    return isCommandFlagEnabled(cfg, "config");
+  }
+  if (commandKey === "mcp") {
+    return isCommandFlagEnabled(cfg, "mcp");
+  }
+  if (commandKey === "plugins") {
+    return isCommandFlagEnabled(cfg, "plugins");
   }
   if (commandKey === "debug") {
-    return cfg.commands?.debug === true;
+    return isCommandFlagEnabled(cfg, "debug");
   }
   if (commandKey === "bash") {
-    return cfg.commands?.bash === true;
+    return isCommandFlagEnabled(cfg, "bash");
   }
   return true;
 }
@@ -121,6 +128,11 @@ export function listChatCommandsForConfig(
 const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   discord: {
     tts: "voice",
+  },
+  slack: {
+    // Slack reserves /status — registering it returns "invalid name"
+    // and invalidates the entire slash_commands manifest array.
+    status: "agentstatus",
   },
 };
 

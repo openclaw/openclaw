@@ -24,6 +24,16 @@ const buildSessionLookup = (
   legacyKey: undefined,
 });
 
+const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    deviceId: "gateway-device-1",
+    publicKeyPem: "public",
+    privateKeyPem: "private",
+  })),
+);
+
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
@@ -31,7 +41,8 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeatNow: vi.fn(),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand: vi.fn(),
+  agentCommand: ingressAgentCommandMock,
+  agentCommandFromIngress: ingressAgentCommandMock,
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
@@ -40,8 +51,21 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
+vi.mock("../infra/push-apns.js", () => ({
+  registerApnsRegistration: registerApnsRegistrationMock,
+}));
+vi.mock("../infra/device-identity.js", () => ({
+  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+}));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  migrateAndPruneGatewaySessionStoreKey: vi.fn(
+    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
+      target: { canonicalKey: key, storeKeys: [key] },
+      primaryKey: key,
+      entry: store[key],
+    }),
+  ),
   pruneLegacyStoreKeys: vi.fn(),
   resolveGatewaySessionStoreTarget: vi.fn(({ key }: { key: string }) => ({
     canonicalKey: key,
@@ -52,8 +76,10 @@ vi.mock("./session-utils.js", () => ({
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
+import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { registerApnsRegistration } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
@@ -61,9 +87,11 @@ import { loadSessionEntry } from "./session-utils.js";
 
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
+const loadConfigMock = vi.mocked(loadConfig);
 const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
+const registerApnsRegistrationVi = vi.mocked(registerApnsRegistration);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -90,8 +118,10 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
-    enqueueSystemEventMock.mockReset();
-    requestHeartbeatNowMock.mockReset();
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
+    registerApnsRegistrationVi.mockClear();
+    loadOrCreateDeviceIdentityMock.mockClear();
   });
 
   it("enqueues exec.started events", async () => {
@@ -109,7 +139,10 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("enqueues exec.finished events with output", async () => {
@@ -183,14 +216,145 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:demo:main",
+    });
+  });
+
+  it("suppresses exec.started when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-1", {
+      event: "exec.started",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "run-silent-1",
+        command: "ls -la",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exec.finished when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-silent-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "some output",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exec.denied when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-silent-3",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("stores direct APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-direct", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-direct",
+      transport: "direct",
+      token: "abcd1234abcd1234abcd1234abcd1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+    });
+  });
+
+  it("stores relay APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-1",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+        tokenDebugSuffix: "abcd1234",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-relay",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+    });
+  });
+
+  it("rejects relay registrations bound to a different gateway identity", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-other",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "production",
+        distribution: "official",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).not.toHaveBeenCalled();
   });
 });
 
 describe("voice transcript events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
@@ -246,7 +410,9 @@ describe("voice transcript events", () => {
   });
 
   it("forwards transcript with voice provenance", async () => {
+    const addChatRun = vi.fn();
     const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
 
     await handleNodeEvent(ctx, "node-v2", {
       event: "voice.transcript",
@@ -268,6 +434,12 @@ describe("voice transcript events", () => {
         sourceTool: "gateway.voice.transcript",
       },
     });
+    expect(typeof opts.runId).toBe("string");
+    expect(opts.runId).not.toBe(opts.sessionId);
+    expect(addChatRun).toHaveBeenCalledWith(
+      opts.runId,
+      expect.objectContaining({ clientRunId: expect.stringMatching(/^voice-/) }),
+    );
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -290,11 +462,162 @@ describe("voice transcript events", () => {
   });
 });
 
+describe("notifications changed events", () => {
+  beforeEach(() => {
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    enqueueSystemEventMock.mockReturnValue(true);
+  });
+
+  it("enqueues notifications.changed posted events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n1", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-1",
+        packageName: "com.example.chat",
+        title: "Message",
+        text: "Ping from Alex",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
+      { sessionKey: "node-node-n1", contextKey: "notification:notif-1" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n1",
+    });
+  });
+
+  it("enqueues notifications.changed removed events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n2", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "notif-2",
+        packageName: "com.example.mail",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
+      { sessionKey: "node-node-n2", contextKey: "notification:notif-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n2",
+    });
+  });
+
+  it("wakes heartbeat on payload sessionKey when provided", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n4", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-4",
+        sessionKey: "agent:main:main",
+      }),
+    });
+
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("canonicalizes notifications session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-n5"),
+      canonicalKey: "agent:main:node-node-n5",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n5", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-5",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n5 key=notif-5)",
+      { sessionKey: "agent:main:node-node-n5", contextKey: "notification:notif-5" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:node-node-n5",
+    });
+  });
+
+  it("ignores notifications.changed payloads missing required fields", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n3", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not wake heartbeat when notifications.changed event is deduped", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const ctx = buildCtx();
+    const payload = JSON.stringify({
+      change: "posted",
+      key: "notif-dupe",
+      packageName: "com.example.chat",
+      title: "Message",
+      text: "Ping from Alex",
+    });
+
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses exec notifyOnExit events when payload opts out", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n7", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "approval-1",
+        exitCode: 0,
+        output: "ok",
+        suppressNotifyOnExit: true,
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("agent request events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionEntryMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
+    loadSessionEntryMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
@@ -359,5 +682,6 @@ describe("agent request events", () => {
       channel: "telegram",
       to: "123",
     });
+    expect(opts.runId).toBe(opts.sessionId);
   });
 });

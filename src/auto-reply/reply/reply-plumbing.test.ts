@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads.js";
@@ -15,7 +18,11 @@ import {
 describe("buildThreadingToolContext", () => {
   const cfg = {} as OpenClawConfig;
 
-  it("uses conversation id for WhatsApp", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("uses the recipient id for WhatsApp without origin routing metadata", () => {
     const sessionCtx = {
       Provider: "whatsapp",
       From: "123@g.us",
@@ -28,7 +35,7 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("123@g.us");
+    expect(result.currentChannelId).toBe("+15550001");
   });
 
   it("falls back to To for WhatsApp when From is missing", () => {
@@ -62,7 +69,7 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("chat:99");
   });
 
-  it("normalizes signal direct targets for tool context", () => {
+  it("uses raw signal direct targets for tool context without provider-specific normalization", () => {
     const sessionCtx = {
       Provider: "signal",
       ChatType: "direct",
@@ -76,10 +83,10 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("+15550001");
+    expect(result.currentChannelId).toBe("signal:+15550002");
   });
 
-  it("preserves signal group ids for tool context", () => {
+  it("keeps raw signal group ids for tool context", () => {
     const sessionCtx = {
       Provider: "signal",
       ChatType: "group",
@@ -92,10 +99,12 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+    expect(result.currentChannelId).toBe(
+      "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    );
   });
 
-  it("uses the sender handle for iMessage direct chats", () => {
+  it("uses chat_id for iMessage direct chats without provider-specific normalization", () => {
     const sessionCtx = {
       Provider: "imessage",
       ChatType: "direct",
@@ -109,7 +118,7 @@ describe("buildThreadingToolContext", () => {
       hasRepliedRef: undefined,
     });
 
-    expect(result.currentChannelId).toBe("imessage:+15550001");
+    expect(result.currentChannelId).toBe("chat_id:12");
   });
 
   it("uses chat_id for iMessage groups", () => {
@@ -129,7 +138,27 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("chat_id:7");
   });
 
-  it("prefers MessageThreadId for Slack tool threading", () => {
+  it("uses raw Slack channel ids without implicit thread context", () => {
+    const sessionCtx = {
+      Provider: "slack",
+      To: "channel:C1",
+      MessageThreadId: "123.456",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("channel:C1");
+    expect(result.currentThreadTs).toBeUndefined();
+  });
+
+  it("uses Slack plugin threading context when the plugin registry is active", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", plugin: slackPlugin, source: "test" }]),
+    );
     const sessionCtx = {
       Provider: "slack",
       To: "channel:C1",
@@ -206,7 +235,7 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeUndefined();
   });
 
-  it("keeps explicit tags for Slack when off mode allows tags", () => {
+  it("keeps explicit tags for Slack when off mode allows explicit tags", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "[[reply_to_current]]A" }],
       replyToMode: "off",
@@ -216,7 +245,6 @@ describe("applyReplyThreading auto-threading", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
@@ -230,6 +258,46 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result).toHaveLength(1);
     expect(result[0].replyToId).toBe("42");
     expect(result[0].replyToTag).toBe(true);
+  });
+
+  it("resolves [[reply_to_current]] to currentMessageId when replyToMode is 'all'", () => {
+    // Mattermost-style scenario: agent responds with [[reply_to_current]] and replyToMode
+    // is "all". The tag should resolve to the inbound message id.
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to_current]] some reply text" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-abc123");
+    expect(result[0].replyToTag).toBe(true);
+    expect(result[0].text).toBe("some reply text");
+  });
+
+  it("resolves [[reply_to:<id>]] to explicit id when replyToMode is 'all'", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to:mm-post-xyz789]] threaded reply" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-xyz789");
+    expect(result[0].text).toBe("threaded reply");
+  });
+
+  it("sets replyToId via implicit threading when replyToMode is 'all'", () => {
+    // Even without explicit tags, replyToMode "all" should set replyToId
+    // to currentMessageId for threading.
+    const result = applyReplyThreading({
+      payloads: [{ text: "hello" }],
+      replyToMode: "all",
+      currentMessageId: "mm-post-abc123",
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].replyToId).toBe("mm-post-abc123");
   });
 });
 

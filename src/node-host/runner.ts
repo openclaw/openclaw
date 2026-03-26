@@ -1,8 +1,16 @@
 import { resolveBrowserConfig } from "../browser/config.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
+import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import {
+  NODE_BROWSER_PROXY_COMMAND,
+  NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_SYSTEM_RUN_COMMANDS,
+} from "../infra/node-commands.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
@@ -27,17 +35,51 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
+  if (bin.includes("/") || bin.includes("\\")) {
+    return null;
+  }
+  return resolveExecutableFromPathEnv(bin, pathEnv) ?? null;
+}
+
+function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinTrustEntry[] {
+  const trustEntries: SkillBinTrustEntry[] = [];
+  const seen = new Set<string>();
+  for (const bin of bins) {
+    const name = bin.trim();
+    if (!name) {
+      continue;
+    }
+    const resolvedPath = resolveExecutablePathFromEnv(name, pathEnv);
+    if (!resolvedPath) {
+      continue;
+    }
+    const key = `${name}\u0000${resolvedPath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    trustEntries.push({ name, resolvedPath });
+  }
+  return trustEntries.toSorted(
+    (left, right) =>
+      left.name.localeCompare(right.name) || left.resolvedPath.localeCompare(right.resolvedPath),
+  );
+}
+
 class SkillBinsCache implements SkillBinsProvider {
-  private bins = new Set<string>();
+  private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
   private readonly ttlMs = 90_000;
   private readonly fetch: () => Promise<string[]>;
+  private readonly pathEnv: string;
 
-  constructor(fetch: () => Promise<string[]>) {
+  constructor(fetch: () => Promise<string[]>, pathEnv: string) {
     this.fetch = fetch;
+    this.pathEnv = pathEnv;
   }
 
-  async current(force = false): Promise<Set<string>> {
+  async current(force = false): Promise<SkillBinTrustEntry[]> {
     if (force || Date.now() - this.lastRefresh > this.ttlMs) {
       await this.refresh();
     }
@@ -47,11 +89,11 @@ class SkillBinsCache implements SkillBinsProvider {
   private async refresh() {
     try {
       const bins = await this.fetch();
-      this.bins = new Set(bins);
+      this.bins = resolveSkillBinTrustEntries(bins, this.pathEnv);
       this.lastRefresh = Date.now();
     } catch {
       if (!this.lastRefresh) {
-        this.bins = new Set();
+        this.bins = [];
       }
     }
   }
@@ -65,6 +107,37 @@ function ensureNodePathEnv(): string {
   }
   process.env.PATH = DEFAULT_NODE_PATH;
   return DEFAULT_NODE_PATH;
+}
+
+export async function resolveNodeHostGatewayCredentials(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string }> {
+  const mode = params.config.gateway?.mode === "remote" ? "remote" : "local";
+  const configForResolution =
+    mode === "local" ? buildNodeHostLocalAuthConfig(params.config) : params.config;
+  return await resolveGatewayConnectionAuth({
+    config: configForResolution,
+    env: params.env,
+    localTokenPrecedence: "env-first",
+    localPasswordPrecedence: "env-first", // pragma: allowlist secret
+    remoteTokenPrecedence: "env-first",
+    remotePasswordPrecedence: "env-first", // pragma: allowlist secret
+  });
+}
+
+function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
+  if (!config.gateway?.remote?.token && !config.gateway?.remote?.password) {
+    return config;
+  }
+  const nextConfig = structuredClone(config);
+  if (nextConfig.gateway?.remote) {
+    // Local node-host must not inherit gateway.remote.* auth material, which can
+    // suppress GatewayClient device-token fallback and cause local token mismatches.
+    nextConfig.gateway.remote.token = undefined;
+    nextConfig.gateway.remote.password = undefined;
+  }
+  return nextConfig;
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
@@ -90,26 +163,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.token : cfg.gateway?.auth?.token);
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
+  const { token, password } = await resolveNodeHostGatewayCredentials({
+    config: cfg,
+    env: process.env,
+  });
 
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const url = `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
-  // eslint-disable-next-line no-console
-  console.log(`node host PATH: ${pathEnv}`);
 
   const client = new GatewayClient({
     url,
-    token: token?.trim() || undefined,
-    password: password?.trim() || undefined,
+    token: token || undefined,
+    password: password || undefined,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -120,11 +188,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     scopes: [],
     caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
-      "system.run",
-      "system.which",
-      "system.execApprovals.get",
-      "system.execApprovals.set",
-      ...(browserProxyEnabled ? ["browser.proxy"] : []),
+      ...NODE_SYSTEM_RUN_COMMANDS,
+      ...NODE_EXEC_APPROVALS_COMMANDS,
+      ...(browserProxyEnabled ? [NODE_BROWSER_PROXY_COMMAND] : []),
     ],
     pathEnv,
     permissions: undefined,
@@ -155,7 +221,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     const res = await client.request<{ bins: Array<unknown> }>("skills.bins", {});
     const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
-  });
+  }, pathEnv);
 
   client.start();
   await new Promise(() => {});

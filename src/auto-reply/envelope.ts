@@ -102,7 +102,7 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-function formatTimestamp(
+export function formatEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
@@ -179,7 +179,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (params.ip?.trim()) {
     parts.push(sanitizeEnvelopeHeaderPart(params.ip.trim()));
   }
-  const ts = formatTimestamp(params.timestamp, resolved);
+  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }
@@ -197,12 +197,18 @@ export function formatInboundEnvelope(params: {
   sender?: SenderLabelParams;
   previousTimestamp?: number | Date;
   envelope?: EnvelopeFormatOptions;
+  fromMe?: boolean;
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
   const resolvedSenderRaw = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  const body =
+    isDirect && params.fromMe
+      ? `(self): ${params.body}`
+      : !isDirect && resolvedSender
+        ? `${resolvedSender}: ${params.body}`
+        : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,

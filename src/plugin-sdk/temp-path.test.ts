@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
 
 describe("buildRandomTempFilePath", () => {
@@ -17,17 +17,17 @@ describe("buildRandomTempFilePath", () => {
   });
 
   it("sanitizes prefix and extension to avoid path traversal segments", () => {
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     const result = buildRandomTempFilePath({
-      prefix: "../../line/../media",
+      prefix: "../../channels/../media",
       extension: "/../.jpg",
       now: 123,
       uuid: "abc",
     });
-    const tmpRoot = path.resolve(os.tmpdir());
     const resolved = path.resolve(result);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
-    expect(path.basename(result)).toBe("line-media-123-abc.jpg");
+    expect(path.basename(result)).toBe("channels-media-123-abc.jpg");
     expect(result).not.toContain("..");
   });
 });
@@ -45,15 +45,16 @@ describe("withTempDownloadPath", () => {
       },
     );
 
-    expect(capturedPath).toContain(path.join(os.tmpdir(), "line-media-"));
+    expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("sanitizes prefix and fileName", async () => {
+    const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
     let capturedPath = "";
     await withTempDownloadPath(
       {
-        prefix: "../../line/../media",
+        prefix: "../../channels/../media",
         fileName: "../../evil.bin",
       },
       async (tmpPath) => {
@@ -61,7 +62,6 @@ describe("withTempDownloadPath", () => {
       },
     );
 
-    const tmpRoot = path.resolve(os.tmpdir());
     const resolved = path.resolve(capturedPath);
     const rel = path.relative(tmpRoot, resolved);
     expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);

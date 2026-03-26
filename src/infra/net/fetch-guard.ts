@@ -1,16 +1,26 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { bindAbortRelay } from "../../utils/fetch-timeout.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
+import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedDispatcherPolicy,
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+export const GUARDED_FETCH_MODE = {
+  STRICT: "strict",
+  TRUSTED_ENV_PROXY: "trusted_env_proxy",
+} as const;
+
+export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
 export type GuardedFetchOptions = {
   url: string;
@@ -21,7 +31,15 @@ export type GuardedFetchOptions = {
   signal?: AbortSignal;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  mode?: GuardedFetchMode;
   pinDns?: boolean;
+  /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
+  proxy?: "env";
+  /**
+   * @deprecated use `mode: "trusted_env_proxy"` instead.
+   */
+  dangerouslyAllowEnvProxyWithoutPinnedDns?: boolean;
   auditContext?: string;
 };
 
@@ -31,44 +49,80 @@ export type GuardedFetchResult = {
   release: () => Promise<void>;
 };
 
+type GuardedFetchPresetOptions = Omit<
+  GuardedFetchOptions,
+  "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
+>;
+
 const DEFAULT_MAX_REDIRECTS = 3;
+const CROSS_ORIGIN_REDIRECT_SAFE_HEADERS = new Set([
+  "accept",
+  "accept-encoding",
+  "accept-language",
+  "cache-control",
+  "content-language",
+  "content-type",
+  "if-match",
+  "if-modified-since",
+  "if-none-match",
+  "if-unmodified-since",
+  "pragma",
+  "range",
+  "user-agent",
+]);
+
+export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
+}
+
+export function withTrustedEnvProxyGuardedFetchMode(
+  params: GuardedFetchPresetOptions,
+): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
+}
+
+function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
+  if (params.mode) {
+    return params.mode;
+  }
+  if (params.proxy === "env" && params.dangerouslyAllowEnvProxyWithoutPinnedDns === true) {
+    return GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY;
+  }
+  return GUARDED_FETCH_MODE.STRICT;
+}
+
+function assertExplicitProxySupportsPinnedDns(
+  url: URL,
+  dispatcherPolicy?: PinnedDispatcherPolicy,
+  pinDns?: boolean,
+): void {
+  if (
+    pinDns !== false &&
+    dispatcherPolicy?.mode === "explicit-proxy" &&
+    url.protocol !== "https:"
+  ) {
+    throw new Error(
+      "Explicit proxy SSRF pinning requires HTTPS targets; plain HTTP targets are not supported",
+    );
+  }
+}
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
+function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
+  if (!init?.headers) {
+    return init;
   }
-
-  if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
+  const incoming = new Headers(init.headers);
+  const headers = new Headers();
+  for (const [key, value] of incoming.entries()) {
+    if (CROSS_ORIGIN_REDIRECT_SAFE_HEADERS.has(key.toLowerCase())) {
+      headers.set(key, value);
     }
   }
-
-  const cleanup = () => {
-    clearTimeout(timeoutId);
-    if (signal) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  };
-
-  return { signal: controller.signal, cleanup };
+  return { ...init, headers };
 }
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -81,8 +135,9 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
       ? Math.max(0, Math.floor(params.maxRedirects))
       : DEFAULT_MAX_REDIRECTS;
+  const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildAbortSignal({
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });
@@ -99,6 +154,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
   const visited = new Set<string>();
   let currentUrl = params.url;
+  let currentInit = params.init ? { ...params.init } : undefined;
   let redirectCount = 0;
 
   while (true) {
@@ -116,16 +172,22 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
+      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
       const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
         lookupFn: params.lookupFn,
         policy: params.policy,
       });
-      if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
+      const canUseTrustedEnvProxy =
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+      if (canUseTrustedEnvProxy) {
+        const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
+        dispatcher = new EnvHttpProxyAgent();
+      } else if (params.pinDns !== false) {
+        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
-        ...(params.init ? { ...params.init } : {}),
+        ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
@@ -144,10 +206,14 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           await release(dispatcher);
           throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
-        const nextUrl = new URL(location, parsedUrl).toString();
+        const nextParsedUrl = new URL(location, parsedUrl);
+        const nextUrl = nextParsedUrl.toString();
         if (visited.has(nextUrl)) {
           await release(dispatcher);
           throw new Error("Redirect loop detected");
+        }
+        if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);
         void response.body?.cancel();

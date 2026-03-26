@@ -1,33 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
-
-vi.mock("../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
-}));
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
+vi.mock(
+  "../agents/model-fallback.js",
+  async () => await import("../test-utils/model-fallback.mock.js"),
+);
 
 const webMocks = vi.hoisted(() => ({
   webAuthExists: vi.fn().mockResolvedValue(true),
@@ -35,7 +14,7 @@ const webMocks = vi.hoisted(() => ({
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
 
-vi.mock("../web/session.js", () => webMocks);
+vi.mock("../../extensions/whatsapp/src/session.js", () => webMocks);
 
 import { getReplyFromConfig } from "./reply.js";
 

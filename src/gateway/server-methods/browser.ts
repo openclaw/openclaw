@@ -4,6 +4,10 @@ import {
   startBrowserControlServiceFromConfig,
 } from "../../browser/control-service.js";
 import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "../../browser/proxy-files.js";
+import {
+  isPersistentBrowserProfileMutation,
+  resolveRequestedBrowserProfile,
+} from "../../browser/request-policy.js";
 import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js";
 import { loadConfig } from "../../config/config.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
@@ -148,6 +152,17 @@ export const browserHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot mutate persistent browser profiles",
+        ),
+      );
+      return;
+    }
 
     const cfg = loadConfig();
     let nodeTarget: NodeSession | null = null;
@@ -169,10 +184,12 @@ export const browserHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
+        const platform = nodeTarget.platform ?? "unknown";
+        const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command: "browser.proxy" },
           }),
         );
@@ -185,7 +202,7 @@ export const browserHandlers: GatewayRequestHandlers = {
         query,
         body,
         timeoutMs,
-        profile: typeof query?.profile === "string" ? query.profile : undefined,
+        profile: resolveRequestedBrowserProfile({ query, body }),
       };
       const res = await context.nodeRegistry.invoke({
         nodeId: nodeTarget.nodeId,

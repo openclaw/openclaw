@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { dispatchChannelMessageAction } from "./message-actions.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
 import type { ChannelPlugin } from "./types.js";
 
 const handleAction = vi.fn(async () => jsonResult({ ok: true }));
@@ -11,22 +14,19 @@ const handleAction = vi.fn(async () => jsonResult({ ok: true }));
 const emptyRegistry = createTestRegistry([]);
 
 const discordPlugin: ChannelPlugin = {
-  id: "discord",
-  meta: {
+  ...createChannelTestPluginBase({
     id: "discord",
     label: "Discord",
-    selectionLabel: "Discord",
-    docsPath: "/channels/discord",
-    blurb: "Discord test plugin.",
-  },
-  capabilities: { chatTypes: ["direct", "group"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({}),
-  },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: {
+      listAccountIds: () => ["default"],
+    },
+  }),
   actions: {
-    listActions: () => ["kick"],
+    describeMessageTool: () => ({ actions: ["kick"] }),
     supportsAction: ({ action }) => action === "kick",
+    requiresTrustedRequesterSender: ({ action, toolContext }) =>
+      Boolean(action === "kick" && toolContext),
     handleAction,
   },
 };

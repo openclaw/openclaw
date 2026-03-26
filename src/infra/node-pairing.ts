@@ -7,10 +7,10 @@ import {
   upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
-export type NodePairingPendingRequest = {
-  requestId: string;
+type NodePairingNodeMetadata = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -23,26 +23,18 @@ export type NodePairingPendingRequest = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   remoteIp?: string;
+};
+
+export type NodePairingPendingRequest = NodePairingNodeMetadata & {
+  requestId: string;
   silent?: boolean;
   isRepair?: boolean;
   ts: number;
 };
 
-export type NodePairingPairedNode = {
-  nodeId: string;
+export type NodePairingPairedNode = Omit<NodePairingNodeMetadata, "requestId"> & {
   token: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
   bins?: string[];
-  permissions?: Record<string, boolean>;
-  remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
@@ -194,14 +186,17 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
-      return null;
-    }
-    delete state.pendingById[requestId];
-    await persistState(state, baseDir);
-    return { requestId, nodeId: pending.nodeId };
+    return await rejectPendingPairingRequest<
+      NodePairingPendingRequest,
+      NodePairingStateFile,
+      "nodeId"
+    >({
+      requestId,
+      idKey: "nodeId",
+      loadState: () => loadState(baseDir),
+      persistState: (state) => persistState(state, baseDir),
+      getId: (pending: NodePairingPendingRequest) => pending.nodeId,
+    });
   });
 }
 

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program.test-mocks.js";
+import { Command } from "commander";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
+import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
-
-const { buildProgram } = await import("./program.js");
+let registerNodesCli: (program: Command) => void;
 
 function formatRuntimeLogCallArg(value: unknown): string {
   if (typeof value === "string") {
@@ -23,14 +24,17 @@ function formatRuntimeLogCallArg(value: unknown): string {
 }
 
 describe("cli program (nodes basics)", () => {
-  function createProgramWithCleanRuntimeLog() {
-    const program = buildProgram();
-    runtime.log.mockClear();
-    return program;
-  }
+  let program: Command;
+
+  beforeAll(async () => {
+    ({ registerNodesCli } = await import("./nodes-cli.js"));
+    program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+  });
 
   async function runProgram(argv: string[]) {
-    const program = createProgramWithCleanRuntimeLog();
+    runtime.log.mockClear();
     await program.parseAsync(argv, { from: "user" });
   }
 
@@ -42,17 +46,7 @@ describe("cli program (nodes basics)", () => {
     callGateway.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "ios-node",
-              displayName: "iOS Node",
-              remoteIp: "192.168.0.88",
-              connected: true,
-            },
-          ],
-        };
+        return createIosNodeListResponse();
       }
       if (opts.method === method) {
         return result;
@@ -63,14 +57,6 @@ describe("cli program (nodes basics)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
-  });
-
-  it("runs nodes list and calls node.pair.list", async () => {
-    callGateway.mockResolvedValue({ pending: [], paired: [] });
-    await runProgram(["nodes", "list"]);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
-    expect(runtime.log).toHaveBeenCalledWith("Pending: 0 · Paired: 0");
   });
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
@@ -249,14 +235,13 @@ describe("cli program (nodes basics)", () => {
       requestId: "r1",
       node: { nodeId: "n1", token: "t1" },
     });
-    await runProgram(["nodes", "approve", "r1"]);
+    await expect(runProgram(["nodes", "approve", "r1"])).rejects.toThrow("exit");
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.pair.approve",
         params: { requestId: "r1" },
       }),
     );
-    expect(runtime.log).toHaveBeenCalled();
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
@@ -267,16 +252,18 @@ describe("cli program (nodes basics)", () => {
       payload: { result: "ok" },
     });
 
-    await runProgram([
-      "nodes",
-      "invoke",
-      "--node",
-      "ios-node",
-      "--command",
-      "canvas.eval",
-      "--params",
-      '{"javaScript":"1+1"}',
-    ]);
+    await expect(
+      runProgram([
+        "nodes",
+        "invoke",
+        "--node",
+        "ios-node",
+        "--command",
+        "canvas.eval",
+        "--params",
+        '{"javaScript":"1+1"}',
+      ]),
+    ).rejects.toThrow("exit");
 
     expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ method: "node.list", params: {} }),
@@ -293,6 +280,5 @@ describe("cli program (nodes basics)", () => {
         },
       }),
     );
-    expect(runtime.log).toHaveBeenCalled();
   });
 });

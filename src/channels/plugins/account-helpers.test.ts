@@ -1,18 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createAccountListHelpers } from "./account-helpers.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  createAccountListHelpers,
+  describeAccountSnapshot,
+  listCombinedAccountIds,
+  mergeAccountConfig,
+  resolveListedDefaultAccountId,
+  resolveMergedAccountConfig,
+} from "./account-helpers.js";
 
 const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
   createAccountListHelpers("testchannel");
 
-function cfg(accounts?: Record<string, unknown> | null): OpenClawConfig {
+function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string): OpenClawConfig {
   if (accounts === null) {
-    return { channels: { testchannel: {} } } as unknown as OpenClawConfig;
+    return {
+      channels: {
+        testchannel: defaultAccount ? { defaultAccount } : {},
+      },
+    } as unknown as OpenClawConfig;
   }
-  if (accounts === undefined) {
+  if (accounts === undefined && !defaultAccount) {
     return {} as unknown as OpenClawConfig;
   }
-  return { channels: { testchannel: { accounts } } } as unknown as OpenClawConfig;
+  return {
+    channels: {
+      testchannel: {
+        ...(accounts === undefined ? {} : { accounts }),
+        ...(defaultAccount ? { defaultAccount } : {}),
+      },
+    },
+  } as unknown as OpenClawConfig;
 }
 
 describe("createAccountListHelpers", () => {
@@ -41,6 +60,22 @@ describe("createAccountListHelpers", () => {
     });
   });
 
+  describe("with normalizeAccountId option", () => {
+    const normalized = createAccountListHelpers("testchannel", { normalizeAccountId });
+
+    it("normalizes and deduplicates configured account ids", () => {
+      expect(
+        normalized.listConfiguredAccountIds(
+          cfg({
+            "Router D": {},
+            "router-d": {},
+            "Personal A": {},
+          }),
+        ),
+      ).toEqual(["router-d", "personal-a"]);
+    });
+  });
+
   describe("listAccountIds", () => {
     it('returns ["default"] for empty config', () => {
       expect(listAccountIds({} as OpenClawConfig)).toEqual(["default"]);
@@ -56,6 +91,18 @@ describe("createAccountListHelpers", () => {
   });
 
   describe("resolveDefaultAccountId", () => {
+    it("prefers configured defaultAccount when it matches a configured account id", () => {
+      expect(resolveDefaultAccountId(cfg({ alpha: {}, beta: {} }, "beta"))).toBe("beta");
+    });
+
+    it("normalizes configured defaultAccount before matching", () => {
+      expect(resolveDefaultAccountId(cfg({ "router-d": {} }, "Router D"))).toBe("router-d");
+    });
+
+    it("falls back when configured defaultAccount is missing", () => {
+      expect(resolveDefaultAccountId(cfg({ beta: {}, alpha: {} }, "missing"))).toBe("alpha");
+    });
+
     it('returns "default" when present', () => {
       expect(resolveDefaultAccountId(cfg({ default: {}, other: {} }))).toBe("default");
     });
@@ -66,6 +113,268 @@ describe("createAccountListHelpers", () => {
 
     it('returns "default" for empty config', () => {
       expect(resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
+    });
+
+    it("can preserve configured defaults that are not present in accounts", () => {
+      const preserveDefault = createAccountListHelpers("testchannel", {
+        allowUnlistedDefaultAccount: true,
+      });
+
+      expect(preserveDefault.resolveDefaultAccountId(cfg({ default: {}, zeta: {} }, "ops"))).toBe(
+        "ops",
+      );
+    });
+  });
+});
+
+describe("listCombinedAccountIds", () => {
+  it("combines configured, additional, and implicit ids once", () => {
+    expect(
+      listCombinedAccountIds({
+        configuredAccountIds: ["work", "alerts"],
+        additionalAccountIds: ["default", "alerts"],
+        implicitAccountId: "ops",
+      }),
+    ).toEqual(["alerts", "default", "ops", "work"]);
+  });
+
+  it("uses the fallback id when no accounts are present", () => {
+    expect(
+      listCombinedAccountIds({
+        configuredAccountIds: [],
+        fallbackAccountIdWhenEmpty: "default",
+      }),
+    ).toEqual(["default"]);
+  });
+});
+
+describe("resolveListedDefaultAccountId", () => {
+  it("prefers the configured default when present in the listed ids", () => {
+    expect(
+      resolveListedDefaultAccountId({
+        accountIds: ["alerts", "work"],
+        configuredDefaultAccountId: "work",
+      }),
+    ).toBe("work");
+  });
+
+  it("matches configured defaults against normalized listed ids", () => {
+    expect(
+      resolveListedDefaultAccountId({
+        accountIds: ["Router D"],
+        configuredDefaultAccountId: "router-d",
+      }),
+    ).toBe("router-d");
+  });
+
+  it("prefers the default account id when listed", () => {
+    expect(
+      resolveListedDefaultAccountId({
+        accountIds: ["default", "work"],
+      }),
+    ).toBe("default");
+  });
+
+  it("can preserve an unlisted configured default", () => {
+    expect(
+      resolveListedDefaultAccountId({
+        accountIds: ["default", "work"],
+        configuredDefaultAccountId: "ops",
+        allowUnlistedDefaultAccount: true,
+      }),
+    ).toBe("ops");
+  });
+
+  it("supports an explicit fallback id for ambiguous multi-account setups", () => {
+    expect(
+      resolveListedDefaultAccountId({
+        accountIds: ["alerts", "work"],
+        ambiguousFallbackAccountId: "default",
+      }),
+    ).toBe("default");
+  });
+});
+
+describe("describeAccountSnapshot", () => {
+  it("builds the standard snapshot shape with optional extras", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {
+          accountId: "work",
+          name: "Work",
+          enabled: true,
+        },
+        configured: true,
+        extra: {
+          tokenSource: "config",
+        },
+      }),
+    ).toEqual({
+      accountId: "work",
+      name: "Work",
+      enabled: true,
+      configured: true,
+      tokenSource: "config",
+    });
+  });
+
+  it("normalizes missing identity fields to the shared defaults", () => {
+    expect(
+      describeAccountSnapshot({
+        account: {},
+      }),
+    ).toEqual({
+      accountId: "default",
+      name: undefined,
+      enabled: true,
+      configured: undefined,
+    });
+  });
+});
+
+describe("mergeAccountConfig", () => {
+  it("drops accounts from the base config before merging", () => {
+    const merged = mergeAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+      accounts?: Record<string, { name?: string }>;
+    }>({
+      channelConfig: {
+        enabled: true,
+        accounts: {
+          work: { name: "Work" },
+        },
+      },
+      accountConfig: {
+        name: "Work",
+      },
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("drops caller-specified keys from the base config before merging", () => {
+    const merged = mergeAccountConfig<{
+      enabled?: boolean;
+      defaultAccount?: string;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+        defaultAccount: "work",
+      },
+      accountConfig: {
+        name: "Work",
+      },
+      omitKeys: ["defaultAccount"],
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("deep-merges selected nested object keys", () => {
+    const merged = mergeAccountConfig<{
+      commands?: { native?: boolean; callbackPath?: string };
+    }>({
+      channelConfig: {
+        commands: {
+          native: true,
+        },
+      },
+      accountConfig: {
+        commands: {
+          callbackPath: "/work",
+        },
+      },
+      nestedObjectKeys: ["commands"],
+    });
+
+    expect(merged).toEqual({
+      commands: {
+        native: true,
+        callbackPath: "/work",
+      },
+    });
+  });
+});
+
+describe("resolveMergedAccountConfig", () => {
+  it("merges the matching account config into channel config", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        work: {
+          name: "Work",
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Work",
+    });
+  });
+
+  it("supports normalized account lookups", () => {
+    const merged = resolveMergedAccountConfig<{
+      enabled?: boolean;
+      name?: string;
+    }>({
+      channelConfig: {
+        enabled: true,
+      },
+      accounts: {
+        "Router D": {
+          name: "Router",
+        },
+      },
+      accountId: "router-d",
+      normalizeAccountId,
+    });
+
+    expect(merged).toEqual({
+      enabled: true,
+      name: "Router",
+    });
+  });
+
+  it("deep-merges selected nested object keys after resolving the account", () => {
+    const merged = resolveMergedAccountConfig<{
+      nickserv?: { service?: string; registerEmail?: string };
+    }>({
+      channelConfig: {
+        nickserv: {
+          service: "NickServ",
+        },
+      },
+      accounts: {
+        work: {
+          nickserv: {
+            registerEmail: "work@example.com",
+          },
+        },
+      },
+      accountId: "work",
+      nestedObjectKeys: ["nickserv"],
+    });
+
+    expect(merged).toEqual({
+      nickserv: {
+        service: "NickServ",
+        registerEmail: "work@example.com",
+      },
     });
   });
 });
