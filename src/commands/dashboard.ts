@@ -2,7 +2,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readGatewayTokenEnv } from "../gateway/credentials.js";
-import { probeGateway } from "../gateway/probe.js";
 import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,57 +13,52 @@ import {
   resolveControlUiLinks,
 } from "./onboard-helpers.js";
 import { getDaemonStatusSummary } from "./status.daemon.js";
-import { resolveGatewayProbeAuthResolution } from "./status.gateway-probe.js";
 
 type DashboardOptions = {
   noOpen?: boolean;
 };
 
-function looksLikeGatewayReachableClose(
-  code: number | undefined,
-  reason: string | undefined,
-): boolean {
-  if (code !== 1008) {
-    return false;
+async function probeDashboardHttpReachability(
+  url: string,
+  timeoutMs: number,
+): Promise<{ reachable: boolean; error?: string }> {
+  if (typeof fetch !== "function") {
+    return { reachable: false, error: "fetch unavailable" };
   }
-  const normalized = (reason ?? "").toLowerCase();
-  return (
-    normalized.includes("auth") ||
-    normalized.includes("token") ||
-    normalized.includes("password") ||
-    normalized.includes("scope") ||
-    normalized.includes("role") ||
-    normalized.includes("device identity")
-  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetch(url, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    return { reachable: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { reachable: false, error: message };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function shouldBlockOnUnreachableGateway(params: {
   cfg: OpenClawConfig;
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  probeWsUrl: string;
+  probeHttpUrl: string;
   runtime: RuntimeEnv;
 }): Promise<boolean> {
   if (params.cfg.gateway?.mode === "remote") {
     return false;
   }
 
-  const authResolution = await resolveGatewayProbeAuthResolution(params.cfg);
-  const probe = await probeGateway({
-    url: params.probeWsUrl,
-    auth: authResolution.auth,
-    timeoutMs: 1_500,
-    includeDetails: false,
-  }).catch(() => null);
-
-  if (!probe) {
-    return false;
-  }
-  if (probe.ok || looksLikeGatewayReachableClose(probe.close?.code, probe.close?.reason)) {
+  const probe = await probeDashboardHttpReachability(params.probeHttpUrl, 1_500);
+  if (probe.reachable) {
     return false;
   }
 
   const detail = probe.error ? ` (${probe.error})` : "";
-  params.runtime.error(`Gateway is not reachable at ${params.probeWsUrl}${detail}.`);
+  params.runtime.error(`Gateway is not reachable at ${params.probeHttpUrl}${detail}.`);
 
   if (!params.snapshot.exists) {
     params.runtime.log(`Missing config: run ${formatCliCommand("openclaw setup")}.`);
@@ -166,16 +160,12 @@ export async function dashboardCommand(
   }
 
   if (!options.noOpen) {
-    const localProbeWsUrl = resolveControlUiLinks({
-      port,
-      bind: "loopback",
-      basePath,
-    }).wsUrl;
+    const probeHttpUrl = new URL("/healthz", links.httpUrl).toString();
     if (
       await shouldBlockOnUnreachableGateway({
         cfg,
         snapshot,
-        probeWsUrl: localProbeWsUrl,
+        probeHttpUrl,
         runtime,
       })
     ) {

@@ -8,9 +8,10 @@ const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
-const probeGatewayMock = vi.hoisted(() => vi.fn());
-const resolveGatewayProbeAuthResolutionMock = vi.hoisted(() => vi.fn());
 const getDaemonStatusSummaryMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn());
+
+vi.stubGlobal("fetch", fetchMock);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -28,16 +29,8 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: (opts: unknown) => probeGatewayMock(opts),
-}));
-
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
-}));
-
-vi.mock("./status.gateway-probe.js", () => ({
-  resolveGatewayProbeAuthResolution: (cfg: unknown) => resolveGatewayProbeAuthResolutionMock(cfg),
 }));
 
 vi.mock("./status.daemon.js", () => ({
@@ -77,12 +70,7 @@ function mockSnapshot(token: unknown = "abc", gateway: Record<string, unknown> =
     }),
   );
   resolveSecretRefValuesMock.mockReset();
-  resolveGatewayProbeAuthResolutionMock.mockResolvedValue({ auth: { token: "abc" } });
-  probeGatewayMock.mockResolvedValue({
-    ok: true,
-    close: null,
-    error: null,
-  });
+  fetchMock.mockResolvedValue({ ok: true, status: 200 });
   getDaemonStatusSummaryMock.mockResolvedValue({
     label: "LaunchAgent",
     installed: true,
@@ -101,6 +89,7 @@ describe("dashboardCommand", () => {
 
   beforeEach(() => {
     resetRuntime();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     readConfigFileSnapshotMock.mockClear();
     resolveGatewayPortMock.mockClear();
     resolveControlUiLinksMock.mockClear();
@@ -108,9 +97,8 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
-    probeGatewayMock.mockClear();
-    resolveGatewayProbeAuthResolutionMock.mockClear();
     getDaemonStatusSummaryMock.mockClear();
+    fetchMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -157,7 +145,7 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(probeGatewayMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
@@ -165,7 +153,7 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("uses loopback for local preflight even when the dashboard URL keeps custom bind", async () => {
+  it("uses the resolved dashboard host for the preflight health probe", async () => {
     mockSnapshot("abc123", { bind: "custom", customBindHost: "10.0.0.5" });
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
@@ -179,13 +167,10 @@ describe("dashboardCommand", () => {
       customBindHost: "10.0.0.5",
       basePath: undefined,
     });
-    expect(resolveControlUiLinksMock).toHaveBeenNthCalledWith(2, {
-      port: 18789,
-      bind: "loopback",
-      basePath: undefined,
-    });
-    expect(probeGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    expect(resolveControlUiLinksMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://10.0.0.5:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
     );
     expect(openUrlMock).toHaveBeenCalledWith("http://10.0.0.5:18789/#token=abc123");
   });
@@ -261,11 +246,7 @@ describe("dashboardCommand", () => {
 
   it("does not copy or open the dashboard when the local gateway is unreachable", async () => {
     mockSnapshot("abc123");
-    probeGatewayMock.mockResolvedValue({
-      ok: false,
-      close: null,
-      error: "connect failed: ECONNREFUSED 127.0.0.1:18789",
-    });
+    fetchMock.mockRejectedValue(new Error("connect failed: ECONNREFUSED 127.0.0.1:18789"));
     getDaemonStatusSummaryMock.mockResolvedValue({
       label: "LaunchAgent",
       installed: false,
@@ -278,34 +259,20 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
     expect(copyToClipboardMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "Gateway is not reachable at ws://127.0.0.1:18789 (connect failed: ECONNREFUSED 127.0.0.1:18789).",
+      "Gateway is not reachable at http://127.0.0.1:18789/healthz (connect failed: ECONNREFUSED 127.0.0.1:18789).",
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Gateway service is not installed"),
     );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Fix reachability first"));
-  });
-
-  it("treats device-identity close as reachable during local preflight", async () => {
-    mockSnapshot("abc123");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-    probeGatewayMock.mockResolvedValue({
-      ok: false,
-      close: { code: 1008, reason: "device identity required" },
-      error: "device identity required",
-    });
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
-    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
-    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("avoids the mode-unset hint when the config file is missing", async () => {
@@ -326,12 +293,7 @@ describe("dashboardCommand", () => {
         wsUrl: bind === "loopback" ? "ws://127.0.0.1:18789" : "ws://10.0.0.5:18789",
       }),
     );
-    resolveGatewayProbeAuthResolutionMock.mockResolvedValue({ auth: {} });
-    probeGatewayMock.mockResolvedValue({
-      ok: false,
-      close: null,
-      error: "connect failed: ECONNREFUSED 127.0.0.1:18789",
-    });
+    fetchMock.mockRejectedValue(new Error("connect failed: ECONNREFUSED 127.0.0.1:18789"));
     getDaemonStatusSummaryMock.mockResolvedValue({
       label: "LaunchAgent",
       installed: false,
@@ -344,6 +306,10 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/healthz",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Missing config"));
     expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Gateway mode is unset"));
   });
