@@ -527,13 +527,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
+  // Note: when suppressAssistantText is true, the message tool records
+  // participation independently via action-runtime.ts.
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
   }
 
-  // Always clean up ack/typing reactions after dispatch completes, even when
-  // regular text was suppressed — the message tool may still have delivered a reply.
+  // Always clean up ack/typing reactions regardless of whether any text reply
+  // was delivered — the message tool may have already replied, or the agent
+  // may have been intentionally silent.
   removeAckReactionAfterReply({
     removeAfterReply: ctx.removeAckAfterReply,
     ackReactionPromise: prepared.ackReactionPromise,
