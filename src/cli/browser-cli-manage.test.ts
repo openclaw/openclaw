@@ -1,51 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserManageCommands } from "./browser-cli-manage.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-  createBrowserProgram,
-  getBrowserCliRuntime,
-  getBrowserCliRuntimeCapture,
-} from "./browser-cli-test-helpers.js";
-
-const mocks = vi.hoisted(() => {
-  return {
-    callBrowserRequest: vi.fn<
-      (
-        opts: unknown,
-        req: { path?: string },
-        runtimeOpts?: { timeoutMs?: number },
-      ) => Promise<Record<string, unknown>>
-    >(async () => ({})),
-  };
-});
-
-vi.mock("./browser-cli-shared.js", () => ({
-  callBrowserRequest: mocks.callBrowserRequest,
-}));
-
-vi.mock("./cli-utils.js", async () => ({
-  ...(await (await import("./browser-cli-test-helpers.js")).createBrowserCliUtilsMockModule()),
-}));
-
-vi.mock(
-  "../runtime.js",
-  async () =>
-    await (await import("./browser-cli-test-helpers.js")).createBrowserCliRuntimeMockModule(),
-);
-
-function createProgram() {
-  const { program, browser, parentOpts } = createBrowserProgram();
-  registerBrowserManageCommands(browser, parentOpts);
-  return program;
-}
+  createBrowserManageProgram,
+  getBrowserManageCallBrowserRequestMock,
+} from "./browser-cli-manage.test-helpers.js";
+import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli-test-helpers.js";
 
 describe("browser manage output", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    getBrowserManageCallBrowserRequestMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
-    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -69,7 +36,7 @@ describe("browser manage output", () => {
         : {},
     );
 
-    const program = createProgram();
+    const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "--browser-profile", "chrome-live", "status"], {
       from: "user",
     });
@@ -81,7 +48,7 @@ describe("browser manage output", () => {
   });
 
   it("shows configured userDataDir for existing-session status", async () => {
-    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -105,7 +72,7 @@ describe("browser manage output", () => {
         : {},
     );
 
-    const program = createProgram();
+    const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "--browser-profile", "brave-live", "status"], {
       from: "user",
     });
@@ -117,7 +84,7 @@ describe("browser manage output", () => {
   });
 
   it("shows chrome-mcp transport in browser profiles output", async () => {
-    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/profiles"
         ? {
             profiles: [
@@ -138,7 +105,7 @@ describe("browser manage output", () => {
         : {},
     );
 
-    const program = createProgram();
+    const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "profiles"], { from: "user" });
 
     const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
@@ -148,7 +115,7 @@ describe("browser manage output", () => {
   });
 
   it("shows chrome-mcp transport after creating an existing-session profile", async () => {
-    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/profiles/create"
         ? {
             ok: true,
@@ -163,7 +130,7 @@ describe("browser manage output", () => {
         : {},
     );
 
-    const program = createProgram();
+    const program = createBrowserManageProgram();
     await program.parseAsync(
       ["browser", "create-profile", "--name", "chrome-live", "--driver", "existing-session"],
       { from: "user" },
@@ -176,7 +143,7 @@ describe("browser manage output", () => {
   });
 
   it("redacts sensitive remote cdpUrl details in status output", async () => {
-    mocks.callBrowserRequest.mockImplementation(async (_opts: unknown, req: { path?: string }) =>
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/"
         ? {
             enabled: true,
@@ -201,7 +168,7 @@ describe("browser manage output", () => {
         : {},
     );
 
-    const program = createProgram();
+    const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "--browser-profile", "remote", "status"], {
       from: "user",
     });
