@@ -344,7 +344,10 @@ export function registerNodesStatusCommands(nodes: Command) {
                     ? liveData.connectedAtMs
                     : undefined;
 
-              const connected = liveData?.connected ?? false;
+              // Only set `connected` when we actually have live status for this node.
+              // If node.list failed (fallback path), leave it unset so JSON output reflects "unknown"
+              // rather than synthesizing "disconnected".
+              const connected = liveData?.connected;
 
               if (pairingData) {
                 return {
