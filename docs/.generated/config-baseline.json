@@ -31120,7 +31120,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "channels",
+        "network"
+      ],
+      "label": "Slack Suppress Assistant Text",
       "hasChildren": false
     },
     {
