@@ -340,7 +340,7 @@ jobs:
             extensions)
               pnpm test:extensions
               ;;
-            contracts)
+            contracts|contracts-protocol)
               pnpm test:contracts
               pnpm protocol:check
               ;;
@@ -422,11 +422,20 @@ jobs:
         run: |
           set -euo pipefail
           case "$TASK" in
-            test|compat-node22)
+            test)
               pnpm test
               ;;
             channels)
               pnpm test:channels
+              ;;
+            compat-node22)
+              pnpm build
+              pnpm ui:build
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
+              node scripts/stage-bundled-plugin-runtime-deps.mjs
+              node --import tsx scripts/release-check.ts
               ;;
             *)
               echo "Unsupported checks task: $TASK" >&2
