@@ -616,7 +616,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.links.scope":
     "Controls when link understanding runs relative to conversation context and message type. Keep scope conservative to avoid unnecessary fetches on messages where links are not actionable.",
   "tools.media.models":
-    "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
+    "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Prefer direct providers or concrete model ids here; avoid LiteLLM routing aliases like vision/simple/medium/complex in tools.media.",
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
   "tools.media.asyncCompletion.directSend":
@@ -634,7 +634,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.media.image.attachments":
     "Attachment handling policy for image inputs, including which message attachments qualify for image analysis. Use restrictive settings in untrusted channels to reduce unexpected processing.",
   "tools.media.image.models":
-    "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
+    "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts, and avoid LiteLLM routing aliases in tools.media model lists.",
   "tools.media.image.scope":
     "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
   ...MEDIA_AUDIO_FIELD_HELP,
@@ -651,7 +651,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.media.video.attachments":
     "Attachment eligibility policy for video analysis, defining which message files can trigger video processing. Keep this explicit in shared channels to prevent accidental large media workloads.",
   "tools.media.video.models":
-    "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support to minimize degraded summaries.",
+    "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support and avoid LiteLLM routing aliases in tools.media model lists.",
   "tools.media.video.scope":
     "Scope selector controlling when video understanding is attempted across incoming events. Narrow scope in noisy channels, and broaden only where video interpretation is core to workflow.",
   "skills.load.watch":
@@ -747,7 +747,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
   "tools.web.fetch.maxResponseBytes": "Max download size before truncation.",
+<<<<<<< HEAD
   "tools.web.fetch.provider": "Web fetch fallback provider id.",
+=======
+>>>>>>> f4fffef0f9 (config: reject litellm routing aliases in tools.media)
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
