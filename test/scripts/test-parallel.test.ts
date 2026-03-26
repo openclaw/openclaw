@@ -200,7 +200,46 @@ describe("scripts/test-parallel lane planning", () => {
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
     expect(output).toContain("unit-fast filters=all maxWorkers=");
-    expect(output).toContain("extensions filters=all maxWorkers=");
+    expect(output).toMatch(/extensions(?:-batch-1)? filters=all maxWorkers=/);
+  });
+
+  it("starts isolated channel lanes before shared extension batches on high-memory local hosts", () => {
+    const repoRoot = path.resolve(import.meta.dirname, "../..");
+    const output = execFileSync(
+      "node",
+      [
+        "scripts/test-parallel.mjs",
+        "--plan",
+        "--surface",
+        "unit",
+        "--surface",
+        "extensions",
+        "--surface",
+        "channels",
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...clearPlannerShardEnv(process.env),
+          CI: "",
+          GITHUB_ACTIONS: "",
+          RUNNER_OS: "macOS",
+          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+          OPENCLAW_TEST_LOAD_AWARE: "0",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    const firstChannelIsolated = output.indexOf(
+      "message-handler.preflight.acp-bindings-channels-isolated",
+    );
+    const firstExtensionBatch = output.indexOf("extensions-batch-1");
+    const firstChannelBatch = output.indexOf("channels-batch-1");
+    expect(firstChannelIsolated).toBeGreaterThanOrEqual(0);
+    expect(firstExtensionBatch).toBeGreaterThan(firstChannelIsolated);
+    expect(firstChannelBatch).toBeGreaterThan(firstExtensionBatch);
   });
 
   it("explains targeted file ownership and execution policy", () => {
