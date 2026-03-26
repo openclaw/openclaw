@@ -22,6 +22,7 @@ import {
   isCliProvider,
   modelKey,
   normalizeModelRef,
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -71,7 +72,7 @@ import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
-import type { AgentCommandOpts } from "./agent/types.js";
+import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -121,6 +122,36 @@ function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boo
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
+}
+
+const OVERRIDE_VALUE_MAX_LENGTH = 256;
+
+function containsControlCharacters(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "model"): string {
+  const trimmed = raw.trim();
+  const label = kind === "provider" ? "Provider" : "Model";
+  if (!trimmed) {
+    throw new Error(`${label} override must be non-empty.`);
+  }
+  if (trimmed.length > OVERRIDE_VALUE_MAX_LENGTH) {
+    throw new Error(`${label} override exceeds ${String(OVERRIDE_VALUE_MAX_LENGTH)} characters.`);
+  }
+  if (containsControlCharacters(trimmed)) {
+    throw new Error(`${label} override contains invalid control characters.`);
+  }
+  return trimmed;
 }
 
 function runAgentAttempt(params: {
@@ -194,7 +225,7 @@ function runAgentAttempt(params: {
     currentThreadTs: params.runContext.currentThreadTs,
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: true,
+    senderIsOwner: params.opts.senderIsOwner ?? true,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
@@ -553,7 +584,19 @@ export async function agentCommand(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
-    const needsModelCatalog = hasAllowlist || hasStoredOverride;
+    const explicitProviderOverride =
+      typeof opts.provider === "string"
+        ? normalizeExplicitOverrideInput(opts.provider, "provider")
+        : undefined;
+    const explicitModelOverride =
+      typeof opts.model === "string"
+        ? normalizeExplicitOverrideInput(opts.model, "model")
+        : undefined;
+    const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
+    if (hasExplicitRunOverride && opts.allowModelOverride === false) {
+      throw new Error("Model override is not authorized for this caller.");
+    }
+    const needsModelCatalog = hasAllowlist || hasStoredOverride || hasExplicitRunOverride;
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
@@ -614,6 +657,30 @@ export async function agentCommand(
         provider = normalizedStored.provider;
         model = normalizedStored.model;
       }
+    }
+    if (hasExplicitRunOverride) {
+      const explicitRef = explicitModelOverride
+        ? explicitProviderOverride
+          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride)
+          : parseModelRef(explicitModelOverride, provider)
+        : explicitProviderOverride
+          ? normalizeModelRef(explicitProviderOverride, model)
+          : null;
+      if (!explicitRef) {
+        throw new Error("Invalid model override.");
+      }
+      const explicitKey = modelKey(explicitRef.provider, explicitRef.model);
+      if (
+        !isCliProvider(explicitRef.provider, cfg) &&
+        !allowAnyModel &&
+        !allowedModelKeys.has(explicitKey)
+      ) {
+        throw new Error(
+          `Model override "${explicitRef.provider}/${explicitRef.model}" is not allowed for agent "${sessionAgentId}".`,
+        );
+      }
+      provider = explicitRef.provider;
+      model = explicitRef.model;
     }
     if (sessionEntry) {
       const authProfileId = sessionEntry.authProfileOverride;
@@ -824,4 +891,18 @@ export async function agentCommand(
   } finally {
     clearAgentRunContext(runId);
   }
+}
+
+export async function agentCommandFromIngress(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps: CliDeps = createDefaultDeps(),
+) {
+  if (typeof opts.senderIsOwner !== "boolean") {
+    throw new Error("senderIsOwner must be explicitly set for ingress agent runs.");
+  }
+  if (typeof opts.allowModelOverride !== "boolean") {
+    throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
+  }
+  return await agentCommand(opts, runtime, deps);
 }

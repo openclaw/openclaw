@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -19,6 +19,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await enabledServer.close({ reason: "openresponses enabled suite done" });
+});
+
+beforeEach(async () => {
+  const { __testing: openResponsesTesting } = await import("./openresponses-http.js");
+  openResponsesTesting.resetResponseSessionState();
 });
 
 async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
@@ -162,6 +167,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const optsHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
+      );
+      expect((optsHeader as { senderIsOwner?: boolean } | undefined)?.senderIsOwner).toBe(true);
+      expect((optsHeader as { allowModelOverride?: boolean } | undefined)?.allowModelOverride).toBe(
+        true,
       );
       await ensureResponseConsumed(resHeader);
 
@@ -376,6 +385,31 @@ describe("OpenResponses HTTP API (e2e)", () => {
       ).toBe(123);
       await ensureResponseConsumed(resMaxTokens);
 
+      mockAgentOnce([{ text: "override ok" }]);
+      const resModelOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-model": "openai/gpt-5.3-codex" },
+      );
+      expect(resModelOverride.status).toBe(200);
+      const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsModelOverride as { model?: string } | undefined)?.model).toBe(
+        "openai/gpt-5.3-codex",
+      );
+      await ensureResponseConsumed(resModelOverride);
+
+      const resInvalidModel = await postResponses(port, {
+        model: "gpt-5.3-codex",
+        input: "hi",
+      });
+      expect(resInvalidModel.status).toBe(400);
+      const invalidModelJson = (await resInvalidModel.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidModelJson.error?.type).toBe("invalid_request_error");
+      expect(invalidModelJson.error?.message ?? "").toMatch(/Invalid `model`/);
+      await ensureResponseConsumed(resInvalidModel);
+
       mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
           usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },
@@ -512,6 +546,66 @@ describe("OpenResponses HTTP API (e2e)", () => {
     } finally {
       // shared server
     }
+  });
+
+  it("reuses previous_response_id only within the same auth and agent scope", async () => {
+    const port = enabledPort;
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
+
+    const first = await postResponses(port, {
+      model: "openclaw",
+      input: "hello",
+    });
+    expect(first.status).toBe(200);
+    const firstJson = (await first.json()) as { id?: string };
+    const firstSessionKey = (
+      (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        sessionKey?: string;
+      }
+    )?.sessionKey;
+    expect(firstJson.id).toBeTruthy();
+    expect(firstSessionKey).toBeTruthy();
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }] } as never);
+
+    const second = await postResponses(port, {
+      model: "openclaw",
+      input: "continue",
+      previous_response_id: firstJson.id,
+    });
+    expect(second.status).toBe(200);
+    const secondSessionKey = (
+      (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        sessionKey?: string;
+      }
+    )?.sessionKey;
+    expect(secondSessionKey).toBe(firstSessionKey);
+    await ensureResponseConsumed(second);
+
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValue({ payloads: [{ text: "other agent" }] } as never);
+
+    const third = await postResponses(
+      port,
+      {
+        model: "openclaw:beta",
+        input: "continue elsewhere",
+        previous_response_id: firstJson.id,
+      },
+      { "x-openclaw-agent-id": "beta" },
+    );
+    expect(third.status).toBe(200);
+    const thirdSessionKey = (
+      (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as {
+        sessionKey?: string;
+      }
+    )?.sessionKey;
+    expect(thirdSessionKey).toMatch(/^agent:beta:/);
+    expect(thirdSessionKey).not.toBe(firstSessionKey);
+    await ensureResponseConsumed(third);
   });
 
   it("blocks unsafe URL-based file/image inputs", async () => {

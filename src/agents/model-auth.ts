@@ -3,6 +3,7 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   normalizeOptionalSecretInput,
@@ -24,6 +25,8 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+export const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
+export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -65,6 +68,40 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function isLocalBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host === "[::1]" ||
+      host === "[::ffff:7f00:1]" ||
+      host === "[::ffff:127.0.0.1]"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
+    coerceSecretRef(providerConfig.apiKey) !== null
+  );
+}
+
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+  return (
+    typeof providerConfig.baseUrl === "string" &&
+    providerConfig.baseUrl.trim().length > 0 &&
+    typeof providerConfig.api === "string" &&
+    providerConfig.api.trim().length > 0 &&
+    Array.isArray(providerConfig.models) &&
+    providerConfig.models.length > 0
+  );
 }
 
 function resolveEnvSourceLabel(params: {
@@ -131,6 +168,54 @@ export type ResolvedProviderAuth = {
   source: string;
   mode: "api-key" | "oauth" | "token" | "aws-sdk";
 };
+
+function resolveSyntheticLocalProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | null {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return null;
+  }
+
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return null;
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (normalizedProvider === "ollama") {
+    return {
+      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+      source: "models.providers.ollama (synthetic local key)",
+      mode: "api-key",
+    };
+  }
+
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return null;
+  }
+  if (!isCustomLocalProviderConfig(providerConfig)) {
+    return null;
+  }
+  if (hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return null;
+  }
+
+  if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
+    return {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: `models.providers.${params.provider} (synthetic local key)`,
+      mode: "api-key",
+    };
+  }
+
+  return null;
+}
 
 export async function resolveApiKeyForProvider(params: {
   provider: string;
@@ -200,6 +285,11 @@ export async function resolveApiKeyForProvider(params: {
       source: envResolved.source,
       mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     };
+  }
+
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  if (syntheticLocalAuth) {
+    return syntheticLocalAuth;
   }
 
   const customKey = getCustomProviderApiKey(cfg, provider);
@@ -384,6 +474,10 @@ export function resolveModelAuthMode(
     return "api-key";
   }
 
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider: resolved })) {
+    return "api-key";
+  }
+
   return "unknown";
 }
 
@@ -411,4 +505,25 @@ export function requireApiKey(auth: ResolvedProviderAuth, provider: string): str
     return key;
   }
   throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+}
+
+export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
+  model: T,
+  auth: ResolvedProviderAuth | null | undefined,
+): T {
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+    return model;
+  }
+
+  // Keep a placeholder apiKey for SDK construction, but clear the actual
+  // Authorization header when talking to intentionally unauthenticated local servers.
+  const headers = {
+    ...model.headers,
+    Authorization: null,
+  } as unknown as Record<string, string>;
+
+  return {
+    ...model,
+    headers,
+  };
 }

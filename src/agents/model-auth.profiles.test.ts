@@ -5,7 +5,13 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
-import { getApiKeyForModel, resolveApiKeyForProvider, resolveEnvApiKey } from "./model-auth.js";
+import {
+  applyLocalNoAuthHeaderOverride,
+  CUSTOM_LOCAL_AUTH_MARKER,
+  getApiKeyForModel,
+  resolveApiKeyForProvider,
+  resolveEnvApiKey,
+} from "./model-auth.js";
 
 const oauthFixture = {
   access: "access-token",
@@ -234,6 +240,51 @@ describe("getApiKeyForModel", () => {
       });
       expect(resolved.apiKey).toBe("gateway-test-key");
       expect(resolved.source).toContain("AI_GATEWAY_API_KEY");
+    });
+  });
+
+  it("synthesizes auth for custom local OpenAI-compatible providers without api keys", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          localai: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8080/v1",
+            models: [{ id: "llama", name: "Llama" }],
+          },
+        },
+      },
+    } as const;
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "localai",
+      store: { version: 1, profiles: {} },
+      cfg: cfg as never,
+    });
+    expect(resolved.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+    expect(resolved.source).toContain("synthetic local key");
+  });
+
+  it("clears Authorization for synthetic local OpenAI-compatible auth", () => {
+    const model = {
+      id: "local-model",
+      provider: "localai",
+      api: "openai-completions",
+      headers: {
+        Authorization: "Bearer placeholder",
+        "x-test": "keep",
+      },
+    } as Model<Api>;
+
+    const patched = applyLocalNoAuthHeaderOverride(model, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "synthetic",
+      mode: "api-key",
+    });
+
+    expect(patched.headers).toMatchObject({
+      Authorization: null,
+      "x-test": "keep",
     });
   });
 

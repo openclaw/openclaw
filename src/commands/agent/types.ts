@@ -35,6 +35,10 @@ export type AgentCommandOpts = {
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
   agentId?: string;
+  /** Per-run provider override. */
+  provider?: string;
+  /** Per-run model override. */
+  model?: string;
   to?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -59,6 +63,10 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Whether the caller is authorized for owner-only tools. */
+  senderIsOwner?: boolean;
+  /** Whether the caller is authorized to use per-run model overrides. */
+  allowModelOverride?: boolean;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label for channel-level tool policy resolution. */
@@ -76,4 +84,14 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+};
+
+export type AgentCommandIngressOpts = Omit<
+  AgentCommandOpts,
+  "senderIsOwner" | "allowModelOverride"
+> & {
+  /** Ingress callsites must always pass explicit owner-tool authorization state. */
+  senderIsOwner: boolean;
+  /** Ingress callsites must always pass explicit model-override authorization state. */
+  allowModelOverride: boolean;
 };

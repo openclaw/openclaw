@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.runtime.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -27,6 +28,7 @@ import {
   ensureAuthProfileStore,
   getApiKeyForModel,
   resolveAuthProfileOrder,
+  applyLocalNoAuthHeaderOverride,
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -62,6 +64,12 @@ import {
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import {
+  createUsageAccumulator,
+  mergeUsageIntoAccumulator,
+  resolveLastCallUsage,
+  toNormalizedUsage,
+} from "./usage-accumulator.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -80,29 +88,6 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
-type UsageAccumulator = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  total: number;
-  /** Cache fields from the most recent API call (not accumulated). */
-  lastCacheRead: number;
-  lastCacheWrite: number;
-  lastInput: number;
-};
-
-const createUsageAccumulator = (): UsageAccumulator => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  total: 0,
-  lastCacheRead: 0,
-  lastCacheWrite: 0,
-  lastInput: 0,
-});
-
 function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
@@ -119,64 +104,6 @@ function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
     Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
   return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
-
-const hasUsageValues = (
-  usage: ReturnType<typeof normalizeUsage>,
-): usage is NonNullable<ReturnType<typeof normalizeUsage>> =>
-  !!usage &&
-  [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
-    (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
-  );
-
-const mergeUsageIntoAccumulator = (
-  target: UsageAccumulator,
-  usage: ReturnType<typeof normalizeUsage>,
-) => {
-  if (!hasUsageValues(usage)) {
-    return;
-  }
-  target.input += usage.input ?? 0;
-  target.output += usage.output ?? 0;
-  target.cacheRead += usage.cacheRead ?? 0;
-  target.cacheWrite += usage.cacheWrite ?? 0;
-  target.total +=
-    usage.total ??
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  // Track the most recent API call's cache fields for accurate context-size reporting.
-  // Accumulated cache totals inflate context size when there are multiple tool-call round-trips,
-  // since each call reports cacheRead ≈ current_context_size.
-  target.lastCacheRead = usage.cacheRead ?? 0;
-  target.lastCacheWrite = usage.cacheWrite ?? 0;
-  target.lastInput = usage.input ?? 0;
-};
-
-const toNormalizedUsage = (usage: UsageAccumulator) => {
-  const hasUsage =
-    usage.input > 0 ||
-    usage.output > 0 ||
-    usage.cacheRead > 0 ||
-    usage.cacheWrite > 0 ||
-    usage.total > 0;
-  if (!hasUsage) {
-    return undefined;
-  }
-  // Use the LAST API call's cache fields for context-size calculation.
-  // The accumulated cacheRead/cacheWrite inflate context size because each tool-call
-  // round-trip reports cacheRead ≈ current_context_size, and summing N calls gives
-  // N × context_size which gets clamped to contextWindow (e.g. 200k).
-  // See: https://github.com/openclaw/openclaw/issues/13698
-  //
-  // We use lastInput/lastCacheRead/lastCacheWrite (from the most recent API call) for
-  // cache-related fields, but keep accumulated output (total generated text this turn).
-  const lastPromptTokens = usage.lastInput + usage.lastCacheRead + usage.lastCacheWrite;
-  return {
-    input: usage.lastInput || undefined,
-    output: usage.output || undefined,
-    cacheRead: usage.lastCacheRead || undefined,
-    cacheWrite: usage.lastCacheWrite || undefined,
-    total: lastPromptTokens + usage.output || undefined,
-  };
-};
 
 function resolveActiveErrorContext(params: {
   lastAssistant: { provider?: string; model?: string } | undefined;
@@ -370,6 +297,7 @@ export async function runEmbeddedPiAgent(
         const attemptedThinking = new Set<ThinkLevel>();
         let apiKeyInfo: ApiKeyInfo | null = null;
         let lastProfileId: string | undefined;
+        let runtimeBaseUrl: string | undefined;
 
         const resolveAuthProfileFailoverReason = (params: {
           allInCooldown: boolean;
@@ -434,6 +362,7 @@ export async function runEmbeddedPiAgent(
         const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
           apiKeyInfo = await resolveApiKeyForCandidate(candidate);
           const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
+          runtimeBaseUrl = undefined;
           if (!apiKeyInfo.apiKey) {
             if (apiKeyInfo.mode !== "aws-sdk") {
               throw new Error(
@@ -443,6 +372,25 @@ export async function runEmbeddedPiAgent(
             lastProfileId = resolvedProfileId;
             return;
           }
+          const preparedAuth = await prepareProviderRuntimeAuth({
+            provider: model.provider,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            env: process.env,
+            context: {
+              config: params.config,
+              agentDir,
+              workspaceDir: resolvedWorkspace,
+              env: process.env,
+              provider: model.provider,
+              modelId,
+              model,
+              apiKey: apiKeyInfo.apiKey,
+              authMode: apiKeyInfo.mode,
+              profileId: apiKeyInfo.profileId,
+            },
+          });
+          runtimeBaseUrl = preparedAuth?.baseUrl;
           if (model.provider === "github-copilot") {
             const { resolveCopilotApiToken } =
               await import("../../providers/github-copilot-token.js");
@@ -450,6 +398,8 @@ export async function runEmbeddedPiAgent(
               githubToken: apiKeyInfo.apiKey,
             });
             authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          } else if (preparedAuth?.apiKey) {
+            authStorage.setRuntimeApiKey(model.provider, preparedAuth.apiKey);
           } else {
             authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
           }
@@ -576,6 +526,10 @@ export async function runEmbeddedPiAgent(
 
             const prompt =
               provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            const attemptModel = applyLocalNoAuthHeaderOverride(
+              runtimeBaseUrl ? { ...model, baseUrl: runtimeBaseUrl } : model,
+              apiKeyInfo,
+            );
 
             const attempt = await runEmbeddedAttempt({
               sessionId: params.sessionId,
@@ -605,7 +559,7 @@ export async function runEmbeddedPiAgent(
               disableTools: params.disableTools,
               provider,
               modelId,
-              model,
+              model: attemptModel,
               authStorage,
               modelRegistry,
               agentId: workspaceResolution.agentId,
@@ -1065,7 +1019,10 @@ export async function runEmbeddedPiAgent(
             // across all calls (tool-use loops, compaction retries), which
             // overstates the actual context size. `lastCallUsage` reflects only
             // the final call, giving an accurate snapshot of current context.
-            const lastCallUsage = normalizeUsage(lastAssistant?.usage as UsageLike);
+            const lastCallUsage = resolveLastCallUsage(
+              lastAssistant?.usage as UsageLike,
+              usageAccumulator,
+            );
             const promptTokens = derivePromptTokens(lastRunPromptUsage);
             const agentMeta: EmbeddedPiAgentMeta = {
               sessionId: sessionIdUsed,

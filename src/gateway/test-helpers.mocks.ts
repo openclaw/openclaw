@@ -211,6 +211,7 @@ export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
 export const agentCommand: Mock<() => void> = hoisted.agentCommand;
+export const agentCommandFromIngress: Mock<() => void> = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
 
 export const testState = {
@@ -582,6 +583,7 @@ vi.mock("../channels/web/index.js", async () => {
 });
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromIngress,
 }));
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig,

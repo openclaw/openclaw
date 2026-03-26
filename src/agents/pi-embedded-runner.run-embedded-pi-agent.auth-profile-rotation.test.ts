@@ -8,9 +8,15 @@ import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const prepareProviderRuntimeAuthMock =
+  vi.fn<(params: unknown) => Promise<{ apiKey?: string; baseUrl?: string } | undefined>>();
 
 vi.mock("./pi-embedded-runner/run/attempt.js", () => ({
   runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
+}));
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  prepareProviderRuntimeAuth: (params: unknown) => prepareProviderRuntimeAuthMock(params),
 }));
 
 vi.mock("./pi-embedded-runner/compact.js", () => ({
@@ -36,6 +42,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
+  prepareProviderRuntimeAuthMock.mockReset();
 });
 
 const baseUsage = {
@@ -744,6 +751,96 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
       expect(typeof usageStats["openai:p3"]?.lastUsed).toBe("number");
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
+    });
+  });
+
+  it("clears Authorization for custom local OpenAI-compatible providers without auth", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {}, usageStats: {} }));
+
+      mockSingleSuccessfulAttempt();
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:local-no-auth",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: {
+          models: {
+            providers: {
+              localai: {
+                api: "openai-completions",
+                baseUrl: "http://127.0.0.1:8080/v1",
+                models: [
+                  {
+                    id: "llama",
+                    name: "Llama",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 16_000,
+                    maxTokens: 2048,
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        prompt: "hello",
+        provider: "localai",
+        model: "llama",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:local-no-auth",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const call = runEmbeddedAttemptMock.mock.calls[0]?.[0] as {
+        model?: { headers?: Record<string, unknown> };
+      };
+      expect(call.model?.headers?.Authorization).toBeNull();
+    });
+  });
+
+  it("applies provider runtime auth overrides before each attempt", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: "runtime-token",
+        baseUrl: "https://runtime.example/v1",
+      });
+      mockSingleSuccessfulAttempt();
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:runtime-auth",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig({ apiKey: "sk-runtime-source" }),
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:runtime-auth",
+      });
+
+      expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledTimes(1);
+      const runtimeCall = prepareProviderRuntimeAuthMock.mock.calls[0]?.[0] as {
+        provider?: string;
+        context?: { apiKey?: string; modelId?: string };
+      };
+      expect(runtimeCall.provider).toBe("openai");
+      expect(runtimeCall.context?.apiKey).toBe("sk-runtime-source");
+      expect(runtimeCall.context?.modelId).toBe("mock-1");
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      const attemptCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as {
+        model?: { baseUrl?: string };
+      };
+      expect(attemptCall.model?.baseUrl).toBe("https://runtime.example/v1");
     });
   });
 });
