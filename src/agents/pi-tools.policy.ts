@@ -2,6 +2,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  type ChannelGroupConfig,
   resolveChannelGroupPolicy,
   resolveChannelGroupToolsPolicy,
   resolveToolsBySender,
@@ -252,6 +253,7 @@ function resolveToolScopeContextFromSessionKey(
         channel: candidate.channel,
         accountId: candidate.accountId,
         groupId: baseCandidate?.scopeId ?? candidate.scopeId,
+        requiresResolvedAccount: candidate.requiresResolvedAccount,
       };
     }
     return {
@@ -726,36 +728,67 @@ export function resolveGroupToolPolicy(params: {
     return best;
   };
 
-  const rawGroupCandidates: Array<{ groupId?: string; accountId?: string | null }> = params.groupId
+  const rawGroupCandidates: Array<{
+    groupId?: string;
+    accountId?: string | null;
+    requiresResolvedAccount?: boolean;
+  }> = params.groupId
     ? [
         {
           groupId: params.groupId,
           accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (sessionContext.requiresResolvedAccount ?? spawnedContext.requiresResolvedAccount),
         },
       ]
     : [
         {
           groupId: sessionContext.groupId,
           accountId: params.accountId ?? sessionContext.accountId ?? spawnedContext.accountId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (sessionContext.requiresResolvedAccount ?? spawnedContext.requiresResolvedAccount),
         },
         {
           groupId: sessionContext.alternate?.groupId,
           accountId:
             params.accountId ?? sessionContext.alternate?.accountId ?? spawnedContext.accountId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (sessionContext.alternate?.requiresResolvedAccount ??
+                spawnedContext.requiresResolvedAccount),
         },
         {
           groupId: spawnedContext.groupId,
           accountId: params.accountId ?? spawnedContext.accountId ?? sessionContext.accountId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (spawnedContext.requiresResolvedAccount ?? sessionContext.requiresResolvedAccount),
         },
         {
           groupId: spawnedContext.alternate?.groupId,
           accountId:
             params.accountId ?? spawnedContext.alternate?.accountId ?? sessionContext.accountId,
+          requiresResolvedAccount:
+            params.accountId !== undefined
+              ? true
+              : (spawnedContext.alternate?.requiresResolvedAccount ??
+                sessionContext.requiresResolvedAccount),
         },
       ];
   const groupCandidates = rawGroupCandidates.filter(
-    (candidate): candidate is { groupId: string; accountId?: string | null } =>
-      typeof candidate.groupId === "string" && candidate.groupId.length > 0,
+    (
+      candidate,
+    ): candidate is {
+      groupId: string;
+      accountId?: string | null;
+      requiresResolvedAccount?: boolean;
+    } => typeof candidate.groupId === "string" && candidate.groupId.length > 0,
   );
 
   type GroupPolicyResolution = {
@@ -767,7 +800,29 @@ export function resolveGroupToolPolicy(params: {
   const resolveGroupCandidatePolicy = (candidate: {
     groupId: string;
     accountId?: string | null;
+    requiresResolvedAccount?: boolean;
   }): GroupPolicyResolution => {
+    const channelConfig = config.channels?.[channel] as
+      | {
+          accounts?: Record<string, { groups?: Record<string, ChannelGroupConfig> }>;
+        }
+      | undefined;
+    const normalizedAccountId = normalizeAccountId(candidate.accountId);
+    const accountEntry =
+      candidate.accountId && channelConfig
+        ? (resolveAccountEntry(channelConfig.accounts, normalizedAccountId) as
+            | { groups?: Record<string, ChannelGroupConfig> }
+            | undefined)
+        : undefined;
+    if (candidate.requiresResolvedAccount && candidate.accountId && accountEntry === undefined) {
+      return {
+        policy: undefined,
+        hasExplicitGroupMatch: false,
+        specificity: 0,
+      };
+    }
+    const hasAccountScopedGroups =
+      accountEntry !== undefined && Object.prototype.hasOwnProperty.call(accountEntry, "groups");
     const { groupConfig } = resolveChannelGroupPolicy({
       cfg: config,
       channel,
@@ -801,7 +856,7 @@ export function resolveGroupToolPolicy(params: {
     return {
       policy: pickSandboxToolPolicy(toolsConfig),
       hasExplicitGroupMatch: Boolean(groupConfig),
-      specificity: candidate.accountId ? 1 : 0,
+      specificity: hasAccountScopedGroups ? 1 : 0,
     };
   };
 

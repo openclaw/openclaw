@@ -925,6 +925,81 @@ describe("resolveGroupToolPolicy", () => {
     ).toEqual({ allow: ["read", "exec"] });
   });
 
+  it("does not let unresolved account-derived group candidates override literal group ids", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "group:abc": {
+              tools: { allow: ["read"] },
+            },
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:group:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("does not let unresolved account-derived group candidates override wildcard group policy", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "*": {
+              tools: { allow: ["read"] },
+            },
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:group:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
+  it("does not give inherited top-level group matches account-scoped precedence when the account omits groups", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          groups: {
+            "group:abc": {
+              tools: { allow: ["read"] },
+            },
+            abc: {
+              tools: { allow: ["read", "exec"] },
+            },
+          },
+          accounts: {
+            group: {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:feishu:group:group:abc",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
   it("does not cross over from direct parsing into unrelated group policies", () => {
     const cfg = {
       channels: {
