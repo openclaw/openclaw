@@ -42,6 +42,7 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     return cachedSelfUserId;
   };
 
+  let dmCacheReliable = false;
   const refreshDmCache = async (): Promise<void> => {
     const now = Date.now();
     if (now - lastDmUpdateMs < DM_CACHE_TTL_MS) {
@@ -50,7 +51,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
     lastDmUpdateMs = now;
     try {
       await client.dms.update();
+      dmCacheReliable = true;
     } catch (err) {
+      dmCacheReliable = false;
       log(`matrix: dm cache refresh failed (${String(err)})`);
     }
   };
@@ -101,8 +104,23 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         log(`matrix: ignoring stale m.direct classification room=${roomId}`);
       }
 
+      // Only fall back to member-count heuristic when the DM cache is unreliable
+      // (e.g. dms.update() failed at startup). When the cache is healthy, isDm()
+      // is authoritative and a 2-person room without m.direct is a group room.
+      if (
+        !dmCacheReliable &&
+        isStrictDirectMembership({
+          selfUserId,
+          remoteUserId: senderId,
+          joinedMembers,
+        })
+      ) {
+        log(`matrix: dm detected via membership fallback (dm cache unreliable) room=${roomId}`);
+        return true;
+      }
+
       log(
-        `matrix: dm check room=${roomId} result=group members=${joinedMembers?.length ?? "unknown"}`,
+        `matrix: dm check room=${roomId} result=group members=${joinedMembers?.length ?? "unknown"} dmCacheReliable=${dmCacheReliable}`,
       );
       return false;
     },
