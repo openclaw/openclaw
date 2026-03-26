@@ -486,11 +486,12 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 
 function isAlreadyBootstrapped(detail: string): boolean {
   const normalized = detail.toLowerCase();
-  // launchctl bootstrap returns exit code 5 ("Input/output error") or the
-  // explicit "already loaded" / "already bootstrapped" messages when the
-  // service target is already registered in the domain.
+  // Match explicit "already loaded" / "already bootstrapped" messages.
+  // We intentionally do NOT match the generic "bootstrap failed: 5"
+  // (Input/output error) because that code also fires for malformed or
+  // unreadable plists, and treating those as "already loaded" would mask
+  // real bootstrap failures.
   return (
-    normalized.includes("bootstrap failed: 5") ||
     normalized.includes("already loaded") ||
     normalized.includes("already bootstrapped")
   );
