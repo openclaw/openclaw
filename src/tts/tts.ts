@@ -38,6 +38,7 @@ import type {
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "./provider-types.js";
+import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { scheduleCleanup, summarizeText } from "./tts-core.js";
 
 export type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
@@ -62,8 +63,6 @@ const DEFAULT_OUTPUT = {
   extension: ".mp3",
   voiceCompatible: false,
 };
-
-const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
   auto: TtsAutoMode;
@@ -132,17 +131,6 @@ type TtsStatusEntry = {
 };
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
-
-export function normalizeTtsAutoMode(value: unknown): TtsAutoMode | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (TTS_AUTO_MODES.has(normalized as TtsAutoMode)) {
-    return normalized as TtsAutoMode;
-  }
-  return undefined;
-}
 
 function resolveModelOverridePolicy(
   overrides: TtsModelOverrideConfig | undefined,
