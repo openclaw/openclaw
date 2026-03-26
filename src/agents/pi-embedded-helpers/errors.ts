@@ -502,6 +502,9 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 529) {
     return "overloaded";
   }
+  if (status === 410) {
+    return "session_expired";
+  }
   if (status === 400 || status === 422) {
     // Some providers return quota/balance errors under HTTP 400, so do not
     // let the generic format fallback mask an explicit billing signal.
@@ -972,6 +975,14 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
+  }
+  const trimmed = raw.trim();
+  const status = extractLeadingHttpStatus(trimmed);
+  if (status?.code === 410) {
+    return "session_expired";
+  }
+  if (/^410[\s:]/i.test(trimmed) || /\(410[\s)]/.test(trimmed)) {
+    return "session_expired";
   }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {

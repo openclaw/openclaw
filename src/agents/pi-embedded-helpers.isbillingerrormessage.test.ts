@@ -558,6 +558,21 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
       ),
     ).toBe("overloaded");
   });
+
+  it("treats HTTP 410 Gone as session_expired to trigger fallback", () => {
+    expect(classifyFailoverReasonFromHttpStatus(410)).toBe("session_expired");
+    expect(classifyFailoverReasonFromHttpStatus(410, "")).toBe("session_expired");
+    expect(classifyFailoverReasonFromHttpStatus(410, "No body response")).toBe("session_expired");
+  });
+
+  it("classifies 410 error messages as session_expired", () => {
+    expect(classifyFailoverReason("410")).toBe("session_expired");
+    expect(classifyFailoverReason("HTTP 410")).toBe("session_expired");
+    expect(classifyFailoverReason("410 Gone")).toBe("session_expired");
+    expect(classifyFailoverReason("410: No body")).toBe("session_expired");
+    expect(classifyFailoverReason("HTTP 410 Gone")).toBe("session_expired");
+    expect(classifyFailoverReason("No body (410)")).toBe("session_expired");
+  });
 });
 
 describe("isFailoverErrorMessage", () => {
