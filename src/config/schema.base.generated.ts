@@ -407,6 +407,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           attachOnly: {
             type: "boolean",
           },
+          extraArgs: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
           cdpPortRangeStart: {
             type: "integer",
             minimum: 1,
