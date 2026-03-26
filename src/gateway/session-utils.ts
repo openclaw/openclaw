@@ -1314,7 +1314,7 @@ export function listSessionsFromStore(params: {
           latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
         return latestControllerSessionKey === spawnedBy;
       }
-      return entry?.spawnedBy === spawnedBy;
+      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
     })
     .filter(([, entry]) => {
       if (!label) {
