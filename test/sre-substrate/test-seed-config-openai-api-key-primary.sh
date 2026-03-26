@@ -11,7 +11,7 @@ jq -e '
 ' "$CONFIG" >/dev/null
 
 jq -e '
-  any(.agents.list[]; .id == "sre" and .model.primary == "anthropic/claude-opus-4-6")
+  any(.agents.list[]; .id == "sre" and ((.model // {}) | has("primary") | not))
 ' "$CONFIG" >/dev/null
 
 jq -e '
