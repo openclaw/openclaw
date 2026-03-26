@@ -65,6 +65,7 @@ enum HostEnvSecurityPolicy {
         "VISUAL",
         "FCEDIT",
         "SUDO_EDITOR",
+        "PROMPT_COMMAND",
         "HISTFILE",
         "PERL5DB",
         "PERL5DBCMD",
@@ -82,10 +83,6 @@ enum HostEnvSecurityPolicy {
         "GIT_CONFIG_",
         "NPM_CONFIG_",
         "OPENCLAW_"
-    ]
-
-    static let blockedOverridePrefixes: [String] = [
-
     ]
 
     static let blockedPrefixes: [String] = [

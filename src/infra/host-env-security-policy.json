@@ -58,6 +58,7 @@
     "VISUAL",
     "FCEDIT",
     "SUDO_EDITOR",
+    "PROMPT_COMMAND",
     "HISTFILE",
     "PERL5DB",
     "PERL5DBCMD",
