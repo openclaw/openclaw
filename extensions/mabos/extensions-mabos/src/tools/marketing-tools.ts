@@ -304,6 +304,56 @@ const AdAnalyticsParams = Type.Object({
   ),
 });
 
+const OrganicAnalyticsParams = Type.Object({
+  business_id: Type.String({ description: "Business ID" }),
+  platform: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("facebook"),
+        Type.Literal("instagram"),
+        Type.Literal("pinterest"),
+        Type.Literal("linkedin"),
+        Type.Literal("tiktok"),
+        Type.Literal("all"),
+      ],
+      { description: "Platform filter (default: all)" },
+    ),
+  ),
+  date_from: Type.Optional(Type.String({ description: "Start date (ISO, e.g. 2026-03-01)" })),
+  date_to: Type.Optional(Type.String({ description: "End date (ISO, e.g. 2026-03-24)" })),
+  metric_type: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("overview"),
+        Type.Literal("audience"),
+        Type.Literal("content"),
+        Type.Literal("engagement"),
+      ],
+      { description: "Metric category (default: overview)" },
+    ),
+  ),
+});
+
+const PostAnalyticsParams = Type.Object({
+  business_id: Type.String({ description: "Business ID" }),
+  platform: Type.Union(
+    [
+      Type.Literal("facebook"),
+      Type.Literal("instagram"),
+      Type.Literal("pinterest"),
+      Type.Literal("linkedin"),
+      Type.Literal("tiktok"),
+    ],
+    { description: "Platform" },
+  ),
+  post_id: Type.Optional(Type.String({ description: "Specific post/pin ID to get analytics for" })),
+  top_n: Type.Optional(
+    Type.Number({ description: "Return top N posts by engagement (default: 10)" }),
+  ),
+  date_from: Type.Optional(Type.String({ description: "Start date (ISO)" })),
+  date_to: Type.Optional(Type.String({ description: "End date (ISO)" })),
+});
+
 const AudienceCreateParams = Type.Object({
   business_id: Type.String({ description: "Business ID" }),
   platform: Type.Union([
@@ -477,9 +527,7 @@ export function createMarketingTools(api: OpenClawPluginApi): AnyAgentTool[] {
           const adAccounts = await apiCall(pinterestUrl("/ad_accounts"), "GET", headers);
           if (adAccounts.status === 200) {
             const first = adAccounts.data?.items?.[0];
-            testResult = first
-              ? `✅ Connected as: ${first.name || first.id}`
-              : "✅ Connected";
+            testResult = first ? `✅ Connected as: ${first.name || first.id}` : "✅ Connected";
           } else {
             // Fallback for tokens that include user profile scope only
             const user = await apiCall(pinterestUrl("/user_account"), "GET", headers);
@@ -783,7 +831,9 @@ Use \`decision_request\` to get stakeholder approval before creating this campai
         };
 
         if (params.platform === "meta") {
-          const adAccountId = config.account_id;
+          const adAccountId = config.account_id?.startsWith("act_")
+            ? config.account_id
+            : `act_${config.account_id}`;
           if (!adAccountId) return textResult("❌ Meta: No ad account ID configured.");
 
           // 1. Create campaign
@@ -1032,7 +1082,9 @@ ${JSON.stringify(campaignResult, null, 2)}
             const fields = "impressions,clicks,spend,cpc,cpm,actions,cost_per_action_type";
             let url = params.campaign_id
               ? metaUrl(`/${params.campaign_id}/insights?fields=${fields}`)
-              : metaUrl(`/${config.account_id}/insights?fields=${fields}&level=campaign`);
+              : metaUrl(
+                  `/${config.account_id?.startsWith("act_") ? config.account_id : `act_${config.account_id}`}/insights?fields=${fields}&level=campaign`,
+                );
             if (params.date_from)
               url += `&time_range={"since":"${params.date_from}","until":"${params.date_to || new Date().toISOString().split("T")[0]}"}`;
 
@@ -1045,7 +1097,9 @@ ${JSON.stringify(campaignResult, null, 2)}
                 )
                 .join("\n");
             }
-            return r.data?.error ? `❌ Meta: ${r.data.error.message}` : "No data for this period.";
+            return r.data?.error
+              ? `❌ Meta Ads (account: ${config.account_id || "unknown"}): ${r.data.error.message} [code: ${r.data.error.code}]`
+              : "No data for this period.";
           }
 
           if (plat === "pinterest" && config.account_id) {
@@ -1300,6 +1354,609 @@ ${JSON.stringify(campaignResult, null, 2)}
           .join("\n");
 
         return textResult(`## 📅 Content Calendar — ${params.business_id}\n\n${output}`);
+      },
+    },
+
+    // --- Organic Social Analytics ---
+    {
+      name: "marketing_organic_analytics",
+      label: "Organic Social Analytics",
+      description:
+        "Fetch organic (non-paid) social media metrics — impressions, reach, engagement, followers, saves, shares — for Facebook Pages, Instagram, Pinterest, LinkedIn, and TikTok.",
+      parameters: OrganicAnalyticsParams,
+      async execute(_id: string, params: Static<typeof OrganicAnalyticsParams>) {
+        const mkt = await loadMarketing(api, params.business_id);
+        const platform = params.platform || "all";
+        const today = new Date().toISOString().split("T")[0];
+        const dateTo = params.date_to || today;
+        const dateFrom =
+          params.date_from || new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+        const results: string[] = [];
+
+        const fetchOrganic = async (plat: string) => {
+          // Facebook organic — New Pages Experience: use page fields + post-level data
+          if (plat === "facebook") {
+            const config = mkt.platforms["meta"];
+            if (!config) return "❌ Facebook: Meta not connected.";
+            if (!config.page_id)
+              return "❌ Facebook: No page_id configured. Set page_id via marketing_connect.";
+            const headers = platformHeaders(config);
+
+            if (params.metric_type === "audience") {
+              // Page-level audience data via fields API (Insights deprecated for New Pages Experience)
+              const r = await apiCall(
+                metaUrl(`/${config.page_id}?fields=fan_count,followers_count,name`),
+                "GET",
+                headers,
+              );
+              if (r.data?.fan_count !== undefined) {
+                return `  **Page Likes**: ${r.data.fan_count}\n  **Followers**: ${r.data.followers_count ?? "N/A"}`;
+              }
+              return r.data?.error
+                ? `❌ Facebook: ${r.data.error.message}`
+                : "No audience data available.";
+            }
+
+            // Engagement & overview: aggregate from recent posts
+            const r = await apiCall(
+              metaUrl(
+                `/${config.page_id}/posts?fields=id,message,created_time,shares,likes.summary(true),comments.summary(true)&limit=25&since=${dateFrom}&until=${dateTo}`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.data?.data?.length) {
+              let totalLikes = 0,
+                totalComments = 0,
+                totalShares = 0;
+              for (const post of r.data.data) {
+                totalLikes += post.likes?.summary?.total_count || 0;
+                totalComments += post.comments?.summary?.total_count || 0;
+                totalShares += post.shares?.count || 0;
+              }
+              return `  **Posts (period)**: ${r.data.data.length}\n  **Total Likes**: ${totalLikes}\n  **Total Comments**: ${totalComments}\n  **Total Shares**: ${totalShares}`;
+            }
+            if (r.data?.error) return `❌ Facebook: ${r.data.error.message}`;
+            // No posts in period - fall back to page-level summary
+            const pg = await apiCall(
+              metaUrl(`/${config.page_id}?fields=fan_count,followers_count`),
+              "GET",
+              headers,
+            );
+            return `  **Page Likes**: ${pg.data?.fan_count ?? "N/A"}\n  **Followers**: ${pg.data?.followers_count ?? "N/A"}\n  **Posts in period**: 0`;
+          }
+
+          // Instagram organic — uses instagram_account_id from meta/instagram config
+          if (plat === "instagram") {
+            const config = mkt.platforms["instagram"] || mkt.platforms["meta"];
+            if (!config) return "❌ Instagram: Not connected.";
+            const igId = config.extra?.instagram_account_id || config.page_id;
+            if (!igId)
+              return "❌ Instagram: No instagram_account_id configured. Set via marketing_connect extra.";
+            const headers = platformHeaders(config);
+            const metrics =
+              params.metric_type === "audience"
+                ? "follows_and_unfollows,reach"
+                : params.metric_type === "engagement"
+                  ? "accounts_engaged,total_interactions,likes,comments,shares,saves,replies"
+                  : "reach,views,follows_and_unfollows";
+            // IG Insights API v21.0 — engagement metrics require metric_type=total_value
+            const igMetricType =
+              params.metric_type === "engagement" || params.metric_type === "audience"
+                ? "&metric_type=total_value"
+                : "";
+            const r = await apiCall(
+              metaUrl(
+                `/${igId}/insights?metric=${metrics}&period=day&since=${dateFrom}&until=${dateTo}${igMetricType}`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.data?.data?.length) {
+              return r.data.data
+                .map((m: any) => {
+                  const latest = m.values?.[m.values.length - 1];
+                  return `  **${m.title || m.name}**: ${typeof latest?.value === "object" ? JSON.stringify(latest.value) : (latest?.value ?? "N/A")}`;
+                })
+                .join("\n");
+            }
+            return r.data?.error
+              ? `❌ Instagram: ${r.data.error.message}`
+              : "No organic data for this period.";
+          }
+
+          // Pinterest organic — uses user_account analytics
+          if (plat === "pinterest") {
+            const config = mkt.platforms["pinterest"];
+            if (!config) return "❌ Pinterest: Not connected.";
+            const headers = platformHeaders(config);
+            const metrics =
+              params.metric_type === "audience"
+                ? "ENGAGEMENT,IMPRESSION"
+                : params.metric_type === "engagement"
+                  ? "ENGAGEMENT,SAVE,PIN_CLICK,OUTBOUND_CLICK,IMPRESSION"
+                  : "IMPRESSION,ENGAGEMENT,PIN_CLICK,OUTBOUND_CLICK,SAVE";
+            const r = await apiCall(
+              pinterestUrl(
+                `/user_account/analytics?start_date=${dateFrom}&end_date=${dateTo}&metric_types=${metrics}`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.status === 200 && r.data) {
+              // Pinterest returns { all: { daily_metrics: [...] }, summary: {...} } or flat metrics
+              const summary = r.data.all?.summary_metrics || r.data.summary_metrics || r.data;
+              const lines: string[] = [];
+              for (const [key, val] of Object.entries(summary)) {
+                lines.push(`  **${key}**: ${val}`);
+              }
+              // Also show daily trend if available
+              const daily = r.data.all?.daily_metrics || r.data.daily_metrics;
+              if (daily?.length) {
+                const recent = daily.slice(-7);
+                lines.push(`\n  *Last 7 days trend:*`);
+                for (const day of recent) {
+                  const dateStr = day.date || "—";
+                  const imp =
+                    day.data_status === "PROCESSING"
+                      ? "(processing)"
+                      : Object.entries(day.metrics || {})
+                          .map(([k, v]) => `${k}=${v}`)
+                          .join(", ");
+                  lines.push(`    ${dateStr}: ${imp}`);
+                }
+              }
+              return lines.join("\n") || "No data returned.";
+            }
+            return `❌ Pinterest: ${r.data?.message || r.status}`;
+          }
+
+          // LinkedIn organic — uses organization page statistics
+          if (plat === "linkedin") {
+            const config = mkt.platforms["linkedin"];
+            if (!config) return "❌ LinkedIn: Not connected.";
+            if (!config.page_id)
+              return "❌ LinkedIn: No page_id (organization ID) configured. Set page_id via marketing_connect.";
+            const headers = platformHeaders(config);
+            const orgUrn = `urn:li:organization:${config.page_id}`;
+
+            // Page statistics — followers and page views
+            const statsR = await apiCall(
+              linkedinUrl(
+                `/organizationalEntityFollowerStatistics?q=organizationalEntity&organizationalEntity=${encodeURIComponent(orgUrn)}`,
+              ),
+              "GET",
+              headers,
+            );
+            const lines: string[] = [];
+            if (statsR.status === 200 && statsR.data?.elements?.length) {
+              const el = statsR.data.elements[0];
+              lines.push(
+                `  **Total followers**: ${el.followerCounts?.organicFollowerCount ?? "N/A"}`,
+              );
+              lines.push(`  **Paid followers**: ${el.followerCounts?.paidFollowerCount ?? "N/A"}`);
+            }
+
+            // Page views / visitor stats
+            const visitR = await apiCall(
+              linkedinUrl(
+                `/organizationPageStatistics?q=organization&organization=${encodeURIComponent(orgUrn)}&timeIntervals=(timeRange:(start:${new Date(dateFrom).getTime()},end:${new Date(dateTo).getTime()}),timeGranularityType:DAY)`,
+              ),
+              "GET",
+              headers,
+            );
+            if (visitR.status === 200 && visitR.data?.elements?.length) {
+              let totalViews = 0;
+              let totalUnique = 0;
+              for (const el of visitR.data.elements) {
+                totalViews += el.totalPageStatistics?.views?.allPageViews?.pageViews || 0;
+                totalUnique += el.totalPageStatistics?.views?.allPageViews?.uniquePageViews || 0;
+              }
+              lines.push(`  **Page views**: ${totalViews}`);
+              lines.push(`  **Unique visitors**: ${totalUnique}`);
+            }
+
+            // Share (post) statistics — engagement
+            const shareR = await apiCall(
+              linkedinUrl(
+                `/organizationalEntityShareStatistics?q=organizationalEntity&organizationalEntity=${encodeURIComponent(orgUrn)}&timeIntervals=(timeRange:(start:${new Date(dateFrom).getTime()},end:${new Date(dateTo).getTime()}),timeGranularityType:DAY)`,
+              ),
+              "GET",
+              headers,
+            );
+            if (shareR.status === 200 && shareR.data?.elements?.length) {
+              let totalLikes = 0;
+              let totalComments = 0;
+              let totalShares = 0;
+              let totalImpressions = 0;
+              let totalClicks = 0;
+              let totalEngagement = 0;
+              for (const el of shareR.data.elements) {
+                const s = el.totalShareStatistics || {};
+                totalLikes += s.likeCount || 0;
+                totalComments += s.commentCount || 0;
+                totalShares += s.shareCount || 0;
+                totalImpressions += s.impressionCount || 0;
+                totalClicks += s.clickCount || 0;
+                totalEngagement += s.engagement || 0;
+              }
+              lines.push(`  **Impressions**: ${totalImpressions}`);
+              lines.push(`  **Clicks**: ${totalClicks}`);
+              lines.push(`  **Likes**: ${totalLikes}`);
+              lines.push(`  **Comments**: ${totalComments}`);
+              lines.push(`  **Shares**: ${totalShares}`);
+              if (totalImpressions > 0) {
+                lines.push(
+                  `  **Engagement rate**: ${((totalEngagement / totalImpressions) * 100).toFixed(2)}%`,
+                );
+              }
+            }
+
+            return lines.length > 0
+              ? lines.join("\n")
+              : "No LinkedIn organic data for this period.";
+          }
+
+          // TikTok organic — uses Business Account API
+          if (plat === "tiktok") {
+            const config = mkt.platforms["tiktok"];
+            if (!config) return "❌ TikTok: Not connected.";
+            const headers = platformHeaders(config);
+
+            // Business Account user info + stats
+            const infoR = await apiCall(tiktokUrl("/business/get/"), "GET", headers);
+            const lines: string[] = [];
+            if (infoR.data?.data) {
+              const d = infoR.data.data;
+              lines.push(`  **Display name**: ${d.display_name || "N/A"}`);
+              lines.push(`  **Followers**: ${d.follower_count ?? "N/A"}`);
+              lines.push(`  **Following**: ${d.following_count ?? "N/A"}`);
+              lines.push(`  **Likes received**: ${d.likes_count ?? "N/A"}`);
+              lines.push(`  **Video count**: ${d.video_count ?? "N/A"}`);
+            }
+
+            // Video list with metrics
+            const vidR = await apiCall(
+              tiktokUrl(
+                `/business/video/list/?business_id=${config.account_id || ""}&fields=item_id,create_time,share_url,video_views,likes,comments,shares`,
+              ),
+              "GET",
+              headers,
+            );
+            if (vidR.data?.data?.videos?.length) {
+              let totalViews = 0;
+              let totalLikes = 0;
+              let totalComments = 0;
+              let totalShares = 0;
+              for (const v of vidR.data.data.videos) {
+                totalViews += v.video_views || 0;
+                totalLikes += v.likes || 0;
+                totalComments += v.comments || 0;
+                totalShares += v.shares || 0;
+              }
+              lines.push(`\n  *Aggregate video metrics (${vidR.data.data.videos.length} videos):*`);
+              lines.push(`  **Total views**: ${totalViews}`);
+              lines.push(`  **Total likes**: ${totalLikes}`);
+              lines.push(`  **Total comments**: ${totalComments}`);
+              lines.push(`  **Total shares**: ${totalShares}`);
+            }
+
+            return lines.length > 0 ? lines.join("\n") : "No TikTok organic data available.";
+          }
+
+          return `${plat}: Organic analytics not available.`;
+        };
+
+        if (platform === "all") {
+          for (const plat of ["facebook", "instagram", "pinterest", "linkedin", "tiktok"]) {
+            const data = await fetchOrganic(plat);
+            results.push(`### ${plat.charAt(0).toUpperCase() + plat.slice(1)}\n${data}`);
+          }
+        } else {
+          results.push(await fetchOrganic(platform));
+        }
+
+        // Save snapshot for trend tracking
+        const snapshot = {
+          date: today,
+          platform,
+          metric_type: params.metric_type || "overview",
+          date_range: `${dateFrom} → ${dateTo}`,
+        };
+        if (!mkt.organic_snapshots) mkt.organic_snapshots = [];
+        mkt.organic_snapshots.push(snapshot);
+        // Keep last 100 snapshots
+        if (mkt.organic_snapshots.length > 100)
+          mkt.organic_snapshots = mkt.organic_snapshots.slice(-100);
+        await saveMarketing(api, params.business_id, mkt);
+
+        return textResult(
+          `## 📈 Organic Social Analytics — ${params.business_id}\n**Period:** ${dateFrom} → ${dateTo}\n\n${results.join("\n\n")}`,
+        );
+      },
+    },
+
+    // --- Per-Post / Per-Pin Analytics ---
+    {
+      name: "marketing_post_analytics",
+      label: "Post/Pin Analytics",
+      description:
+        "Fetch per-post or per-pin performance metrics — impressions, reach, engagement, saves, clicks — for Facebook, Instagram, Pinterest, LinkedIn, and TikTok. Can get a specific post by ID or list top performing posts.",
+      parameters: PostAnalyticsParams,
+      async execute(_id: string, params: Static<typeof PostAnalyticsParams>) {
+        const mkt = await loadMarketing(api, params.business_id);
+        const topN = params.top_n || 10;
+        const today = new Date().toISOString().split("T")[0];
+        const dateTo = params.date_to || today;
+        const dateFrom =
+          params.date_from || new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0];
+
+        // Facebook post analytics
+        if (params.platform === "facebook") {
+          const config = mkt.platforms["meta"];
+          if (!config) return textResult("❌ Facebook: Meta not connected.");
+          if (!config.page_id) return textResult("❌ Facebook: No page_id configured.");
+          const headers = platformHeaders(config);
+
+          if (params.post_id) {
+            const r = await apiCall(
+              metaUrl(
+                `/${params.post_id}/insights?metric=post_impressions,post_impressions_unique,post_engaged_users,post_clicks,post_reactions_by_type_total`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.data?.data?.length) {
+              const lines = r.data.data.map(
+                (m: any) =>
+                  `  **${m.title || m.name}**: ${typeof m.values?.[0]?.value === "object" ? JSON.stringify(m.values[0].value) : (m.values?.[0]?.value ?? "N/A")}`,
+              );
+              return textResult(`## Facebook Post ${params.post_id}\n\n${lines.join("\n")}`);
+            }
+            return textResult(r.data?.error ? `❌ ${r.data.error.message}` : "No data.");
+          }
+
+          // List recent posts with metrics
+          const r = await apiCall(
+            metaUrl(
+              `/${config.page_id}/posts?fields=id,message,created_time,insights.metric(post_impressions,post_engaged_users,post_clicks)&limit=${topN}&since=${dateFrom}&until=${dateTo}`,
+            ),
+            "GET",
+            headers,
+          );
+          if (r.data?.data?.length) {
+            const lines = r.data.data.map((post: any) => {
+              const insights = post.insights?.data || [];
+              const imp =
+                insights.find((i: any) => i.name === "post_impressions")?.values?.[0]?.value || 0;
+              const eng =
+                insights.find((i: any) => i.name === "post_engaged_users")?.values?.[0]?.value || 0;
+              const clicks =
+                insights.find((i: any) => i.name === "post_clicks")?.values?.[0]?.value || 0;
+              const msg = (post.message || "").slice(0, 60);
+              return `  **${post.created_time?.split("T")[0]}** — ${msg}…\n    Impressions: ${imp} | Engaged: ${eng} | Clicks: ${clicks}`;
+            });
+            return textResult(
+              `## Facebook Top Posts — ${params.business_id}\n\n${lines.join("\n\n")}`,
+            );
+          }
+          return textResult("No Facebook posts found for this period.");
+        }
+
+        // Instagram post analytics
+        if (params.platform === "instagram") {
+          const config = mkt.platforms["instagram"] || mkt.platforms["meta"];
+          if (!config) return textResult("❌ Instagram: Not connected.");
+          const igId = config.extra?.instagram_account_id || config.page_id;
+          if (!igId) return textResult("❌ Instagram: No instagram_account_id configured.");
+          const headers = platformHeaders(config);
+
+          if (params.post_id) {
+            const r = await apiCall(
+              metaUrl(
+                `/${params.post_id}/insights?metric=impressions,reach,engagement,saved,shares`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.data?.data?.length) {
+              const lines = r.data.data.map(
+                (m: any) => `  **${m.title || m.name}**: ${m.values?.[0]?.value ?? "N/A"}`,
+              );
+              return textResult(`## Instagram Post ${params.post_id}\n\n${lines.join("\n")}`);
+            }
+            return textResult(r.data?.error ? `❌ ${r.data.error.message}` : "No data.");
+          }
+
+          // List recent media with metrics
+          const r = await apiCall(
+            metaUrl(
+              `/${igId}/media?fields=id,caption,timestamp,media_type,like_count,comments_count,insights.metric(impressions,reach,engagement,saved)&limit=${topN}`,
+            ),
+            "GET",
+            headers,
+          );
+          if (r.data?.data?.length) {
+            const lines = r.data.data.map((media: any) => {
+              const insights = media.insights?.data || [];
+              const imp =
+                insights.find((i: any) => i.name === "impressions")?.values?.[0]?.value || 0;
+              const reach = insights.find((i: any) => i.name === "reach")?.values?.[0]?.value || 0;
+              const saved = insights.find((i: any) => i.name === "saved")?.values?.[0]?.value || 0;
+              const caption = (media.caption || "").slice(0, 60);
+              return `  **${media.timestamp?.split("T")[0]}** [${media.media_type}] — ${caption}…\n    Impressions: ${imp} | Reach: ${reach} | Likes: ${media.like_count || 0} | Comments: ${media.comments_count || 0} | Saved: ${saved}`;
+            });
+            return textResult(
+              `## Instagram Top Posts — ${params.business_id}\n\n${lines.join("\n\n")}`,
+            );
+          }
+          return textResult("No Instagram posts found.");
+        }
+
+        // Pinterest pin analytics
+        if (params.platform === "pinterest") {
+          const config = mkt.platforms["pinterest"];
+          if (!config) return textResult("❌ Pinterest: Not connected.");
+          const headers = platformHeaders(config);
+
+          if (params.post_id) {
+            const r = await apiCall(
+              pinterestUrl(
+                `/pins/${params.post_id}/analytics?start_date=${dateFrom}&end_date=${dateTo}&metric_types=IMPRESSION,SAVE,PIN_CLICK,OUTBOUND_CLICK,ENGAGEMENT&app_types=all`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.status === 200 && r.data) {
+              const lines: string[] = [];
+              const summary = r.data.all?.summary_metrics || r.data;
+              for (const [key, val] of Object.entries(summary)) {
+                lines.push(`  **${key}**: ${val}`);
+              }
+              return textResult(`## Pinterest Pin ${params.post_id}\n\n${lines.join("\n")}`);
+            }
+            return textResult(`❌ Pinterest: ${r.data?.message || r.status}`);
+          }
+
+          // List pins with metrics
+          const pinsR = await apiCall(
+            pinterestUrl(`/pins?page_size=${Math.min(topN, 50)}`),
+            "GET",
+            headers,
+          );
+          if (pinsR.status === 200 && pinsR.data?.items?.length) {
+            const pinLines: string[] = [];
+            for (const pin of pinsR.data.items.slice(0, topN)) {
+              // Fetch analytics per pin
+              const aR = await apiCall(
+                pinterestUrl(
+                  `/pins/${pin.id}/analytics?start_date=${dateFrom}&end_date=${dateTo}&metric_types=IMPRESSION,SAVE,PIN_CLICK,OUTBOUND_CLICK&app_types=all`,
+                ),
+                "GET",
+                headers,
+              );
+              const metrics = aR.data?.all?.summary_metrics || aR.data || {};
+              const title = (pin.title || pin.description || "").slice(0, 60);
+              pinLines.push(
+                `  **${pin.created_at?.split("T")[0] || "—"}** — ${title}…\n    Impressions: ${metrics.IMPRESSION || 0} | Saves: ${metrics.SAVE || 0} | Pin clicks: ${metrics.PIN_CLICK || 0} | Outbound: ${metrics.OUTBOUND_CLICK || 0}`,
+              );
+            }
+            return textResult(
+              `## Pinterest Top Pins — ${params.business_id}\n\n${pinLines.join("\n\n")}`,
+            );
+          }
+          return textResult("No Pinterest pins found.");
+        }
+
+        // LinkedIn post analytics
+        if (params.platform === "linkedin") {
+          const config = mkt.platforms["linkedin"];
+          if (!config) return textResult("❌ LinkedIn: Not connected.");
+          if (!config.page_id)
+            return textResult("❌ LinkedIn: No page_id (organization ID) configured.");
+          const headers = platformHeaders(config);
+          const orgUrn = `urn:li:organization:${config.page_id}`;
+
+          if (params.post_id) {
+            const r = await apiCall(
+              linkedinUrl(`/socialActions/${params.post_id}`),
+              "GET",
+              headers,
+            );
+            if (r.status === 200) {
+              return textResult(
+                `## LinkedIn Post ${params.post_id}\n\n  **Likes**: ${r.data?.likesSummary?.totalLikes || 0}\n  **Comments**: ${r.data?.commentsSummary?.totalFirstLevelComments || 0}`,
+              );
+            }
+            return textResult(`❌ LinkedIn: ${r.status}`);
+          }
+
+          // List recent shares with engagement
+          const sharesR = await apiCall(
+            linkedinUrl(
+              `/ugcPosts?q=authors&authors=List(${encodeURIComponent(orgUrn)})&count=${topN}&sortBy=LAST_MODIFIED`,
+            ),
+            "GET",
+            headers,
+          );
+          if (sharesR.status === 200 && sharesR.data?.elements?.length) {
+            const lines: string[] = [];
+            for (const post of sharesR.data.elements.slice(0, topN)) {
+              const shareUrn = post.id || post["activity"];
+              const text = (
+                post.specificContent?.["com.linkedin.ugc.ShareContent"]?.shareCommentary?.text || ""
+              ).slice(0, 60);
+              // Get social actions for this post
+              const actR = await apiCall(
+                linkedinUrl(`/socialActions/${encodeURIComponent(shareUrn)}`),
+                "GET",
+                headers,
+              );
+              const likes = actR.data?.likesSummary?.totalLikes || 0;
+              const comments = actR.data?.commentsSummary?.totalFirstLevelComments || 0;
+              const created = post.created?.time
+                ? new Date(post.created.time).toISOString().split("T")[0]
+                : "—";
+              lines.push(
+                `  **${created}** — ${text}…\n    Likes: ${likes} | Comments: ${comments}`,
+              );
+            }
+            return textResult(
+              `## LinkedIn Top Posts — ${params.business_id}\n\n${lines.join("\n\n")}`,
+            );
+          }
+          return textResult("No LinkedIn posts found.");
+        }
+
+        // TikTok video analytics
+        if (params.platform === "tiktok") {
+          const config = mkt.platforms["tiktok"];
+          if (!config) return textResult("❌ TikTok: Not connected.");
+          const headers = platformHeaders(config);
+
+          if (params.post_id) {
+            const r = await apiCall(
+              tiktokUrl(
+                `/business/video/list/?business_id=${config.account_id || ""}&filters={"video_ids":["${params.post_id}"]}&fields=item_id,create_time,video_views,likes,comments,shares,reach,full_video_watched_rate`,
+              ),
+              "GET",
+              headers,
+            );
+            if (r.data?.data?.videos?.length) {
+              const v = r.data.data.videos[0];
+              return textResult(
+                `## TikTok Video ${params.post_id}\n\n  **Views**: ${v.video_views || 0}\n  **Likes**: ${v.likes || 0}\n  **Comments**: ${v.comments || 0}\n  **Shares**: ${v.shares || 0}\n  **Reach**: ${v.reach || "N/A"}\n  **Full watch rate**: ${v.full_video_watched_rate || "N/A"}`,
+              );
+            }
+            return textResult(r.data?.code !== 0 ? `❌ TikTok: ${r.data?.message}` : "No data.");
+          }
+
+          // List videos with metrics
+          const r = await apiCall(
+            tiktokUrl(
+              `/business/video/list/?business_id=${config.account_id || ""}&fields=item_id,create_time,share_url,video_views,likes,comments,shares&max_count=${topN}`,
+            ),
+            "GET",
+            headers,
+          );
+          if (r.data?.data?.videos?.length) {
+            const sorted = r.data.data.videos.sort(
+              (a: any, b: any) => (b.video_views || 0) - (a.video_views || 0),
+            );
+            const lines = sorted.slice(0, topN).map((v: any) => {
+              const created = v.create_time
+                ? new Date(v.create_time * 1000).toISOString().split("T")[0]
+                : "—";
+              return `  **${created}** — ${v.item_id}\n    Views: ${v.video_views || 0} | Likes: ${v.likes || 0} | Comments: ${v.comments || 0} | Shares: ${v.shares || 0}`;
+            });
+            return textResult(
+              `## TikTok Top Videos — ${params.business_id}\n\n${lines.join("\n\n")}`,
+            );
+          }
+          return textResult("No TikTok videos found.");
+        }
+
+        return textResult(`❌ Unsupported platform: ${params.platform}`);
       },
     },
   ];

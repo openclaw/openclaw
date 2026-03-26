@@ -73,6 +73,17 @@ Agent: CEO — Kingler Bercy (Stakeholder / Principal)
 
 ## Belief Revision Log
 
-| Date       | ID  | Change                     | Old | New                     | Source      |
-| ---------- | --- | -------------------------- | --- | ----------------------- | ----------- |
-| 2026-03-20 | --  | Initial belief set created | --  | Full BDI initialization | system-init |
+| Date       | ID                     | Change                            | Old | New                                        | Source                     |
+| ---------- | ---------------------- | --------------------------------- | --- | ------------------------------------------ | -------------------------- |
+| 2026-03-20 | --                     | Initial belief set created        | --  | Full BDI initialization                    | system-init                |
+| 2026-03-25 | B-OPS-001 to B-OPS-005 | Added Operational Beliefs section | --  | Verification rules for incident escalation | stakeholder-correction-001 |
+
+## Operational Beliefs
+
+| ID        | Belief                           | Value                                                                                                             | Certainty | Source                     | Updated    |
+| --------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------- | --------- | -------------------------- | ---------- |
+| B-OPS-001 | Gateway restart cron behavior    | Gateway restarts invalidate existing cron job IDs; stale-ID errors are transient and self-resolve within minutes  | 0.97      | stakeholder-correction-001 | 2026-03-25 |
+| B-OPS-002 | Error ≠ System failure           | Individual tool errors (especially after restarts) do not indicate systemic integration failures                  | 0.95      | stakeholder-correction-001 | 2026-03-25 |
+| B-OPS-003 | Verification before escalation   | All P1/P2 incidents MUST be verified by calling the relevant integration tools directly before escalating         | 0.99      | stakeholder-directive      | 2026-03-25 |
+| B-OPS-004 | Shopify integration baseline     | Shopify API is enterprise-grade (99.98% uptime); apparent failures should be verified with direct API calls first | 0.96      | platform-data + B-ENV-005  | 2026-03-25 |
+| B-OPS-005 | Budget requests require evidence | Budget increase requests to stakeholder require verified data, not assumptions from error logs                    | 0.98      | stakeholder-directive      | 2026-03-25 |
