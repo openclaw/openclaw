@@ -133,6 +133,31 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
+  it("rejects requests sent to the wrong webhook path before content-type or signature checks", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "wrong-path",
+        path: "/expected-feishu-hook",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const wrongUrl = new URL(url);
+        wrongUrl.pathname = "/wrong-path";
+        const response = await fetch(wrongUrl, {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: "{}",
+        });
+
+        expect(response.status).toBe(404);
+        expect(await response.text()).toBe("Not Found");
+      },
+    );
+  });
+
   it("rejects oversized unsigned webhook bodies with 413 before signature verification", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     await withRunningWebhookMonitor(
