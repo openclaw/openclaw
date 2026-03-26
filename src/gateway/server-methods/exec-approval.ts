@@ -183,11 +183,9 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      const hasExecApprovalClients = context.hasExecApprovalClients?.() ?? false;
-      let forwarded = false;
       if (opts?.forwarder) {
         try {
-          forwarded = await opts.forwarder.handleRequested({
+          await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
@@ -198,20 +196,9 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
-        manager.expire(record.id, "no-approval-route");
-        respond(
-          true,
-          {
-            id: record.id,
-            decision: null,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          },
-          undefined,
-        );
-        return;
-      }
+      // Keep approvals pending even when no messaging forwarder targets and no operator WS clients
+      // are connected yet, so Control UI / webchat can connect with operator.approvals scope and
+      // resolve via exec.approval.resolve before the timeout (see hasExecApprovalClients in server.impl).
 
       // Only send immediate "accepted" response when twoPhase is requested.
       // This preserves single-response semantics for existing callers.

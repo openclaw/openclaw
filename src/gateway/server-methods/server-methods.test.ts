@@ -964,25 +964,36 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
-    const { manager, handlers, forwarder, respond, context } =
-      createForwardingExecApprovalFixture();
-    const expireSpy = vi.spyOn(manager, "expire");
+  it("keeps approvals pending when no approver clients and no forwarding targets until timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
 
-    await requestExecApproval({
-      handlers,
-      respond,
-      context,
-      params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
-    });
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: { timeoutMs: 60_000, id: "approval-no-approver", host: "gateway" },
+      });
+      await drainApprovalRequestTicks();
 
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
-    expect(expireSpy).toHaveBeenCalledWith("approval-no-approver", "no-approval-route");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ id: "approval-no-approver", decision: null }),
-      undefined,
-    );
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await requestPromise;
+
+      expect(expireSpy).toHaveBeenCalledWith("approval-no-approver");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ id: "approval-no-approver", decision: null }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async () => {
