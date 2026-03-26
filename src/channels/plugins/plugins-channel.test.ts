@@ -166,6 +166,12 @@ describe("whatsappOutbound.resolveTarget", () => {
     });
 
     expectWhatsAppTargetResolutionError(result);
+    if (!result || result.ok) {
+      throw new Error("expected WhatsApp target resolution to fail");
+    }
+    expect(result.error.message).toBe(
+      'Target "+15550000000" is not listed in the configured WhatsApp allowFrom policy.',
+    );
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {
