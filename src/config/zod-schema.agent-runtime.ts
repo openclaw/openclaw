@@ -332,6 +332,7 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    maxResponseBytes: z.number().int().positive().optional(),
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),

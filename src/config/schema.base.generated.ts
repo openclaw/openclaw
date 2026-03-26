@@ -5637,6 +5637,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   readability: {
                     type: "boolean",
                   },
+                  maxResponseBytes: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                   firecrawl: {
                     type: "object",
                     properties: {
