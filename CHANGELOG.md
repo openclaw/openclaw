@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Breaking
 
+- Providers/Qwen: remove the deprecated `qwen-portal-auth` OAuth integration for `portal.qwen.ai`; migrate to Model Studio with `openclaw onboard --auth-choice modelstudio-api-key`. (#52709) Thanks @pomelo-nwu.
+
 ### Changes
 
 - MiniMax: add image generation provider for `image-01` model, supporting generate and image-to-image editing with aspect ratio control. (#54487) Thanks @liyuan97.
@@ -38,6 +40,8 @@ Docs: https://docs.openclaw.ai
 - CLI/message send: write manual `openclaw message send` deliveries into the resolved agent session transcript again by always threading the default CLI agent through outbound mirroring. (#54187) Thanks @KevInTheCloud5617.
 - CLI/onboarding: show the Kimi Code API key option again in the Moonshot setup menu so the interactive picker includes all Kimi setup paths together. Fixes #54412 Thanks @sparkyrider
 - WhatsApp: fix infinite echo loop in self-chat DM mode where the bot's own outbound replies were re-processed as new inbound user messages. (#54570) Thanks @joelnishanth
+- Discord/reconnect: drain stale gateway sockets, clear cached resume state before forced fresh reconnects, and fail closed when old sockets refuse to die so Discord recovery stops looping on poisoned resume state. (#54697) Thanks @ngutman.
+- BlueBubbles/groups: optionally enrich unnamed participant lists with local macOS Contacts names after group gating passes, so group member context can show names instead of only raw phone numbers.
 
 ## 2026.3.24
 

@@ -40,8 +40,6 @@ const PROVIDER_ALIAS_TO_OPENROUTER: Record<string, string> = {
   moonshot: "moonshotai",
   moonshotai: "moonshotai",
   "openai-codex": "openai",
-  qwen: "qwen",
-  "qwen-portal": "qwen",
   xai: "x-ai",
   zai: "z-ai",
 };
