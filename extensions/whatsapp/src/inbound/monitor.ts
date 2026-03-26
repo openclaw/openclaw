@@ -218,8 +218,10 @@ export async function monitorWebInbox(options: {
     }
 
     const group = isGroupJid(remoteJid);
+    // Drop echoes of messages the gateway itself sent (tracked by sendTrackedMessage).
+    // Applies to both groups and DMs/self-chat — without this, self-chat mode
+    // re-processes the bot's own replies as new inbound user messages.
     if (
-      group &&
       Boolean(msg.key?.fromMe) &&
       id &&
       isRecentOutboundMessage({
@@ -228,7 +230,7 @@ export async function monitorWebInbox(options: {
         messageId: id,
       })
     ) {
-      logVerbose(`Skipping recent outbound WhatsApp group echo ${id} for ${remoteJid}`);
+      logVerbose(`Skipping recent outbound WhatsApp echo ${id} for ${remoteJid}`);
       return null;
     }
     if (id) {
