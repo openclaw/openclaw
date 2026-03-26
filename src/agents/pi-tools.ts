@@ -649,8 +649,10 @@ export function createOpenClawCodingTools(options?: {
       ...buildDefaultToolPolicyPipelineSteps({
         profilePolicy: profilePolicyWithAlsoAllow,
         profile,
+        profileAlsoAllow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
+        providerProfileAlsoAllow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,

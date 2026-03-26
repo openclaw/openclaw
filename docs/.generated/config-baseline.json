@@ -8561,6 +8561,17 @@
       "hasChildren": false
     },
     {
+      "path": "channels.bluebubbles.accounts.*.enrichGroupParticipantsFromContacts",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -9096,6 +9107,17 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.enrichGroupParticipantsFromContacts",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -23317,6 +23339,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.mattermost.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.mattermost.accounts.*.baseUrl",
       "kind": "channel",
       "type": "string",
@@ -23837,6 +23869,16 @@
         "number",
         "string"
       ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.mattermost.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25427,6 +25469,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.apiPassword",
       "kind": "channel",
       "type": [
@@ -26008,6 +26060,16 @@
       "path": "channels.nextcloud-talk.allowFrom.*",
       "kind": "channel",
       "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nextcloud-talk.allowPrivateNetwork",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -51564,6 +51626,127 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.microsoft-foundry",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry",
+      "help": "OpenClaw Microsoft Foundry provider plugin (plugin: microsoft-foundry)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry Config",
+      "help": "Plugin-defined config payload for microsoft-foundry.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/microsoft-foundry",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.microsoft.config",
       "kind": "plugin",
       "type": "object",
@@ -54115,127 +54298,6 @@
     },
     {
       "path": "plugins.entries.qianfan.subagent.allowModelOverride",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Plugin Subagent Model Override",
-      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "qwen-portal-auth",
-      "help": "Plugin entry for qwen-portal-auth.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.config",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "qwen-portal-auth Config",
-      "help": "Plugin-defined config payload for qwen-portal-auth.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.enabled",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Enable qwen-portal-auth",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.hooks",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Hook Policy",
-      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.hooks.allowPromptInjection",
-      "kind": "plugin",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Allow Prompt Injection Hooks",
-      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Plugin Subagent Policy",
-      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels",
-      "kind": "plugin",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Plugin Subagent Allowed Models",
-      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowedModels.*",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.qwen-portal-auth.subagent.allowModelOverride",
       "kind": "plugin",
       "type": "boolean",
       "required": false,

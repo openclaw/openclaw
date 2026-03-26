@@ -14,6 +14,7 @@ import groqPlugin from "../../../extensions/groq/index.js";
 import huggingFacePlugin from "../../../extensions/huggingface/index.js";
 import kilocodePlugin from "../../../extensions/kilocode/index.js";
 import kimiCodingPlugin from "../../../extensions/kimi-coding/index.js";
+import microsoftFoundryPlugin from "../../../extensions/microsoft-foundry/index.js";
 import microsoftPlugin from "../../../extensions/microsoft/index.js";
 import minimaxPlugin from "../../../extensions/minimax/index.js";
 import mistralPlugin from "../../../extensions/mistral/index.js";
@@ -26,7 +27,6 @@ import opencodeGoPlugin from "../../../extensions/opencode-go/index.js";
 import opencodePlugin from "../../../extensions/opencode/index.js";
 import openrouterPlugin from "../../../extensions/openrouter/index.js";
 import qianfanPlugin from "../../../extensions/qianfan/index.js";
-import qwenPortalAuthPlugin from "../../../extensions/qwen-portal-auth/index.js";
 import sglangPlugin from "../../../extensions/sglang/index.js";
 import syntheticPlugin from "../../../extensions/synthetic/index.js";
 import togetherPlugin from "../../../extensions/together/index.js";
@@ -75,7 +75,6 @@ type PluginRegistrationContractEntry = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -366,6 +365,7 @@ const bundledProviderPlugins = dedupePlugins([
   huggingFacePlugin,
   kilocodePlugin,
   kimiCodingPlugin,
+  microsoftFoundryPlugin,
   minimaxPlugin,
   mistralPlugin,
   modelStudioPlugin,
@@ -377,7 +377,6 @@ const bundledProviderPlugins = dedupePlugins([
   opencodeGoPlugin,
   openrouterPlugin,
   qianfanPlugin,
-  qwenPortalAuthPlugin,
   sglangPlugin,
   syntheticPlugin,
   togetherPlugin,
@@ -420,10 +419,6 @@ function upsertPluginRegistrationContractEntry(
     existing.imageGenerationProviderIds,
     next.imageGenerationProviderIds,
   );
-  existing.videoGenerationProviderIds = mergeIds(
-    existing.videoGenerationProviderIds,
-    next.videoGenerationProviderIds,
-  );
   existing.webSearchProviderIds = mergeIds(
     existing.webSearchProviderIds,
     next.webSearchProviderIds,
@@ -448,7 +443,6 @@ function mergeProviderContractRegistrations(
       speechProviderIds: [],
       mediaUnderstandingProviderIds: [],
       imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
       webSearchProviderIds: [],
       toolNames: [],
     });
@@ -468,9 +462,6 @@ function loadPluginRegistrationContractRegistry(): PluginRegistrationContractEnt
           (provider) => provider.id,
         ),
         imageGenerationProviderIds: captured.imageGenerationProviders.map(
-          (provider) => provider.id,
-        ),
-        videoGenerationProviderIds: captured.videoGenerationProviders.map(
           (provider) => provider.id,
         ),
         webSearchProviderIds: captured.webSearchProviders.map((provider) => provider.id),
