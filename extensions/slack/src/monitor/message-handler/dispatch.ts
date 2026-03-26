@@ -345,7 +345,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // the 1000ms draft-stream throttle, leaving messageId() undefined and
       // causing canFinalizeViaPreviewEdit to fall through to deliverNormally —
       // which sends a second message while the throttled draft posts shortly after.
-      await draftStream?.flush();
+      // Only flush when streaming was active but the draft hasn't posted yet,
+      // to avoid sending a throwaway draft message on non-edit paths (hasMedia, isError).
+      if (hasStreamedMessage && draftStream && !draftStream.messageId()) {
+        await draftStream.flush();
+      }
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
       const finalText = reply.text;
