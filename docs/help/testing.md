@@ -23,6 +23,7 @@ This doc is a “how we test” guide:
 Most days:
 
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
+- Faster local full-suite run on a roomy machine: `pnpm test:max`
 
 When you touch tests or want extra confidence:
 
@@ -54,9 +55,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Should be fast and stable
 - Scheduler note:
   - `pnpm test` now keeps a small checked-in behavioral manifest for true pool/isolation overrides and a separate timing snapshot for the slowest unit files.
-  - Shared unit coverage now defaults to `threads`, while the manifest keeps the measured fork-only exceptions and heavy singleton lanes explicit.
-  - The shared extension lane still defaults to `threads`; the wrapper keeps explicit fork-only exceptions in `test/fixtures/test-parallel.behavior.json` when a file cannot safely share a non-isolated worker.
-  - The channel suite (`vitest.channels.config.ts`) now also defaults to `threads`; the March 22, 2026 direct full-suite control run passed clean without channel-specific fork exceptions.
+  - Shared unit, extension, channel, and gateway runs all stay on Vitest `forks`.
+  - The wrapper keeps measured fork-isolated exceptions and heavy singleton lanes explicit in `test/fixtures/test-parallel.behavior.json`.
   - The wrapper peels the heaviest measured files into dedicated lanes instead of relying on a growing hand-maintained exclusion list.
   - Refresh the timing snapshot with `pnpm test:perf:update-timings` after major suite shape changes.
 - Embedded runner note:
@@ -72,15 +72,16 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     sufficient substitute for those integration paths.
 - Pool note:
   - Base Vitest config still defaults to `forks`.
-  - Unit wrapper lanes default to `threads`, with explicit manifest fork-only exceptions.
-  - Extension scoped config defaults to `threads`.
-  - Channel scoped config defaults to `threads`.
+  - Unit, channel, extension, and gateway wrapper lanes all default to `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
   - `pnpm test` also passes `--isolate=false` at the wrapper level.
   - Opt back into Vitest file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:
   - `pnpm test:changed` runs the wrapper with `--changed origin/main`.
+  - `pnpm test:changed:max` keeps the same changed-file filter but uses the wrapper's aggressive local planner profile.
+  - `pnpm test:max` exposes that same planner profile for a full local run.
+  - On Node 25, the normal local profile keeps top-level lane parallelism off; `pnpm test:max` re-enables it. On Node 22/24 LTS, normal local runs can also use top-level lane parallelism.
   - The base Vitest config marks the wrapper manifests/config files as `forceRerunTriggers` so changed-mode reruns stay correct when scheduler inputs change.
   - Vitest's filesystem module cache is now enabled by default for Node-side test reruns.
   - Opt out with `OPENCLAW_VITEST_FS_MODULE_CACHE=0` or `OPENCLAW_VITEST_FS_MODULE_CACHE=false` if you suspect stale transform cache behavior.
