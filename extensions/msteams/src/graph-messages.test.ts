@@ -6,6 +6,7 @@ import {
   listReactionsMSTeams,
   pinMessageMSTeams,
   reactMessageMSTeams,
+  searchMessagesMSTeams,
   unpinMessageMSTeams,
   unreactMessageMSTeams,
 } from "./graph-messages.js";
@@ -19,13 +20,17 @@ const mockState = vi.hoisted(() => ({
   findByUserId: vi.fn(),
 }));
 
-vi.mock("./graph.js", () => ({
-  resolveGraphToken: mockState.resolveGraphToken,
-  fetchGraphJson: mockState.fetchGraphJson,
-  postGraphJson: mockState.postGraphJson,
-  postGraphBetaJson: mockState.postGraphBetaJson,
-  deleteGraphRequest: mockState.deleteGraphRequest,
-}));
+vi.mock("./graph.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./graph.js")>();
+  return {
+    ...actual,
+    resolveGraphToken: mockState.resolveGraphToken,
+    fetchGraphJson: mockState.fetchGraphJson,
+    postGraphJson: mockState.postGraphJson,
+    postGraphBetaJson: mockState.postGraphBetaJson,
+    deleteGraphRequest: mockState.deleteGraphRequest,
+  };
+});
 
 vi.mock("./conversation-store-fs.js", () => ({
   createMSTeamsConversationStoreFs: () => ({
@@ -540,5 +545,172 @@ describe("listReactionsMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
     });
+  });
+});
+
+describe("searchMessagesMSTeams", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  });
+
+  it("searches chat messages with query string", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-1",
+          body: { content: "Meeting notes from Monday" },
+          from: { user: { id: "u1", displayName: "Alice" } },
+          createdDateTime: "2026-03-25T10:00:00Z",
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "meeting notes",
+    });
+
+    expect(result.messages).toEqual([
+      {
+        id: "msg-1",
+        text: "Meeting notes from Monday",
+        from: { user: { id: "u1", displayName: "Alice" } },
+        createdAt: "2026-03-25T10:00:00Z",
+      },
+    ]);
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain(`/chats/${encodeURIComponent(CHAT_ID)}/messages?`);
+    expect(calledPath).toContain("%24search=%22meeting+notes%22");
+    expect(calledPath).toContain("%24top=25");
+  });
+
+  it("searches channel messages", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [
+        {
+          id: "msg-2",
+          body: { content: "Sprint review" },
+          from: { user: { id: "u2", displayName: "Bob" } },
+          createdDateTime: "2026-03-25T11:00:00Z",
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      query: "sprint",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain("/teams/team-id-1/channels/channel-id-1/messages?");
+  });
+
+  it("applies limit parameter", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "test",
+      limit: 10,
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain("%24top=10");
+  });
+
+  it("clamps limit to max 50", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "test",
+      limit: 100,
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain("%24top=50");
+  });
+
+  it("clamps limit to min 1", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "test",
+      limit: 0,
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain("%24top=1");
+  });
+
+  it("applies from filter", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "budget",
+      from: "Alice",
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain("%24filter=");
+    expect(calledPath).toContain("Alice");
+  });
+
+  it("escapes single quotes in from filter", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "test",
+      from: "O'Brien",
+    });
+
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    // URLSearchParams encodes the escaped OData value; decode to verify escaping
+    const decoded = decodeURIComponent(calledPath);
+    expect(decoded).toContain("O''Brien");
+  });
+
+  it("returns empty array when no messages match", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "nonexistent",
+    });
+
+    expect(result.messages).toEqual([]);
+  });
+
+  it("resolves user: target through conversation store", async () => {
+    mockState.findByUserId.mockResolvedValue({
+      conversationId: "a:bot-id",
+      reference: { graphChatId: "19:dm-chat@thread.tacv2" },
+    });
+    mockState.fetchGraphJson.mockResolvedValue({ value: [] });
+
+    await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "user:aad-user-1",
+      query: "hello",
+    });
+
+    expect(mockState.findByUserId).toHaveBeenCalledWith("aad-user-1");
+    const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
+    expect(calledPath).toContain(
+      `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages?`,
+    );
   });
 });

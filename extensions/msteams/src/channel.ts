@@ -142,6 +142,7 @@ function describeMSTeamsMessageTool({
           "read",
           "react",
           "reactions",
+          "search",
         ] satisfies ChannelMessageActionName[])
       : [],
     capabilities: enabled ? ["cards"] : [],
@@ -722,6 +723,44 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
               ok: true,
               channel: "msteams",
               action: "reactions",
+              ...result,
+            });
+          }
+
+          if (ctx.action === "search") {
+            const to =
+              typeof ctx.params.to === "string"
+                ? ctx.params.to.trim()
+                : typeof ctx.params.target === "string"
+                  ? ctx.params.target.trim()
+                  : (ctx.toolContext?.currentChannelId?.trim() ?? "");
+            const query = typeof ctx.params.query === "string" ? ctx.params.query.trim() : "";
+            if (!to || !query) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Search requires a target (to) and query.",
+                  },
+                ],
+                details: { error: "Search requires a target (to) and query." },
+              };
+            }
+            const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
+            const from = typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
+            const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();
+            const result = await searchMessagesMSTeams({
+              cfg: ctx.cfg,
+              to,
+              query,
+              from: from || undefined,
+              limit,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "msteams",
+              action: "search",
               ...result,
             });
           }

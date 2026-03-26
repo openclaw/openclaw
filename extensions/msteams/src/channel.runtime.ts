@@ -8,6 +8,7 @@ import {
   listReactionsMSTeams as listReactionsMSTeamsImpl,
   pinMessageMSTeams as pinMessageMSTeamsImpl,
   reactMessageMSTeams as reactMessageMSTeamsImpl,
+  searchMessagesMSTeams as searchMessagesMSTeamsImpl,
   unpinMessageMSTeams as unpinMessageMSTeamsImpl,
   unreactMessageMSTeams as unreactMessageMSTeamsImpl,
 } from "./graph-messages.js";
@@ -27,6 +28,7 @@ export const msTeamsChannelRuntime = {
   listReactionsMSTeams: listReactionsMSTeamsImpl,
   pinMessageMSTeams: pinMessageMSTeamsImpl,
   reactMessageMSTeams: reactMessageMSTeamsImpl,
+  searchMessagesMSTeams: searchMessagesMSTeamsImpl,
   unpinMessageMSTeams: unpinMessageMSTeamsImpl,
   unreactMessageMSTeams: unreactMessageMSTeamsImpl,
   listMSTeamsDirectoryGroupsLive: listMSTeamsDirectoryGroupsLiveImpl,

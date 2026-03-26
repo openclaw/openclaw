@@ -1,7 +1,9 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {
+  type GraphResponse,
   deleteGraphRequest,
+  escapeOData,
   fetchGraphJson,
   postGraphBetaJson,
   postGraphJson,
@@ -360,4 +362,65 @@ export async function listReactionsMSTeams(
   }));
 
   return { reactions };
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+export type SearchMessagesMSTeamsParams = {
+  cfg: OpenClawConfig;
+  to: string;
+  query: string;
+  from?: string;
+  limit?: number;
+};
+
+export type SearchMessagesMSTeamsResult = {
+  messages: Array<{
+    id: string;
+    text: string | undefined;
+    from: GraphMessageFrom | undefined;
+    createdAt: string | undefined;
+  }>;
+};
+
+const SEARCH_DEFAULT_LIMIT = 25;
+const SEARCH_MAX_LIMIT = 50;
+
+/**
+ * Search messages in a chat or channel by content via Graph API.
+ * Uses `$search` for full-text body search and optional `$filter` for sender.
+ */
+export async function searchMessagesMSTeams(
+  params: SearchMessagesMSTeamsParams,
+): Promise<SearchMessagesMSTeamsResult> {
+  const token = await resolveGraphToken(params.cfg);
+  const conversationId = await resolveGraphConversationId(params.to);
+  const { basePath } = resolveConversationPath(conversationId);
+
+  const top = Math.min(
+    Math.max(Math.floor(params.limit ?? SEARCH_DEFAULT_LIMIT), 1),
+    SEARCH_MAX_LIMIT,
+  );
+
+  const qp = new URLSearchParams();
+  qp.set("$search", `"${params.query}"`);
+  qp.set("$top", String(top));
+
+  if (params.from) {
+    qp.set("$filter", `from/user/displayName eq '${escapeOData(params.from)}'`);
+  }
+
+  const path = `${basePath}/messages?${qp.toString()}`;
+  const res = await fetchGraphJson<GraphResponse<GraphMessage>>({ token, path });
+
+  const messages = (res.value ?? []).map((msg) => ({
+    id: msg.id ?? "",
+    text: msg.body?.content,
+    from: msg.from,
+    createdAt: msg.createdDateTime,
+  }));
+
+  return { messages };
 }
