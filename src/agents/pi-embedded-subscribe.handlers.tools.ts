@@ -470,6 +470,7 @@ export async function handleToolExecutionEnd(
       reportD0ToolLifecycle(
         {
           toolName,
+          toolDetail: meta,
           status: isToolError ? "error" : "success",
           runId,
           toolCallId,
