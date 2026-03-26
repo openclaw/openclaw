@@ -584,11 +584,14 @@ export async function runHeartbeatOnce(opts: {
     const { runPreHook } = await import("../cron/pre-hook.js");
     const hookResult = await runPreHook(preHookConfig, opts.abortSignal);
     if (hookResult.outcome === "skip") {
-      log.info("heartbeat: pre-hook returned skip");
+      log.info({ stdout: hookResult.stdout, stderr: hookResult.stderr }, "heartbeat: pre-hook returned skip");
       return { status: "skipped", reason: "pre-hook-skip" };
     }
     if (hookResult.outcome === "error") {
-      log.warn(`heartbeat: pre-hook failed: ${hookResult.message}`);
+      log.warn(
+        { exitCode: hookResult.exitCode, stdout: hookResult.stdout, stderr: hookResult.stderr },
+        `heartbeat: pre-hook failed: ${hookResult.message}`,
+      );
       return { status: "failed", reason: `pre-hook: ${hookResult.message}` };
     }
   }

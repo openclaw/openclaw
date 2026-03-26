@@ -522,6 +522,9 @@ export function normalizeCronJobInput(
       next.preHook = null;
     } else if (base.preHook === undefined) {
       delete next.preHook;
+    } else {
+      // Non-object, non-null, non-undefined (e.g. a bare string or number) — drop it.
+      delete next.preHook;
     }
   }
 

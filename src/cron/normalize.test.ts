@@ -911,6 +911,14 @@ describe("preHook normalization", () => {
     expect(normalized.preHook).toBeNull();
   });
 
+  it("drops bare-string preHook", () => {
+    const normalized = normalizeCronJobCreate({
+      ...base,
+      preHook: "ping localhost",
+    }) as unknown as Record<string, unknown>;
+    expect(normalized.preHook).toBeUndefined();
+  });
+
   it("omits timeoutSeconds when not a number", () => {
     const normalized = normalizeCronJobCreate({
       ...base,
