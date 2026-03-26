@@ -3,17 +3,16 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
+  createTopLevelChannelDmPolicy,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
-  setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type {
   ChannelSetupAdapter,
-  ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
@@ -106,20 +105,14 @@ export async function promptIMessageAllowFrom(params: {
   });
 }
 
-export const imessageDmPolicy: ChannelSetupDmPolicy = {
+export const imessageDmPolicy = createTopLevelChannelDmPolicy({
   label: "iMessage",
   channel,
   policyKey: "channels.imessage.dmPolicy",
   allowFromKey: "channels.imessage.allowFrom",
   getCurrent: (cfg: OpenClawConfig) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
-  setPolicy: (cfg: OpenClawConfig, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
   promptAllowFrom: promptIMessageAllowFrom,
-};
+});
 
 function resolveIMessageCliPath(params: { cfg: OpenClawConfig; accountId: string }) {
   return resolveIMessageAccount(params).config.cliPath ?? "imsg";
