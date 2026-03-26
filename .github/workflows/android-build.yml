@@ -56,21 +56,25 @@ jobs:
         working-directory: ./apps/android
         run: ./gradlew :app:assembleRelease --parallel --build-cache --configure-on-demand --no-daemon
 
-      - name: Setup Android SDK Build Tools
-        run: |
-          sudo apt-get install -y apksigner
-
       - name: Sign APK
         run: |
-          apksigner sign --ks apps/android/app/keystore.jks \
+          # Use apksigner from Android SDK
+          APKSIGNER=$(find $ANDROID_HOME/build-tools -name apksigner | sort -v | tail -n 1)
+          $APKSIGNER sign --ks apps/android/app/keystore.jks \
             --ks-key-alias ${{ secrets.ANDROID_KEY_ALIAS }} \
             --ks-pass pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
             --key-pass pass:${{ secrets.ANDROID_KEY_PASSWORD }} \
-            apps/android/app/build/outputs/apk/release/*.apk
+            apps/android/app/build/outputs/apk/*/release/*.apk
 
       - name: Rename APK for Release
         run: |
-          mv apps/android/app/build/outputs/apk/release/*.apk apps/android/app/build/outputs/apk/release/openclaw-android-latest.apk
+          mkdir -p apps/android/app/build/outputs/apk/release
+          # Prefer thirdParty flavor for the latest release artifact
+          if ls apps/android/app/build/outputs/apk/thirdParty/release/*.apk 1> /dev/null 2>&1; then
+            cp apps/android/app/build/outputs/apk/thirdParty/release/*.apk apps/android/app/build/outputs/apk/release/openclaw-android-latest.apk
+          else
+            cp apps/android/app/build/outputs/apk/*/release/*.apk apps/android/app/build/outputs/apk/release/openclaw-android-latest.apk
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
