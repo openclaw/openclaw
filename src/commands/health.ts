@@ -419,8 +419,10 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: import("../gateway/server-channels.js").ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
+  const runtimeSnapshot = params?.runtimeSnapshot;
   const cfg = loadConfig();
   const { defaultAgentId, ordered } = resolveAgentOrder(cfg);
   const channelBindings = buildChannelAccountBindings(cfg);
@@ -522,7 +524,12 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      const defaultRuntime = runtimeSnapshot?.channels[plugin.id];
+      const runtimeAccount = runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId];
+      const runtimeForAccount =
+        runtimeAccount ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
       const snapshot: ChannelAccountSnapshot = {
+        ...(runtimeForAccount ?? null),
         accountId,
         enabled,
         configured,
