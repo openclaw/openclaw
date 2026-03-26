@@ -187,6 +187,23 @@ describe("runDiscordGatewayLifecycle", () => {
     };
   }
 
+  function expectGatewaySessionStateCleared(gateway: {
+    state?: {
+      sessionId?: string | null;
+      resumeGatewayUrl?: string | null;
+      sequence?: number | null;
+    };
+    sequence?: number | null;
+  }) {
+    if (!gateway.state) {
+      throw new Error("gateway state was not initialized");
+    }
+    expect(gateway.state.sessionId).toBeNull();
+    expect(gateway.state.resumeGatewayUrl).toBeNull();
+    expect(gateway.state.sequence).toBeNull();
+    expect(gateway.sequence).toBeNull();
+  }
+
   it("cleans up thread bindings when exec approvals startup fails", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const { lifecycleParams, start, stop, threadStop, gatewaySupervisor } = createLifecycleHarness({
@@ -350,13 +367,7 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(runtimeError).not.toHaveBeenCalledWith(
         expect.stringContaining("WebSocket was closed before the connection was established"),
       );
-      if (!gateway.state) {
-        throw new Error("gateway state was not initialized");
-      }
-      expect(gateway.state.sessionId).toBeNull();
-      expect(gateway.state.resumeGatewayUrl).toBeNull();
-      expect(gateway.state.sequence).toBeNull();
-      expect(gateway.sequence).toBeNull();
+      expectGatewaySessionStateCleared(gateway);
     } finally {
       vi.useRealTimers();
     }
@@ -677,13 +688,7 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.connect).toHaveBeenNthCalledWith(1, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(2, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(3, false);
-      if (!gateway.state) {
-        throw new Error("gateway state was not initialized");
-      }
-      expect(gateway.state.sessionId).toBeNull();
-      expect(gateway.state.resumeGatewayUrl).toBeNull();
-      expect(gateway.state.sequence).toBeNull();
-      expect(gateway.sequence).toBeNull();
+      expectGatewaySessionStateCleared(gateway);
     } finally {
       vi.useRealTimers();
     }
