@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { ResolvedQmdConfig } from "./backend-config.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemorySearchManager,
-  MemorySyncProgressUpdate,
-} from "./types.js";
+import {
+  createSubsystemLogger,
+  resolveGlobalSingleton,
+  resolveMemoryBackendConfig,
+  type MemoryEmbeddingProbeResult,
+  type MemorySearchManager,
+  type MemorySyncProgressUpdate,
+  type OpenClawConfig,
+  type ResolvedQmdConfig,
+} from "../api.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type MemorySearchManagerCacheStore = {

@@ -4,52 +4,47 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
-import { resolveAgentDir } from "../agents/agent-scope.js";
-import { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
-import { type OpenClawConfig } from "../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { resolveUserPath } from "../utils.js";
-import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
-import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "./embeddings-mistral.js";
-import { DEFAULT_OLLAMA_EMBEDDING_MODEL } from "./embeddings-ollama.js";
-import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
-import { DEFAULT_VOYAGE_EMBEDDING_MODEL } from "./embeddings-voyage.js";
 import {
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_MISTRAL_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  DEFAULT_OPENAI_EMBEDDING_MODEL,
+  DEFAULT_VOYAGE_EMBEDDING_MODEL,
+  buildCaseInsensitiveExtensionGlob,
+  buildFileEntry,
+  classifyMemoryMultimodalPath,
   createEmbeddingProvider,
+  createSubsystemLogger,
+  ensureDir,
+  ensureMemoryIndexSchema,
+  getMemoryMultimodalExtensions,
+  hashText,
+  isFileMissingError,
+  listMemoryFiles,
+  listSessionFilesForAgent,
+  loadSqliteVecExtension,
+  normalizeExtraMemoryPaths,
+  onSessionTranscriptUpdate,
+  requireNodeSqlite,
+  resolveAgentDir,
+  resolveSessionTranscriptsDirForAgent,
+  resolveUserPath,
+  runWithConcurrency,
+  sessionPathForFile,
+  type MemoryFileEntry,
+  type MemorySource,
+  type MemorySyncProgressUpdate,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+  type SessionFileEntry,
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
   type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
-} from "./embeddings.js";
-import { isFileMissingError } from "./fs-utils.js";
-import {
-  buildFileEntry,
-  ensureDir,
-  hashText,
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-  runWithConcurrency,
-} from "./internal.js";
-import { type MemoryFileEntry } from "./internal.js";
-import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import {
-  buildCaseInsensitiveExtensionGlob,
-  classifyMemoryMultimodalPath,
-  getMemoryMultimodalExtensions,
-} from "./multimodal.js";
-import type { SessionFileEntry } from "./session-files.js";
-import {
   buildSessionEntry,
-  listSessionFilesForAgent,
-  sessionPathForFile,
-} from "./session-files.js";
-import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import { requireNodeSqlite } from "./sqlite.js";
-import type { MemorySource, MemorySyncProgressUpdate } from "./types.js";
+} from "../api.js";
 
 type MemoryIndexMeta = {
   model: string;
