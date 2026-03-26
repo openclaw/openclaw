@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 import type { WaitForDiscordGatewayStopParams } from "../monitor.gateway.js";
 import type { DiscordGatewayEvent } from "./gateway-supervisor.js";
+
 type LifecycleParams = Parameters<
   typeof import("./provider.lifecycle.js").runDiscordGatewayLifecycle
 >[0];
@@ -164,7 +165,7 @@ describe("runDiscordGatewayLifecycle", () => {
     };
     sequence?: number | null;
     ws?: EventEmitter & { terminate?: () => void };
-  }) {
+  }): { emitter: EventEmitter; gateway: MockGateway } {
     const emitter = new EventEmitter();
     const gateway: MockGateway = {
       isConnected: false,
@@ -527,7 +528,7 @@ describe("runDiscordGatewayLifecycle", () => {
         start,
         stop,
         threadStop,
-        waitCalls: 0,
+        waitCalls: 1,
         gatewaySupervisor,
       });
     } finally {
@@ -865,7 +866,7 @@ describe("runDiscordGatewayLifecycle", () => {
       disconnect: vi.fn(),
       connect: vi.fn(),
       emitter,
-    };
+    } as unknown as TestGateway;
     getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
 
     const abortController = new AbortController();
