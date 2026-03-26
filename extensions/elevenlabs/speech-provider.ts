@@ -94,12 +94,13 @@ function normalizeElevenLabsBaseUrl(baseUrl: string | undefined): string {
 function normalizeElevenLabsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): ElevenLabsProviderConfig {
-  const raw = asObject(rawConfig.elevenlabs);
+  const providers = asObject(rawConfig.providers);
+  const raw = asObject(providers?.elevenlabs) ?? asObject(rawConfig.elevenlabs);
   const rawVoiceSettings = asObject(raw?.voiceSettings);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.elevenlabs.apiKey",
+      path: "messages.tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,

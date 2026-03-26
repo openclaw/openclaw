@@ -72,6 +72,23 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   if (!override) {
     return base;
   }
+  const baseProviders = base.providers ?? {};
+  const overrideProviders = override.providers ?? {};
+  const mergedProviders = Object.fromEntries(
+    [...new Set([...Object.keys(baseProviders), ...Object.keys(overrideProviders)])].map(
+      (providerId) => {
+        const baseProvider = baseProviders[providerId] ?? {};
+        const overrideProvider = overrideProviders[providerId] ?? {};
+        return [
+          providerId,
+          {
+            ...baseProvider,
+            ...overrideProvider,
+          },
+        ];
+      },
+    ),
+  );
   return {
     ...base,
     ...override,
@@ -79,22 +96,7 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
       ...base.modelOverrides,
       ...override.modelOverrides,
     },
-    elevenlabs: {
-      ...base.elevenlabs,
-      ...override.elevenlabs,
-      voiceSettings: {
-        ...base.elevenlabs?.voiceSettings,
-        ...override.elevenlabs?.voiceSettings,
-      },
-    },
-    openai: {
-      ...base.openai,
-      ...override.openai,
-    },
-    edge: {
-      ...base.edge,
-      ...override.edge,
-    },
+    ...(Object.keys(mergedProviders).length === 0 ? {} : { providers: mergedProviders }),
   };
 }
 

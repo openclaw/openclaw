@@ -64,9 +64,11 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 function normalizeMicrosoftProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MicrosoftProviderConfig {
+  const providers = asObject(rawConfig.providers);
   const rawEdge = asObject(rawConfig.edge);
   const rawMicrosoft = asObject(rawConfig.microsoft);
-  const raw = { ...(rawEdge ?? {}), ...(rawMicrosoft ?? {}) };
+  const rawProvider = asObject(providers?.microsoft);
+  const raw = { ...(rawEdge ?? {}), ...(rawMicrosoft ?? {}), ...(rawProvider ?? {}) };
   const outputFormat = trimToUndefined(raw.outputFormat);
   return {
     enabled: asBoolean(raw.enabled) ?? true,
