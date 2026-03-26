@@ -172,7 +172,29 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(runtime.memoryBand).toBe("high");
     expect(runtime.loadBand).toBe("idle");
     expect(budget.channelsBatchTargetMs).toBe(30_000);
+    expect(budget.channelSharedWorkers).toBe(5);
     expect(budget.deferredRunConcurrency).toBe(8);
     expect(budget.topLevelParallelLimitNoIsolate).toBe(14);
+  });
+
+  it("uses a coarser shared extension batch target on high-memory local hosts", () => {
+    const runtime = resolveRuntimeCapabilities(
+      {
+        RUNNER_OS: "macOS",
+      },
+      {
+        cpuCount: 16,
+        totalMemoryBytes: 128 * 1024 ** 3,
+        platform: "darwin",
+        mode: "local",
+        loadAverage: [0.2, 0.2, 0.2],
+      },
+    );
+    const budget = resolveExecutionBudget(runtime);
+
+    expect(runtime.memoryBand).toBe("high");
+    expect(runtime.loadBand).toBe("idle");
+    expect(budget.extensionsBatchTargetMs).toBe(300_000);
+    expect(budget.extensionWorkers).toBe(5);
   });
 });
