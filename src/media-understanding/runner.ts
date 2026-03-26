@@ -494,7 +494,7 @@ export async function resolveAutoImageModel(params: {
   agentDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry();
+  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
     if (!entry || entry.type === "cli") {
       return null;

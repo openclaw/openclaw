@@ -11,15 +11,10 @@ describe("media-understanding provider registry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("keeps core-owned fallback providers registered by default", () => {
+  it("returns no providers by default when no active registry is present", () => {
     const registry = buildMediaUnderstandingRegistry();
-    const groqProvider = getMediaUnderstandingProvider("groq", registry);
-    const deepgramProvider = getMediaUnderstandingProvider("deepgram", registry);
-
-    expect(groqProvider?.id).toBe("groq");
-    expect(groqProvider?.capabilities).toEqual(["audio"]);
-    expect(deepgramProvider?.id).toBe("deepgram");
-    expect(deepgramProvider?.capabilities).toEqual(["audio"]);
+    expect(getMediaUnderstandingProvider("groq", registry)).toBeUndefined();
+    expect(getMediaUnderstandingProvider("deepgram", registry)).toBeUndefined();
   });
 
   it("merges plugin-registered media providers into the active registry", async () => {

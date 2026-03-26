@@ -453,6 +453,10 @@
       "types": "./dist/plugin-sdk/provider-env-vars.d.ts",
       "default": "./dist/plugin-sdk/provider-env-vars.js"
     },
+    "./plugin-sdk/provider-http": {
+      "types": "./dist/plugin-sdk/provider-http.d.ts",
+      "default": "./dist/plugin-sdk/provider-http.js"
+    },
     "./plugin-sdk/provider-google": {
       "types": "./dist/plugin-sdk/provider-google.d.ts",
       "default": "./dist/plugin-sdk/provider-google.js"
@@ -528,6 +532,10 @@
     "./plugin-sdk/telegram-core": {
       "types": "./dist/plugin-sdk/telegram-core.d.ts",
       "default": "./dist/plugin-sdk/telegram-core.js"
+    },
+    "./plugin-sdk/telegram-runtime": {
+      "types": "./dist/plugin-sdk/telegram-runtime.d.ts",
+      "default": "./dist/plugin-sdk/telegram-runtime.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
