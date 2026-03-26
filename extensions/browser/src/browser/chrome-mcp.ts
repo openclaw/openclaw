@@ -8,15 +8,7 @@ import { logWarn } from "../logger.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
-
-/**
- * Sanitize error messages to prevent control character injection in logs.
- */
-function sanitizeErrorMessage(err: unknown, maxLen = 200): string {
-  let str = String(err);
-  str = str.replace(/\p{C}/gu, "");
-  return str.length > maxLen ? `${str.slice(0, maxLen)}...` : str;
-}
+import { sanitizeErrorMessage } from "./browser-utils.js";
 
 type ChromeMcpStructuredPage = {
   id: number;

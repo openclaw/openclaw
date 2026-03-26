@@ -8,6 +8,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { sanitizeErrorMessage } from "./browser-utils.js";
 
 export {
   appendCdpPath,
@@ -16,15 +17,6 @@ export {
   getHeadersWithAuth,
   isWebSocketUrl,
 } from "./cdp.helpers.js";
-
-/**
- * Sanitize error messages to prevent control character injection in logs.
- */
-function sanitizeErrorMessage(err: unknown, maxLen = 200): string {
-  let str = String(err);
-  str = str.replace(/\p{C}/gu, "");
-  return str.length > maxLen ? `${str.slice(0, maxLen)}...` : str;
-}
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
