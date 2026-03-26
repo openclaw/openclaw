@@ -30,6 +30,9 @@ export { shortenHomeInString, shortenHomePath } from "../utils.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { MemoryCitationsMode } from "../config/types.memory.js";
 export type { MemorySearchResult } from "../memory/types.js";
-export type { MemoryFlushPlan, MemoryFlushPlanResolver } from "../memory/flush-plan.js";
-export type { MemoryPromptSectionBuilder } from "../memory/prompt-section.js";
+export type {
+  MemoryFlushPlan,
+  MemoryFlushPlanResolver,
+  MemoryPromptSectionBuilder,
+} from "../plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
