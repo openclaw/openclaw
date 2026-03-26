@@ -176,13 +176,23 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       providerAuthChoices: [
         {
           provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          choiceLabel: "Anthropic Claude CLI",
+          choiceHint: "Reuse a local Claude CLI login on this host",
+          groupId: "anthropic",
+          groupLabel: "Anthropic",
+          groupHint: "Claude CLI + setup-token + API key",
+        },
+        {
+          provider: "anthropic",
           method: "setup-token",
           choiceId: "token",
           choiceLabel: "Anthropic token (paste setup-token)",
           choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "setup-token + API key",
+          groupHint: "Claude CLI + setup-token + API key",
         },
         {
           provider: "anthropic",
@@ -191,7 +201,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           choiceLabel: "Anthropic API key",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "setup-token + API key",
+          groupHint: "Claude CLI + setup-token + API key",
           optionKey: "anthropicApiKey",
           cliFlag: "--anthropic-api-key",
           cliOption: "--anthropic-api-key <key>",
