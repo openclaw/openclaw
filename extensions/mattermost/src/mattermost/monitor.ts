@@ -467,7 +467,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
           typing: {
-            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+            start: () => sendTypingIndicator(opts.channelId, (opts.post.root_id || "").trim() || threadContext.effectiveReplyToId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -491,7 +491,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 accountId: account.accountId,
                 agentId: route.agentId,
                 replyToId: resolveMattermostReplyRootId({
-                  threadRootId: threadContext.effectiveReplyToId,
+                  threadRootId: (opts.post.root_id || "").trim() || threadContext.effectiveReplyToId,
                   replyToId: payload.replyToId,
                 }),
                 textLimit,
@@ -596,6 +596,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     teamId?: string;
     postId: string;
     effectiveReplyToId?: string;
+    rawThreadRootId?: string;
     deliverReplies?: boolean;
   }): Promise<string> => {
     const to = params.kind === "direct" ? `user:${params.senderId}` : `channel:${params.channelId}`;
@@ -660,7 +661,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       typing: shouldDeliverReplies
         ? {
-            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+            start: () => sendTypingIndicator(params.channelId, params.rawThreadRootId || params.effectiveReplyToId),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => logger.debug?.(message),
@@ -698,7 +699,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: params.route.agentId,
             replyToId: resolveMattermostReplyRootId({
-              threadRootId: params.effectiveReplyToId,
+              threadRootId: params.rawThreadRootId || params.effectiveReplyToId,
               replyToId: trimmedPayload.replyToId,
             }),
             textLimit,
@@ -921,6 +922,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           teamId,
           postId: params.payload.post_id,
           effectiveReplyToId: threadContext.effectiveReplyToId,
+          rawThreadRootId: (params.post.root_id || "").trim() || undefined,
           deliverReplies: true,
         });
         const updatedModel = resolveMattermostModelPickerCurrentModel({
@@ -1384,7 +1386,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       channel: "mattermost",
       accountId: account.accountId,
       typing: {
-        start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+        start: () => sendTypingIndicator(channelId, threadRootId || effectiveReplyToId),
         onStartError: (err) => {
           logTypingFailure({
             log: (message) => logger.debug?.(message),
@@ -1409,7 +1411,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostReplyRootId({
-              threadRootId: effectiveReplyToId,
+              threadRootId: threadRootId || effectiveReplyToId,
               replyToId: payload.replyToId,
             }),
             textLimit,
