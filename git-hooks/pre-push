@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+READONLY_BOT_EMAIL='264278285+prd-carapulse[bot]@users.noreply.github.com'
+LEGACY_UNSAFE_BOT_EMAIL='carapulse@morpho.org'
+PROTECTED_EMAILS_RAW="${OPENCLAW_PROTECTED_PUSH_EMAILS:-${READONLY_BOT_EMAIL},${LEGACY_UNSAFE_BOT_EMAIL}}"
+CURRENT_EMAIL="$(git config --get user.email || true)"
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_protected_identity() {
+  local email="${1:-}" candidate
+  [[ -n "$email" ]] || return 1
+  while IFS= read -r candidate; do
+    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+    candidate="${candidate%"${candidate##*[![:space:]]}"}"
+    [[ -n "$candidate" ]] || continue
+    if [[ "$candidate" == "$email" ]]; then
+      return 0
+    fi
+  done < <(printf '%s\n' "$PROTECTED_EMAILS_RAW" | tr ',' '\n')
+  return 1
+}
+
+if ! is_protected_identity "$CURRENT_EMAIL" && ! is_truthy "${OPENCLAW_ENFORCE_PUSH_OWNERSHIP_GUARD:-0}"; then
+  exit 0
+fi
+
+remote_name="${1:-origin}"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -n "${local_ref:-}" ]] || continue
+  [[ "$remote_ref" == refs/heads/* ]] || continue
+
+  branch_name="${remote_ref#refs/heads/}"
+  deleting_ref=0
+  if [[ "$local_sha" =~ ^0+$ ]]; then
+    deleting_ref=1
+  fi
+
+  remote_exists=1
+  if [[ "$remote_sha" =~ ^0+$ ]]; then
+    remote_exists=0
+  fi
+
+  if [[ "$remote_exists" -eq 1 ]] && ! is_truthy "${OPENCLAW_ALLOW_FOREIGN_BRANCH_PUSH:-0}"; then
+    printf 'pre-push guard: protected identity %s cannot push to existing remote branch %s on %s; create a fresh branch or set OPENCLAW_ALLOW_FOREIGN_BRANCH_PUSH=1\n' \
+      "${CURRENT_EMAIL:-unknown}" "$branch_name" "$remote_name" >&2
+    exit 1
+  fi
+
+  if [[ "$deleting_ref" -eq 1 || "$remote_exists" -eq 0 ]]; then
+    continue
+  fi
+
+  if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" >/dev/null 2>&1 && ! is_truthy "${OPENCLAW_ALLOW_FORCE_PUSH:-0}"; then
+    printf 'pre-push guard: protected identity %s cannot rewrite remote branch %s on %s; set OPENCLAW_ALLOW_FORCE_PUSH=1 only for audited recovery\n' \
+      "${CURRENT_EMAIL:-unknown}" "$branch_name" "$remote_name" >&2
+    exit 1
+  fi
+done

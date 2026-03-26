@@ -32,6 +32,7 @@ Use this flow only when:
 - Secret-pattern scan in staged diff before push
 - Create/reuse Linear ticket when missing (`AUTO_PR_LINEAR_*`)
 - Branch = Linear `branchName`
+- Existing remote branch must already be bot-owned; open human PR branch or non-bot head commit is a hard stop unless `AUTO_PR_ALLOW_FOREIGN_BRANCH_PUSH=1`
 - Conventional PR title carries the Linear ticket scope token
 - Verified GitHub App commit via `createCommitOnBranch` + `gh pr create`
 - Tracking label `openclaw-sre` on PR (`AUTO_PR_TRACKING_LABEL`)
@@ -39,6 +40,7 @@ Use this flow only when:
 - PR URL attachment + implementation comment back on the linked Linear ticket
 - Slack DM warning to operator before PR creation (`AUTO_PR_NOTIFY_*`)
 - No local git commit/push fallback for bot PRs; missing GitHub App creds is a hard stop.
+- Raw git pushes from protected bot identities must not target existing remote branches; use the signed helper path or an audited override.
 
 ## PR Convention Requirements
 

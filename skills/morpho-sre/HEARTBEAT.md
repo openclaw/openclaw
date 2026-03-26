@@ -54,6 +54,7 @@ HEARTBEAT_OK
 Include created PR URL in the alert.
 `autofix-pr.sh` creates or reuses the linked Linear follow-up ticket first and uses the ticket `branchName` as the branch.
 `autofix-pr.sh` sends a Slack DM warning to the configured operator user before creating the PR.
+`autofix-pr.sh` must abort if the target branch already exists with a non-bot head commit or belongs to an open human PR; recovery path is a fresh branch unless explicit override is set.
 
 3c. If `health_status` contains `state\tincident` but `incident_gate` contains `should_alert\tno`, reply exactly:
 
@@ -86,6 +87,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Enrich with BetterStack API context when needed:
   `/home/node/.openclaw/skills/morpho-sre/scripts/betterstack-api.sh GET '/incidents/<id>'`
 - If confidence is high and fix is scoped/reversible, run `autofix-pr.sh` and post PR URL in-thread.
+- Never push or force-push into an existing human-owned PR branch from Slack task flow. Fresh branch + PR only unless the branch owner explicitly authorizes that exact branch.
 - If the fix is plausible but not open-PR ready, still name 1-2 concrete suggested PRs with repo/path/title/validation.
 - Create or reuse a Linear follow-up ticket for code/config work and mention it in-thread.
 - Any incident PR must use the Linear ticket `branchName` as the branch and attach the PR URL back to the ticket.
@@ -97,6 +99,7 @@ When a BetterStack alert/update arrives in monitored Slack channels (`#staging-i
 - Keep unrelated warnings under `*Also watching:*`.
 - Never lead with routing hints, fingerprint changes, raw section names, signal counts, or `primary/supporting` namespace jargon.
 - Never stream drafts, progress chatter, tool JSON, exec-approval warnings, or command-construction failures into any Slack thread.
+- Never "clean up" a foreign branch with raw `git push` or force-push after being corrected. Stop writes, explain state, and switch to explicit remediation.
 - In `incidentRootOnly` channels, native preview streaming, partial reply streaming, and progress acknowledgements stay disabled by design; operators should expect one final reply once evidence is ready.
 - Never send progress-only replies (`On it`, `Found it`, `Let me verify`, `Checking…`) in any Slack thread.
 - Content gate anti-patterns — these are ALWAYS progress-only and must NEVER be posted as standalone messages: "Now let me...", "I need to...", "Good —...", "The script...", "Let me check...", "Let me compose...", "There are stale changes...", "The commit was created...", "PR is created. Let me...", "Now I see some issues...", "Honest answer:...". Buffer all intermediate work into the next substantive final reply.

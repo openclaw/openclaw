@@ -25,6 +25,7 @@ const unitIsolatedFilesRaw = [
   "src/agents/skills.build-workspace-skills-prompt.syncs-merged-skills-into-target-workspace.test.ts",
   // Real git hook integration test; keep signal, move off unit-fast critical path.
   "test/git-hooks-pre-commit.test.ts",
+  "test/git-hooks-pre-push.test.ts",
   // Setup-heavy doctor command suites; keep them off the unit-fast critical path.
   "src/commands/doctor.warns-state-directory-is-missing.test.ts",
   "src/commands/doctor.warns-per-agent-sandbox-docker-browser-prune.test.ts",

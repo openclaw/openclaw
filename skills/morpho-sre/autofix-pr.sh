@@ -31,6 +31,7 @@ Env guards:
   AUTO_PR_BODY_MAX_LINES=<int>       (default: 120; compact oversized PR bodies)
   AUTO_PR_BODY_MAX_CHARS=<int>       (default: 12000; compact oversized PR bodies)
   AUTO_PR_SIGNED_COMMITS=1           (default and required; GitHub API signed commit flow is mandatory for security)
+  AUTO_PR_ALLOW_FOREIGN_BRANCH_PUSH=1|0 (default: 0; override existing human-owned remote branch guard)
   AUTO_PR_GITHUB_APP_TOKEN_CACHE_TTL=<sec> (default: 3300; keep below GitHub App token expiry)
   AUTO_PR_NOTIFY_ENABLED=1|0         (default: 1)
   AUTO_PR_NOTIFY_USER_ID=<U...>      (default: first SLACK_ALLOWED_USER_IDS value)
@@ -489,6 +490,72 @@ resolve_remote_branch_oid() {
     | head -n1
 }
 
+is_readonly_bot_email() {
+  local email="${1:-}"
+  [[ -n "$email" && "$email" == "$AUTO_PR_READONLY_BOT_EMAIL" ]]
+}
+
+fetch_open_pr_for_head_branch() {
+  local repo_slug="${1:-}"
+  local head_branch="${2:-}"
+  local repo_owner="${3:-}"
+
+  if [[ -z "$repo_slug" || -z "$head_branch" || -z "$repo_owner" ]]; then
+    echo "fetch_open_pr_for_head_branch requires repo slug, head branch, and repo owner" >&2
+    return 1
+  fi
+
+  gh api "repos/${repo_slug}/pulls" \
+    -f state=open \
+    -f head="${repo_owner}:${head_branch}"
+}
+
+assert_remote_branch_write_allowed() {
+  local repo_path="${1:-}"
+  local repo_slug="${2:-}"
+  local head_branch="${3:-}"
+  local git_auth_basic="${4:-}"
+  local repo_owner branch_oid commit_json pr_json commit_author_email pr_url pr_author
+
+  if [[ -z "$repo_path" || -z "$repo_slug" || -z "$head_branch" || -z "$git_auth_basic" ]]; then
+    echo "assert_remote_branch_write_allowed requires repo path, repo slug, head branch, and auth" >&2
+    return 1
+  fi
+
+  if truthy "${AUTO_PR_ALLOW_FOREIGN_BRANCH_PUSH:-0}"; then
+    return 0
+  fi
+
+  branch_oid="$(resolve_remote_branch_oid "$repo_path" "$head_branch" "$git_auth_basic" || true)"
+  if [[ -z "$branch_oid" ]]; then
+    return 0
+  fi
+
+  commit_json="$(gh api "repos/${repo_slug}/commits/${branch_oid}")" || {
+    echo "auto-pr foreign-branch guard: failed to inspect ${repo_slug}@${head_branch} (${branch_oid})" >&2
+    return 1
+  }
+  commit_author_email="$(printf '%s\n' "$commit_json" | jq -r '.commit.author.email // empty')"
+  if is_readonly_bot_email "$commit_author_email"; then
+    return 0
+  fi
+
+  repo_owner="${repo_slug%%/*}"
+  pr_json="$(fetch_open_pr_for_head_branch "$repo_slug" "$head_branch" "$repo_owner" || true)"
+  pr_url="$(printf '%s\n' "$pr_json" | jq -r '.[0].html_url // empty' 2>/dev/null || true)"
+  pr_author="$(printf '%s\n' "$pr_json" | jq -r '.[0].user.login // empty' 2>/dev/null || true)"
+
+  if [[ -n "$pr_url" ]]; then
+    printf 'auto-pr foreign-branch guard: remote branch %s already belongs to open PR %s by %s; create a fresh branch or set AUTO_PR_ALLOW_FOREIGN_BRANCH_PUSH=1\n' \
+      "$head_branch" "$pr_url" "${pr_author:-unknown}" >&2
+    return 1
+  fi
+
+  printf 'auto-pr foreign-branch guard: remote branch %s already exists at %s with non-bot author email %s; create a fresh branch or set AUTO_PR_ALLOW_FOREIGN_BRANCH_PUSH=1\n' \
+    "$head_branch" "$branch_oid" "${commit_author_email:-unknown}" >&2
+  return 1
+}
+
 ensure_remote_branch_for_signed_commit() {
   local repo_path="${1:-}"
   local repo_slug="${2:-}"
@@ -501,6 +568,8 @@ ensure_remote_branch_for_signed_commit() {
     echo "ensure_remote_branch_for_signed_commit requires repo path, repo slug, base branch, head branch, and auth" >&2
     return 1
   fi
+
+  assert_remote_branch_write_allowed "$repo_path" "$repo_slug" "$head_branch" "$git_auth_basic" || return 1
 
   branch_oid="$(resolve_remote_branch_oid "$repo_path" "$head_branch" "$git_auth_basic" || true)"
   if [[ -n "$branch_oid" ]]; then
