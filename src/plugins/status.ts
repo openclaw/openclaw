@@ -141,11 +141,10 @@ export function buildPluginStatusReport(params?: {
   const rawConfig = params?.config ?? loadConfig();
   // Apply bundled allowlist compat so bundled-by-default plugins are not shown
   // as disabled when plugins.allow is configured, matching gateway runtime behavior.
-  const config =
-    withBundledPluginAllowlistCompat({
-      config: rawConfig,
-      pluginIds: [...BUNDLED_ENABLED_BY_DEFAULT],
-    }) ?? rawConfig;
+  const config = withBundledPluginAllowlistCompat({
+    config: rawConfig,
+    pluginIds: [...BUNDLED_ENABLED_BY_DEFAULT],
+  });
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
