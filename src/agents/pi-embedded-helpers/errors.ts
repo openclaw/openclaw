@@ -66,19 +66,30 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\breset\b|\bplan\b|\bquota\b/i;
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
+  const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
   // Try to pull a human-readable message out of a JSON error payload first.
-  const info = parseApiErrorInfo(raw);
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(withoutPrefix);
   // When the raw string is not a JSON payload, strip any leading HTTP status
   // code (e.g. "429 ") so the surfaced message stays clean.
-  const candidate = info?.message ?? (extractLeadingHttpStatus(raw.trim())?.rest || raw);
+  const candidate =
+    info?.message ?? (extractLeadingHttpStatus(withoutPrefix)?.rest || withoutPrefix);
 
   if (!candidate || !RATE_LIMIT_SPECIFIC_HINT_RE.test(candidate)) {
     return undefined;
   }
 
+  // Skip HTML/Cloudflare error pages even if the body mentions quota/plan text.
+  if (isCloudflareOrHtmlErrorPage(withoutPrefix)) {
+    return undefined;
+  }
+
   // Avoid surfacing very long or clearly non-human-readable blobs.
   const trimmed = candidate.trim();
-  if (trimmed.length > 300 || trimmed.startsWith("{")) {
+  if (
+    trimmed.length > 300 ||
+    trimmed.startsWith("{") ||
+    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed)
+  ) {
     return undefined;
   }
 
