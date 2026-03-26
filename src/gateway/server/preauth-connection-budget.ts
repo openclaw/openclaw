@@ -34,6 +34,9 @@ export function createPreauthConnectionBudget(
     acquire(remoteAddr) {
       const ip = normalizeIp(remoteAddr);
       if (!ip) {
+        // Fail open when the socket has no usable client IP. Direct sockets
+        // normally populate remoteAddress, and falling closed here would risk
+        // rejecting legitimate local/test traffic on transport edge cases.
         return true;
       }
       const next = (counts.get(ip) ?? 0) + 1;

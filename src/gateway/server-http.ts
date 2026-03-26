@@ -1074,15 +1074,27 @@ export function attachGatewayUpgradeHandler(opts: {
         socket.destroy();
         return;
       }
+      let budgetTransferred = false;
+      const releaseUpgradeBudget = () => {
+        if (budgetTransferred) {
+          return;
+        }
+        budgetTransferred = true;
+        preauthConnectionBudget.release((socket as Socket).remoteAddress);
+      };
+      socket.once("close", releaseUpgradeBudget);
       try {
         wss.handleUpgrade(req, socket, head, (ws) => {
+          budgetTransferred = true;
+          socket.off("close", releaseUpgradeBudget);
           (
             ws as unknown as import("ws").WebSocket & { __openclawPreauthRemoteAddr?: string }
           ).__openclawPreauthRemoteAddr = (socket as Socket).remoteAddress;
           wss.emit("connection", ws, req);
         });
       } catch {
-        preauthConnectionBudget.release((socket as Socket).remoteAddress);
+        socket.off("close", releaseUpgradeBudget);
+        releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
     })().catch(() => {
