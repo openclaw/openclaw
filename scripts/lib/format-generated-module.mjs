@@ -23,6 +23,9 @@ export function formatGeneratedModule(source, { repoRoot, outputPath, errorLabel
     const formatter = spawnSync(command, args, {
       cwd: resolvedRepoRoot,
       encoding: "utf8",
+      // Some Windows CI runs can emit large pnpm/formatter output, which may exceed
+      // spawnSync's default buffer and surface as ENOBUFS.
+      maxBuffer: 16 * 1024 * 1024,
       // Windows requires a shell to launch package-manager shim scripts reliably.
       ...(process.platform === "win32" ? { shell: true } : {}),
     });
