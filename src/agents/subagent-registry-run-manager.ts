@@ -218,7 +218,7 @@ export function createSubagentRunManager(params: {
         : archiveAfterMs
           ? now + archiveAfterMs
           : undefined;
-    const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
+    const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
     const sessionStartedAt = getSubagentSessionStartedAt(source) ?? now;
@@ -295,7 +295,7 @@ export function createSubagentRunManager(params: {
         : archiveAfterMs
           ? now + archiveAfterMs
           : undefined;
-    const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
+    const runTimeoutSeconds = registerParams.runTimeoutSeconds;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
     params.runs.set(registerParams.runId, {

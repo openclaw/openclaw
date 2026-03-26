@@ -440,7 +440,7 @@ function resolveSubagentWaitTimeoutMs(
 ) {
   return subagentRegistryDeps.resolveAgentTimeoutMs({
     cfg,
-    overrideSeconds: runTimeoutSeconds ?? 0,
+    overrideSeconds: runTimeoutSeconds,
   });
 }
 
