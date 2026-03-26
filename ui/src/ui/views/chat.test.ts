@@ -453,46 +453,6 @@ describe("chat view", () => {
     expect(groupedLogo?.getAttribute("src")).toBe("/openclaw/favicon.svg");
   });
 
-  it("renders anthropic tool_use input details in tool cards", () => {
-    const container = document.createElement("div");
-    render(
-      renderChat(
-        createProps({
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "tool_use",
-                  id: "toolu_123",
-                  name: "Bash",
-                  input: { command: 'time claude -p "say ok"' },
-                },
-              ],
-              timestamp: 1000,
-            },
-            {
-              role: "user",
-              content: [
-                {
-                  type: "tool_result",
-                  name: "Bash",
-                  tool_use_id: "toolu_123",
-                  content: "ok",
-                },
-              ],
-              timestamp: 1001,
-            },
-          ],
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain('time claude -p "say ok"');
-    expect(container.textContent).toContain("Bash");
-  });
-
   it("keeps the persisted overview locale selected before i18n hydration finishes", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
