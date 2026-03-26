@@ -51,10 +51,10 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("./inbound-context.js", () => ({
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   }));
-  vi.mock("./session-reset-model.js", () => ({
+  vi.mock("./session-reset-model.runtime.js", () => ({
     applyResetModelOverride: vi.fn(async () => undefined),
   }));
-  vi.mock("./stage-sandbox-media.js", () => ({
+  vi.mock("./stage-sandbox-media.runtime.js", () => ({
     stageSandboxMedia: vi.fn(async () => undefined),
   }));
   vi.mock("./typing.js", () => ({

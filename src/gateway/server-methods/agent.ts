@@ -656,7 +656,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     respond(true, accepted, undefined, { runId });
 
     if (resolvedSessionKey) {
-      reactivateCompletedSubagentSession({
+      await reactivateCompletedSubagentSession({
         sessionKey: resolvedSessionKey,
         runId,
       });

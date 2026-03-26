@@ -19,15 +19,18 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+vi.mock("../../agents/subagent-registry-read.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/subagent-registry-read.js")>();
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
       getLatestSubagentRunByChildSessionKeyMock(...args),
-    replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
   };
 });
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+  replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
+}));
 
 vi.mock("./chat.js", () => ({
   chatHandlers: {
