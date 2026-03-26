@@ -13,6 +13,11 @@ import {
   estimateUtf8Bytes,
 } from "./embedding-input-limits.js";
 import { type EmbeddingInput, hasNonTextEmbeddingParts } from "./embedding-inputs.js";
+import {
+  EmbeddingDroppedError,
+  EmbeddingPriority,
+  reasonToPriority,
+} from "./embedding-rate-limiter.js";
 import { buildGeminiEmbeddingRequest } from "./embeddings-gemini.js";
 import {
   buildMultimodalChunkForIndexing,
@@ -182,7 +187,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(excess);
   }
 
-  private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
+  private async embedChunksInBatches(
+    chunks: MemoryChunk[],
+    priority?: EmbeddingPriority,
+  ): Promise<number[][]> {
     if (chunks.length === 0) {
       return [];
     }
@@ -209,8 +217,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
       }
       const batchEmbeddings = hasStructuredInputs
-        ? await this.embedBatchInputsWithRetry(inputs)
-        : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+        ? await this.embedBatchInputsWithRetry(inputs, priority)
+        : await this.embedBatchWithRetry(
+            batch.map((chunk) => chunk.text),
+            priority,
+          );
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
@@ -521,7 +532,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
+  protected async embedBatchWithRetry(
+    texts: string[],
+    priority?: EmbeddingPriority,
+  ): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
     }
@@ -539,11 +553,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           timeoutMs,
         });
         return await this.withTimeout(
-          this.provider.embedBatch(texts),
+          this.provider.embedBatch(texts, { priority }),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
+        if (err instanceof EmbeddingDroppedError) {
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
@@ -555,12 +572,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
   }
 
-  protected async embedBatchInputsWithRetry(inputs: EmbeddingInput[]): Promise<number[][]> {
+  protected async embedBatchInputsWithRetry(
+    inputs: EmbeddingInput[],
+    priority?: EmbeddingPriority,
+  ): Promise<number[][]> {
     if (inputs.length === 0) {
       return [];
     }
     if (!this.provider?.embedBatchInputs) {
-      return await this.embedBatchWithRetry(inputs.map((input) => input.text));
+      return await this.embedBatchWithRetry(
+        inputs.map((input) => input.text),
+        priority,
+      );
     }
     let attempt = 0;
     let delayMs = EMBEDDING_RETRY_BASE_DELAY_MS;
@@ -573,11 +596,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           timeoutMs,
         });
         return await this.withTimeout(
-          this.provider.embedBatchInputs(inputs),
+          this.provider.embedBatchInputs(inputs, { priority }),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
+        if (err instanceof EmbeddingDroppedError) {
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
@@ -802,7 +828,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
-    options: { source: MemorySource; content?: string },
+    options: { source: MemorySource; content?: string; reason?: string },
   ) {
     // FTS-only mode: skip indexing if no provider
     if (!this.provider) {
@@ -839,10 +865,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     let embeddings: number[][];
     try {
+      const priority = reasonToPriority(options.reason);
       embeddings = this.batch.enabled
         ? await this.embedChunksWithBatch(chunks, entry, options.source)
-        : await this.embedChunksInBatches(chunks);
+        : await this.embedChunksInBatches(chunks, priority);
     } catch (err) {
+      if (err instanceof EmbeddingDroppedError) {
+        log.warn("memory embeddings: file skipped due to rate limit", {
+          path: entry.path,
+          source: options.source,
+          priority: EmbeddingPriority[err.priority],
+          dropReason: err.dropReason,
+        });
+        return; // Do NOT call upsertFileRecord — next sync will retry
+      }
       const message = err instanceof Error ? err.message : String(err);
       if (
         "kind" in entry &&

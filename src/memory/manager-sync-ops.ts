@@ -164,7 +164,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
   protected abstract indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
-    options: { source: MemorySource; content?: string },
+    options: { source: MemorySource; content?: string; reason?: string },
   ): Promise<void>;
 
   protected async ensureVectorReady(dimensions?: number): Promise<boolean> {
@@ -695,6 +695,7 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncMemoryFiles(params: {
     needsFullReindex: boolean;
+    reason?: string;
     progress?: MemorySyncProgressState;
   }) {
     // FTS-only mode: skip embedding sync (no provider)
@@ -747,7 +748,7 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      await this.indexFile(entry, { source: "memory" });
+      await this.indexFile(entry, { source: "memory", reason: params.reason });
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -786,6 +787,7 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
+    reason?: string;
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
@@ -859,7 +861,11 @@ export abstract class MemoryManagerSyncOps {
         this.resetSessionDelta(absPath, entry.size);
         return;
       }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      await this.indexFile(entry, {
+        source: "sessions",
+        content: entry.content,
+        reason: params.reason,
+      });
       this.resetSessionDelta(absPath, entry.size);
       if (params.progress) {
         params.progress.completed += 1;
@@ -958,6 +964,7 @@ export abstract class MemoryManagerSyncOps {
       try {
         await this.syncSessionFiles({
           needsFullReindex: false,
+          reason: params?.reason,
           targetSessionFiles: Array.from(targetSessionFiles),
           progress: progress ?? undefined,
         });
@@ -1027,13 +1034,18 @@ export abstract class MemoryManagerSyncOps {
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+        await this.syncMemoryFiles({
+          needsFullReindex,
+          reason: params?.reason,
+          progress: progress ?? undefined,
+        });
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
         await this.syncSessionFiles({
           needsFullReindex,
+          reason: params?.reason,
           targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
           progress: progress ?? undefined,
         });
@@ -1196,12 +1208,20 @@ export abstract class MemoryManagerSyncOps {
       );
 
       if (shouldSyncMemory) {
-        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        await this.syncMemoryFiles({
+          needsFullReindex: true,
+          reason: params.reason,
+          progress: params.progress,
+        });
         this.dirty = false;
       }
 
       if (shouldSyncSessions) {
-        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        await this.syncSessionFiles({
+          needsFullReindex: true,
+          reason: params.reason,
+          progress: params.progress,
+        });
         this.sessionsDirty = false;
         this.sessionsDirtyFiles.clear();
       } else if (this.sessionsDirtyFiles.size > 0) {
@@ -1268,12 +1288,20 @@ export abstract class MemoryManagerSyncOps {
     );
 
     if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncMemoryFiles({
+        needsFullReindex: true,
+        reason: params.reason,
+        progress: params.progress,
+      });
       this.dirty = false;
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+      await this.syncSessionFiles({
+        needsFullReindex: true,
+        reason: params.reason,
+        progress: params.progress,
+      });
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (this.sessionsDirtyFiles.size > 0) {

@@ -30,9 +30,12 @@ export type EmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { priority?: number }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { priority?: number }) => Promise<number[][]>;
+  embedBatchInputs?: (
+    inputs: EmbeddingInput[],
+    options?: { priority?: number },
+  ) => Promise<number[][]>;
 };
 
 export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";

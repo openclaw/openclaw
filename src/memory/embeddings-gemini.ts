@@ -6,9 +6,15 @@ import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
+import {
+  acquireEmbeddingSlot,
+  EmbeddingPriority,
+  reportThrottled,
+} from "./embedding-rate-limiter.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
+import { hashText } from "./internal.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
@@ -165,10 +171,13 @@ async function fetchGeminiEmbeddingPayload(params: {
   client: GeminiEmbeddingClient;
   endpoint: string;
   body: unknown;
+  priority?: EmbeddingPriority;
 }): Promise<{
   embedding?: { values?: number[] };
   embeddings?: Array<{ values?: number[] }>;
 }> {
+  const apiKeyHash = hashText(params.client.apiKeys.join(","));
+  await acquireEmbeddingSlot(apiKeyHash, params.priority ?? EmbeddingPriority.LOW);
   return await executeWithApiKeyRotation({
     provider: "google",
     apiKeys: params.client.apiKeys,
@@ -188,6 +197,11 @@ async function fetchGeminiEmbeddingPayload(params: {
         },
         onResponse: async (res) => {
           if (!res.ok) {
+            if (res.status === 429) {
+              const retryAfter = res.headers.get("retry-after");
+              const seconds = retryAfter ? parseInt(retryAfter, 10) : undefined;
+              reportThrottled(apiKeyHash, Number.isFinite(seconds) ? seconds : undefined);
+            }
             const text = await res.text();
             throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
           }
@@ -224,13 +238,14 @@ export async function createGeminiEmbeddingProvider(
   const isV2 = isGeminiEmbedding2Model(client.model);
   const outputDimensionality = client.outputDimensionality;
 
-  const embedQuery = async (text: string): Promise<number[]> => {
+  const embedQuery = async (text: string, embedOpts?: { priority?: number }): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     const payload = await fetchGeminiEmbeddingPayload({
       client,
       endpoint: embedUrl,
+      priority: embedOpts?.priority as EmbeddingPriority | undefined,
       body: buildGeminiTextEmbeddingRequest({
         text,
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
@@ -240,13 +255,17 @@ export async function createGeminiEmbeddingProvider(
     return sanitizeAndNormalizeEmbedding(payload.embedding?.values ?? []);
   };
 
-  const embedBatchInputs = async (inputs: EmbeddingInput[]): Promise<number[][]> => {
+  const embedBatchInputs = async (
+    inputs: EmbeddingInput[],
+    embedOpts?: { priority?: number },
+  ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
     }
     const payload = await fetchGeminiEmbeddingPayload({
       client,
       endpoint: batchUrl,
+      priority: embedOpts?.priority as EmbeddingPriority | undefined,
       body: {
         requests: inputs.map((input) =>
           buildGeminiEmbeddingRequest({
@@ -262,11 +281,15 @@ export async function createGeminiEmbeddingProvider(
     return inputs.map((_, index) => sanitizeAndNormalizeEmbedding(embeddings[index]?.values ?? []));
   };
 
-  const embedBatch = async (texts: string[]): Promise<number[][]> => {
+  const embedBatch = async (
+    texts: string[],
+    embedOpts?: { priority?: number },
+  ): Promise<number[][]> => {
     return await embedBatchInputs(
       texts.map((text) => ({
         text,
       })),
+      embedOpts,
     );
   };
 
