@@ -14,7 +14,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
-      const responseFormat = req.target === "voice-note" ? "opus" : "mp3";
+      const responseFormat = req.config.openai.responseFormat || (req.target === "voice-note" ? "opus" : "mp3");
       const audioBuffer = await openaiTTS({
         text: req.text,
         apiKey,
