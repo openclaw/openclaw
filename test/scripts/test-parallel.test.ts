@@ -117,6 +117,22 @@ function parseNumericPlanField(line: string, key: string): number {
   return Number(match[1]);
 }
 
+function runManifestOutputWriter(workflow: string, envOverrides: NodeJS.ProcessEnv = {}): string {
+  const outputPath = path.join(os.tmpdir(), `openclaw-${workflow}-output-${Date.now()}.txt`);
+  try {
+    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", workflow], {
+      cwd: REPO_ROOT,
+      env: createPlannerEnv({
+        GITHUB_OUTPUT: outputPath,
+        ...envOverrides,
+      }),
+      encoding: "utf8",
+    });
+    return fs.readFileSync(outputPath, "utf8");
+  } finally {
+    fs.rmSync(outputPath, { force: true });
+  }
+}
 describe("scripts/test-parallel fatal output guard", () => {
   it("fails a zero exit when V8 reports an out-of-memory fatal", () => {
     const output = [
@@ -389,77 +405,41 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("writes CI workflow outputs in ci mode", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const outputPath = path.join(os.tmpdir(), `openclaw-ci-output-${Date.now()}.txt`);
-
-    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "ci"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        GITHUB_OUTPUT: outputPath,
-        GITHUB_EVENT_NAME: "pull_request",
-        OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_DOCS_CHANGED: "false",
-        OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_MACOS: "true",
-        OPENCLAW_CI_RUN_ANDROID: "true",
-        OPENCLAW_CI_RUN_WINDOWS: "true",
-        OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
-        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
-        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
-      },
-      encoding: "utf8",
+    const outputs = runManifestOutputWriter("ci", {
+      GITHUB_EVENT_NAME: "pull_request",
+      OPENCLAW_CI_DOCS_ONLY: "false",
+      OPENCLAW_CI_DOCS_CHANGED: "false",
+      OPENCLAW_CI_RUN_NODE: "true",
+      OPENCLAW_CI_RUN_MACOS: "true",
+      OPENCLAW_CI_RUN_ANDROID: "true",
+      OPENCLAW_CI_RUN_WINDOWS: "true",
+      OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
+      OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
+      OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
     });
-
-    const outputs = fs.readFileSync(outputPath, "utf8");
     expect(outputs).toContain("run_build_artifacts=true");
     expect(outputs).toContain("run_checks_windows=true");
     expect(outputs).toContain("run_macos_node=true");
     expect(outputs).toContain("android_matrix=");
-    fs.rmSync(outputPath, { force: true });
   });
 
   it("writes install-smoke outputs in install-smoke mode", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const outputPath = path.join(os.tmpdir(), `openclaw-install-output-${Date.now()}.txt`);
-
-    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "install-smoke"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        GITHUB_OUTPUT: outputPath,
-        OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_RUN_CHANGED_SMOKE: "true",
-      },
-      encoding: "utf8",
+    const outputs = runManifestOutputWriter("install-smoke", {
+      OPENCLAW_CI_DOCS_ONLY: "false",
+      OPENCLAW_CI_RUN_CHANGED_SMOKE: "true",
     });
-
-    const outputs = fs.readFileSync(outputPath, "utf8");
     expect(outputs).toContain("run_install_smoke=true");
     expect(outputs).not.toContain("run_checks=");
-    fs.rmSync(outputPath, { force: true });
   });
 
   it("writes bun outputs in ci-bun mode", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const outputPath = path.join(os.tmpdir(), `openclaw-bun-output-${Date.now()}.txt`);
-
-    execFileSync("node", ["scripts/ci-write-manifest-outputs.mjs", "--workflow", "ci-bun"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        GITHUB_OUTPUT: outputPath,
-        OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_RUN_NODE: "true",
-      },
-      encoding: "utf8",
+    const outputs = runManifestOutputWriter("ci-bun", {
+      OPENCLAW_CI_DOCS_ONLY: "false",
+      OPENCLAW_CI_RUN_NODE: "true",
     });
-
-    const outputs = fs.readFileSync(outputPath, "utf8");
     expect(outputs).toContain("run_bun_checks=true");
     expect(outputs).toContain("bun_checks_matrix=");
     expect(outputs).not.toContain("run_install_smoke=");
-    fs.rmSync(outputPath, { force: true });
   });
 
   it("passes through vitest --mode values that are not wrapper runtime overrides", () => {
