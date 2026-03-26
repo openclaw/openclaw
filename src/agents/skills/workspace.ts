@@ -199,6 +199,24 @@ function warnEscapedSkillPath(params: {
   });
 }
 
+function warnMalformedSkillMetadata(params: {
+  source: string;
+  rootDir: string;
+  skillName: string;
+  filePath: string;
+  baseDir: string;
+  reason: string;
+}) {
+  skillsLogger.warn("Skipping skill with malformed path metadata.", {
+    source: params.source,
+    rootDir: params.rootDir,
+    skill: params.skillName,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    reason: params.reason,
+  });
+}
+
 function resolveContainedSkillPath(params: {
   source: string;
   rootDir: string;
@@ -243,7 +261,33 @@ function filterLoadedSkillsInsideRoot(params: {
       rootRealPath: params.rootRealPath,
       candidatePath: skill.filePath,
     });
-    return Boolean(skillFileRealPath);
+    if (!skillFileRealPath) {
+      return false;
+    }
+    if (path.basename(skillFileRealPath) !== "SKILL.md") {
+      warnMalformedSkillMetadata({
+        source: params.source,
+        rootDir: params.rootDir,
+        skillName: skill.name,
+        filePath: skill.filePath,
+        baseDir: skill.baseDir,
+        reason: "filePath must point to SKILL.md",
+      });
+      return false;
+    }
+    const expectedBaseDir = path.dirname(skillFileRealPath);
+    if (baseDirRealPath !== expectedBaseDir) {
+      warnMalformedSkillMetadata({
+        source: params.source,
+        rootDir: params.rootDir,
+        skillName: skill.name,
+        filePath: skill.filePath,
+        baseDir: skill.baseDir,
+        reason: "baseDir must match the SKILL.md parent directory",
+      });
+      return false;
+    }
+    return true;
   });
 }
 
