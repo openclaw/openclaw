@@ -387,25 +387,22 @@ export const OpenClawSchema = z
                 userDataDir: z.string().optional(),
                 driver: z
                   .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
-                  .optional(),
-                attachOnly: z.boolean().optional(),
-                color: HexColorSchema,
               })
-              .strict()
-              .refine(
-                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
-                {
-                  message: "Profile must set cdpPort or cdpUrl",
-                },
-              )
-              .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
-                message: 'Profile userDataDir is only supported with driver="existing-session"',
-              }),
+              .optional(),
+            attachOnly: z.boolean().optional(),
+            color: HexColorSchema,
+          })
+          .strict()
+          .refine(
+            (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+            {
+              message: "Profile must set cdpPort or cdpUrl",
+            },
           )
-          .optional(),
-        extraArgs: z.array(z.string()).optional(),
-      })
-      .strict()
+          .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
+            message: 'Profile userDataDir is only supported with driver="existing-session"',
+          }),
+      )
       .optional(),
     ui: z
       .object({
@@ -858,7 +855,11 @@ export const OpenClawSchema = z
             browser: z
               .object({
                 mode: z
-                  .union([z.literal("auto"), z.literal("manual"), z.literal("off")])
+                  .union([
+                    z.literal("auto"),
+                    z.literal("manual"),
+                    z.literal("off"),
+                  ])
                   .optional(),
                 node: z.string().optional(),
               })
@@ -904,7 +905,12 @@ export const OpenClawSchema = z
           .object({
             preferBrew: z.boolean().optional(),
             nodeManager: z
-              .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
+              .union([
+                z.literal("npm"),
+                z.literal("pnpm"),
+                z.literal("yarn"),
+                z.literal("bun"),
+              ])
               .optional(),
           })
           .strict()

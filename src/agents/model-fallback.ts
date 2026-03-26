@@ -147,7 +147,7 @@ async function runFallbackCandidate<T>(params: {
     // Apply internal retry for rate-limiting errors BEFORE giving up and
     // moving to the next candidate model in the fallback chain.
     const result = await retryAsync(runFn, {
-      attempts: 4, // 1 initial + 3 retries
+      attempts: 1 + (params.options?.allowTransientCooldownProbe ?? false),
       minDelayMs: 2000,
       maxDelayMs: 30000,
       jitter: 0.1,
@@ -704,31 +704,6 @@ export async function runWithModelFallback<T>(params: {
         log.warn(
           `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
         );
-      }
-      return attemptRun.success;
-    if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        logModelFallbackDecision({
-          decision: "candidate_succeeded",
-          runId: params.runId,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
-          previousAttempts: attempts,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-        });
-      }
-      const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-      if (notFoundAttempt) {
-        log.warn(
-          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-        );
-      }
       return attemptRun.success;
     }
     const err = attemptRun.error;

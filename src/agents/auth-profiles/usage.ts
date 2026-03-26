@@ -244,11 +244,9 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     // decay check in computeNextProfileUsageStats.
     if (profileMutated && !resolveProfileUnusableUntil(stats)) {
       stats.errorCount = 0;
-      stats.failureCounts = undefined;
     }
 
     if (profileMutated) {
-      usageStats[profileId] = stats;
       mutated = true;
     }
   }
@@ -299,7 +297,6 @@ export function calculateAuthProfileCooldownMs(
   const normalized = Math.max(1, errorCount);
   const baseMs = Math.max(1000, params?.baseMs ?? 60_000);
   const maxMs = Math.max(baseMs, params?.maxMs ?? 3600_000);
-  const exponent = Math.min(normalized - 1, 10);
   const exponent = Math.min(normalized - 1, 10);
   const raw = baseMs * 5 ** exponent;
   return Math.min(maxMs, raw);
@@ -502,8 +499,7 @@ function computeNextProfileUsageStats(params: {
 
 /**
  * Mark a profile as failed for a specific reason. Billing and permanent-auth
- * failures are treated as "disabled" (longer backoff) vs the regular cooldown
- * window.
+ * failures are treated as "disabled" (longer backoff) vs the regular cooldown window.
  */
 export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
@@ -513,7 +509,7 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId } = params;
+  const { store, profileId, reason, cfg, agentDir, runId } = params;
   const profile = store.profiles[profileId];
   if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
     return;

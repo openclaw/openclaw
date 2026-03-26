@@ -142,9 +142,6 @@ function readDirectErrorMessage(err: unknown): string | undefined {
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
-  if (typeof err === "symbol") {
-    return err.description ?? undefined;
-  }
   if (err && typeof err === "object") {
     const message = (err as { message?: unknown }).message;
     if (typeof message === "string") {
