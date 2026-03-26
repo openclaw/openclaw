@@ -64,6 +64,15 @@ Only output ONE Action per turn. If you do not need to use a tool, simply respon
 }
 
 /**
+ * Detects provider errors indicating lack of native tool support.
+ */
+function isUnsupportedToolError(errorMessage: string): boolean {
+  return (
+    errorMessage.includes("does not support tools") || errorMessage.includes("not support tool")
+  );
+}
+
+/**
  * Sanitizes reasoning blocks and extracts tool calls.
  */
 export function parseReActResponse(
@@ -288,10 +297,20 @@ export function wrapStreamFnWithReActFallback(
                 ) {
                   hasReActAction = true;
                 }
+              } else if (chunk.type === "error") {
+                const error = chunk.error as unknown as Record<string, unknown>;
+                const msg = (error?.message as string) || (error?.errorMessage as string) || "";
+                if (isUnsupportedToolError(msg)) {
+                  hasReActAction = true;
+                }
               }
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } catch (err: any) {
+            const errorMessage = (err?.message as string) || String(err);
+            if (isUnsupportedToolError(errorMessage)) {
+              hasReActAction = true;
+            }
             wrappedStream.push({
               type: "error",
               reason: "error",

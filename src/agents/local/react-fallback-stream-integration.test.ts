@@ -5,7 +5,8 @@ import path from "node:path";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { updateModelCapability } from "./capabilities-cache.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { updateModelCapability, getModelCapability } from "./capabilities-cache.js";
 import { wrapStreamFnWithReActFallback } from "./react-fallback-stream.js";
 
 const FIXTURES_DIR = path.resolve(__dirname, "../../../test-fixtures/streams/local-models");
@@ -563,5 +564,56 @@ Action: {"tool": "real_tool", "args": {"param": 123}}
     expect(err.provider).toBe("ollama-instance-1");
     expect(err.model).toBe("llama3-70b");
     expect(err.usage.totalTokens).toBe(105);
+  });
+
+  it("should update cache to react when native stream returns unsupported tool error during snooping", async () => {
+    const providerId = `test-provider-${Date.now()}`;
+    const modelId = "llama3-test";
+
+    // 1. Mock a model that fails with "does not support tools" during stream execution
+    const errorStreamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      setTimeout(() => {
+        stream.push({
+          type: "error",
+          reason: "error",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          error: { message: "model does not support tools" } as any,
+        });
+        stream.end();
+      }, 10);
+      return Promise.resolve(stream);
+    };
+
+    const configDir = resolveStateDir();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const wrappedStreamFn = wrapStreamFnWithReActFallback(errorStreamFn, {
+      modelId,
+      providerId,
+      providerType: "ollama",
+      toolFallback: "auto",
+      configDir,
+    });
+
+    // 2. Run a turn with tools (triggers snooper)
+    const stream = await wrappedStreamFn(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { id: modelId, api: "test" } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { tools: [{ name: "test_tool", description: "test" }] } as any,
+      {},
+    );
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of stream) {
+      /* consume */
+    }
+
+    // Give it more time for the async cache update side-effect
+    await new Promise((r) => setTimeout(r, 200));
+
+    // 3. Verify cache is now 'react'
+    const status = await getModelCapability(configDir, providerId, modelId);
+    expect(status).toBe("react");
   });
 });
