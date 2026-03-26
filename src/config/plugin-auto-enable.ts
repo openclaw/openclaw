@@ -457,6 +457,16 @@ export function applyPluginAutoEnable(params: {
       continue;
     }
     const allow = next.plugins?.allow;
+    // A plugin listed in plugins.allow is intentionally opted-in by the user.
+    // Treat it as already enabled so we don't write a redundant plugins.entries
+    // record, which would trigger a config-change event and cause an infinite
+    // reload loop when the gateway is managed by launchd or systemd.
+    // See: https://github.com/openclaw/openclaw/issues/55163
+    const alreadyInAllowlist =
+      builtInChannelId == null && Array.isArray(allow) && allow.includes(entry.pluginId);
+    if (alreadyInAllowlist) {
+      continue;
+    }
     const allowMissing =
       builtInChannelId == null && Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled =

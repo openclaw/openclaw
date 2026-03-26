@@ -225,6 +225,52 @@ describe("applyPluginAutoEnable", () => {
     expect(second.config).toEqual(first.config);
   });
 
+  it("skips writing plugins.entries for plugins already in plugins.allow (prevents reload loop)", () => {
+    // Regression test for https://github.com/openclaw/openclaw/issues/55163
+    // When a local extension is placed in plugins.allow but NOT in plugins.entries,
+    // applyPluginAutoEnable should treat it as already opted-in and NOT write a new
+    // plugins.entries record.  Writing that record triggers a config-change event which
+    // causes the gateway to reload, re-run the doctor, detect the same "missing" entry,
+    // write it again — an infinite loop under launchd / systemd supervision.
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "my-plugin");
+    writePluginManifestFixture({
+      rootDir: pluginDir,
+      id: "my-plugin",
+      channels: ["my-channel"],
+    });
+
+    const config = {
+      channels: { "my-channel": { enabled: true } },
+      plugins: {
+        allow: ["my-plugin"],
+        // Intentionally no plugins.entries for my-plugin
+      },
+    };
+
+    const result = applyPluginAutoEnable({
+      config,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      },
+      manifestRegistry: makeRegistry([{ id: "my-plugin", channels: ["my-channel"] }]),
+    });
+
+    // Should produce no config changes — plugin is already allow-listed
+    expect(result.changes).toEqual([]);
+    expect(result.config.plugins?.entries?.["my-plugin"]).toBeUndefined();
+    // Running again should also produce no changes (idempotency)
+    const second = applyPluginAutoEnable({
+      config: result.config,
+      env: {},
+      manifestRegistry: makeRegistry([{ id: "my-plugin", channels: ["my-channel"] }]),
+    });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toEqual(result.config);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {
