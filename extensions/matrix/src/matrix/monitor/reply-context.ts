@@ -73,6 +73,9 @@ export function createMatrixReplyContextResolver(params: {
     const cacheKey = `${input.roomId}:${input.eventId}`;
     const cached = cache.get(cacheKey);
     if (cached) {
+      // Move to end for LRU semantics so frequently accessed entries survive eviction.
+      cache.delete(cacheKey);
+      cache.set(cacheKey, cached);
       return cached;
     }
 
