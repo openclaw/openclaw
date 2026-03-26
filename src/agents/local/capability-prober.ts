@@ -48,21 +48,12 @@ export async function runBackgroundCapabilityProbe(params: {
       {},
     );
 
-    let finalStatus: "native" | "react" | "unknown" = "unknown";
+    let finalStatus: "native" | "react" = "react";
     for await (const chunk of stream) {
       if (chunk.type === "done") {
         const content = chunk.message.content as unknown as Array<Record<string, unknown>>;
         if (content.some((p) => p.type === "toolCall")) {
           finalStatus = "native";
-        } else {
-          const textOutput = content
-            .filter((p) => p.type === "text")
-            .map((p) => (p.text as string) ?? "")
-            .join("");
-
-          if (textOutput.includes("Action:") || textOutput.includes("Thought:")) {
-            finalStatus = "react";
-          }
         }
       } else if (chunk.type === "error") {
         const error = chunk.error as unknown as Record<string, unknown>;
@@ -73,10 +64,8 @@ export async function runBackgroundCapabilityProbe(params: {
       }
     }
 
-    // Only update if we got a definitive result (not unknown) or if it's currently unknown
-    if (finalStatus !== "unknown") {
-      await updateModelCapability(configDir, providerId, modelId, finalStatus);
-    }
+    // Always update capability to either native or react to ensure convergence
+    await updateModelCapability(configDir, providerId, modelId, finalStatus);
   } catch (err: unknown) {
     const error = err as Record<string, unknown>;
     const errorMessage = (error?.message as string) || String(err);
