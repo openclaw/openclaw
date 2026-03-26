@@ -4,12 +4,22 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../../agents/model-catalog.js";
+import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import { isImageAttachment, normalizeAttachments } from "../../media-understanding/attachments.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -98,6 +108,39 @@ async function applyLinkUnderstandingIfNeeded(params: {
   const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
   await applyLinkUnderstanding(params);
   return true;
+}
+
+function resolveConfiguredImageModelRefs(params: {
+  cfg: OpenClawConfig;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): Array<{ provider: string; model: string }> {
+  const refs: string[] = [];
+  const primary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.imageModel);
+  if (primary?.trim()) {
+    refs.push(primary.trim());
+  }
+  for (const fallback of resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.imageModel)) {
+    if (fallback?.trim()) {
+      refs.push(fallback.trim());
+    }
+  }
+  return refs
+    .map((ref) => {
+      const slashIdx = ref.indexOf("/");
+      if (slashIdx > 0 && slashIdx < ref.length - 1) {
+        return {
+          provider: ref.slice(0, slashIdx),
+          model: ref.slice(slashIdx + 1),
+        };
+      }
+      return resolveModelRefFromString({
+        raw: ref,
+        defaultProvider: params.defaultProvider,
+        aliasIndex: params.aliasIndex,
+      })?.ref;
+    })
+    .filter((entry): entry is { provider: string; model: string } => Boolean(entry));
 }
 
 export async function getReplyFromConfig(
@@ -266,6 +309,33 @@ export async function getReplyFromConfig(
       provider = resolved.ref.provider;
       model = resolved.ref.model;
     }
+  }
+  const hasInboundImageAttachment = normalizeAttachments(finalized).some((attachment) =>
+    isImageAttachment(attachment),
+  );
+  if (
+    hasInboundImageAttachment &&
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride &&
+    !channelModelOverride
+  ) {
+    try {
+      const catalog = await loadModelCatalog({ config: cfg });
+      const activeEntry = findModelInCatalog(catalog, provider, model);
+      if (!modelSupportsVision(activeEntry)) {
+        const configuredImageModel = resolveConfiguredImageModelRefs({
+          cfg,
+          defaultProvider,
+          aliasIndex,
+        }).find((entry) =>
+          modelSupportsVision(findModelInCatalog(catalog, entry.provider, entry.model)),
+        );
+        if (configuredImageModel) {
+          provider = configuredImageModel.provider;
+          model = configuredImageModel.model;
+        }
+      }
+    } catch {}
   }
 
   const directiveResult = await resolveReplyDirectives({

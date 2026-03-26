@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { MsgContext } from "../templating.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   applyLinkUnderstanding: vi.fn(async (..._args: unknown[]) => undefined),
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async (..._args: unknown[]) => undefined),
+  loadModelCatalog: vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []),
   resolveReplyDirectives: vi.fn(),
   initSessionState: vi.fn(),
 }));
@@ -15,6 +17,16 @@ registerGetReplyCommonMocks();
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
+}));
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+  findModelInCatalog: vi.fn(
+    (catalog: Array<{ provider: string; id: string }>, provider: string, model: string) =>
+      catalog.find((entry) => entry.provider === provider && entry.id === model),
+  ),
+  modelSupportsVision: vi.fn(
+    (entry?: { input?: string[] }) => entry?.input?.includes("image") ?? false,
+  ),
 }));
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: mocks.createInternalHookEvent,
@@ -83,6 +95,7 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.applyLinkUnderstanding.mockReset();
     mocks.createInternalHookEvent.mockReset();
     mocks.triggerInternalHook.mockReset();
+    mocks.loadModelCatalog.mockReset();
     mocks.resolveReplyDirectives.mockReset();
     mocks.initSessionState.mockReset();
 
@@ -104,6 +117,7 @@ describe("getReplyFromConfig message hooks", () => {
       }),
     );
     mocks.triggerInternalHook.mockResolvedValue(undefined);
+    mocks.loadModelCatalog.mockResolvedValue([]);
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
     mocks.initSessionState.mockResolvedValue({
       sessionCtx: {},
@@ -215,5 +229,38 @@ describe("getReplyFromConfig message hooks", () => {
 
     expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
     expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("switches to the configured image model for inbound image attachments", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-4o-mini", name: "gpt-4o-mini", input: ["text"] },
+      { provider: "moonshot", id: "kimi-k2.5", name: "kimi-k2.5", input: ["text", "image"] },
+    ]);
+    const ctx = buildCtx({
+      Body: "<media:image>",
+      BodyForAgent: "<media:image>",
+      RawBody: "<media:image>",
+      CommandBody: "<media:image>",
+      MediaPath: "/tmp/input.png",
+      MediaUrl: "/tmp/input.png",
+      MediaType: "image/png",
+    });
+
+    await getReplyFromConfig(ctx, undefined, {
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "moonshot/kimi-k2.5",
+          },
+        },
+      },
+    });
+
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "moonshot",
+        model: "kimi-k2.5",
+      }),
+    );
   });
 });

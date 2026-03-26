@@ -1225,8 +1225,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ]);
       expect(message?.MediaType).toBe("image/png");
       expect(message?.MediaTypes).toEqual(["image/png", "image/jpeg"]);
-      expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
-      expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
+      expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/chat-send-image-a.png");
+      expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+        "/tmp/chat-send-image-a.png",
+        "/tmp/chat-send-image-b.jpg",
+      ]);
+      expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+      expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png", "image/jpeg"]);
       expect(mockState.lastDispatchImages).toHaveLength(2);
     });
   });
