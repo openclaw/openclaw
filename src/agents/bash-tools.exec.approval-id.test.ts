@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -84,14 +85,23 @@ function expectPendingApprovalText(
     host: "gateway" | "node";
     nodeId?: string;
     interactive?: boolean;
+    /** webchat uses Control-UI-first copy; `/approve` is still present but labeled as alternative. */
+    surface?: "webchat" | "default";
   },
 ) {
   expect(result.details.status).toBe("approval-pending");
   const details = result.details as { approvalId: string; approvalSlug: string };
   const pendingText = getResultText(result);
-  expect(pendingText).toContain(
-    `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
-  );
+  if (options.surface === "webchat") {
+    expect(pendingText).toContain(
+      "In OpenClaw Control UI (webchat): use the exec approval buttons",
+    );
+    expect(pendingText).toContain(`/approve ${details.approvalSlug} allow-once|allow-always|deny`);
+  } else {
+    expect(pendingText).toContain(
+      `Reply with: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    );
+  }
   expect(pendingText).toContain(`full ${details.approvalId}`);
   expect(pendingText).toContain(`Host: ${options.host}`);
   if (options.nodeId) {
@@ -408,6 +418,39 @@ describe("exec approvals", () => {
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("uses Control UI first in approval-pending copy when message provider is webchat", async () => {
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+    });
+
+    const result = await tool.execute("call-webchat-surface", {
+      command: "echo ok",
+      elevated: true,
+    });
+    expectPendingApprovalText(result, {
+      command: "echo ok",
+      host: "gateway",
+      surface: "webchat",
+    });
+    expect(calls).toContain("exec.approval.request");
   });
 
   it("starts a direct agent follow-up after approved gateway exec completes", async () => {

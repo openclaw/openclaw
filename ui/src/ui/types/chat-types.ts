@@ -43,4 +43,6 @@ export type ToolCard = {
   name: string;
   args?: unknown;
   text?: string;
+  /** From exec tool `details.status` when present on the tool result message. */
+  execApprovalStatus?: "pending" | "unavailable";
 };

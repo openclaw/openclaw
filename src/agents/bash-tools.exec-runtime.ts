@@ -20,6 +20,7 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
   addSession,
   appendOutput,
@@ -279,6 +280,8 @@ export function buildApprovalPendingMessage(params: {
   cwd: string;
   host: "gateway" | "node";
   nodeId?: string;
+  /** When set to webchat, copy prioritizes Control UI approval buttons over `/approve`. */
+  turnSourceChannel?: string;
 }) {
   let fence = "```";
   while (params.command.includes(fence)) {
@@ -300,8 +303,19 @@ export function buildApprovalPendingMessage(params: {
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
   lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
-  lines.push("If the short code is ambiguous, use the full id in /approve.");
+  const isWebchat = params.turnSourceChannel?.trim() === INTERNAL_MESSAGE_CHANNEL;
+  if (isWebchat) {
+    lines.push(
+      "In OpenClaw Control UI (webchat): use the exec approval buttons Allow once, Always allow, or Deny on the prompt or overlay.",
+    );
+    lines.push("");
+    lines.push("Alternatively, reply in chat:");
+    lines.push(`/approve ${params.approvalSlug} allow-once|allow-always|deny`);
+    lines.push("If the short code is ambiguous, use the full id in /approve.");
+  } else {
+    lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+    lines.push("If the short code is ambiguous, use the full id in /approve.");
+  }
   return lines.join("\n");
 }
 
