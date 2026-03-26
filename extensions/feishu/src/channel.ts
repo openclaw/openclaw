@@ -60,6 +60,14 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
   return media.trim() ? media : undefined;
 }
 
+function readFeishuCardParam(params: Record<string, unknown>): Record<string, unknown> | undefined {
+  const card = params.card;
+  if (!card || typeof card !== "object" || Array.isArray(card)) {
+    return undefined;
+  }
+  return Object.keys(card).length > 0 ? (card as Record<string, unknown>) : undefined;
+}
+
 const meta: ChannelMeta = {
   id: "feishu",
   label: "Feishu",
@@ -506,10 +514,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
-                ? (ctx.params.card as Record<string, unknown>)
-                : undefined;
+            const card = readFeishuCardParam(ctx.params);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             if (card && mediaUrl) {
@@ -596,10 +601,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
-                ? (ctx.params.card as Record<string, unknown>)
-                : undefined;
+            const card = readFeishuCardParam(ctx.params);
             const { editMessageFeishu } = await loadFeishuChannelRuntime();
             const result = await editMessageFeishu({
               cfg: ctx.cfg,

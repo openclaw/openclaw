@@ -206,6 +206,44 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
   });
 
+  it("treats empty card payloads as absent for plain text sends", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", message: "hello", card: {} },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "hello",
+      accountId: undefined,
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+    expect(result?.details).toMatchObject({ ok: true, messageId: "om_sent", chatId: "oc_group_1" });
+  });
+
+  it("rejects empty card payloads when no text or media is provided", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "send",
+        params: { to: "chat:oc_group_1", card: {} },
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never),
+    ).rejects.toThrow("Feishu send requires text/message, media, or card.");
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("sends media through the outbound adapter", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({
       channel: "feishu",
