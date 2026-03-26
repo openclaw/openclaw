@@ -119,14 +119,10 @@ export function registerLazyLaneConcurrency(lane: string, resolver: LazyConcurre
 async function ensureLaneConcurrency(lane: string): Promise<void> {
   const state = getLaneState(lane);
 
-  // If already configured (not default), skip
-  if (state.maxConcurrent !== 1) {
-    return;
-  }
-
-  // Check if we have a lazy resolver
+  // Check if we have a lazy resolver — always run it on first call to initialize
   const resolver = getQueueState().lazyResolvers.get(lane);
   if (!resolver) {
+    // No lazy resolver; nothing to do unless someone explicitly configured the lane
     return;
   }
 
@@ -160,62 +156,65 @@ function drainLane(lane: string) {
     return;
   }
   state.draining = true;
-
-  const pump = () => {
-    try {
-      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
-        const waitedMs = Date.now() - entry.enqueuedAt;
-        if (waitedMs >= entry.warnAfterMs) {
-          try {
-            entry.onWait?.(waitedMs, state.queue.length);
-          } catch (err) {
-            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+  try {
+    const pump = () => {
+      try {
+        while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+          const entry = state.queue.shift() as QueueEntry;
+          const waitedMs = Date.now() - entry.enqueuedAt;
+          if (waitedMs >= entry.warnAfterMs) {
+            try {
+              entry.onWait?.(waitedMs, state.queue.length);
+            } catch (err) {
+              diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
+            }
+            diag.warn(
+              `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+            );
           }
-          diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
-          );
-        }
-        logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = getQueueState().nextTaskId++;
-        const taskGeneration = state.generation;
-        state.activeTaskIds.add(taskId);
-        void (async () => {
+          logLaneDequeue(lane, waitedMs, state.queue.length);
+          const taskId = getQueueState().nextTaskId++;
+          const taskGeneration = state.generation;
+          state.activeTaskIds.add(taskId);
           const startTime = Date.now();
-          try {
-            const result = await entry.task();
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            if (completedCurrentGeneration) {
-              diag.debug(
-                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-              );
-              pump();
+          void (async () => {
+            try {
+              const result = await entry.task();
+              const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+              if (completedCurrentGeneration) {
+                diag.debug(
+                  `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+                );
+                pump();
+              }
+              entry.resolve(result);
+            } catch (err) {
+              const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+              const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+              if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+                diag.error(
+                  `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+                );
+              } else if (!isProbeLane) {
+                diag.debug(
+                  `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
+                );
+              }
+              if (completedCurrentGeneration) {
+                pump();
+              }
+              entry.reject(err);
             }
-            entry.resolve(result);
-          } catch (err) {
-            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
-              diag.error(
-                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
-              );
-            } else if (!isProbeLane) {
-              diag.debug(
-                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
-              );
-            }
-            if (completedCurrentGeneration) {
-              pump();
-            }
-            entry.reject(err);
-          }
-        })();
+          })();
+        }
+      } catch (err) {
+        diag.error(`drainLane pump error: lane=${lane} err=${String(err)}`);
       }
-    } catch (err) {
-      diag.error(`drainLane pump error: lane=${lane} err=${String(err)}`);
-    }
-  };
-  pump();
+    };
+    pump();
+  } finally {
+    state.draining = false;
+  }
 }
 
 /**
