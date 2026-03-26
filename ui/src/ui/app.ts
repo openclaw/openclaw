@@ -693,6 +693,7 @@ export class OpenClawApp extends LitElement {
       await this.client.request("exec.approval.resolve", {
         id: active.id,
         decision,
+        channel: "control",
       });
       this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
     } catch (err) {

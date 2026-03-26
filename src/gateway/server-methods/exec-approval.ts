@@ -286,7 +286,7 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      const p = params as { id: string; decision: string };
+      const p = params as { id: string; decision: string; channel?: string };
       const decision = p.decision as ExecApprovalDecision;
       if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
@@ -326,9 +326,17 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const resolvedChannel = typeof p.channel === "string" ? p.channel.trim() || null : null;
       context.broadcast(
         "exec.approval.resolved",
-        { id: approvalId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        {
+          id: approvalId,
+          decision,
+          resolvedBy,
+          resolvedChannel,
+          ts: Date.now(),
+          request: snapshot?.request,
+        },
         { dropIfSlow: true },
       );
       void opts?.forwarder
