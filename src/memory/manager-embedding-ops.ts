@@ -638,14 +638,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return isLocal ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
   }
 
-  protected async embedQueryWithTimeout(text: string): Promise<number[]> {
+  protected async embedQueryWithTimeout(
+    text: string,
+    priority = EmbeddingPriority.HIGH,
+  ): Promise<number[]> {
     if (!this.provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
-      this.provider.embedQuery(text),
+      this.provider.embedQuery(text, { priority }),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );
@@ -866,6 +869,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let embeddings: number[][];
     try {
       const priority = reasonToPriority(options.reason);
+      // Async batch path uses the Gemini batchEmbedContents API (separate quota) —
+      // rate limiter only applies to the direct embedContent path.
       embeddings = this.batch.enabled
         ? await this.embedChunksWithBatch(chunks, entry, options.source)
         : await this.embedChunksInBatches(chunks, priority);
