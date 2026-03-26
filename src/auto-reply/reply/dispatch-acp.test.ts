@@ -488,6 +488,10 @@ describe("tryDispatchAcpReply", () => {
     const result = await runDispatch({
       bodyForAgent: "reply",
       dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
     });
 
     expect(result?.counts.block).toBe(0);
@@ -498,6 +502,30 @@ describe("tryDispatchAcpReply", () => {
       expect.objectContaining({ text: "CODEX_OK" }),
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
   });
 
   it("does not add text fallback when final TTS already delivered audio", async () => {

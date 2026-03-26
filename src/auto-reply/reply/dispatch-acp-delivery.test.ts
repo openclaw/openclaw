@@ -75,37 +75,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().final).toBe(0);
   });
 
-  it("tracks visible routed text separately from final delivery", async () => {
+  it("tracks visible direct block text for dispatcher-backed delivery", async () => {
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
       ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
+        Provider: "telegram",
+        Surface: "telegram",
         SessionKey: "agent:codex-acp:session-1",
-        AccountId: "default",
-        MessageThreadId: "topic-1",
       }),
       dispatcher: createDispatcher(),
       inboundAudio: false,
-      shouldRouteToOriginating: true,
-      originatingChannel: "telegram",
-      originatingTo: "telegram:thread-1",
+      shouldRouteToOriginating: false,
     });
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
-    expect(coordinator.getRoutedCounts().block).toBe(1);
+    expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
-  it("tracks visible direct block text for dispatcher-backed delivery", async () => {
+  it("does not treat non-telegram direct block text as visible", async () => {
     const coordinator = createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 

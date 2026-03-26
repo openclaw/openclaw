@@ -23,6 +23,25 @@ type ToolMessageHandle = {
   messageId: string;
 };
 
+function normalizeDeliveryChannel(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function shouldTreatDeliveredTextAsVisible(params: {
+  channel: string | undefined;
+  kind: ReplyDispatchKind;
+  text: string | undefined;
+}): boolean {
+  if (!params.text?.trim()) {
+    return false;
+  }
+  if (params.kind === "final") {
+    return true;
+  }
+  return normalizeDeliveryChannel(params.channel) === "telegram";
+}
+
 type AcpDispatchDeliveryState = {
   startedReplyLifecycle: boolean;
   accumulatedBlockText: string;
@@ -73,6 +92,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  const directChannel = normalizeDeliveryChannel(params.ctx.Surface ?? params.ctx.Provider);
+  const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
 
   const startReplyLifecycleOnce = async () => {
     if (state.startedReplyLifecycle) {
@@ -186,7 +207,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "final") {
         state.deliveredFinalReply = true;
       }
-      if ((kind === "block" || kind === "final") && ttsPayload.text?.trim()) {
+      if (
+        shouldTreatDeliveredTextAsVisible({
+          channel: routedChannel,
+          kind,
+          text: ttsPayload.text,
+        })
+      ) {
         state.deliveredVisibleText = true;
       }
       state.routedCounts[kind] += 1;
@@ -202,7 +229,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
     }
-    if (delivered && (kind === "block" || kind === "final") && ttsPayload.text?.trim()) {
+    if (
+      delivered &&
+      shouldTreatDeliveredTextAsVisible({
+        channel: directChannel,
+        kind,
+        text: ttsPayload.text,
+      })
+    ) {
       state.deliveredVisibleText = true;
     }
     return delivered;
