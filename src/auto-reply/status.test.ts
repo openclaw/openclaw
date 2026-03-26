@@ -1909,6 +1909,17 @@ describe("buildCommandsMessage", () => {
     );
     expect(text).toContain("/sessions -");
   });
+
+  it("hides /sessions in non-telegram group commands output when chat context is provided", () => {
+    const text = buildCommandsMessage(
+      {
+        commands: { config: false, debug: false },
+      } as unknown as OpenClawConfig,
+      undefined,
+      { surface: "dingtalk", chatType: "group", isGroup: true },
+    );
+    expect(text).not.toContain("/sessions -");
+  });
 });
 
 describe("buildHelpMessage", () => {
