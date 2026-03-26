@@ -36,9 +36,7 @@ export function resolveAgentTimeoutMs(
   const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
   const clampTimeoutMs = (valueMs: number) =>
     Math.min(Math.max(valueMs, minMs), MAX_SAFE_TIMEOUT_MS);
-  const defaultMs = clampTimeoutMs(
-    resolveAgentTimeoutSeconds(opts.cfg, subagentOpts) * 1000,
-  );
+  const defaultMs = clampTimeoutMs(resolveAgentTimeoutSeconds(opts.cfg, subagentOpts) * 1000);
   // Use the maximum timer-safe timeout to represent "no timeout" when explicitly set to 0.
   const NO_TIMEOUT_MS = MAX_SAFE_TIMEOUT_MS;
   const overrideMs = normalizeNumber(opts.overrideMs);

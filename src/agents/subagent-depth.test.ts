@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
 
