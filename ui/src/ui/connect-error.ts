@@ -16,9 +16,44 @@ function normalizeErrorMessage(message: unknown): string {
   return "unknown error";
 }
 
+function isDeviceIdentityDetailCode(detailCode: string | null): boolean {
+  return (
+    detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
+    detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
+  );
+}
+
+function hasLegacyQueryTokenInUrl(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.search);
+    const hashParams = new URLSearchParams(
+      url.hash.startsWith("#") ? url.hash.slice(1) : url.hash,
+    );
+    return params.has("token") && !hashParams.has("token");
+  } catch {
+    return false;
+  }
+}
+
+function formatLegacyQueryTokenHint(detailCode: string | null): string | null {
+  if (!isDeviceIdentityDetailCode(detailCode) || !hasLegacyQueryTokenInUrl()) {
+    return null;
+  }
+  return "device identity required (if your URL uses ?token=..., move it to /#token=<token>)";
+}
+
 function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): string {
   const message = normalizeErrorMessage(error.message);
   const detailCode = resolveGatewayErrorDetailCode(error);
+  const legacyQueryTokenHint = formatLegacyQueryTokenHint(detailCode);
+
+  if (legacyQueryTokenHint) {
+    return legacyQueryTokenHint;
+  }
 
   switch (detailCode) {
     case ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH:
@@ -31,6 +66,8 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
       return "gateway pairing required";
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
       return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
+    case ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED:
+      return "device identity required";
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
       return "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     case ConnectErrorDetailCodes.AUTH_TOKEN_MISSING:
