@@ -1,3 +1,4 @@
+import { redactInternalDetails } from "../../agents/pi-embedded-helpers/errors.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -28,6 +29,8 @@ export type NormalizeReplyOptions = {
   stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  /** shoar local: When true, redact file paths, session keys, and model/provider details from output. */
+  redactInternals?: boolean;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
@@ -97,6 +100,9 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    if (opts.redactInternals) {
+      text = redactInternalDetails(text);
+    }
   }
   if (!hasContent(text)) {
     opts.onSkip?.("empty");

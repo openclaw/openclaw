@@ -5408,6 +5408,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              blockReplyPolicy: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "stream",
+                  },
+                  {
+                    type: "string",
+                    const: "final_only",
+                  },
+                ],
+              },
               blockStreamingChunk: {
                 type: "object",
                 properties: {
@@ -19036,6 +19048,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Optional retention window in hours for persisted inbound media cleanup across the full media tree. Leave unset to preserve legacy behavior, or set values like 24 (1 day) or 168 (7 days) when you want automatic cleanup.",
           },
+          localRoots: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
         },
         additionalProperties: false,
         title: "Media",
@@ -26240,6 +26258,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "media.ttlHours": {
       label: "Media Retention TTL (hours)",
       help: "Optional retention window in hours for persisted inbound media cleanup across the full media tree. Leave unset to preserve legacy behavior, or set values like 24 (1 day) or 168 (7 days) when you want automatic cleanup.",
+      tags: ["advanced"],
+    },
+    "media.localRoots": {
+      label: "Media Local Roots",
+      help: "Defines additional local directory paths that agents are allowed to use when sending media attachments. Each entry must be an absolute path. Files under these directories bypass the default sandbox and can be attached to outbound messages.",
       tags: ["advanced"],
     },
     "audio.transcription": {

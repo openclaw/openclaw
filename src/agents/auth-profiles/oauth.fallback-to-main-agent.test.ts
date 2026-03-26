@@ -226,6 +226,8 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       }),
     );
 
+    // The merge now prefers the fresher OAuth credential by expiry, so the
+    // main agent's newer token is used directly from the merged store.
     const result = await resolveFromSecondaryAgent(profileId);
 
     expect(result?.apiKey).toBe("main-newer-access-token");

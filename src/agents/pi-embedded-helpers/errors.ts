@@ -1151,6 +1151,26 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
+// Surface-aware redaction for external messaging surfaces.
+// Strips internal details (file paths, session IDs, auth stores, model/provider names)
+// from text before it reaches external messaging surfaces like WhatsApp.
+const INTERNAL_PATH_RE = /(?:\/Users\/\S+|~\/\.\S+|\/home\/\S+|\/opt\/\S+)/g;
+const SESSION_KEY_RE = /agent:\S+:\S+:\S+/g;
+const AUTH_STORE_RE = /Auth store:\s*\S+/gi;
+const API_KEY_RE = /(?:API key|token|key)[^.]*?(?:for|in|at)\s+['"]?\S+['"]?/gi;
+const PROVIDER_MODEL_RE = /(?:anthropic|google|openai|minimax|deepseek|xai|meta)\/[\w.-]+/gi;
+
+export function redactInternalDetails(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text
+    .replace(INTERNAL_PATH_RE, "[internal path]")
+    .replace(SESSION_KEY_RE, "[session]")
+    .replace(AUTH_STORE_RE, "Auth store: [redacted]")
+    .replace(API_KEY_RE, "[redacted credentials]")
+    .replace(PROVIDER_MODEL_RE, "[model]");
+}
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;

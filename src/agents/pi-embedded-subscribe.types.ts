@@ -37,6 +37,13 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
+  /**
+   * Controls whether intermediate assistant text (narration between tool calls) is delivered.
+   * - `"stream"` (default): all text is emitted as block replies in real-time (current behavior).
+   * - `"final_only"`: text from tool-use turns is discarded; only the final turn's text is emitted.
+   *   Use this for external messaging surfaces (WhatsApp, Telegram) to prevent internal monologue leaking.
+   */
+  blockReplyPolicy?: "stream" | "final_only";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;

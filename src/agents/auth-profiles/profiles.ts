@@ -11,6 +11,18 @@ import {
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 
+function clearProfileFailureState(store: AuthProfileStore, profileId: string): void {
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return;
+  }
+  stats.cooldownUntil = undefined;
+  stats.disabledUntil = undefined;
+  stats.disabledReason = undefined;
+  stats.errorCount = 0;
+  stats.failureCounts = undefined;
+}
+
 export async function setAuthProfileOrder(params: {
   agentDir?: string;
   provider: string;
@@ -94,6 +106,7 @@ export function upsertAuthProfile(params: {
         : params.credential;
   const store = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
   store.profiles[params.profileId] = credential;
+  clearProfileFailureState(store, params.profileId);
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
@@ -109,6 +122,7 @@ export async function upsertAuthProfileWithLock(params: {
     agentDir: params.agentDir,
     updater: (store) => {
       store.profiles[params.profileId] = params.credential;
+      clearProfileFailureState(store, params.profileId);
       return true;
     },
   });

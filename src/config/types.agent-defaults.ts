@@ -334,6 +334,12 @@ export type AgentDefaultsConfig = {
    * - "message_end": end of the whole assistant message (may include tool blocks)
    */
   blockStreamingBreak?: "text_end" | "message_end";
+  /**
+   * Controls delivery of intermediate assistant text (narration between tool calls).
+   * - "stream" (default): all text is emitted as block replies in real-time.
+   * - "final_only": text from tool-use turns is discarded; only the final turn's text is delivered.
+   */
+  blockReplyPolicy?: "stream" | "final_only";
   /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */
   blockStreamingChunk?: BlockStreamingChunkConfig;
   /**

@@ -753,7 +753,9 @@ async function readWorkspaceContextForSummary(): Promise<string> {
     })();
     // Accept legacy section names ("Every Session", "Safety") as fallback
     // for backward compatibility with older AGENTS.md templates.
-    let sections = extractSections(content, ["Session Startup", "Red Lines"]);
+    // Also include "Non-Negotiables" which is used by some deployments for
+    // security/privacy rules that must survive compaction.
+    let sections = extractSections(content, ["Session Startup", "Red Lines", "Non-Negotiables"]);
     if (sections.length === 0) {
       sections = extractSections(content, ["Every Session", "Safety"]);
     }

@@ -319,6 +319,7 @@ type RunPreparedReplyParams = {
     flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
+  resolvedBlockReplyPolicy?: "stream" | "final_only";
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
   model: string;
@@ -384,6 +385,7 @@ export async function runPreparedReply(
     blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
+    resolvedBlockReplyPolicy,
     modelState,
     provider,
     model,
@@ -1018,6 +1020,7 @@ export async function runPreparedReply(
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
+      blockReplyPolicy: resolvedBlockReplyPolicy ?? "stream",
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
