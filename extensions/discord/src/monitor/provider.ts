@@ -754,6 +754,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   let autoPresenceController: ReturnType<typeof createDiscordAutoPresenceController> | null = null;
   let earlyGatewayEmitter = gatewaySupervisor?.emitter;
   let onEarlyGatewayDebug: ((msg: unknown) => void) | undefined;
+  // Guard shared across all native commands for this provider instance. Set to
+  // false when the provider begins shutting down (abortSignal fires) so that
+  // stale commands registered on the old client silently no-op after a gateway
+  // restart rather than racing the new client and hitting Discord error 40060
+  // (already acknowledged). The guard is also cleared in the finally block as a
+  // safety net, but the abort listener handles the critical window between
+  // disconnect initiation and lifecycle teardown completion.
+  let nativeCommandsActive = true;
+  const nativeCommandGuard = { isActive: () => nativeCommandsActive };
+  const deactivateOnAbort = () => {
+    nativeCommandsActive = false;
+  };
+  if (opts.abortSignal?.aborted) {
+    nativeCommandsActive = false;
+  } else {
+    opts.abortSignal?.addEventListener("abort", deactivateOnAbort, { once: true });
+  }
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
       createDiscordNativeCommand({
@@ -764,6 +781,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         sessionPrefix,
         ephemeralDefault,
         threadBindings,
+        guard: nativeCommandGuard,
       }),
     );
     if (nativeEnabled && voiceEnabled) {
@@ -1125,6 +1143,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       gatewaySupervisor,
     });
   } finally {
+    nativeCommandsActive = false;
+    opts.abortSignal?.removeEventListener("abort", deactivateOnAbort);
     deactivateMessageHandler?.();
     autoPresenceController?.stop();
     opts.setStatus?.({ connected: false });

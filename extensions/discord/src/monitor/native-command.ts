@@ -492,6 +492,7 @@ export function createDiscordNativeCommand(params: {
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
+  guard?: { isActive: () => boolean };
 }): Command {
   const {
     command,
@@ -501,6 +502,7 @@ export function createDiscordNativeCommand(params: {
     sessionPrefix,
     ephemeralDefault,
     threadBindings,
+    guard,
   } = params;
   const commandDefinition =
     findCommandByNativeName(command.name, "discord") ??
@@ -557,6 +559,13 @@ export function createDiscordNativeCommand(params: {
     options = options;
 
     async run(interaction: CommandInteraction) {
+      // Guard: silently drop if the provider is being torn down (e.g. gateway
+      // restart). A stale client may still receive events after the new client
+      // has taken over; without this check both clients process the same
+      // interaction and the stale one hits Discord error 40060.
+      if (guard && !guard.isActive()) {
+        return;
+      }
       const commandArgs = argDefinitions?.length
         ? readDiscordCommandArgs(interaction, argDefinitions)
         : command.acceptsArgs
