@@ -1,1 +1,1 @@
-export * from "../compat/browser/server-context.availability.js";
+export * from "../../extensions/browser/src/browser/server-context.availability.js";

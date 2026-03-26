@@ -1,1 +1,1 @@
-export * from "../../compat/browser/gateway/browser-request.js";
+export * from "../../../extensions/browser/src/gateway/browser-request.js";

@@ -1,1 +1,1 @@
-export * from "../compat/browser/pw-ai-state.js";
+export * from "../../extensions/browser/src/browser/pw-ai-state.js";

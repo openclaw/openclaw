@@ -268,7 +268,13 @@ function collectExtensionSourceFiles(): string[] {
 function collectCoreSourceFiles(): string[] {
   const srcDir = resolve(ROOT_DIR, "..", "src");
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
-  const normalizedBrowserCompatDir = normalizePath(resolve(ROOT_DIR, "compat", "browser"));
+  const explicitBrowserBridgeFiles = [
+    "/src/browser/",
+    "/src/cli/browser-cli",
+    "/src/gateway/server-methods/browser.ts",
+    "/src/node-host/invoke-browser.ts",
+    "/src/agents/tools/browser-tool",
+  ] as const;
   coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
     rootDir: srcDir,
     shouldSkipEntry: ({ normalizedFullPath }) =>
@@ -281,9 +287,9 @@ function collectCoreSourceFiles(): string[] {
       // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
       // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
       normalizedFullPath.includes(`${normalizedPluginSdkDir}/`) ||
-      // src/compat/browser is the explicit browser compatibility shim layer that forwards
-      // legacy core entrypoints into the bundled browser plugin.
-      normalizedFullPath.includes(`${normalizedBrowserCompatDir}/`),
+      // These legacy core entrypoints remain as explicit bridges into the bundled browser
+      // plugin, so the generic core-to-extension guardrail should ignore them.
+      explicitBrowserBridgeFiles.some((needle) => normalizedFullPath.includes(needle)),
   });
   return coreSourceFilesCache;
 }

@@ -1,1 +1,1 @@
-export * from "../compat/browser/plugin-enabled.js";
+export * from "../../extensions/browser/src/browser/plugin-enabled.js";

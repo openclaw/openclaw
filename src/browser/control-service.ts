@@ -1,1 +1,1 @@
-export * from "../compat/browser/control-service.js";
+export * from "../../extensions/browser/src/browser/control-service.js";

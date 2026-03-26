@@ -1,1 +1,1 @@
-export * from "../compat/browser/url-pattern.js";
+export * from "../../extensions/browser/src/browser/url-pattern.js";
