@@ -67,8 +67,9 @@ export class ExecApprovalManager {
       if (existing.record.resolvedAtMs === undefined) {
         return existing.promise;
       }
-      // Already resolved - don't allow re-registration
-      throw new Error(`approval id '${record.id}' already resolved`);
+      // Resolved entries are kept briefly for late waitDecision callers (grace window).
+      // Drop the stale entry so a new exec.approval.request can reuse the same id immediately.
+      this.pending.delete(record.id);
     }
     let resolvePromise: (decision: ExecApprovalDecision | null) => void;
     let rejectPromise: (err: Error) => void;
