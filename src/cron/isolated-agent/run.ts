@@ -1,4 +1,3 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -44,8 +43,9 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
-  getHookType,
+  mapHookExternalContentSource,
   isExternalHookSession,
+  resolveHookExternalContentSource,
 } from "../../security/external-content.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
@@ -58,10 +58,7 @@ import {
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
-  pickLastDeliverablePayload,
-  pickLastNonEmptyTextFromPayloads,
-  pickSummaryFromOutput,
-  pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
@@ -226,6 +223,10 @@ export async function runCronIsolatedAgentTurn(params: {
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
   const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const payloadHookExternalContentSource =
+    params.job.payload.kind === "agentTurn" ? params.job.payload.externalContentSource : undefined;
+  const hookExternalContentSource =
+    payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);
@@ -236,7 +237,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const workspaceDir = workspace.dir;
 
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
-  const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
+  const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const cronSession = resolveCronSession({
     cfg: params.cfg,
@@ -340,7 +341,8 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
   // unless explicitly allowed via a dangerous config override.
-  const isExternalHook = isExternalHookSession(baseSessionKey);
+  const isExternalHook =
+    hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
   const allowUnsafeExternalContent =
     agentPayload?.allowUnsafeExternalContent === true ||
     (isGmailHook && params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
@@ -360,7 +362,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   if (shouldWrapExternal) {
     // Wrap external content with security boundaries
-    const hookType = getHookType(baseSessionKey);
+    const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
     const safeContent = buildSafeExternalPrompt({
       content: params.message,
       source: hookType,
@@ -561,12 +563,14 @@ export async function runCronIsolatedAgentTurn(params: {
     if (!isAborted()) {
       const interimRunResult = runResult;
       const interimPayloads = interimRunResult.payloads ?? [];
-      const interimDeliveryPayload = pickLastDeliverablePayload(interimPayloads);
-      const interimPayloadHasStructuredContent =
-        (interimDeliveryPayload
-          ? resolveSendableOutboundReplyParts(interimDeliveryPayload).hasMedia
-          : false) || Object.keys(interimDeliveryPayload?.channelData ?? {}).length > 0;
-      const interimText = pickLastNonEmptyTextFromPayloads(interimPayloads)?.trim() ?? "";
+      const {
+        deliveryPayloadHasStructuredContent: interimPayloadHasStructuredContent,
+        outputText: interimOutputText,
+      } = resolveCronPayloadOutcome({
+        payloads: interimPayloads,
+        runLevelError: interimRunResult.meta?.error,
+      });
+      const interimText = interimOutputText?.trim() ?? "";
       const hasDescendantsSinceRunStart = listDescendantRunsForRequester(agentSessionKey).some(
         (entry) => {
           const descendantStartedAt =
@@ -690,41 +694,19 @@ export async function runCronIsolatedAgentTurn(params: {
   if (isAborted()) {
     return withRunSession({ status: "error", error: abortReason(), ...telemetry });
   }
-  const firstText = payloads[0]?.text ?? "";
-  let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
-  let outputText = pickLastNonEmptyTextFromPayloads(payloads);
-  let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
-  const deliveryPayload = pickLastDeliverablePayload(payloads);
-  let deliveryPayloads =
-    deliveryPayload !== undefined
-      ? [deliveryPayload]
-      : synthesizedText
-        ? [{ text: synthesizedText }]
-        : [];
-  const deliveryPayloadHasStructuredContent =
-    (deliveryPayload ? resolveSendableOutboundReplyParts(deliveryPayload).hasMedia : false) ||
-    Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
+  let {
+    summary,
+    outputText,
+    synthesizedText,
+    deliveryPayloads,
+    deliveryPayloadHasStructuredContent,
+    hasFatalErrorPayload,
+    embeddedRunError,
+  } = resolveCronPayloadOutcome({
+    payloads,
+    runLevelError: finalRunResult.meta?.error,
+  });
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
-  const hasErrorPayload = payloads.some((payload) => payload?.isError === true);
-  const runLevelError = finalRunResult.meta?.error;
-  const lastErrorPayloadIndex = payloads.findLastIndex((payload) => payload?.isError === true);
-  const hasSuccessfulPayloadAfterLastError =
-    !runLevelError &&
-    lastErrorPayloadIndex >= 0 &&
-    payloads
-      .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
-  // Tool wrappers can emit transient/false-positive error payloads before a valid final
-  // assistant payload.  Only treat payload errors as recoverable when (a) the run itself
-  // did not report a model/context-level error and (b) a non-error payload follows.
-  const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
-  const lastErrorPayloadText = [...payloads]
-    .toReversed()
-    .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
-    ?.text?.trim();
-  const embeddedRunError = hasFatalErrorPayload
-    ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
-    : undefined;
   const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",

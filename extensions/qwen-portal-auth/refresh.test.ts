@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../test/helpers/extensions/fetch-mock.js";
 import { refreshQwenPortalCredentials } from "./refresh.js";
 
 function expiredCredentials() {
@@ -22,18 +23,20 @@ describe("refreshQwenPortalCredentials", () => {
   const runRefresh = async () => await refreshQwenPortalCredentials(expiredCredentials());
 
   it("refreshes oauth credentials and preserves existing refresh token when absent", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access",
-          expires_in: 3600,
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            access_token: "new-access",
+            expires_in: 3600,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
+    );
 
     const result = await runRefresh();
 
@@ -51,19 +54,21 @@ describe("refreshQwenPortalCredentials", () => {
   });
 
   it("replaces the refresh token when the server rotates it", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access",
-          refresh_token: "rotated-refresh",
-          expires_in: 1200,
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            access_token: "new-access",
+            refresh_token: "rotated-refresh",
+            expires_in: 1200,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
+    );
 
     const result = await runRefresh();
 
@@ -71,18 +76,20 @@ describe("refreshQwenPortalCredentials", () => {
   });
 
   it("rejects invalid expires_in payloads", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        JSON.stringify({
-          access_token: "new-access",
-          expires_in: 0,
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            access_token: "new-access",
+            expires_in: 0,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
+    );
 
     await expect(runRefresh()).rejects.toThrow(
       "Qwen OAuth refresh response missing or invalid expires_in",
@@ -90,9 +97,9 @@ describe("refreshQwenPortalCredentials", () => {
   });
 
   it("turns 400 responses into a re-authenticate hint", async () => {
-    globalThis.fetch = vi.fn(
-      async () => new Response("bad refresh", { status: 400 }),
-    ) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => new Response("bad refresh", { status: 400 })),
+    );
 
     await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh token expired or invalid");
   });
@@ -110,25 +117,27 @@ describe("refreshQwenPortalCredentials", () => {
   });
 
   it("rejects missing access tokens", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(
-        JSON.stringify({
-          expires_in: 3600,
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
-    }) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            expires_in: 3600,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }),
+    );
 
     await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh response missing access token");
   });
 
   it("surfaces non-400 refresh failures", async () => {
-    globalThis.fetch = vi.fn(
-      async () => new Response("gateway down", { status: 502 }),
-    ) as typeof fetch;
+    globalThis.fetch = withFetchPreconnect(
+      vi.fn(async () => new Response("gateway down", { status: 502 })),
+    );
 
     await expect(runRefresh()).rejects.toThrow("Qwen OAuth refresh failed: gateway down");
   });

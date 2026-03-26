@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { runCliAgent } from "./cli-runner.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -48,6 +47,32 @@ vi.mock("./bootstrap-files.js", () => ({
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
 }));
 
+let runCliAgent: typeof import("./cli-runner.js").runCliAgent;
+
+async function loadFreshCliRunnerModuleForTest() {
+  vi.resetModules();
+  vi.doMock("../process/supervisor/index.js", () => ({
+    getProcessSupervisor: () => ({
+      spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      reconcileOrphans: vi.fn(),
+      getRecord: vi.fn(),
+    }),
+  }));
+  vi.doMock("../infra/system-events.js", () => ({
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  }));
+  vi.doMock("../infra/heartbeat-wake.js", () => ({
+    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+  }));
+  vi.doMock("./bootstrap-files.js", () => ({
+    makeBootstrapWarn: () => () => {},
+    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
+  }));
+  ({ runCliAgent } = await import("./cli-runner.js"));
+}
+
 type MockRunExit = {
   reason:
     | "manual-cancel"
@@ -77,7 +102,11 @@ function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 describe("runCliAgent with process supervisor", () => {
-  beforeEach(() => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  beforeEach(async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
@@ -85,6 +114,7 @@ describe("runCliAgent with process supervisor", () => {
       bootstrapFiles: [],
       contextFiles: [],
     });
+    await loadFreshCliRunnerModuleForTest();
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
@@ -129,6 +159,114 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
     expect(input.replaceExistingScope).toBe(true);
     expect(input.scopeKey).toContain("thread-123");
+  });
+
+  it("sanitizes dangerous backend env overrides before spawn", async () => {
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    vi.stubEnv("HOME", "/tmp/trusted-home");
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                env: {
+                  NODE_OPTIONS: "--require ./malicious.js",
+                  LD_PRELOAD: "/tmp/pwn.so",
+                  PATH: "/tmp/evil",
+                  HOME: "/tmp/evil-home",
+                  SAFE_KEY: "ok",
+                },
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-env-sanitized",
+      cliSessionId: "thread-123",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.SAFE_KEY).toBe("ok");
+    expect(input.env?.PATH).toBe("/usr/bin:/bin");
+    expect(input.env?.HOME).toBe("/tmp/trusted-home");
+    expect(input.env?.NODE_OPTIONS).toBeUndefined();
+    expect(input.env?.LD_PRELOAD).toBeUndefined();
+  });
+
+  it("applies clearEnv after sanitizing backend env overrides", async () => {
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    vi.stubEnv("SAFE_CLEAR", "from-base");
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await runCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "codex-cli": {
+                command: "codex",
+                env: {
+                  SAFE_KEEP: "keep-me",
+                },
+                clearEnv: ["SAFE_CLEAR"],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      prompt: "hi",
+      provider: "codex-cli",
+      model: "gpt-5.2-codex",
+      timeoutMs: 1_000,
+      runId: "run-clear-env",
+      cliSessionId: "thread-123",
+    });
+
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.SAFE_KEEP).toBe("keep-me");
+    expect(input.env?.SAFE_CLEAR).toBeUndefined();
   });
 
   it("prepends bootstrap warnings to the CLI prompt body", async () => {

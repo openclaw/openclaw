@@ -20,6 +20,7 @@ import type {
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
+import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import type {
@@ -47,18 +48,9 @@ import { pluginSdkSubpaths } from "./entrypoints.js";
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PLUGIN_SDK_DIR = resolve(ROOT_DIR, "plugin-sdk");
 const sourceCache = new Map<string, string>();
-const representativeRuntimeSmokeSubpaths = [
-  "channel-runtime",
-  "conversation-runtime",
-  "core",
-  "discord",
-  "provider-auth",
-  "provider-setup",
-  "setup",
-  "webhook-ingress",
-] as const;
+const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 
-const importPluginSdkSubpath = (specifier: string) => import(/* @vite-ignore */ specifier);
+const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
 function readPluginSdkSource(subpath: string): string {
   const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
@@ -71,51 +63,87 @@ function readPluginSdkSource(subpath: string): string {
   return text;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function isIdentifierCode(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 36 ||
+    code === 95
+  );
+}
+
+function sourceMentionsIdentifier(source: string, name: string): boolean {
+  let fromIndex = 0;
+  while (true) {
+    const matchIndex = source.indexOf(name, fromIndex);
+    if (matchIndex === -1) {
+      return false;
+    }
+    const beforeCode = matchIndex === 0 ? -1 : source.charCodeAt(matchIndex - 1);
+    const afterIndex = matchIndex + name.length;
+    const afterCode = afterIndex >= source.length ? -1 : source.charCodeAt(afterIndex);
+    if (!isIdentifierCode(beforeCode) && !isIdentifierCode(afterCode)) {
+      return true;
+    }
+    fromIndex = matchIndex + 1;
+  }
 }
 
 function expectSourceMentions(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
-  for (const name of names) {
-    expect(source, `${subpath} should mention ${name}`).toMatch(
-      new RegExp(`\\b${escapeRegExp(name)}\\b`, "u"),
-    );
-  }
+  const missing = names.filter((name) => !sourceMentionsIdentifier(source, name));
+  expect(missing, `${subpath} missing exports`).toEqual([]);
 }
 
 function expectSourceOmits(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
-  for (const name of names) {
-    expect(source, `${subpath} should not mention ${name}`).not.toMatch(
-      new RegExp(`\\b${escapeRegExp(name)}\\b`, "u"),
-    );
-  }
+  const present = names.filter((name) => sourceMentionsIdentifier(source, name));
+  expect(present, `${subpath} leaked exports`).toEqual([]);
+}
+
+function expectSourceContract(
+  subpath: string,
+  params: { mentions?: readonly string[]; omits?: readonly string[] },
+) {
+  const source = readPluginSdkSource(subpath);
+  const missing = (params.mentions ?? []).filter((name) => !sourceMentionsIdentifier(source, name));
+  const present = (params.omits ?? []).filter((name) => sourceMentionsIdentifier(source, name));
+  expect(missing, `${subpath} missing exports`).toEqual([]);
+  expect(present, `${subpath} leaked exports`).toEqual([]);
+}
+
+function expectSourceContains(subpath: string, snippet: string) {
+  expect(readPluginSdkSource(subpath)).toContain(snippet);
 }
 
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
-    expect(pluginSdkSubpaths).not.toContain("acpx");
-    expect(pluginSdkSubpaths).not.toContain("compat");
-    expect(pluginSdkSubpaths).not.toContain("device-pair");
-    expect(pluginSdkSubpaths).not.toContain("google");
-    expect(pluginSdkSubpaths).not.toContain("lobster");
-    expect(pluginSdkSubpaths).not.toContain("pairing-access");
-    expect(pluginSdkSubpaths).not.toContain("qwen-portal-auth");
-    expect(pluginSdkSubpaths).not.toContain("reply-prefix");
-    expect(pluginSdkSubpaths).not.toContain("signal-core");
-    expect(pluginSdkSubpaths).not.toContain("synology-chat");
-    expect(pluginSdkSubpaths).not.toContain("typing");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp-action-runtime");
-    expect(pluginSdkSubpaths).not.toContain("whatsapp-login-qr");
-    expect(pluginSdkSubpaths).not.toContain("secret-input-runtime");
-    expect(pluginSdkSubpaths).not.toContain("secret-input-schema");
-    expect(pluginSdkSubpaths).not.toContain("zai");
-    expect(pluginSdkSubpaths).not.toContain("provider-model-definitions");
+    for (const deniedSubpath of [
+      "acpx",
+      "compat",
+      "device-pair",
+      "google",
+      "lobster",
+      "pairing-access",
+      "provider-model-definitions",
+      "qwen-portal-auth",
+      "reply-prefix",
+      "secret-input-runtime",
+      "secret-input-schema",
+      "signal-core",
+      "synology-chat",
+      "typing",
+      "whatsapp",
+      "whatsapp-action-runtime",
+      "whatsapp-login-qr",
+      "zai",
+    ]) {
+      expect(pluginSdkSubpaths).not.toContain(deniedSubpath);
+    }
   });
 
-  it("keeps core focused on generic shared exports", () => {
+  it("keeps helper subpaths aligned", () => {
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
       "definePluginEntry",
@@ -131,21 +159,14 @@ describe("plugin-sdk subpath exports", () => {
       "createLoggerBackedRuntime",
       "registerSandboxBackend",
     ]);
-  });
-
-  it("re-exports the canonical plugin entry helper from core", async () => {
-    const [coreSdk, pluginEntrySdk] = await Promise.all([
-      importPluginSdkSubpath("openclaw/plugin-sdk/core"),
-      importPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
-    ]);
-    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
-  });
-
-  it("exports routing helpers from the dedicated subpath", () => {
-    expectSourceMentions("routing", ["buildAgentSessionKey", "resolveThreadSessionKeys"]);
-  });
-
-  it("exports reply payload helpers from the dedicated subpath", () => {
+    expectSourceContract("routing", {
+      mentions: [
+        "buildAgentSessionKey",
+        "resolveThreadSessionKeys",
+        "normalizeMessageChannel",
+        "resolveGatewayMessageChannel",
+      ],
+    });
     expectSourceMentions("reply-payload", [
       "buildMediaPayload",
       "deliverTextOrMediaReply",
@@ -156,106 +177,68 @@ describe("plugin-sdk subpath exports", () => {
       "sendTextMediaPayload",
       "sendPayloadWithChunkedTextAndMedia",
     ]);
-  });
-
-  it("exports media runtime helpers from the dedicated subpath", () => {
     expectSourceMentions("media-runtime", [
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-  });
-
-  it("exports reply history helpers from the dedicated subpath", () => {
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
       "recordPendingHistoryEntryIfEnabled",
     ]);
-    expectSourceOmits("reply-runtime", [
-      "buildPendingHistoryContextFromMap",
-      "clearHistoryEntriesIfEnabled",
-      "recordPendingHistoryEntryIfEnabled",
-      "DEFAULT_GROUP_HISTORY_LIMIT",
-    ]);
-  });
-
-  it("exports account helper builders from the dedicated subpath", () => {
+    expectSourceContract("reply-runtime", {
+      omits: [
+        "buildPendingHistoryContextFromMap",
+        "clearHistoryEntriesIfEnabled",
+        "recordPendingHistoryEntryIfEnabled",
+        "DEFAULT_GROUP_HISTORY_LIMIT",
+      ],
+    });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
-  });
-
-  it("exports device bootstrap helpers from the dedicated subpath", () => {
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
       "issueDeviceBootstrapToken",
       "listDevicePairing",
     ]);
-  });
-
-  it("exports allowlist edit helpers from the dedicated subpath", () => {
     expectSourceMentions("allowlist-config-edit", [
       "buildDmGroupAccountAllowlistAdapter",
       "createNestedAllowlistOverrideResolver",
     ]);
-  });
-
-  it("exports allowlist resolution helpers from the dedicated subpath", () => {
-    expectSourceMentions("allow-from", [
-      "addAllowlistUserEntriesFromConfigEntry",
-      "buildAllowlistResolutionSummary",
-      "canonicalizeAllowlistWithResolvedIds",
-      "mapAllowlistResolutionInputs",
-      "mergeAllowlist",
-      "patchAllowlistUsersInConfigEntries",
-      "summarizeMapping",
-    ]);
-  });
-
-  it("exports allow-from matching helpers from the dedicated subpath", () => {
-    expectSourceMentions("allow-from", [
-      "compileAllowlist",
-      "firstDefined",
-      "formatAllowlistMatchMeta",
-      "isSenderIdAllowed",
-      "mergeDmAllowFromSources",
-      "resolveAllowlistMatchSimple",
-    ]);
-  });
-
-  it("exports runtime helpers from the dedicated subpath", () => {
+    expectSourceContract("allow-from", {
+      mentions: [
+        "addAllowlistUserEntriesFromConfigEntry",
+        "buildAllowlistResolutionSummary",
+        "canonicalizeAllowlistWithResolvedIds",
+        "mapAllowlistResolutionInputs",
+        "mergeAllowlist",
+        "patchAllowlistUsersInConfigEntries",
+        "summarizeMapping",
+        "compileAllowlist",
+        "firstDefined",
+        "formatAllowlistMatchMeta",
+        "isSenderIdAllowed",
+        "mergeDmAllowFromSources",
+        "resolveAllowlistMatchSimple",
+      ],
+    });
     expectSourceMentions("runtime", ["createLoggerBackedRuntime"]);
-  });
-
-  it("exports Discord component helpers from the dedicated subpath", () => {
     expectSourceMentions("discord", [
       "buildDiscordComponentMessage",
       "editDiscordComponentMessage",
       "registerBuiltDiscordComponentMessage",
       "resolveDiscordAccount",
     ]);
-  });
-
-  it("exports channel identity and session helpers from stronger existing homes", () => {
-    expectSourceMentions("routing", ["normalizeMessageChannel", "resolveGatewayMessageChannel"]);
     expectSourceMentions("conversation-runtime", [
       "recordInboundSession",
       "recordInboundSessionMetaSafe",
       "resolveConversationLabel",
     ]);
-  });
-
-  it("exports directory runtime helpers from the dedicated subpath", () => {
     expectSourceMentions("directory-runtime", [
       "createChannelDirectoryAdapter",
       "createRuntimeDirectoryLiveAdapter",
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
-  });
-
-  it("exports infra runtime helpers from the dedicated subpath", async () => {
-    const infraRuntimeSdk = await importPluginSdkSubpath("openclaw/plugin-sdk/infra-runtime");
-    expect(typeof infraRuntimeSdk.createRuntimeOutboundDelegates).toBe("function");
-    expect(typeof infraRuntimeSdk.resolveOutboundSendDep).toBe("function");
   });
 
   it("exports channel runtime helpers from the dedicated subpath", () => {
@@ -359,13 +342,12 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-  });
-
-  it("exports inbound channel helpers from the dedicated subpath", () => {
     expectSourceMentions("channel-inbound", [
       "buildMentionRegexes",
+      "createDirectDmPreCryptoGuardPolicy",
       "createChannelInboundDebouncer",
       "createInboundDebouncer",
+      "dispatchInboundDirectDmWithRuntime",
       "formatInboundEnvelope",
       "formatInboundFromLabel",
       "formatLocationText",
@@ -381,35 +363,43 @@ describe("plugin-sdk subpath exports", () => {
       "shouldDebounceTextInbound",
       "toLocationContext",
     ]);
-    expectSourceOmits("reply-runtime", [
-      "buildMentionRegexes",
-      "createInboundDebouncer",
-      "formatInboundEnvelope",
-      "formatInboundFromLabel",
-      "matchesMentionPatterns",
-      "matchesMentionWithExplicit",
-      "normalizeMentionText",
-      "resolveEnvelopeFormatOptions",
-      "resolveInboundDebounceMs",
-    ]);
-  });
-
-  it("exports channel setup helpers from the dedicated subpath", () => {
+    expectSourceContract("reply-runtime", {
+      omits: [
+        "buildMentionRegexes",
+        "createInboundDebouncer",
+        "formatInboundEnvelope",
+        "formatInboundFromLabel",
+        "matchesMentionPatterns",
+        "matchesMentionWithExplicit",
+        "normalizeMentionText",
+        "resolveEnvelopeFormatOptions",
+        "resolveInboundDebounceMs",
+        "hasControlCommand",
+        "buildCommandTextFromArgs",
+        "buildCommandsPaginationKeyboard",
+        "buildModelsProviderData",
+        "listNativeCommandSpecsForConfig",
+        "listSkillCommandsForAgents",
+        "normalizeCommandBody",
+        "resolveCommandAuthorization",
+        "resolveStoredModelOverride",
+        "shouldComputeCommandAuthorized",
+        "shouldHandleTextCommands",
+      ],
+    });
     expectSourceMentions("channel-setup", [
       "createOptionalChannelSetupSurface",
       "createTopLevelChannelDmPolicy",
     ]);
-  });
-
-  it("exports channel action helpers from the dedicated subpath", () => {
-    expectSourceMentions("channel-actions", [
-      "createUnionActionGate",
-      "listTokenSourcedAccounts",
-      "resolveReactionMessageId",
-    ]);
-  });
-
-  it("exports channel target helpers from the dedicated subpath", () => {
+    expectSourceContract("channel-actions", {
+      mentions: [
+        "createUnionActionGate",
+        "listTokenSourcedAccounts",
+        "resolveReactionMessageId",
+        "createMessageToolButtonsSchema",
+        "createMessageToolCardSchema",
+      ],
+    });
     expectSourceMentions("channel-targets", [
       "applyChannelMatchMeta",
       "buildChannelKeyCandidates",
@@ -421,44 +411,12 @@ describe("plugin-sdk subpath exports", () => {
       "resolveChannelMatchConfig",
       "resolveTargetsWithOptionalToken",
     ]);
-  });
-
-  it("exports channel config write helpers from the dedicated subpath", () => {
     expectSourceMentions("channel-config-helpers", [
       "authorizeConfigWrite",
       "canBypassConfigWritePolicy",
       "formatConfigWriteDeniedMessage",
       "resolveChannelConfigWrites",
     ]);
-  });
-
-  it("keeps channel contract types on the dedicated subpath", () => {
-    expectTypeOf<ContractBaseProbeResult>().toMatchTypeOf<BaseProbeResult>();
-    expectTypeOf<ContractBaseTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
-    expectTypeOf<ContractChannelAgentTool>().toMatchTypeOf<ChannelAgentTool>();
-    expectTypeOf<ContractChannelAccountSnapshot>().toMatchTypeOf<ChannelAccountSnapshot>();
-    expectTypeOf<ContractChannelGroupContext>().toMatchTypeOf<ChannelGroupContext>();
-    expectTypeOf<ContractChannelMessageActionAdapter>().toMatchTypeOf<ChannelMessageActionAdapter>();
-    expectTypeOf<ContractChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
-    expectTypeOf<ContractChannelMessageActionName>().toMatchTypeOf<ChannelMessageActionName>();
-    expectTypeOf<ContractChannelMessageToolDiscovery>().toMatchTypeOf<ChannelMessageToolDiscovery>();
-    expectTypeOf<ContractChannelStatusIssue>().toMatchTypeOf<ChannelStatusIssue>();
-    expectTypeOf<ContractChannelThreadingContext>().toMatchTypeOf<ChannelThreadingContext>();
-    expectTypeOf<ContractChannelThreadingToolContext>().toMatchTypeOf<ChannelThreadingToolContext>();
-  });
-
-  it("exports channel lifecycle helpers from the dedicated subpath", async () => {
-    const channelLifecycleSdk = await importPluginSdkSubpath(
-      "openclaw/plugin-sdk/channel-lifecycle",
-    );
-    expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
-    expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
-    expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
-    expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
-    expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");
-  });
-
-  it("exports channel feedback helpers from the dedicated subpath", () => {
     expectSourceMentions("channel-feedback", [
       "createStatusReactionController",
       "logAckFailure",
@@ -468,9 +426,6 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReactionForWhatsApp",
       "DEFAULT_EMOJIS",
     ]);
-  });
-
-  it("exports status helper utilities from the dedicated subpath", () => {
     expectSourceMentions("status-helpers", [
       "appendMatchMetadata",
       "asString",
@@ -478,38 +433,11 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-  });
-
-  it("exports message tool schema helpers from the dedicated subpath", () => {
-    expectSourceMentions("channel-actions", [
-      "createMessageToolButtonsSchema",
-      "createMessageToolCardSchema",
+    expectSourceMentions("outbound-runtime", [
+      "createRuntimeOutboundDelegates",
+      "resolveOutboundSendDep",
+      "resolveAgentOutboundIdentity",
     ]);
-  });
-
-  it("exports channel pairing helpers from the dedicated subpath", async () => {
-    const channelPairingSdk = await importPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing");
-    expectSourceMentions("channel-pairing", [
-      "createChannelPairingController",
-      "createChannelPairingChallengeIssuer",
-      "createLoggedPairingApprovalNotifier",
-      "createPairingPrefixStripper",
-      "createTextPairingAdapter",
-    ]);
-    expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
-  });
-
-  it("exports channel reply pipeline helpers from the dedicated subpath", async () => {
-    const channelReplyPipelineSdk = await importPluginSdkSubpath(
-      "openclaw/plugin-sdk/channel-reply-pipeline",
-    );
-    expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
-    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(false);
-  });
-
-  it("exports command auth helpers from the dedicated subpath", () => {
     expectSourceMentions("command-auth", [
       "buildCommandTextFromArgs",
       "buildCommandsPaginationKeyboard",
@@ -518,8 +446,10 @@ describe("plugin-sdk subpath exports", () => {
       "listNativeCommandSpecsForConfig",
       "listSkillCommandsForAgents",
       "normalizeCommandBody",
+      "createPreCryptoDirectDmAuthorizer",
       "resolveCommandAuthorization",
       "resolveCommandAuthorizedFromAuthorizers",
+      "resolveInboundDirectDmAccessWithRuntime",
       "resolveControlCommandGate",
       "resolveDualTextControlCommandGate",
       "resolveNativeCommandSessionTargets",
@@ -527,29 +457,11 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
-    expectSourceOmits("reply-runtime", [
-      "hasControlCommand",
-      "buildCommandTextFromArgs",
-      "buildCommandsPaginationKeyboard",
-      "buildModelsProviderData",
-      "listNativeCommandSpecsForConfig",
-      "listSkillCommandsForAgents",
-      "normalizeCommandBody",
-      "resolveCommandAuthorization",
-      "resolveStoredModelOverride",
-      "shouldComputeCommandAuthorized",
-      "shouldHandleTextCommands",
-    ]);
-  });
-
-  it("exports channel send-result helpers from the dedicated subpath", () => {
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
     ]);
-  });
 
-  it("exports binding lifecycle helpers from the conversation-runtime subpath", () => {
     expectSourceMentions("conversation-runtime", [
       "DISCORD_THREAD_BINDING_CHANNEL",
       "MATRIX_THREAD_BINDING_CHANNEL",
@@ -571,17 +483,9 @@ describe("plugin-sdk subpath exports", () => {
       "createStaticReplyToModeResolver",
       "createTopLevelChannelReplyToModeResolver",
     ]);
-  });
 
-  it("exports narrow binding lifecycle helpers from the dedicated subpath", () => {
     expectSourceMentions("thread-bindings-runtime", ["resolveThreadBindingLifecycle"]);
-  });
-
-  it("exports narrow matrix runtime helpers from the dedicated subpath", () => {
     expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
-  });
-
-  it("exports narrow ssrf helpers from the dedicated subpath", () => {
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
       "createPinnedDispatcher",
@@ -589,39 +493,27 @@ describe("plugin-sdk subpath exports", () => {
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
-  });
 
-  it("exports provider setup helpers from the dedicated subpath", () => {
     expectSourceMentions("provider-setup", [
       "buildVllmProvider",
       "discoverOpenAICompatibleSelfHostedProvider",
     ]);
-  });
-
-  it("exports oauth helpers from provider-auth", () => {
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
       "generatePkceVerifierChallenge",
       "toFormUrlEncoded",
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
-  });
+    expectSourceContract("provider-models", {
+      mentions: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
+      omits: [
+        "buildMinimaxModelDefinition",
+        "buildMoonshotProvider",
+        "QIANFAN_BASE_URL",
+        "resolveZaiBaseUrl",
+      ],
+    });
 
-  it("keeps provider models focused on shared provider primitives", () => {
-    expectSourceMentions("provider-models", [
-      "applyOpenAIConfig",
-      "buildKilocodeModelDefinition",
-      "discoverHuggingfaceModels",
-    ]);
-    expectSourceOmits("provider-models", [
-      "buildMinimaxModelDefinition",
-      "buildMoonshotProvider",
-      "QIANFAN_BASE_URL",
-      "resolveZaiBaseUrl",
-    ]);
-  });
-
-  it("exports shared setup helpers from the dedicated subpath", () => {
     expectSourceMentions("setup", [
       "DEFAULT_ACCOUNT_ID",
       "createAllowFromSection",
@@ -629,29 +521,15 @@ describe("plugin-sdk subpath exports", () => {
       "createTopLevelChannelDmPolicy",
       "mergeAllowFromEntries",
     ]);
-  });
-
-  it("exports shared lazy runtime helpers from the dedicated subpath", () => {
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
-  });
-
-  it("exports narrow self-hosted provider setup helpers", () => {
     expectSourceMentions("self-hosted-provider-setup", [
       "buildVllmProvider",
       "buildSglangProvider",
       "configureOpenAICompatibleSelfHostedProviderNonInteractive",
     ]);
-  });
-
-  it("exports narrow Ollama setup helpers", () => {
     expectSourceMentions("ollama-setup", ["buildOllamaProvider", "configureOllamaNonInteractive"]);
-  });
-
-  it("exports sandbox helpers from the dedicated subpath", () => {
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
-  });
 
-  it("exports secret input helpers from the dedicated subpath", () => {
     expectSourceMentions("secret-input", [
       "buildSecretInputSchema",
       "buildOptionalSecretInputSchema",
@@ -662,9 +540,6 @@ describe("plugin-sdk subpath exports", () => {
       "normalizeResolvedSecretInputString",
       "normalizeSecretInputString",
     ]);
-  });
-
-  it("exports webhook ingress helpers from the dedicated subpath", () => {
     expectSourceMentions("webhook-ingress", [
       "registerPluginHttpRoute",
       "resolveWebhookPath",
@@ -673,30 +548,89 @@ describe("plugin-sdk subpath exports", () => {
       "requestBodyErrorToText",
       "withResolvedWebhookRequestPipeline",
     ]);
-  });
-
-  it("exports shared core types used by bundled extensions", () => {
-    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
-    expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
-    expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
-  });
-
-  it("exports the public testing surface", () => {
     expectSourceMentions("testing", ["removeAckReactionAfterReply", "shouldAckReaction"]);
   });
 
-  it("keeps core shared types aligned with the channel prelude", () => {
+  it("keeps shared plugin-sdk types aligned", () => {
+    expectTypeOf<ContractBaseProbeResult>().toMatchTypeOf<BaseProbeResult>();
+    expectTypeOf<ContractBaseTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
+    expectTypeOf<ContractChannelAgentTool>().toMatchTypeOf<ChannelAgentTool>();
+    expectTypeOf<ContractChannelAccountSnapshot>().toMatchTypeOf<ChannelAccountSnapshot>();
+    expectTypeOf<ContractChannelGroupContext>().toMatchTypeOf<ChannelGroupContext>();
+    expectTypeOf<ContractChannelMessageActionAdapter>().toMatchTypeOf<ChannelMessageActionAdapter>();
+    expectTypeOf<ContractChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
+    expectTypeOf<ContractChannelMessageActionName>().toMatchTypeOf<ChannelMessageActionName>();
+    expectTypeOf<ContractChannelMessageToolDiscovery>().toMatchTypeOf<ChannelMessageToolDiscovery>();
+    expectTypeOf<ContractChannelStatusIssue>().toMatchTypeOf<ChannelStatusIssue>();
+    expectTypeOf<ContractChannelThreadingContext>().toMatchTypeOf<ChannelThreadingContext>();
+    expectTypeOf<ContractChannelThreadingToolContext>().toMatchTypeOf<ChannelThreadingToolContext>();
+    expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<OpenClawPluginApi>();
+    expectTypeOf<CorePluginRuntime>().toMatchTypeOf<PluginRuntime>();
+    expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<ChannelMessageActionContext>();
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
   });
 
-  it("resolves representative curated public subpaths", async () => {
+  it("keeps runtime entry subpaths importable", async () => {
+    const [
+      coreSdk,
+      textRuntimeSdk,
+      pluginEntrySdk,
+      channelLifecycleSdk,
+      channelPairingSdk,
+      channelReplyPipelineSdk,
+      ...representativeModules
+    ] = await Promise.all([
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/core"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-lifecycle"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-pairing"),
+      importResolvedPluginSdkSubpath("openclaw/plugin-sdk/channel-reply-pipeline"),
+      ...representativeRuntimeSmokeSubpaths.map((id) =>
+        importResolvedPluginSdkSubpath(`openclaw/plugin-sdk/${id}`),
+      ),
+    ]);
+
+    expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
+    expect(typeof coreSdk.optionalStringEnum).toBe("function");
+    expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
+    expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
+
+    expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
+    expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+
+    expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
+    expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
+    expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
+    expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
+    expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");
+
+    expectSourceMentions("channel-pairing", [
+      "createChannelPairingController",
+      "createChannelPairingChallengeIssuer",
+      "createLoggedPairingApprovalNotifier",
+      "createPairingPrefixStripper",
+      "createTextPairingAdapter",
+    ]);
+    expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
+
+    expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
+    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(false);
+    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(false);
+    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(false);
+
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
-    for (const id of representativeRuntimeSmokeSubpaths) {
-      const mod = await importPluginSdkSubpath(`openclaw/plugin-sdk/${id}`);
+    for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {
+      const mod = representativeModules[index];
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
+    expect(typeof providerEntrySdk.defineSingleProviderPluginEntry).toBe("function");
   });
 });

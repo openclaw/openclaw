@@ -3,63 +3,39 @@ import {
   collectWebSearchProviderBoundaryInventory,
   main,
 } from "../scripts/check-web-search-provider-boundaries.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
-function createCapturedIo() {
-  let stdout = "";
-  let stderr = "";
+const inventoryPromise = collectWebSearchProviderBoundaryInventory();
+const jsonOutputPromise = getJsonOutput();
+
+async function getJsonOutput() {
+  const captured = createCapturedIo();
+  const exitCode = await main(["--json"], captured.io);
   return {
-    io: {
-      stdout: {
-        write(chunk) {
-          stdout += String(chunk);
-        },
-      },
-      stderr: {
-        write(chunk) {
-          stderr += String(chunk);
-        },
-      },
-    },
-    readStdout: () => stdout,
-    readStderr: () => stderr,
+    exitCode,
+    stderr: captured.readStderr(),
+    json: JSON.parse(captured.readStdout()),
   };
 }
 
 describe("web search provider boundary inventory", () => {
-  it("has no remaining production inventory in core", async () => {
-    const inventory = await collectWebSearchProviderBoundaryInventory();
+  it("stays empty, core-only, and sorted", async () => {
+    const inventory = await inventoryPromise;
+    const jsonOutput = await jsonOutputPromise;
 
     expect(inventory).toEqual([]);
-  });
-
-  it("ignores extension-owned registrations", async () => {
-    const inventory = await collectWebSearchProviderBoundaryInventory();
-
     expect(inventory.some((entry) => entry.file.startsWith("extensions/"))).toBe(false);
-  });
-
-  it("produces stable sorted output", async () => {
-    const first = await collectWebSearchProviderBoundaryInventory();
-    const second = await collectWebSearchProviderBoundaryInventory();
-
-    expect(second).toEqual(first);
     expect(
-      [...first].toSorted(
+      [...inventory].toSorted(
         (left, right) =>
           left.provider.localeCompare(right.provider) ||
           left.file.localeCompare(right.file) ||
           left.line - right.line ||
           left.reason.localeCompare(right.reason),
       ),
-    ).toEqual(first);
-  });
-
-  it("script json output is empty", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--json"], captured.io);
-
-    expect(exitCode).toBe(0);
-    expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
+    ).toEqual(inventory);
+    expect(jsonOutput.exitCode).toBe(0);
+    expect(jsonOutput.stderr).toBe("");
+    expect(jsonOutput.json).toEqual([]);
   });
 });

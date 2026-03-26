@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const selectMock = vi.hoisted(() => vi.fn());
 const createSecretsConfigIOMock = vi.hoisted(() => vi.fn());
 const readJsonObjectIfExistsMock = vi.hoisted(() => vi.fn());
+
+const mockedModuleIds = ["@clack/prompts", "./config-io.js", "./storage-scan.js"] as const;
 
 vi.mock("@clack/prompts", () => ({
   confirm: vi.fn(),
@@ -25,6 +27,13 @@ describe("runSecretsConfigureInteractive", () => {
     selectMock.mockReset();
     createSecretsConfigIOMock.mockReset();
     readJsonObjectIfExistsMock.mockReset();
+  });
+
+  afterAll(() => {
+    for (const id of mockedModuleIds) {
+      vi.doUnmock(id);
+    }
+    vi.resetModules();
   });
 
   it("does not load auth-profiles when running providers-only", async () => {

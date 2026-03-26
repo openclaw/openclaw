@@ -4,22 +4,36 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../../../extensions/openai/index.js";
 import qwenPortalPlugin from "../../../extensions/qwen-portal-auth/index.js";
-import { createCapturedPluginRegistration } from "../../test-utils/plugin-registration.js";
 import { createProviderUsageFetch, makeResponse } from "../../test-utils/provider-usage-fetch.js";
-import type { OpenClawPluginApi, ProviderPlugin } from "../types.js";
-import type { ProviderRuntimeModel } from "../types.js";
+import type { ProviderPlugin, ProviderRuntimeModel } from "../types.js";
 import { requireProviderContractProvider as requireBundledProviderContractProvider } from "./registry.js";
+import { registerProviders, requireProvider } from "./testkit.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
 const getOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+const getOAuthProvidersMock = vi.hoisted(() =>
+  vi.fn(() => [
+    { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" }, // pragma: allowlist secret
+    { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
+    {
+      id: "qwen-portal",
+      envApiKey: "QWEN_PORTAL_API_KEY",
+      oauthTokenEnv: "QWEN_PORTAL_OAUTH_TOKEN",
+    }, // pragma: allowlist secret
+  ]),
+);
 const refreshQwenPortalCredentialsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<object>("@mariozechner/pi-ai/oauth");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
   return {
     ...actual,
     getOAuthApiKey: getOAuthApiKeyMock,
+    getOAuthProviders: getOAuthProvidersMock,
   };
 });
 
@@ -46,22 +60,6 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
   } satisfies ProviderRuntimeModel;
 }
 
-function registerProviders(...plugins: Array<{ register(api: OpenClawPluginApi): void }>) {
-  const captured = createCapturedPluginRegistration();
-  for (const plugin of plugins) {
-    plugin.register(captured.api);
-  }
-  return captured.providers;
-}
-
-function requireProvider(providers: ProviderPlugin[], providerId: string) {
-  const provider = providers.find((entry) => entry.id === providerId);
-  if (!provider) {
-    throw new Error(`provider ${providerId} missing`);
-  }
-  return provider;
-}
-
 function requireProviderContractProvider(providerId: string): ProviderPlugin {
   if (providerId === "openai-codex") {
     return requireProvider(registerProviders(openAIPlugin), providerId);
@@ -75,6 +73,7 @@ function requireProviderContractProvider(providerId: string): ProviderPlugin {
 describe("provider runtime contract", () => {
   beforeEach(() => {
     getOAuthApiKeyMock.mockReset();
+    getOAuthProvidersMock.mockClear();
     refreshQwenPortalCredentialsMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
@@ -192,7 +191,7 @@ describe("provider runtime contract", () => {
       const provider = requireProviderContractProvider("github-copilot");
       const model = provider.resolveDynamicModel?.({
         provider: "github-copilot",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
@@ -207,7 +206,7 @@ describe("provider runtime contract", () => {
       });
 
       expect(model).toMatchObject({
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "github-copilot",
         api: "openai-codex-responses",
       });
