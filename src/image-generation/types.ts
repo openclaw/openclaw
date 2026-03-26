@@ -31,6 +31,12 @@ export type ImageGenerationRequest = {
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
+  seed?: number;
+  watermark?: boolean;
+  guidanceScale?: number;
+  optimizePrompt?: boolean;
+  /** Provider-specific options (e.g. sequential generation). */
+  providerOptions?: Record<string, unknown>;
 };
 
 export type ImageGenerationResult = {

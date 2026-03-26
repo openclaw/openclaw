@@ -20,6 +20,7 @@ function createPluginRecord(id: string, name: string): PluginRecord {
     speechProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
