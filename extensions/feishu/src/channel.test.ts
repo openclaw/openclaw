@@ -313,6 +313,47 @@ describe("feishuPlugin actions", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("allows non-button controls to carry text metadata values", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "select_static",
+                placeholder: { tag: "plain_text", content: "Pick one" },
+                value: { text: "display-only metadata" },
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Option A" },
+                    value: "a",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card,
+      }),
+    );
+  });
+
   it("sends media through the outbound adapter", async () => {
     feishuOutboundSendMediaMock.mockResolvedValueOnce({
       channel: "feishu",

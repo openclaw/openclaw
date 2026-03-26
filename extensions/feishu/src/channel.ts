@@ -65,6 +65,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
+  return (
+    isRecord(actionValue) &&
+    actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION &&
+    (Boolean(typeof actionValue.command === "string" && actionValue.command.trim()) ||
+      Boolean(typeof actionValue.text === "string" && actionValue.text.trim()))
+  );
+}
+
 function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
   if (Array.isArray(node)) {
     return node.some((item) => containsLegacyFeishuCardCommandValue(item));
@@ -73,13 +82,7 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
     return false;
   }
 
-  const actionValue = node.value;
-  if (
-    isRecord(actionValue) &&
-    actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION &&
-    ((typeof actionValue.command === "string" && actionValue.command.trim()) ||
-      (typeof actionValue.text === "string" && actionValue.text.trim()))
-  ) {
+  if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
     return true;
   }
 
