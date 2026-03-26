@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -11,6 +12,10 @@ import {
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
+  ExecAllowlistMatcher,
+  type ExecAllowlistConfig,
+} from "../exec-allowlist-matcher.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -21,8 +26,9 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
-  opts?: { forwarder?: ExecApprovalForwarder },
+  opts?: { forwarder?: ExecApprovalForwarder; allowlist?: ExecAllowlistConfig },
 ): GatewayRequestHandlers {
+  const allowlistMatcher = new ExecAllowlistMatcher(opts?.allowlist);
   return {
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -97,6 +103,22 @@ export function createExecApprovalHandlers(
       }
       if (!effectiveCommandText) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        return;
+      }
+
+      // Check if command matches allowlist - if so, auto-approve with allow-once
+      if (allowlistMatcher.matches(effectiveCommandText)) {
+        respond(
+          true,
+          {
+            id: randomUUID(),
+            decision: "allow-once",
+            createdAtMs: Date.now(),
+            expiresAtMs: Date.now() + 1000, // minimal timeout since already approved
+            allowedViaAllowlist: true,
+          },
+          undefined,
+        );
         return;
       }
       if (
