@@ -151,6 +151,7 @@ export function registerBrowserManageCommands(
             `profile: ${status.profile ?? "openclaw"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
+            ...(typeof status.tabCount === "number" ? [`tabs: ${status.tabCount}`] : []),
             `transport: ${
               usesChromeMcpTransport(status) ? "chrome-mcp" : (status.transport ?? "cdp")
             }`,
@@ -166,6 +167,7 @@ export function registerBrowserManageCommands(
             `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
             `detectedPath: ${detectedDisplay}`,
             `profileColor: ${status.color}`,
+            ...(status.availabilityError ? [`availabilityError: ${status.availabilityError}`] : []),
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );

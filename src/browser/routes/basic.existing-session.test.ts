@@ -8,7 +8,7 @@ vi.mock("../chrome-mcp.js", () => ({
 }));
 
 describe("basic browser routes", () => {
-  it("maps existing-session status failures to JSON browser errors", async () => {
+  it("reports existing-session attach failures as not running with context", async () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserBasicRoutes(app, {
       state: () => ({
@@ -31,9 +31,10 @@ describe("basic browser routes", () => {
             color: "#00AA00",
             attachOnly: true,
           },
-          isHttpReachable: async () => {
+          listTabs: async () => {
             throw new BrowserProfileUnavailableError("attach failed");
           },
+          isHttpReachable: async () => false,
           isReachable: async () => true,
         }) as never,
     } as never);
@@ -44,8 +45,14 @@ describe("basic browser routes", () => {
     const response = createBrowserRouteResponse();
     await handler?.({ params: {}, query: { profile: "chrome-live" } }, response.res);
 
-    expect(response.statusCode).toBe(409);
-    expect(response.body).toMatchObject({ error: "attach failed" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      profile: "chrome-live",
+      transport: "chrome-mcp",
+      running: false,
+      tabCount: 0,
+      availabilityError: "attach failed",
+    });
   });
 
   it("reports Chrome MCP transport without fake CDP fields", async () => {
@@ -71,7 +78,11 @@ describe("basic browser routes", () => {
             color: "#00AA00",
             attachOnly: true,
           },
-          isHttpReachable: async () => true,
+          listTabs: async () => [
+            { type: "page", targetId: "tab-1", title: "One", url: "https://example.com/1" },
+            { type: "page", targetId: "tab-2", title: "Two", url: "https://example.com/2" },
+          ],
+          isHttpReachable: async () => false,
           isReachable: async () => true,
         }) as never,
     } as never);
@@ -88,6 +99,7 @@ describe("basic browser routes", () => {
       driver: "existing-session",
       transport: "chrome-mcp",
       running: true,
+      tabCount: 2,
       cdpPort: null,
       cdpUrl: null,
       userDataDir: "/tmp/brave-profile",
