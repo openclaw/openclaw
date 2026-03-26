@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: trigger timeout recovery compaction before retrying high-context LLM timeouts so embedded runs stop repeating oversized requests. (#46417) thanks @joeykrug.
 - Agents/compaction: reconcile `sessions.json.compactionCount` after a late embedded auto-compaction success so persisted session counts catch up once the handler reports completion. (#45493) Thanks @jackal092927.
 - Agents/failover: classify Codex accountId token extraction failures as auth errors so model fallback continues to the next configured candidate. (#55206) Thanks @cosmicnet.
+- Talk/macOS: stop direct system-voice failures from replaying system speech, use app-locale fallback for shared watchdog timing, and add regression coverage for the macOS fallback route and language-aware timeout policy. (#53511) thanks @hongsw.
 
 ## 2026.3.24
 
@@ -430,6 +431,16 @@ Docs: https://docs.openclaw.ai
 - Security/network: harden explicit-proxy SSRF pinning by translating target-hop transport hints onto HTTPS proxy tunnels and failing closed for plain HTTP guarded fetches that cannot preserve pinned DNS.
 - Security/Synology Chat: require explicit per-account webhook paths for multi-account setups by default, reject duplicate exact webhook paths fail-closed, and keep inherited-path behavior behind an explicit dangerous opt-in so shared routes can no longer collapse DM policy contexts across accounts. Thanks @tdjackey for reporting.
 - Browser/remote CDP: honor strict browser SSRF policy during remote CDP reachability and `/json/version` discovery checks, redact sensitive `cdpUrl` tokens from status output, and warn when remote CDP targets private/internal hosts.
+- Telegram/replies: set `allow_sending_without_reply` on reply-targeted sends and media-error notices so deleted parent messages no longer drop otherwise valid replies. (#52524) Thanks @moltbot886.
+- Gateway/status: resolve env-backed `gateway.auth.*` SecretRefs before read-only probe auth checks so status no longer reports false probe failures when auth is configured through SecretRef. (#52513) Thanks @CodeForgeNet.
+- Agents/exec: return plain-text failed tool output for timeouts and other non-success exec outcomes so models no longer parrot raw JSON error payloads back to users. (#52508) Thanks @martingarramon.
+- CLI/startup: lazy-load channel add and root help startup paths to trim avoidable RSS and help latency on constrained hosts. (#46784) Thanks @vincentkoc.
+- CLI/onboarding: import static provider definitions directly for onboarding model/config helpers so those paths no longer pull provider discovery just for built-in defaults. (#47467) Thanks @vincentkoc.
+- CLI/configure: clarify fresh-setup memory-search warnings so they say semantic recall needs at least one embedding provider, and scope the initial model allowlist picker to the provider selected in configure. Thanks @vincentkoc.
+- CLI/auth choice: lazy-load plugin/provider fallback resolution so mapped auth choices stay on the static path and only unknown choices pay the heavy provider load. (#47495) Thanks @vincentkoc.
+- CLI: avoid loading provider discovery during startup model normalization. (#46522) Thanks @ItsAditya-xyz and @vincentkoc.
+- CLI/status: keep `status --json` stdout clean by skipping plugin compatibility scans that were not rendered in the JSON payload. (#52449) Thanks @cgdusek.
+- Agents/Telegram: avoid rebuilding the full model catalog on ordinary inbound replies so Telegram message handling no longer pays multi-second core startup latency before reply generation. Thanks @vincentkoc.
 - Media/security: bound remote-media error-body snippets with the same streaming caps and idle timeouts as successful downloads, so malicious HTTP error responses cannot force unbounded buffering before OpenClaw throws.
 - Gateway/auth: ignore spoofed loopback hops in trusted forwarding chains and block device approvals that request scopes above the caller session. (#46800) Thanks @vincentkoc.
 - Gateway/auth: clear self-declared scopes for device-less trusted-proxy Control UI sessions so proxy-authenticated connects cannot claim admin or secrets scopes without a bound device identity.
