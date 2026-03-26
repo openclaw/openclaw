@@ -130,8 +130,8 @@ export async function executeNodeHostCommand(
         cwd: params.workdir ?? null,
         commandText: params.command || formatExecCommand(argv),
         commandPreview: null,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        agentId: params.agentId ?? null,
+        sessionKey: params.sessionKey ?? null,
       },
     };
   }

@@ -690,8 +690,8 @@ export function createNodesTool(options?: {
                   cwd: cwd ?? null,
                   commandText: formatExecCommand(command),
                   commandPreview: null,
-                  agentId,
-                  sessionKey,
+                  agentId: agentId ?? null,
+                  sessionKey: sessionKey ?? null,
                 },
               };
             }

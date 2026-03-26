@@ -159,7 +159,7 @@ async function prepareNodesRunContext(params: {
       cwd: params.opts.cwd ?? null,
       commandText: rawCommand ?? formatExecCommand(argv),
       commandPreview: null,
-      agentId: params.agentId,
+      agentId: params.agentId ?? null,
       sessionKey: null,
     },
   };
