@@ -283,10 +283,10 @@ describe("test planner", () => {
     expect(manifest.jobs.buildArtifacts.enabled).toBe(true);
     expect(manifest.shardCounts.unit).toBe(4);
     expect(manifest.shardCounts.channels).toBe(3);
-    expect(manifest.shardCounts.windows).toBe(9);
+    expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
-    expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(9);
+    expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");
