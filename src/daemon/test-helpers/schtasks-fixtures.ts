@@ -8,6 +8,7 @@ import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
 import { resolveTaskScriptPath } from "../schtasks.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
+export const schtasksThrownErrors: unknown[] = [];
 export const schtasksCalls: string[][] = [];
 
 export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
@@ -33,6 +34,7 @@ export async function withWindowsEnv(
 
 export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
+  schtasksThrownErrors.length = 0;
   schtasksCalls.length = 0;
   inspectPortUsage.mockReset();
   killProcessTree.mockReset();

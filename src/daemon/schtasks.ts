@@ -783,19 +783,14 @@ export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Pro
 export async function readScheduledTaskRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
 ): Promise<GatewayServiceRuntime> {
-  try {
-    await assertSchtasksAvailable();
-  } catch (err) {
-    if (await isStartupEntryInstalled(env)) {
-      return await resolveFallbackRuntime(env);
-    }
-    return {
-      status: "unknown",
-      detail: String(err),
-    };
-  }
   const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]).catch(
+    (err: unknown) => ({
+      code: 1,
+      stdout: "",
+      stderr: String(err),
+    }),
+  );
   if (res.code !== 0) {
     if (await isStartupEntryInstalled(env)) {
       return await resolveFallbackRuntime(env);

@@ -8,6 +8,8 @@ import {
   inspectPortUsage,
   killProcessTree,
   resetSchtasksBaseMocks,
+  schtasksCalls,
+  schtasksThrownErrors,
   schtasksResponses,
   withWindowsEnv,
   writeGatewayScript,
@@ -69,12 +71,12 @@ function expectGatewayTermination(pid: number) {
 
 function addStartupFallbackMissingResponses(
   extraResponses: Array<{ code: number; stdout: string; stderr: string }> = [],
+  opts?: { includePreflight?: boolean },
 ) {
-  schtasksResponses.push(
-    { code: 0, stdout: "", stderr: "" },
-    { code: 1, stdout: "", stderr: "not found" },
-    ...extraResponses,
-  );
+  if (opts?.includePreflight) {
+    schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+  }
+  schtasksResponses.push({ code: 1, stdout: "", stderr: "not found" }, ...extraResponses);
 }
 beforeEach(() => {
   resetSchtasksBaseMocks();
@@ -169,12 +171,56 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("reads runtime from the task-scoped schtasks query without a global preflight", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({
+        code: 0,
+        stdout: [
+          "TaskName: \\OpenClaw Gateway",
+          "Status: Running",
+          "Last Run Time: 2026/3/21 14:00:00",
+          "Last Run Result: 267009",
+        ].join("\r\n"),
+        stderr: "",
+      });
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
+        status: "running",
+        state: "Running",
+        lastRunResult: "267009",
+      });
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"]]);
+    });
+  });
+
+  it("falls back to Startup runtime when the task-scoped schtasks query throws", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksThrownErrors.push(new Error("spawn ENOENT"));
+      await writeStartupFallbackEntry(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 4242, command: "node.exe" }],
+        hints: [],
+      });
+
+      await expect(readScheduledTaskRuntime(env)).resolves.toMatchObject({
+        status: "running",
+        pid: 4242,
+      });
+      expect(schtasksCalls).toEqual([["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"]]);
+    });
+  });
+
   it("restarts the Startup fallback by killing the current pid and relaunching the entry", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      addStartupFallbackMissingResponses([
-        { code: 0, stdout: "", stderr: "" },
-        { code: 1, stdout: "", stderr: "not found" },
-      ]);
+      addStartupFallbackMissingResponses(
+        [
+          { code: 0, stdout: "", stderr: "" },
+          { code: 1, stdout: "", stderr: "not found" },
+        ],
+        { includePreflight: true },
+      );
       await writeStartupFallbackEntry(env);
       inspectPortUsage.mockResolvedValue({
         port: 18789,
