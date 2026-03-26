@@ -1,1 +1,1 @@
-export * from "../compat/browser/client-fetch.js";
+export * from "../../extensions/browser/src/browser/client-fetch.js";

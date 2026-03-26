@@ -1,1 +1,1 @@
-export * from "../../compat/browser/cli/browser-cli-actions-input/register.element.js";
+export * from "../../../extensions/browser/src/cli/browser-cli-actions-input/register.element.js";
