@@ -24,7 +24,13 @@ export async function loadCapabilities(configDir: string): Promise<CapabilityMap
 }
 
 /**
+ * Internal queue to serialize capability cache updates and prevent race conditions.
+ */
+let updateQueue: Promise<void> = Promise.resolve();
+
+/**
  * Updates the capabilities for a specific model in the cache and persists it.
+ * Updates are serialized to prevent data loss from concurrent read-modify-write operations.
  */
 export async function updateModelCapability(
   configDir: string,
@@ -32,15 +38,28 @@ export async function updateModelCapability(
   modelId: string,
   status: CapabilityStatus,
 ): Promise<void> {
-  const cache = await loadCapabilities(configDir);
-  const key = `${providerId}:${modelId}`;
+  // Push the update into the queue to ensure serial execution
+  updateQueue = updateQueue
+    .then(async () => {
+      const cache = await loadCapabilities(configDir);
+      const key = `${providerId}:${modelId}`;
 
-  cache[key] = {
-    status,
-    lastVerified: Date.now(),
-  };
+      cache[key] = {
+        status,
+        lastVerified: Date.now(),
+      };
 
-  await writeJsonFileAtomically(getCachePath(configDir), cache);
+      await writeJsonFileAtomically(getCachePath(configDir), cache);
+    })
+    .catch((err) => {
+      // Log error but don't break the promise chain for future updates
+      console.error(
+        `[capabilities-cache] Failed to update capability for ${providerId}:${modelId}:`,
+        err,
+      );
+    });
+
+  return updateQueue;
 }
 
 /**
