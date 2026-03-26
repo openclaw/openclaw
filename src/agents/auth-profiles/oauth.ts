@@ -12,13 +12,19 @@ import {
   refreshProviderOAuthCredentialWithPlugin,
 } from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
+import { resolveProcessScopedMap } from "../../shared/process-scoped-map.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 function listOAuthProviderIds(): string[] {
@@ -48,6 +54,16 @@ const isOAuthProvider = (provider: string): provider is OAuthProvider =>
 
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
+
+type OAuthRefreshResult = {
+  apiKey: string;
+  newCredentials: OAuthCredentials;
+};
+
+const OAUTH_REFRESH_IN_FLIGHT_KEY = Symbol.for("openclaw.authProfiles.oauthRefreshInFlight");
+const oauthRefreshInFlight = resolveProcessScopedMap<Promise<OAuthRefreshResult | null>>(
+  OAUTH_REFRESH_IN_FLIGHT_KEY,
+);
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
@@ -112,6 +128,122 @@ function extractErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isRefreshTokenReusedError(error: unknown): boolean {
+  const message = extractErrorMessage(error).toLowerCase();
+  return (
+    message.includes("refresh_token_reused") ||
+    message.includes("refresh token has already been used") ||
+    message.includes("already been used to generate a new access token")
+  );
+}
+
+function buildOAuthRefreshMutexKey(params: { profileId: string; provider: string }): string {
+  return `${params.provider}:${params.profileId}`;
+}
+
+function hasOAuthCredentialChanged(
+  previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+  current: Pick<OAuthCredential, "access" | "refresh" | "expires">,
+): boolean {
+  return (
+    previous.access !== current.access ||
+    previous.refresh !== current.refresh ||
+    previous.expires !== current.expires
+  );
+}
+
+async function syncOAuthCredentialToStore(params: {
+  profileId: string;
+  agentDir?: string;
+  provider: string;
+  email?: string;
+  newCredentials: OAuthCredentials;
+}): Promise<void> {
+  await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      const current = store.profiles[params.profileId];
+      if (current?.type === "oauth" && current.provider !== params.provider) {
+        return false;
+      }
+      const nextCredential = {
+        ...(current?.type === "oauth" ? current : {}),
+        ...params.newCredentials,
+        type: "oauth" as const,
+        provider: params.provider,
+        email: params.email ?? (current?.type === "oauth" ? current.email : undefined),
+      };
+      if (
+        current?.type === "oauth" &&
+        current.provider === nextCredential.provider &&
+        current.access === nextCredential.access &&
+        current.refresh === nextCredential.refresh &&
+        current.expires === nextCredential.expires &&
+        current.email === nextCredential.email
+      ) {
+        return false;
+      }
+      store.profiles[params.profileId] = nextCredential;
+      return true;
+    },
+  });
+}
+
+async function loadFreshStoredOAuthCredential(params: {
+  profileId: string;
+  agentDir?: string;
+  provider: string;
+  email?: string;
+  previous?: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+  requireChange?: boolean;
+}): Promise<OAuthRefreshResult | null> {
+  const reloadedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+  const reloaded = reloadedStore.profiles[params.profileId];
+  if (reloaded?.type !== "oauth" || reloaded.provider !== params.provider) {
+    return null;
+  }
+  if (Date.now() >= reloaded.expires) {
+    return null;
+  }
+  if (
+    params.requireChange &&
+    params.previous &&
+    !hasOAuthCredentialChanged(params.previous, reloaded)
+  ) {
+    return null;
+  }
+  if (params.agentDir) {
+    await syncOAuthCredentialToStore({
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      provider: reloaded.provider,
+      email: reloaded.email ?? params.email,
+      newCredentials: reloaded,
+    });
+  }
+  return {
+    apiKey: await buildOAuthApiKey(reloaded.provider, reloaded),
+    newCredentials: reloaded,
+  };
+}
+
+async function awaitOAuthRefreshResult(
+  refreshPromise: Promise<OAuthRefreshResult | null>,
+  params: { profileId: string; agentDir?: string; provider: string; email?: string },
+): Promise<OAuthRefreshResult | null> {
+  const result = await refreshPromise;
+  if (result && params.agentDir) {
+    await syncOAuthCredentialToStore({
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      email: params.email,
+      newCredentials: result.newCredentials,
+    });
+  }
+  return result;
+}
+
 type ResolveApiKeyForProfileParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -158,10 +290,10 @@ function adoptNewerMainOAuthCredential(params: {
   return null;
 }
 
-async function refreshOAuthTokenWithLock(params: {
+async function refreshOAuthTokenFromStoreWithLock(params: {
   profileId: string;
   agentDir?: string;
-}): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+}): Promise<OAuthRefreshResult | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
@@ -223,6 +355,73 @@ async function refreshOAuthTokenWithLock(params: {
   });
 }
 
+async function refreshOAuthTokenWithLock(params: {
+  profileId: string;
+  agentDir?: string;
+  provider: string;
+  email?: string;
+  currentCredentials: OAuthCredential;
+}): Promise<OAuthRefreshResult | null> {
+  const mutexKey = buildOAuthRefreshMutexKey({
+    profileId: params.profileId,
+    provider: params.provider,
+  });
+  const inFlight = oauthRefreshInFlight.get(mutexKey);
+  if (inFlight) {
+    return await awaitOAuthRefreshResult(inFlight, params);
+  }
+
+  const refreshPromise = (async () => {
+    const freshStored = await loadFreshStoredOAuthCredential({
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      email: params.email,
+    });
+    if (freshStored) {
+      return freshStored;
+    }
+
+    try {
+      return await refreshOAuthTokenFromStoreWithLock({
+        profileId: params.profileId,
+        agentDir: params.agentDir,
+      });
+    } catch (error) {
+      if (isRefreshTokenReusedError(error)) {
+        const recovered = await loadFreshStoredOAuthCredential({
+          profileId: params.profileId,
+          agentDir: params.agentDir,
+          provider: params.provider,
+          email: params.email,
+          previous: params.currentCredentials,
+          requireChange: true,
+        });
+        if (recovered) {
+          return recovered;
+        }
+
+        // Retry once after a hard reload in case another process already rotated
+        // the refresh token but the stored access token is still expired.
+        return await refreshOAuthTokenFromStoreWithLock({
+          profileId: params.profileId,
+          agentDir: params.agentDir,
+        });
+      }
+      throw error;
+    }
+  })();
+  oauthRefreshInFlight.set(mutexKey, refreshPromise);
+
+  try {
+    return await awaitOAuthRefreshResult(refreshPromise, params);
+  } finally {
+    if (oauthRefreshInFlight.get(mutexKey) === refreshPromise) {
+      oauthRefreshInFlight.delete(mutexKey);
+    }
+  }
+}
+
 async function tryResolveOAuthProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<{ apiKey: string; provider: string; email?: string } | null> {
@@ -253,6 +452,9 @@ async function tryResolveOAuthProfile(
   const refreshed = await refreshOAuthTokenWithLock({
     profileId,
     agentDir: params.agentDir,
+    provider: cred.provider,
+    email: cred.email,
+    currentCredentials: cred,
   });
   if (!refreshed) {
     return null;
@@ -399,6 +601,9 @@ export async function resolveApiKeyForProfile(
     const result = await refreshOAuthTokenWithLock({
       profileId,
       agentDir: params.agentDir,
+      provider: cred.provider,
+      email: cred.email,
+      currentCredentials: cred,
     });
     if (!result) {
       return null;
