@@ -1,6 +1,7 @@
 import {
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_TEXT_MODEL_CATALOG,
+  getMiniMaxModelInput,
   type ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-models";
 
@@ -46,7 +47,7 @@ export function buildMinimaxModelDefinition(params: {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input: ["text"],
+    input: getMiniMaxModelInput(params.id),
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,

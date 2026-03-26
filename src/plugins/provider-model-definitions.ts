@@ -6,7 +6,11 @@ import {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
 } from "./provider-model-kilocode.js";
-import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-model-minimax.js";
+import {
+  getMiniMaxModelInput,
+  MINIMAX_DEFAULT_MODEL_ID,
+  MINIMAX_TEXT_MODEL_CATALOG,
+} from "./provider-model-minimax.js";
 
 const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_MODEL_ID = "kimi-code";
@@ -140,7 +144,7 @@ function buildMinimaxModelDefinition(params: {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input: ["text"],
+    input: getMiniMaxModelInput(params.id),
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,

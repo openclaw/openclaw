@@ -36,6 +36,7 @@ export {
   MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
   MINIMAX_TEXT_MODEL_REFS,
+  getMiniMaxModelInput,
   isMiniMaxModernModelId,
 } from "../plugins/provider-model-minimax.js";
 

@@ -35,6 +35,7 @@ describe("minimax model definitions", () => {
       id: "MiniMax-M2.7",
       name: "MiniMax M2.7",
       reasoning: true,
+      input: ["text", "image"],
     });
   });
 
@@ -43,6 +44,11 @@ describe("minimax model definitions", () => {
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
+  });
+
+  it("keeps MiniMax-M2.7-highspeed text-only until MiniMax documents image support for it", () => {
+    const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
+    expect(model.input).toEqual(["text"]);
   });
 
   it("falls back to generated name for unknown model id", () => {

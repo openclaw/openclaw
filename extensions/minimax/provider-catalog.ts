@@ -3,6 +3,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-models";
 import {
+  getMiniMaxModelInput,
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
@@ -35,18 +36,18 @@ function buildMinimaxModel(params: {
   };
 }
 
-function buildMinimaxTextModel(params: {
+function buildMinimaxCatalogModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
 }): ModelDefinitionConfig {
-  return buildMinimaxModel({ ...params, input: ["text"] });
+  return buildMinimaxModel({ ...params, input: getMiniMaxModelInput(params.id) });
 }
 
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
     const model = MINIMAX_TEXT_MODEL_CATALOG[id];
-    return buildMinimaxTextModel({
+    return buildMinimaxCatalogModel({
       id,
       name: model.name,
       reasoning: model.reasoning,
