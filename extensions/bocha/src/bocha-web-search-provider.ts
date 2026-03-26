@@ -164,9 +164,10 @@ function createBochaToolDefinition(
       const apiKey = resolveBochaApiKey(bochaConfig);
       if (!apiKey) {
         return {
+        return {
           error: "missing_bocha_api_key",
           message:
-            "web_search (bocha) needs a Bocha API key. Set BOCHA_API_KEY in the Gateway environment, or configure tools.web.search.bocha.apiKey.",
+            "web_search (bocha) needs a Bocha API key. Set BOCHA_API_KEY in the Gateway environment, or configure plugins.entries.bocha.config.webSearch.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
