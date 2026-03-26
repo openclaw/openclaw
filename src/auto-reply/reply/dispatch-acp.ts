@@ -6,6 +6,7 @@ import {
   isSessionIdentityPending,
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -13,6 +14,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
+import { withTimeout } from "../../node-host/with-timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -417,16 +419,25 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    await acpManager.runTurn({
-      cfg: params.cfg,
-      sessionKey: canonicalSessionKey,
-      text: promptText,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-      onEvent: async (event) => await projector.onEvent(event),
-    });
+    // Guard against stalled upstream streams: abort the turn after the configured
+    // agent timeout (agents.defaults.timeoutSeconds, default 600s). Without this,
+    // a silently hung SSE connection blocks the session queue forever. refs #17258
+    const turnTimeoutMs = resolveAgentTimeoutMs({ cfg: params.cfg, minMs: 30_000 });
+    await withTimeout(
+      (signal) =>
+        acpManager.runTurn({
+          cfg: params.cfg,
+          sessionKey: canonicalSessionKey,
+          text: promptText,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          mode: "prompt",
+          requestId: resolveAcpRequestId(params.ctx),
+          onEvent: (event) => projector.onEvent(event),
+          signal,
+        }),
+      turnTimeoutMs,
+      "ACP turn",
+    );
 
     await projector.flush(true);
     queuedFinal =
