@@ -203,6 +203,7 @@ export async function handleSlackMessageAction(params: {
     const to = readStringParam(actionParams, "to") ?? resolveChannelId();
     const filePath =
       readStringParam(actionParams, "filePath", { trim: false }) ??
+      readStringParam(actionParams, "path", { trim: false }) ??
       readStringParam(actionParams, "media", { required: true, trim: false });
     const threadId =
       readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");

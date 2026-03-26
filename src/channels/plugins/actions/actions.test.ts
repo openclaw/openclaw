@@ -1341,6 +1341,20 @@ describe("slack actions adapter", () => {
           threadTs: "171234.567",
         },
       },
+      {
+        action: "upload-file" as const,
+        params: {
+          to: "channel:C1",
+          path: "/tmp/path-alias.txt",
+          message: "path alias",
+        },
+        expected: {
+          action: "uploadFile",
+          to: "channel:C1",
+          filePath: "/tmp/path-alias.txt",
+          initialComment: "path alias",
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
