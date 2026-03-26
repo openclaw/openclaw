@@ -199,5 +199,31 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
+  if (action === "upload-file") {
+    const to = readStringParam(actionParams, "to") ?? resolveChannelId();
+    const filePath =
+      readStringParam(actionParams, "filePath", { trim: false }) ??
+      readStringParam(actionParams, "media", { required: true, trim: false });
+    const threadId =
+      readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    return await invoke(
+      {
+        action: "uploadFile",
+        to,
+        filePath,
+        initialComment:
+          readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
+          readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          "",
+        filename: readStringParam(actionParams, "filename"),
+        title: readStringParam(actionParams, "title"),
+        threadTs: threadId ?? undefined,
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
+    );
+  }
+
   throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
 }
