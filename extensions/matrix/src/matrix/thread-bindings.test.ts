@@ -8,7 +8,7 @@ import {
 } from "../../../../src/infra/outbound/session-binding-service.js";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
-import { resolveMatrixStoragePaths } from "./client/storage.js";
+import { resolveMatrixStateFilePath, resolveMatrixStoragePaths } from "./client/storage.js";
 import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
@@ -87,14 +87,12 @@ describe("matrix thread bindings", () => {
   }
 
   function resolveBindingsFilePath(customStateDir?: string) {
-    return path.join(
-      resolveMatrixStoragePaths({
-        ...auth,
-        env: process.env,
-        ...(customStateDir ? { stateDir: customStateDir } : {}),
-      }).rootDir,
-      "thread-bindings.json",
-    );
+    return resolveMatrixStateFilePath({
+      auth,
+      env: process.env,
+      ...(customStateDir ? { stateDir: customStateDir } : {}),
+      filename: "thread-bindings.json",
+    });
   }
 
   async function readPersistedLastActivityAt(bindingsPath: string) {
