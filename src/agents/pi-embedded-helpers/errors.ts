@@ -74,7 +74,7 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   const candidate = withoutPrefix || raw;
 
   // Skip HTML/Cloudflare error pages — fall back to generic message
-  if (isCloudflareOrHtmlErrorPage(raw)) {
+  if (isCloudflareOrHtmlErrorPage(candidate)) {
     return undefined;
   }
 

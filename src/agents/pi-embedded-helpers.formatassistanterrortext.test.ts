@@ -144,8 +144,7 @@ describe("formatAssistantErrorText", () => {
       "521 <!DOCTYPE html><html><head><title>Error</title></head><body>rate limit</body></html>",
     );
     const result = formatAssistantErrorText(msg);
-    // Cloudflare pages are handled by the HTML error path, not the rate limit path
-    expect(result).toBeDefined();
+    expect(result).toBe("⚠️ API rate limit reached. Please try again later.");
   });
 
   it("returns a friendly message for empty stream chunk errors", () => {
