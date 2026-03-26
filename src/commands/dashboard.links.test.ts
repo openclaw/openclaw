@@ -8,6 +8,9 @@ const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
+const probeGatewayMock = vi.hoisted(() => vi.fn());
+const resolveGatewayProbeAuthResolutionMock = vi.hoisted(() => vi.fn());
+const getDaemonStatusSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -25,8 +28,20 @@ vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
+vi.mock("../gateway/probe.js", () => ({
+  probeGateway: (opts: unknown) => probeGatewayMock(opts),
+}));
+
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
+}));
+
+vi.mock("./status.gateway-probe.js", () => ({
+  resolveGatewayProbeAuthResolution: (cfg: unknown) => resolveGatewayProbeAuthResolutionMock(cfg),
+}));
+
+vi.mock("./status.daemon.js", () => ({
+  getDaemonStatusSummary: () => getDaemonStatusSummaryMock(),
 }));
 
 let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
@@ -43,14 +58,14 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
-function mockSnapshot(token: unknown = "abc") {
+function mockSnapshot(token: unknown = "abc", gateway: Record<string, unknown> = {}) {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
     parsed: {},
     valid: true,
-    config: { gateway: { auth: { token } } },
+    config: { gateway: { auth: { token }, ...gateway } },
     issues: [],
     legacyIssues: [],
   });
@@ -60,6 +75,21 @@ function mockSnapshot(token: unknown = "abc") {
     wsUrl: "ws://127.0.0.1:18789",
   });
   resolveSecretRefValuesMock.mockReset();
+  resolveGatewayProbeAuthResolutionMock.mockResolvedValue({ auth: { token: "abc" } });
+  probeGatewayMock.mockResolvedValue({
+    ok: true,
+    close: null,
+    error: null,
+  });
+  getDaemonStatusSummaryMock.mockResolvedValue({
+    label: "LaunchAgent",
+    installed: true,
+    loaded: true,
+    managedByOpenClaw: true,
+    externallyManaged: false,
+    loadedText: "loaded",
+    runtimeShort: "running",
+  });
 }
 
 describe("dashboardCommand", () => {
@@ -76,6 +106,9 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
+    probeGatewayMock.mockClear();
+    resolveGatewayProbeAuthResolutionMock.mockClear();
+    getDaemonStatusSummaryMock.mockClear();
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -196,5 +229,38 @@ describe("dashboardCommand", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
     );
+  });
+
+  it("does not copy or open the dashboard when the local gateway is unreachable", async () => {
+    mockSnapshot("abc123");
+    probeGatewayMock.mockResolvedValue({
+      ok: false,
+      close: null,
+      error: "connect failed: ECONNREFUSED 127.0.0.1:18789",
+    });
+    getDaemonStatusSummaryMock.mockResolvedValue({
+      label: "LaunchAgent",
+      installed: false,
+      loaded: false,
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtimeShort: null,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).not.toHaveBeenCalled();
+    expect(openUrlMock).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Gateway is not reachable at ws://127.0.0.1:18789 (connect failed: ECONNREFUSED 127.0.0.1:18789).",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Gateway mode is unset; local gateway start is blocked. Run openclaw config set gateway.mode local.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Gateway service is not installed. Run openclaw daemon install.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith("Fix reachability first: openclaw gateway probe");
   });
 });
