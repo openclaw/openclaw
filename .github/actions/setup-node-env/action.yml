@@ -38,6 +38,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        if ! git config --file .gitmodules --name-only --get-regexp '^submodule\..*\.path$' >/dev/null 2>&1; then
+          echo "No submodules configured; skipping submodule checkout."
+          exit 0
+        fi
         git submodule sync --recursive
         for attempt in 1 2 3 4 5; do
           if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
