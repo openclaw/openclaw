@@ -178,6 +178,7 @@ export async function runBootOnce(params: {
         sessionId,
         deliver: true,
         bestEffortDeliver: true,
+        skipSendPolicy: true,
         senderIsOwner: true,
       },
       bootRuntime,

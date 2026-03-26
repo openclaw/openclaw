@@ -78,6 +78,8 @@ export type AgentCommandOpts = {
   spawnedBy?: SpawnedRunMetadata["spawnedBy"];
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
+  /** Skip the session send-policy gate (used by system-initiated runs like boot-md). */
+  skipSendPolicy?: boolean;
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;

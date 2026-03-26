@@ -140,6 +140,7 @@ describe("runBootOnce", () => {
         expect.objectContaining({
           deliver: true,
           bestEffortDeliver: true,
+          skipSendPolicy: true,
           sessionKey: resolveMainSessionKey({}),
         }),
       );

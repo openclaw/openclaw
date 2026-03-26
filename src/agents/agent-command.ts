@@ -358,7 +358,7 @@ async function agentCommandInternal(
   let sessionEntry = prepared.sessionEntry;
 
   try {
-    if (opts.deliver === true) {
+    if (opts.deliver === true && !opts.skipSendPolicy) {
       const sendPolicy = resolveSendPolicy({
         cfg,
         entry: sessionEntry,
