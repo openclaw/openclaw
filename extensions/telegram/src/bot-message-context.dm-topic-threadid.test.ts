@@ -21,6 +21,15 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     });
   }
 
+  function expectRecordedRoute(params: { to: string; threadId?: string }) {
+    const updateLastRoute = getRecordedUpdateLastRoute(0) as
+      | { threadId?: string; to?: string }
+      | undefined;
+    expect(updateLastRoute).toBeDefined();
+    expect(updateLastRoute?.to).toBe(params.to);
+    expect(updateLastRoute?.threadId).toBe(params.threadId);
+  }
+
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     recordInboundSessionMock.mockClear();
@@ -46,13 +55,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute includes threadId
-    const updateLastRoute = getRecordedUpdateLastRoute(0) as
-      | { threadId?: string; to?: string }
-      | undefined;
-    expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.to).toBe("telegram:1234");
-    expect(updateLastRoute?.threadId).toBe("42");
+    expectRecordedRoute({ to: "telegram:1234", threadId: "42" });
   });
 
   it("does not pass threadId for regular DM without topic", async () => {
@@ -65,13 +68,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    // Check that updateLastRoute does NOT include threadId
-    const updateLastRoute = getRecordedUpdateLastRoute(0) as
-      | { threadId?: string; to?: string }
-      | undefined;
-    expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.to).toBe("telegram:1234");
-    expect(updateLastRoute?.threadId).toBeUndefined();
+    expectRecordedRoute({ to: "telegram:1234" });
   });
 
   it("passes threadId to updateLastRoute for forum topic group messages", async () => {
@@ -88,12 +85,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    const updateLastRoute = getRecordedUpdateLastRoute(0) as
-      | { threadId?: string; to?: string }
-      | undefined;
-    expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
-    expect(updateLastRoute?.threadId).toBe("99");
+    expectRecordedRoute({ to: "telegram:-1001234567890", threadId: "99" });
   });
 
   it("passes threadId to updateLastRoute for the forum General topic", async () => {
@@ -109,11 +101,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(ctx).not.toBeNull();
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    const updateLastRoute = getRecordedUpdateLastRoute(0) as
-      | { threadId?: string; to?: string }
-      | undefined;
-    expect(updateLastRoute).toBeDefined();
-    expect(updateLastRoute?.to).toBe("telegram:-1001234567890");
-    expect(updateLastRoute?.threadId).toBe("1");
+    expectRecordedRoute({ to: "telegram:-1001234567890", threadId: "1" });
   });
 });
