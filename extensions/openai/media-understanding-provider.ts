@@ -24,3 +24,10 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   describeImages: describeImagesWithModel,
   transcribeAudio: transcribeOpenAiAudio,
 };
+
+export const openaiCodexMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "openai-codex",
+  capabilities: ["image"],
+  describeImage: describeImageWithModel,
+  describeImages: describeImagesWithModel,
+};
