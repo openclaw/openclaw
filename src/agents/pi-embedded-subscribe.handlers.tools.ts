@@ -4,6 +4,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -239,18 +240,55 @@ function stripToolResultMediaDetails(result: unknown): unknown {
     return result;
   }
   const record = result as Record<string, unknown>;
-  const details = record.details;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  let changed = false;
+
+  let nextDetails = record.details;
+  if (nextDetails && typeof nextDetails === "object" && !Array.isArray(nextDetails)) {
+    const detailsRecord = { ...(nextDetails as Record<string, unknown>) };
+    if ("media" in detailsRecord) {
+      delete detailsRecord.media;
+      changed = true;
+    }
+    if ("path" in detailsRecord) {
+      delete detailsRecord.path;
+      changed = true;
+    }
+    nextDetails = detailsRecord;
+  }
+
+  let nextContent: unknown = record.content;
+  if (Array.isArray(record.content)) {
+    const cleaned = record.content.map((item) => {
+      if (!item || typeof item !== "object") {
+        return item;
+      }
+      const entry = item as Record<string, unknown>;
+      if (entry.type === "image") {
+        changed = true;
+        return null;
+      }
+      if (entry.type === "text" && typeof entry.text === "string") {
+        const cleanedText = splitMediaFromOutput(entry.text).text;
+        if (cleanedText !== entry.text) {
+          changed = true;
+        }
+        return { ...entry, text: cleanedText };
+      }
+      return entry;
+    });
+    const filtered = cleaned.filter((item) => item !== null);
+    nextContent = filtered;
+  }
+
+  if (!changed) {
     return result;
   }
-  const detailsRecord = { ...(details as Record<string, unknown>) };
-  if ("media" in detailsRecord) {
-    delete detailsRecord.media;
-  }
-  if ("path" in detailsRecord) {
-    delete detailsRecord.path;
-  }
-  return { ...record, details: detailsRecord };
+
+  return {
+    ...record,
+    ...(typeof nextDetails !== "undefined" ? { details: nextDetails } : {}),
+    ...(typeof nextContent !== "undefined" ? { content: nextContent } : {}),
+  };
 }
 
 async function emitToolResultOutput(params: {

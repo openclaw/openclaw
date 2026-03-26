@@ -332,6 +332,11 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(outputResult?.details?.mcpTool).toBe("browser");
     expect(outputResult?.details?.media).toBeUndefined();
     expect(outputResult?.details?.path).toBeUndefined();
+    const outputRecord = outputResult as Record<string, unknown> | undefined;
+    const contentText = Array.isArray(outputRecord?.content)
+      ? (outputRecord?.content[0] as { text?: string } | undefined)?.text
+      : undefined;
+    expect(contentText ?? "").not.toContain("MEDIA:");
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
