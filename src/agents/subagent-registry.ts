@@ -1674,6 +1674,7 @@ export function markSubagentRunTerminated(params: {
     updated += 1;
   }
   if (updated > 0) {
+    subagentRegistryGeneration += 1;
     persistSubagentRuns();
     for (const entry of entriesByChildSessionKey.values()) {
       void persistSubagentSessionTiming(entry).catch((err) => {
