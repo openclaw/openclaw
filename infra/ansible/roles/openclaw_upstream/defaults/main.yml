@@ -36,7 +36,10 @@ openclaw_start_container: true
 openclaw_fork_compose_file: "docker-compose.yml"
 openclaw_fork_service_name: "openclaw"
 
+# Auth mode for Anthropic (oauth or api_key)
+openclaw_anthropic_auth_mode: "oauth"
+
 # Secrets (set via vault or SOPS — never commit real values)
 openclaw_gateway_token: "{{ lookup('env', 'OPENCLAW_GATEWAY_TOKEN') }}"
-openclaw_anthropic_api_key: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
+openclaw_anthropic_oauth_token: "{{ lookup('env', 'ANTHROPIC_OAUTH_TOKEN') }}"
 openclaw_telegram_bot_token: "{{ lookup('env', 'TELEGRAM_BOT_TOKEN') }}"
