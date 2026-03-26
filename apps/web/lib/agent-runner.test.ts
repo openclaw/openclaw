@@ -357,6 +357,125 @@ describe("agent-runner", () => {
 			proc.kill("SIGTERM");
 		});
 
+		it("reconnects and resumes the active session after a transient 1006 close", async () => {
+			const MockWs = installMockWsModule();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess("hello", "sess-reconnect");
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+			const firstWs = MockWs.instances[0];
+
+			let stdout = "";
+			let closed = false;
+			proc.stdout?.on("data", (chunk: Buffer | string) => {
+				stdout += chunk.toString();
+			});
+			proc.on("close", () => {
+				closed = true;
+			});
+
+			firstWs.emitJson({
+				type: "event",
+				event: "agent",
+				seq: 1,
+				payload: {
+					runId: "r-reconnect",
+					sessionKey: "agent:main:web:sess-reconnect",
+					stream: "assistant",
+					data: { delta: "before-drop" },
+					globalSeq: 1,
+					ts: Date.now(),
+				},
+			});
+
+			await waitFor(() => stdout.includes("before-drop"), {
+				attempts: 80,
+				delayMs: 10,
+			});
+
+			firstWs.emit("close", 1006, Buffer.alloc(0));
+
+			await new Promise((resolve) => setTimeout(resolve, 40));
+			expect(closed).toBe(false);
+
+			await waitFor(() => MockWs.instances.length >= 2, {
+				attempts: 160,
+				delayMs: 10,
+			});
+			const secondWs = MockWs.instances[1];
+
+			await waitFor(() => secondWs?.methods.includes("agent.subscribe"), {
+				attempts: 80,
+				delayMs: 10,
+			});
+
+			const subscribeFrame = secondWs.requestFrames.find(
+				(frame) => frame.method === "agent.subscribe",
+			);
+			expect(subscribeFrame?.params).toMatchObject({
+				sessionKey: "agent:main:web:sess-reconnect",
+				afterSeq: 1,
+			});
+
+			secondWs.emitJson({
+				type: "event",
+				event: "agent",
+				seq: 2,
+				payload: {
+					runId: "r-reconnect",
+					sessionKey: "agent:main:web:sess-reconnect",
+					stream: "assistant",
+					data: { delta: "after-reconnect" },
+					globalSeq: 2,
+					ts: Date.now(),
+				},
+			});
+
+			await waitFor(() => stdout.includes("after-reconnect"), {
+				attempts: 80,
+				delayMs: 10,
+			});
+
+			secondWs.emitJson({
+				type: "event",
+				event: "agent",
+				seq: 3,
+				payload: {
+					runId: "r-reconnect",
+					sessionKey: "agent:main:web:sess-reconnect",
+					stream: "lifecycle",
+					data: { phase: "end" },
+					globalSeq: 3,
+					ts: Date.now(),
+				},
+			});
+
+			await waitFor(() => closed, { attempts: 120, delayMs: 10 });
+		});
+
+		it("clears a pending reconnect timer when the process is killed", async () => {
+			const MockWs = installMockWsModule();
+			const { spawnAgentProcess } = await import("./agent-runner.js");
+
+			const proc = spawnAgentProcess("hello", "sess-stop-reconnect");
+			await waitFor(() => MockWs.instances[0]?.methods.includes("chat.send"));
+			const firstWs = MockWs.instances[0];
+
+			let closed = false;
+			proc.on("close", () => {
+				closed = true;
+			});
+
+			firstWs.emit("close", 1006, Buffer.alloc(0));
+			await new Promise((resolve) => setTimeout(resolve, 40));
+
+			expect(proc.kill("SIGTERM")).toBe(true);
+			await waitFor(() => closed, { attempts: 80, delayMs: 10 });
+
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			expect(MockWs.instances).toHaveLength(1);
+		});
+
 		it("uses chat.send RPC for slash commands instead of agent", async () => {
 			const MockWs = installMockWsModule();
 			const { spawnAgentProcess } = await import("./agent-runner.js");

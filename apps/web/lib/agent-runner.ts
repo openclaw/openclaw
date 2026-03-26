@@ -163,7 +163,12 @@ const DEFAULT_GATEWAY_CLIENT_CAPS = ["tool-events"];
 const SESSIONS_PATCH_RETRY_DELAY_MS = 150;
 const SESSIONS_PATCH_MAX_ATTEMPTS = 2;
 const LIFECYCLE_ERROR_RECOVERY_MS = 15_000;
+const GATEWAY_RECONNECT_BASE_MS = 300;
+const GATEWAY_RECONNECT_MAX_MS = 5_000;
+const GATEWAY_RECONNECT_MAX_ATTEMPTS = 6;
+const GATEWAY_RPC_RETRY_BASE_MS = 250;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const RETRYABLE_GATEWAY_CLOSE_CODES = new Set([1000, 1005, 1006, 1012]);
 
 type AgentSubscribeSupport = "unknown" | "supported" | "unsupported";
 let cachedAgentSubscribeSupport: AgentSubscribeSupport = "unknown";
@@ -493,6 +498,30 @@ function isRetryableGatewayMessage(message: string): boolean {
 	);
 }
 
+function isRetryableGatewayCloseCode(code: number): boolean {
+	return RETRYABLE_GATEWAY_CLOSE_CODES.has(code);
+}
+
+function isRetryableGatewayTransportError(message: string): boolean {
+	const normalized = message.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return (
+		normalized.includes("gateway connection closed") ||
+		normalized.includes("gateway websocket connection failed") ||
+		normalized.includes("gateway websocket open timeout") ||
+		normalized.includes("code 1000") ||
+		normalized.includes("code 1005") ||
+		normalized.includes("code 1006") ||
+		normalized.includes("code 1012") ||
+		normalized.includes("closed (1000") ||
+		normalized.includes("closed (1005") ||
+		normalized.includes("closed (1006") ||
+		normalized.includes("closed (1012")
+	);
+}
+
 const MISSING_SCOPE_RE = /missing scope:\s*(\S+)/i;
 
 /**
@@ -735,9 +764,21 @@ class GatewayProcessHandle
 	private lifecycleErrorRecoveryUntil = 0;
 	private useChatSend = false;
 	private receivedAgentEvent = false;
+	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private reconnectAttempt = 0;
+	private lastGlobalSeq = 0;
+	private replayFloorSeq = 0;
+	private sessionStarted = false;
+	private readonly startIdempotencyKey = randomUUID();
 
 	constructor(private readonly params: SpawnGatewayProcessParams) {
 		super();
+		const initialSeq = Math.max(
+			0,
+			Number.isFinite(params.afterSeq) ? params.afterSeq : 0,
+		);
+		this.lastGlobalSeq = initialSeq;
+		this.replayFloorSeq = initialSeq;
 		void this.start();
 	}
 
@@ -746,6 +787,7 @@ class GatewayProcessHandle
 			return false;
 		}
 		this.requestedClose = true;
+		this.clearReconnectTimer();
 		this.clearLifecycleErrorCloseTimer();
 		this.client?.close();
 		const closeSignal = typeof signal === "string" ? signal : null;
@@ -753,14 +795,83 @@ class GatewayProcessHandle
 		return true;
 	}
 
-	private async start(): Promise<void> {
-		try {
-			const { client, settings } = await openGatewayClient(
-				(frame) => this.handleGatewayEvent(frame),
-				(code, reason) => this.handleSocketClose(code, reason),
-			);
-			this.client = client;
+	private clearReconnectTimer(): void {
+		if (!this.reconnectTimer) {
+			return;
+		}
+		clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = null;
+	}
 
+	private resetReconnectState(): void {
+		this.reconnectAttempt = 0;
+		this.clearReconnectTimer();
+	}
+
+	private retryMode(): "start" | "subscribe" | "resume" {
+		if (this.params.mode === "start") {
+			return this.sessionStarted && Boolean(this.params.sessionKey) ? "resume" : "start";
+		}
+		return this.sessionStarted ? "resume" : "subscribe";
+	}
+
+	private shouldScheduleReconnect(detail: string, code?: number): boolean {
+		if (this.finished || this.requestedClose || this.closeScheduled) {
+			return false;
+		}
+		if (typeof code === "number" && !isRetryableGatewayCloseCode(code)) {
+			return false;
+		}
+		if (!isRetryableGatewayTransportError(detail)) {
+			return false;
+		}
+		if (this.reconnectAttempt >= GATEWAY_RECONNECT_MAX_ATTEMPTS) {
+			return false;
+		}
+		const mode = this.retryMode();
+		if (mode === "resume") {
+			return Boolean(this.params.sessionKey);
+		}
+		if (mode === "subscribe") {
+			return Boolean(this.params.sessionKey);
+		}
+		return typeof this.params.message === "string";
+	}
+
+	private scheduleReconnect(detail: string, code?: number): boolean {
+		if (!this.shouldScheduleReconnect(detail, code)) {
+			return false;
+		}
+		if (this.reconnectTimer) {
+			return true;
+		}
+		this.clearLifecycleErrorCloseTimer();
+		try {
+			this.client?.close();
+		} catch {
+			// Ignore socket close failures while entering reconnect mode.
+		}
+		this.client = null;
+		this.replayFloorSeq = Math.max(this.replayFloorSeq, this.lastGlobalSeq);
+		const delay = Math.min(
+			GATEWAY_RECONNECT_MAX_MS,
+			GATEWAY_RECONNECT_BASE_MS * 2 ** this.reconnectAttempt,
+		);
+		this.reconnectAttempt += 1;
+		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
+			void this.reconnectAfterDrop();
+		}, delay);
+		return true;
+	}
+
+	private async openAndAuthenticate(): Promise<void> {
+		const { client, settings } = await openGatewayClient(
+			(frame) => this.handleGatewayEvent(frame),
+			(code, reason) => this.handleSocketClose(code, reason),
+		);
+		this.client = client;
+		try {
 			const stateDir = resolveOpenClawStateDir();
 			const deviceIdentity = loadDeviceIdentity(stateDir);
 			const deviceAuth = loadDeviceAuth(stateDir);
@@ -779,93 +890,150 @@ class GatewayProcessHandle
 				deviceIdentity,
 				deviceToken: deviceAuth?.token,
 			});
-			const connectRes = await this.client.request(
-				"connect",
-				connectParams,
-			);
+			const connectRes = await client.request("connect", connectParams);
 			if (!connectRes.ok) {
 				throw new Error(frameErrorMessage(connectRes));
 			}
+		} catch (error) {
+			this.client = null;
+			client.close();
+			throw error;
+		}
+	}
 
-		if (this.params.mode === "start") {
+	private async beginStartMode(): Promise<void> {
+		const client = this.client;
+		if (!client) {
+			throw new Error("Gateway WebSocket is not connected");
+		}
+		if (this.params.sessionKey) {
 			// Pre-patch verbose for existing sessions (best-effort; new
 			// sessions don't exist yet so this may fail — we retry below).
-			if (this.params.sessionKey) {
-				await this.ensureFullToolVerbose(this.params.sessionKey);
-			}
+			await this.ensureFullToolVerbose(this.params.sessionKey);
+		}
 
-			const sessionKey = this.params.sessionKey;
-			const msg = this.params.message ?? "";
-			// Always use chat.send so runs are registered in the gateway's
-			// session-level tracking.  The `agent` RPC scopes runs to the
-			// originating WebSocket, making them invisible to chat.abort
-			// from any other connection (including the stop route).
-			this.useChatSend = true;
+		const sessionKey = this.params.sessionKey;
+		const msg = this.params.message ?? "";
+		// Always use chat.send so runs are registered in the gateway's
+		// session-level tracking.  The `agent` RPC scopes runs to the
+		// originating WebSocket, making them invisible to chat.abort
+		// from any other connection (including the stop route).
+		this.useChatSend = true;
 
-			let startRes: GatewayResFrame;
-			if (this.useChatSend) {
-				startRes = await this.client.request("chat.send", {
-					message: msg,
-					...(sessionKey ? { sessionKey } : {}),
-					idempotencyKey: randomUUID(),
-					deliver: false,
-				});
-			} else {
-				startRes = await this.client.request("agent", {
-					message: msg,
-					idempotencyKey: randomUUID(),
-					...(sessionKey ? { sessionKey } : {}),
-					deliver: false,
-					channel: "webchat",
-					lane: this.params.lane ?? "web",
-					timeout: 0,
-				});
-			}
-			if (!startRes.ok) {
-				throw new Error(frameErrorMessage(startRes));
-			}
-			const payload = asRecord(startRes.payload);
-			const runId =
-				payload && typeof payload.runId === "string" ? payload.runId : null;
-			this.runId = runId;
+		let startRes: GatewayResFrame;
+		if (this.useChatSend) {
+			startRes = await client.request("chat.send", {
+				message: msg,
+				...(sessionKey ? { sessionKey } : {}),
+				idempotencyKey: this.startIdempotencyKey,
+				deliver: false,
+			});
+		} else {
+			startRes = await client.request("agent", {
+				message: msg,
+				idempotencyKey: this.startIdempotencyKey,
+				...(sessionKey ? { sessionKey } : {}),
+				deliver: false,
+				channel: "webchat",
+				lane: this.params.lane ?? "web",
+				timeout: 0,
+			});
+		}
+		if (!startRes.ok) {
+			throw new Error(frameErrorMessage(startRes));
+		}
+		const payload = asRecord(startRes.payload);
+		const runId =
+			payload && typeof payload.runId === "string" ? payload.runId : null;
+		this.runId = runId;
+		this.sessionStarted = true;
 
-			// Retry verbose patch now that the RPC has created the
-			// session.  This is the critical path for first-message-in-chat
-			// where the pre-patch above failed.
-			if (sessionKey) {
-				await this.ensureFullToolVerbose(sessionKey);
-			}
-			} else {
-				const sessionKey = this.params.sessionKey;
-				if (!sessionKey) {
-					throw new Error("Missing session key for subscribe mode");
+		// Retry verbose patch now that the RPC has created the
+		// session.  This is the critical path for first-message-in-chat
+		// where the pre-patch above failed.
+		if (sessionKey) {
+			await this.ensureFullToolVerbose(sessionKey);
+		}
+	}
+
+	private async beginSubscribeMode(afterSeq: number): Promise<void> {
+		const client = this.client;
+		const sessionKey = this.params.sessionKey;
+		if (!client) {
+			throw new Error("Gateway WebSocket is not connected");
+		}
+		if (!sessionKey) {
+			throw new Error("Missing session key for subscribe mode");
+		}
+		const effectiveAfterSeq = Math.max(
+			0,
+			Number.isFinite(afterSeq) ? afterSeq : 0,
+		);
+		this.replayFloorSeq = effectiveAfterSeq;
+		await this.ensureFullToolVerbose(sessionKey);
+		if (cachedAgentSubscribeSupport !== "unsupported") {
+			const subscribeRes = await client.request("agent.subscribe", {
+				sessionKey,
+				afterSeq: effectiveAfterSeq,
+			});
+			if (!subscribeRes.ok) {
+				if (isUnknownMethodResponse(subscribeRes, "agent.subscribe")) {
+					cachedAgentSubscribeSupport = "unsupported";
+					(this.stderr as PassThrough).write(
+						"[gateway] agent.subscribe unavailable; using passive session filter mode\n",
+					);
+				} else {
+					throw new Error(frameErrorMessage(subscribeRes));
 				}
-				await this.ensureFullToolVerbose(sessionKey);
-				if (cachedAgentSubscribeSupport !== "unsupported") {
-					const subscribeRes = await this.client.request("agent.subscribe", {
-						sessionKey,
-						afterSeq: Math.max(
-							0,
-							Number.isFinite(this.params.afterSeq) ? this.params.afterSeq : 0,
-						),
-					});
-					if (!subscribeRes.ok) {
-						if (isUnknownMethodResponse(subscribeRes, "agent.subscribe")) {
-							cachedAgentSubscribeSupport = "unsupported";
-							(this.stderr as PassThrough).write(
-								"[gateway] agent.subscribe unavailable; using passive session filter mode\n",
-							);
-						} else {
-							throw new Error(frameErrorMessage(subscribeRes));
-						}
-					} else {
-						cachedAgentSubscribeSupport = "supported";
-					}
-				}
+			} else {
+				cachedAgentSubscribeSupport = "supported";
 			}
+		}
+		this.sessionStarted = true;
+	}
+
+	private async reconnectAfterDrop(): Promise<void> {
+		if (this.finished || this.requestedClose) {
+			return;
+		}
+		try {
+			await this.openAndAuthenticate();
+			const mode = this.retryMode();
+			if (mode === "start") {
+				await this.beginStartMode();
+			} else {
+				await this.beginSubscribeMode(this.replayFloorSeq);
+			}
+			this.resetReconnectState();
 		} catch (error) {
 			const raw =
 				error instanceof Error ? error.message : String(error);
+			if (this.scheduleReconnect(raw)) {
+				return;
+			}
+			const enhanced = enhanceScopeError(raw);
+			const err = new Error(enhanced ?? raw);
+			(this.stderr as PassThrough).write(`${err.message}\n`);
+			this.emit("error", err);
+			this.finish(1, null);
+		}
+	}
+
+	private async start(): Promise<void> {
+		try {
+			await this.openAndAuthenticate();
+			if (this.params.mode === "start") {
+				await this.beginStartMode();
+			} else {
+				await this.beginSubscribeMode(this.params.afterSeq);
+			}
+			this.resetReconnectState();
+		} catch (error) {
+			const raw =
+				error instanceof Error ? error.message : String(error);
+			if (this.scheduleReconnect(raw)) {
+				return;
+			}
 			const enhanced = enhanceScopeError(raw);
 			const err = new Error(enhanced ?? raw);
 			(this.stderr as PassThrough).write(`${err.message}\n`);
@@ -993,9 +1161,16 @@ class GatewayProcessHandle
 				(typeof frame.seq === "number" ? frame.seq : undefined);
 			if (
 				typeof eventGlobalSeq === "number" &&
-				eventGlobalSeq <= this.params.afterSeq
+				eventGlobalSeq <= this.replayFloorSeq
 			) {
 				return;
+			}
+			this.sessionStarted = true;
+			if (
+				typeof eventGlobalSeq === "number" &&
+				eventGlobalSeq > this.lastGlobalSeq
+			) {
+				this.lastGlobalSeq = eventGlobalSeq;
 			}
 
 			const event: AgentEvent = {
@@ -1071,6 +1246,19 @@ class GatewayProcessHandle
 			const eventGlobalSeq =
 				payloadGlobalSeq ??
 				(typeof frame.seq === "number" ? frame.seq : undefined);
+			if (
+				typeof eventGlobalSeq === "number" &&
+				eventGlobalSeq <= this.replayFloorSeq
+			) {
+				return;
+			}
+			this.sessionStarted = true;
+			if (
+				typeof eventGlobalSeq === "number" &&
+				eventGlobalSeq > this.lastGlobalSeq
+			) {
+				this.lastGlobalSeq = eventGlobalSeq;
+			}
 			const event: AgentEvent = {
 				event: "chat",
 				data: payload,
@@ -1104,6 +1292,19 @@ class GatewayProcessHandle
 			const eventGlobalSeq =
 				payloadGlobalSeq ??
 				(typeof frame.seq === "number" ? frame.seq : undefined);
+			if (
+				typeof eventGlobalSeq === "number" &&
+				eventGlobalSeq <= this.replayFloorSeq
+			) {
+				return;
+			}
+			this.sessionStarted = true;
+			if (
+				typeof eventGlobalSeq === "number" &&
+				eventGlobalSeq > this.lastGlobalSeq
+			) {
+				this.lastGlobalSeq = eventGlobalSeq;
+			}
 			const event: AgentEvent = {
 				event: "error",
 				data: payload,
@@ -1145,6 +1346,7 @@ class GatewayProcessHandle
 			return;
 		}
 		this.closeScheduled = true;
+		this.clearReconnectTimer();
 		setTimeout(() => {
 			if (this.finished) {
 				return;
@@ -1159,11 +1361,20 @@ class GatewayProcessHandle
 		if (this.finished) {
 			return;
 		}
+		this.client = null;
+		if (this.closeScheduled) {
+			this.requestedClose = true;
+			this.finish(0, null);
+			return;
+		}
+		const detail = reason.trim() || `code ${code}`;
+		if (this.scheduleReconnect(detail, code)) {
+			return;
+		}
 		if (!this.requestedClose) {
-			const detail = reason.trim() || `code ${code}`;
 			(this.stderr as PassThrough).write(`Gateway connection closed: ${detail}\n`);
 		}
-		const exitCode = this.requestedClose || code === 1000 || code === 1005 ? 0 : 1;
+		const exitCode = this.requestedClose ? 0 : 1;
 		this.finish(exitCode, null);
 	}
 
@@ -1172,7 +1383,9 @@ class GatewayProcessHandle
 			return;
 		}
 		this.finished = true;
+		this.clearReconnectTimer();
 		this.clearLifecycleErrorCloseTimer();
+		this.client = null;
 		try {
 			(this.stdout as PassThrough).end();
 			(this.stderr as PassThrough).end();
@@ -1183,7 +1396,7 @@ class GatewayProcessHandle
 	}
 }
 
-export async function callGatewayRpc(
+async function callGatewayRpcOnce(
 	method: string,
 	params?: Record<string, unknown>,
 	options?: { timeoutMs?: number },
@@ -1232,6 +1445,37 @@ export async function callGatewayRpc(
 			client.close();
 		}
 	}
+}
+
+export async function callGatewayRpc(
+	method: string,
+	params?: Record<string, unknown>,
+	options?: { timeoutMs?: number; retries?: number },
+): Promise<GatewayResFrame> {
+	const retries = Math.max(
+		0,
+		Number.isFinite(options?.retries) ? Number(options?.retries) : 2,
+	);
+	let lastError: unknown;
+	for (let attempt = 0; attempt <= retries; attempt += 1) {
+		try {
+			return await callGatewayRpcOnce(method, params, options);
+		} catch (error) {
+			lastError = error;
+			const raw = error instanceof Error ? error.message : String(error);
+			if (attempt >= retries || !isRetryableGatewayTransportError(raw)) {
+				throw error;
+			}
+			const delay = Math.min(
+				2_000,
+				GATEWAY_RPC_RETRY_BASE_MS * 2 ** attempt,
+			);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error(lastError == null ? "Gateway RPC failed" : String(lastError));
 }
 
 /**
