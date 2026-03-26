@@ -1,5 +1,5 @@
 import type { PluginChannelRegistration, PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ChannelId } from "./channel-id.types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -22,11 +22,23 @@ export function createChannelRegistryLoader<TValue>(
     if (cached) {
       return cached;
     }
+    // Prefer the pinned channel registry (stable across subagent registry swaps).
     const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
-    if (!pluginEntry) {
+    if (pluginEntry) {
+      const resolved = resolveValue(pluginEntry);
+      if (resolved) {
+        cache.set(id, resolved);
+      }
+      return resolved;
+    }
+    // Fall back to the mutable active registry for channels loaded after the
+    // initial pin (e.g. via bootstrap or late-loaded plugins).
+    const activeRegistry = getActivePluginRegistry();
+    const activeEntry = activeRegistry?.channels.find((entry) => entry.plugin.id === id);
+    if (!activeEntry) {
       return undefined;
     }
-    const resolved = resolveValue(pluginEntry);
+    const resolved = resolveValue(activeEntry);
     if (resolved) {
       cache.set(id, resolved);
     }
