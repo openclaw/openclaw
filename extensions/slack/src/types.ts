@@ -28,10 +28,16 @@ export type SlackAttachment = {
   message_blocks?: unknown[];
 };
 
+export type SlackBotProfile = {
+  app_id?: string;
+  user_id?: string;
+};
+
 export type SlackMessageEvent = {
   type: "message";
   user?: string;
   bot_id?: string;
+  bot_profile?: SlackBotProfile;
   subtype?: string;
   username?: string;
   text?: string;
@@ -49,6 +55,7 @@ export type SlackAppMentionEvent = {
   type: "app_mention";
   user?: string;
   bot_id?: string;
+  bot_profile?: SlackBotProfile;
   username?: string;
   text?: string;
   ts?: string;
