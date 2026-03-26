@@ -70,10 +70,10 @@ class WearGatewayClient internal constructor(
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val json = Json { ignoreUnknownKeys = true }
   private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<String>>()
-  private var httpClient = buildHttpClient()
 
   private var ws: WebSocket? = null
   private var config: WearGatewayConfig = WearGatewayConfig()
+  private var httpClient = buildHttpClient()
   private var reconnectJob: Job? = null
   private var deviceId: String = UUID.randomUUID().toString()
   @Volatile private var connectionEpoch = 0L
