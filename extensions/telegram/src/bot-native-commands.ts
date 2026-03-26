@@ -750,7 +750,10 @@ export const registerTelegramNativeCommands = ({
           const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
             chatId,
             accountId: route.accountId,
-            sessionKeyForInternalHooks: commandSessionKey,
+            // Callback-driven follow-ups (for example Telegram model-picker
+            // buttons) must route back to the conversation session, not the
+            // synthetic slash-session used only to receive the native command.
+            sessionKeyForInternalHooks: commandTargetSessionKey,
             mirrorIsGroup: isGroup,
             mirrorGroupId: isGroup ? String(chatId) : undefined,
             mediaLocalRoots,

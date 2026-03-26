@@ -376,6 +376,39 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:main:main:thread:100:42");
   });
 
+  it("delivers native DM topic model replies with the target thread session key", async () => {
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
+      async ({ dispatcherOptions }: DispatchReplyWithBufferedBlockDispatcherParams) => {
+        await dispatcherOptions.deliver(
+          {
+            text: "Select a model:",
+            channelData: {
+              telegram: {
+                buttons: [[{ text: "gpt-4o", callback_data: "mdl_sel_openai/gpt-4o" }]],
+              },
+            },
+          },
+          { kind: "final" },
+        );
+        return dispatchReplyResult;
+      },
+    );
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "model",
+      cfg: {},
+      allowFrom: ["200"],
+      useAccessGroups: true,
+    });
+    await handler(buildStatusDmTopicCommandContext());
+
+    const deliveredCall = deliveryMocks.deliverReplies.mock.calls[0]?.[0] as
+      | DeliverRepliesParams
+      | undefined;
+    expect(deliveredCall?.sessionKeyForInternalHooks).toBe("agent:main:main:thread:100:42");
+    expect(deliveredCall?.thread?.id).toBe(42);
+  });
+
   it("awaits session metadata persistence before dispatch", async () => {
     const deferred = createDeferred<void>();
     sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
