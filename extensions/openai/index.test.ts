@@ -2,13 +2,33 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadConfig } from "../../src/config/config.js";
 import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
 import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../test/helpers/extensions/provider-registration.js";
+import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+
+const runtimeMocks = vi.hoisted(() => ({
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+  getOAuthApiKey: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
+}));
+
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: runtimeMocks.getOAuthApiKey,
+}));
+
+import { getOAuthApiKey as getCodexOAuthApiKey } from "./openai-codex-provider.runtime.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
@@ -64,36 +84,12 @@ function createTemplateModel(modelId: string) {
   }
 }
 
-function registerOpenAIPlugin() {
-  const providers: unknown[] = [];
-  const speechProviders: unknown[] = [];
-  const mediaProviders: unknown[] = [];
-  const imageProviders: unknown[] = [];
-
-  plugin.register(
-    createTestPluginApi({
-      id: "openai",
-      name: "OpenAI Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-      registerSpeechProvider: (provider) => {
-        speechProviders.push(provider);
-      },
-      registerMediaUnderstandingProvider: (provider) => {
-        mediaProviders.push(provider);
-      },
-      registerImageGenerationProvider: (provider) => {
-        imageProviders.push(provider);
-      },
-    }),
-  );
-
-  return { providers, speechProviders, mediaProviders, imageProviders };
-}
+const registerOpenAIPlugin = () =>
+  registerProviderPlugin({
+    plugin,
+    id: "openai",
+    name: "OpenAI Provider",
+  });
 
 function createReferencePng(): Buffer {
   const width = 96;
@@ -185,6 +181,14 @@ async function createTempAgentDir(): Promise<string> {
 }
 
 describe("openai plugin", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("registers the expected provider surfaces", () => {
     const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
 
@@ -200,16 +204,115 @@ describe("openai plugin", () => {
     expect(mediaProviders).toHaveLength(1);
     expect(imageProviders).toHaveLength(1);
   });
+
+  it("generates PNG buffers from the OpenAI Images API", async () => {
+    const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            b64_json: Buffer.from("png-data").toString("base64"),
+            revised_prompt: "revised",
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const authStore = { version: 1, profiles: {} };
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "draw a cat",
+      cfg: {},
+      authStore,
+    });
+
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        store: authStore,
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/images/generations",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          model: "gpt-image-1",
+          prompt: "draw a cat",
+          n: 1,
+          size: "1024x1024",
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        {
+          buffer: Buffer.from("png-data"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+          revisedPrompt: "revised",
+        },
+      ],
+      model: "gpt-image-1",
+    });
+  });
+
+  it("rejects reference-image edits for now", async () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-1",
+        prompt: "Edit this image",
+        cfg: {},
+        inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("does not support reference-image edits");
+  });
+
+  it("bootstraps the env proxy dispatcher before refreshing oauth credentials", async () => {
+    const refreshed = {
+      newCredentials: {
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 60_000,
+      },
+    };
+    runtimeMocks.getOAuthApiKey.mockResolvedValue(refreshed);
+
+    await expect(
+      getCodexOAuthApiKey("openai-codex", {
+        "openai-codex": {
+          provider: "openai-codex",
+          type: "oauth",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now(),
+        },
+      }),
+    ).resolves.toBe(refreshed);
+
+    expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(runtimeMocks.getOAuthApiKey).toHaveBeenCalledOnce();
+    expect(
+      runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+    ).toBeLessThan(runtimeMocks.getOAuthApiKey.mock.invocationCallOrder[0]);
+  });
 });
 
 describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
     const { providers } = registerOpenAIPlugin();
-    const provider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      providers.find((entry) => (entry as any).id === "openai");
-
-    expect(provider).toBeDefined();
+    const provider = requireRegisteredProvider(providers, "openai");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const resolved = (provider as any).resolveDynamicModel?.({
@@ -226,7 +329,9 @@ describeLive("openai plugin live", () => {
       },
     });
 
-    expect(resolved).toBeDefined();
+    if (!resolved) {
+      throw new Error("openai provider did not resolve the live model");
+    }
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const normalized = (provider as any).normalizeResolvedModel?.({
@@ -257,16 +362,14 @@ describeLive("openai plugin live", () => {
 
   it("lists voices and synthesizes audio through the registered speech provider", async () => {
     const { speechProviders } = registerOpenAIPlugin();
-    const speechProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      speechProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(speechProvider).toBeDefined();
+    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
 
     // oxlint-disable-next-line typescript/no-explicit-any
     const voices = await (speechProvider as any).listVoices?.({});
-    expect(Array.isArray(voices)).toBe(true);
-    expect(voices.map((voice: { id: string }) => voice.id)).toContain("alloy");
+    if (!voices) {
+      throw new Error("openai speech provider did not return voices");
+    }
+    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
@@ -295,15 +398,8 @@ describeLive("openai plugin live", () => {
 
   it("transcribes synthesized speech through the registered media provider", async () => {
     const { speechProviders, mediaProviders } = registerOpenAIPlugin();
-    const speechProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      speechProviders.find((entry) => (entry as any).id === "openai");
-    const mediaProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      mediaProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(speechProvider).toBeDefined();
-    expect(mediaProvider).toBeDefined();
+    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
+    const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
 
     const cfg = createLiveConfig();
     const ttsConfig = createLiveTtsConfig();
@@ -333,11 +429,7 @@ describeLive("openai plugin live", () => {
 
   it("generates an image through the registered image provider", async () => {
     const { imageProviders } = registerOpenAIPlugin();
-    const imageProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      imageProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(imageProvider).toBeDefined();
+    const imageProvider = requireRegisteredProvider(imageProviders, "openai");
 
     const cfg = createLiveConfig();
     const agentDir = await createTempAgentDir();
@@ -366,11 +458,7 @@ describeLive("openai plugin live", () => {
 
   it("describes a deterministic image through the registered media provider", async () => {
     const { mediaProviders } = registerOpenAIPlugin();
-    const mediaProvider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      mediaProviders.find((entry) => (entry as any).id === "openai");
-
-    expect(mediaProvider).toBeDefined();
+    const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
 
     const cfg = createLiveConfig();
     const agentDir = await createTempAgentDir();

@@ -166,7 +166,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "Mirror: https://docs.openclaw.ai",
     "Source: https://github.com/openclaw/openclaw",
     "Community: https://discord.com/invite/clawd",
-    "Find new skills: https://clawhub.com",
+    "Find new skills: https://clawhub.ai",
     "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
@@ -256,6 +256,7 @@ export function buildAgentSystemPrompt(params: {
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
+    video_generate: "Generate short videos with the configured video-generation model",
   };
 
   const toolOrder = [
@@ -284,6 +285,7 @@ export function buildAgentSystemPrompt(params: {
     "session_status",
     "image",
     "image_generate",
+    "video_generate",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -353,9 +355,6 @@ export function buildAgentSystemPrompt(params: {
   const userTimezone = params.userTimezone?.trim();
   const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
-  const heartbeatPromptLine = heartbeatPrompt
-    ? `Heartbeat prompt: ${heartbeatPrompt}`
-    : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
@@ -645,10 +644,10 @@ export function buildAgentSystemPrompt(params: {
   }
 
   // Skip heartbeats for subagent/none modes
-  if (!isMinimal) {
+  if (!isMinimal && heartbeatPrompt) {
     lines.push(
       "## Heartbeats",
-      heartbeatPromptLine,
+      `Heartbeat prompt: ${heartbeatPrompt}`,
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",
       'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',

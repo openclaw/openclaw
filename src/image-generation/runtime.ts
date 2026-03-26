@@ -7,6 +7,8 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { parseImageGenerationModelRef } from "./model-ref.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type {
   GeneratedImageAsset,
@@ -28,6 +30,11 @@ export type GenerateImageParams = {
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
   inputImages?: ImageGenerationSourceImage[];
+  seed?: number;
+  watermark?: boolean;
+  guidanceScale?: number;
+  optimizePrompt?: boolean;
+  providerOptions?: Record<string, unknown>;
 };
 
 export type GenerateImageRuntimeResult = {
@@ -38,21 +45,6 @@ export type GenerateImageRuntimeResult = {
   metadata?: Record<string, unknown>;
 };
 
-function parseModelRef(raw: string | undefined): { provider: string; model: string } | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
-    return null;
-  }
-  return {
-    provider: trimmed.slice(0, slashIndex).trim(),
-    model: trimmed.slice(slashIndex + 1).trim(),
-  };
-}
-
 function resolveImageGenerationCandidates(params: {
   cfg: OpenClawConfig;
   modelOverride?: string;
@@ -60,7 +52,7 @@ function resolveImageGenerationCandidates(params: {
   const candidates: Array<{ provider: string; model: string }> = [];
   const seen = new Set<string>();
   const add = (raw: string | undefined) => {
-    const parsed = parseModelRef(raw);
+    const parsed = parseImageGenerationModelRef(raw);
     if (!parsed) {
       return;
     }
@@ -100,6 +92,28 @@ function throwImageGenerationFailure(params: {
   });
 }
 
+function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
+  const providers = listImageGenerationProviders(cfg);
+  const sampleModel =
+    providers.find((provider) => provider.defaultModel) ??
+    ({ id: "google", defaultModel: "gemini-3-pro-image-preview" } as const);
+  const authHints = providers
+    .flatMap((provider) => {
+      const envVars = getProviderEnvVars(provider.id);
+      if (envVars.length === 0) {
+        return [];
+      }
+      return [`${provider.id}: ${envVars.join(" / ")}`];
+    })
+    .slice(0, 3);
+  return [
+    `No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model like "${sampleModel.id}/${sampleModel.defaultModel}".`,
+    authHints.length > 0
+      ? `If you want a specific provider, also configure that provider's auth/API key first (${authHints.join("; ")}).`
+      : "If you want a specific provider, also configure that provider's auth/API key first.",
+  ].join(" ");
+}
+
 export function listRuntimeImageGenerationProviders(params?: { config?: OpenClawConfig }) {
   return listImageGenerationProviders(params?.config);
 }
@@ -112,9 +126,7 @@ export async function generateImage(
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
-    throw new Error(
-      "No image-generation model configured. Set agents.defaults.imageGenerationModel.primary or agents.defaults.imageGenerationModel.fallbacks.",
-    );
+    throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
   }
 
   const attempts: FallbackAttempt[] = [];
@@ -146,6 +158,11 @@ export async function generateImage(
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,
         inputImages: params.inputImages,
+        seed: params.seed,
+        watermark: params.watermark,
+        guidanceScale: params.guidanceScale,
+        optimizePrompt: params.optimizePrompt,
+        providerOptions: params.providerOptions,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");

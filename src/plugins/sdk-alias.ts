@@ -17,6 +17,8 @@ type PluginSdkPackageJson = {
   bin?: string | Record<string, unknown>;
 };
 
+const STARTUP_ARGV1 = process.argv[1];
+
 function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string {
   return params.modulePath ?? fileURLToPath(params.moduleUrl ?? import.meta.url);
 }
@@ -30,11 +32,15 @@ function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | n
   }
 }
 
+function isSafePluginSdkSubpathSegment(subpath: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+}
+
 function listPluginSdkSubpathsFromPackageJson(pkg: PluginSdkPackageJson): string[] {
   return Object.keys(pkg.exports ?? {})
     .filter((key) => key.startsWith("./plugin-sdk/"))
     .map((key) => key.slice("./plugin-sdk/".length))
-    .filter((subpath) => Boolean(subpath) && !subpath.includes("/"))
+    .filter((subpath) => isSafePluginSdkSubpathSegment(subpath))
     .toSorted();
 }
 
@@ -71,6 +77,27 @@ function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | n
   }
   const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
   return subpaths.length > 0 ? subpaths : null;
+}
+
+function resolveTrustedOpenClawRootFromArgvHint(params: {
+  argv1?: string;
+  cwd: string;
+}): string | null {
+  if (!params.argv1) {
+    return null;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    cwd: params.cwd,
+    argv1: params.argv1,
+  });
+  if (!packageRoot) {
+    return null;
+  }
+  const packageJson = readPluginSdkPackageJson(packageRoot);
+  if (!packageJson) {
+    return null;
+  }
+  return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
 function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
@@ -112,13 +139,13 @@ function resolveLoaderPluginSdkPackageRoot(
   const cwd = params.cwd ?? path.dirname(params.modulePath);
   const fromCwd = resolveOpenClawPackageRootSync({ cwd });
   const fromExplicitHints =
-    params.argv1 || params.moduleUrl
+    resolveTrustedOpenClawRootFromArgvHint({ cwd, argv1: params.argv1 }) ??
+    (params.moduleUrl
       ? resolveOpenClawPackageRootSync({
           cwd,
-          ...(params.argv1 ? { argv1: params.argv1 } : {}),
-          ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
+          moduleUrl: params.moduleUrl,
         })
-      : null;
+      : null);
   return (
     fromCwd ??
     fromExplicitHints ??
@@ -207,9 +234,15 @@ export function resolvePluginSdkAliasFile(params: {
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
 
-export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
+export function listPluginSdkExportedSubpaths(
+  params: { modulePath?: string; argv1?: string; moduleUrl?: string } = {},
+): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return [];
   }
@@ -223,10 +256,14 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: { modulePath?: string; argv1?: string; moduleUrl?: string } = {},
 ): Record<string, string> {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  });
   if (!packageRoot) {
     return {};
   }
@@ -240,7 +277,11 @@ export function resolvePluginSdkScopedAliasMap(
     return cached;
   }
   const aliasMap: Record<string, string> = {};
-  for (const subpath of listPluginSdkExportedSubpaths({ modulePath })) {
+  for (const subpath of listPluginSdkExportedSubpaths({
+    modulePath,
+    argv1: params.argv1,
+    moduleUrl: params.moduleUrl,
+  })) {
     const candidateMap = {
       src: path.join(packageRoot, "src", "plugin-sdk", `${subpath}.ts`),
       dist: path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`),
@@ -285,17 +326,23 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-export function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
+export function buildPluginLoaderAliasMap(
+  modulePath: string,
+  argv1: string | undefined = STARTUP_ARGV1,
+  moduleUrl?: string,
+): Record<string, string> {
   const pluginSdkAlias = resolvePluginSdkAliasFile({
     srcFile: "root-alias.cjs",
     distFile: "root-alias.cjs",
     modulePath,
+    argv1,
+    moduleUrl,
   });
   const extensionApiAlias = resolveExtensionApiAlias({ modulePath });
   return {
     ...(extensionApiAlias ? { "openclaw/extension-api": extensionApiAlias } : {}),
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap({ modulePath, argv1, moduleUrl }),
   };
 }
 

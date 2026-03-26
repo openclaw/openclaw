@@ -1,22 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { registerSlackReactionEvents } from "./reactions.js";
-import {
-  createSlackSystemEventTestHarness,
-  type SlackSystemEventTestOverrides,
-} from "./system-event-test-harness.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const reactionQueueMock = vi.fn();
-const reactionAllowMock = vi.fn();
+const reactionQueueMock = vi.hoisted(() => vi.fn());
+let registerSlackReactionEvents: typeof import("./reactions.js").registerSlackReactionEvents;
+let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+type SlackSystemEventTestOverrides =
+  import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-vi.mock("../../../../../src/infra/system-events.js", () => {
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
+    ...actual,
     enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
-  };
-});
-
-vi.mock("../../../../../src/pairing/pairing-store.js", () => {
-  return {
-    readChannelAllowFromStore: (...args: unknown[]) => reactionAllowMock(...args),
   };
 });
 
@@ -63,7 +57,6 @@ function createReactionHandlers(params: {
 
 async function executeReactionCase(input: ReactionRunInput = {}) {
   reactionQueueMock.mockClear();
-  reactionAllowMock.mockReset().mockResolvedValue([]);
   const handlers = createReactionHandlers({
     overrides: input.overrides,
     trackEvent: input.trackEvent,
@@ -78,6 +71,16 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
 }
 
 describe("registerSlackReactionEvents", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ registerSlackReactionEvents } = await import("./reactions.js"));
+    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
+  });
+
+  beforeEach(() => {
+    reactionQueueMock.mockClear();
+  });
+
   const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [
     {
       name: "enqueues DM reaction system events when dmPolicy is open",
@@ -156,7 +159,6 @@ describe("registerSlackReactionEvents", () => {
 
   it("passes sender context when resolving reaction session keys", async () => {
     reactionQueueMock.mockClear();
-    reactionAllowMock.mockReset().mockResolvedValue([]);
     const harness = createSlackSystemEventTestHarness();
     const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:main");
     harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;

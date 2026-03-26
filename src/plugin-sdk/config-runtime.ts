@@ -7,6 +7,9 @@ export {
   readConfigFileSnapshotForWrite,
   writeConfigFile,
 } from "../config/io.js";
+export { logConfigUpdated } from "../config/logging.js";
+export { updateConfig } from "../commands/models/shared.js";
+export { resolveChannelModelOverride } from "../channels/model-overrides.js";
 export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
@@ -93,4 +96,7 @@ export {
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
 export { resolveSessionStoreEntry } from "../config/sessions/store.js";
-export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+export {
+  isDangerousNameMatchingEnabled,
+  resolveDangerousNameMatchingEnabled,
+} from "../config/dangerous-name-matching.js";

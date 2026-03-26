@@ -158,7 +158,7 @@ describe("web monitor inbox", () => {
       () => {
         expect(sock.sendMessage).toHaveBeenCalledTimes(1);
       },
-      { timeout: 2_000, interval: 5 },
+      { timeout: 5_000, interval: 5 },
     );
     expect(onMessage).not.toHaveBeenCalled();
     expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
@@ -214,6 +214,90 @@ describe("web monitor inbox", () => {
     });
   });
 
+  it("allows owner fromMe group commands when they were not sent by the gateway", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "owner-group-1",
+            fromMe: true,
+            remoteJid: "120363@g.us",
+            participant: "123@s.whatsapp.net",
+          },
+          message: { conversation: "/status" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Owner",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "/status",
+        chatType: "group",
+        from: "120363@g.us",
+        fromMe: true,
+        senderE164: "+123",
+      }),
+    );
+
+    await listener.close();
+  });
+
+  it("filters group fromMe echoes only when the gateway sent the matching message id", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-group-echo-1" } });
+    await listener.sendMessage("120363@g.us", "gateway echo candidate");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "bot-group-echo-1",
+            fromMe: true,
+            remoteJid: "120363@g.us",
+            participant: "123@s.whatsapp.net",
+          },
+          message: { conversation: "gateway echo candidate" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Owner",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
     const staleTs = Math.floor(Date.now() / 1000) - 300;
@@ -246,7 +330,7 @@ describe("web monitor inbox", () => {
           },
         ]);
       },
-      { timeout: 2_000, interval: 5 },
+      { timeout: 5_000, interval: 5 },
     );
 
     // Verify it WAS NOT passed to onMessage

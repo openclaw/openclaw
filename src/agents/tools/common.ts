@@ -8,6 +8,7 @@ import { sanitizeToolResultImages } from "../tool-images.js";
 // oxlint-disable-next-line typescript/no-explicit-any
 export type AnyAgentTool = AgentTool<any, unknown> & {
   ownerOnly?: boolean;
+  displaySummary?: string;
 };
 
 export type StringParamOptions = {
@@ -141,6 +142,26 @@ export function readNumberParam(
   return integer ? Math.trunc(value) : value;
 }
 
+export function readBooleanParam(
+  params: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const raw = readParamRaw(params, key);
+  if (typeof raw === "boolean") {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed === "true" || trimmed === "1") {
+      return true;
+    }
+    if (trimmed === "false" || trimmed === "0") {
+      return false;
+    }
+  }
+  return undefined;
+}
+
 export function readStringArrayParam(
   params: Record<string, unknown>,
   key: string,
@@ -214,16 +235,46 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+export function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
+}
+
+export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(payload, null, 2),
+        text,
       },
     ],
-    details: payload,
+    details,
   };
+}
+
+export function failedTextResult<TDetails extends { status: "failed" }>(
+  text: string,
+  details: TDetails,
+): AgentToolResult<TDetails> {
+  return textResult(text, details);
+}
+
+export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
+  return textResult(stringifyToolPayload(payload), payload);
+}
+
+export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export function wrapOwnerOnlyToolExecution(

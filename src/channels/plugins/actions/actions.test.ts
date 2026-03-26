@@ -1,35 +1,27 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ChannelMessageActionAdapter } from "../types.js";
 
-const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
-const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const sendReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const removeReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const actionResult = (): AgentToolResult<unknown> => ({
+  content: [],
+  details: { ok: true },
+});
 
-vi.mock("../../../../extensions/discord/src/actions/runtime.js", () => ({
-  handleDiscordAction,
-}));
-
-vi.mock("../../../../extensions/telegram/src/action-runtime.js", () => ({
-  handleTelegramAction,
-}));
-
-vi.mock("../../../../extensions/signal/src/send-reactions.js", () => ({
-  sendReactionSignal,
-  removeReactionSignal,
-}));
-
-vi.mock("../../../../extensions/slack/src/action-runtime.js", () => ({
-  handleSlackAction,
-}));
+const handleDiscordAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => actionResult()));
+const handleTelegramAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => actionResult()));
+const sendReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const removeReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const handleSlackAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => actionResult()));
 
 let discordMessageActions: typeof import("../../../../extensions/discord/runtime-api.js").discordMessageActions;
 let handleDiscordMessageAction: typeof import("./discord/handle-action.js").handleDiscordMessageAction;
 let telegramMessageActions: typeof import("../../../../extensions/telegram/runtime-api.js").telegramMessageActions;
 let signalMessageActions: typeof import("../../../../extensions/signal/src/message-actions.js").signalMessageActions;
 let createSlackActions: typeof import("../../../../extensions/slack/src/channel-actions.js").createSlackActions;
+let discordRuntimeModule: typeof import("../../../../extensions/discord/src/actions/runtime.js");
+let telegramChannelActionsModule: typeof import("../../../../extensions/telegram/src/channel-actions.js");
+let signalReactionModule: typeof import("../../../../extensions/signal/src/send-reactions.js");
 
 function getDescribedActions(params: {
   describeMessageTool?: ChannelMessageActionAdapter["describeMessageTool"];
@@ -94,7 +86,10 @@ async function runSignalAction(
 
 function slackHarness() {
   const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-  const actions = createSlackActions("slack");
+  const actions = createSlackActions("slack", {
+    invoke: async (action, invokeCfg, toolContext) =>
+      await handleSlackAction(action, invokeCfg, toolContext),
+  });
   return { cfg, actions };
 }
 
@@ -200,15 +195,33 @@ async function expectSlackSendRejected(params: Record<string, unknown>, error: R
 }
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ discordMessageActions } = await import("../../../../extensions/discord/runtime-api.js"));
   ({ handleDiscordMessageAction } = await import("./discord/handle-action.js"));
+  discordRuntimeModule = await import("../../../../extensions/discord/src/actions/runtime.js");
   ({ telegramMessageActions } = await import("../../../../extensions/telegram/runtime-api.js"));
+  telegramChannelActionsModule =
+    await import("../../../../extensions/telegram/src/channel-actions.js");
   ({ signalMessageActions } = await import("../../../../extensions/signal/src/message-actions.js"));
+  signalReactionModule = await import("../../../../extensions/signal/src/send-reactions.js");
   ({ createSlackActions } = await import("../../../../extensions/slack/src/channel-actions.js"));
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  vi.spyOn(discordRuntimeModule, "handleDiscordAction").mockImplementation(
+    async (...args) => await handleDiscordAction(...args),
+  );
+  telegramChannelActionsModule.telegramMessageActionRuntime.handleTelegramAction = async (
+    ...args
+  ) => await handleTelegramAction(...args);
+  vi.spyOn(signalReactionModule, "sendReactionSignal").mockImplementation(
+    async (...args) => await sendReactionSignal(...args),
+  );
+  vi.spyOn(signalReactionModule, "removeReactionSignal").mockImplementation(
+    async (...args) => await removeReactionSignal(...args),
+  );
 });
 
 describe("discord message actions", () => {
@@ -725,6 +738,37 @@ describe("telegramMessageActions", () => {
           to: "123",
           media: "https://example.com/voice.ogg",
           asVoice: true,
+        }),
+      },
+      {
+        name: "media-only send preserves asDocument",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          asDocument: true,
+        }),
+      },
+      {
+        name: "explicit forceDocument false beats asDocument alias",
+        action: "send" as const,
+        params: {
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
+          asDocument: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendMessage",
+          to: "123",
+          media: "https://example.com/photo.jpg",
+          forceDocument: false,
         }),
       },
       {

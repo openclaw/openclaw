@@ -1,18 +1,19 @@
-import fs from "node:fs";
-import json5 from "json5";
-import { resolveConfigPath } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.js";
+import { getCommandPathWithRootOptions } from "../cli/argv.js";
+import { loadConfig, type OpenClawConfig } from "../config/config.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
+export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
+  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
+  return primary === "config" && (secondary === "schema" || secondary === "validate");
+}
+
 export function readLoggingConfig(): LoggingConfig | undefined {
-  const configPath = resolveConfigPath();
+  if (shouldSkipMutatingLoggingConfigRead()) {
+    return undefined;
+  }
   try {
-    if (!fs.existsSync(configPath)) {
-      return undefined;
-    }
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const parsed = json5.parse(raw);
+    const parsed = loadConfig();
     const logging = parsed?.logging;
     if (!logging || typeof logging !== "object" || Array.isArray(logging)) {
       return undefined;

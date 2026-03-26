@@ -66,10 +66,37 @@ vi.mock("../../cli/nodes-screen.js", () => ({
   writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
 }));
 
-import { createNodesTool } from "./nodes-tool.js";
+let createNodesTool: typeof import("./nodes-tool.js").createNodesTool;
+
+async function loadFreshNodesToolModuleForTest() {
+  vi.resetModules();
+  vi.doMock("./gateway.js", () => ({
+    callGatewayTool: gatewayMocks.callGatewayTool,
+    readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
+  }));
+  vi.doMock("./nodes-utils.js", () => ({
+    resolveNodeId: nodeUtilsMocks.resolveNodeId,
+    resolveNode: nodeUtilsMocks.resolveNode,
+    listNodes: nodeUtilsMocks.listNodes,
+    resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
+  }));
+  vi.doMock("../../cli/nodes-camera.js", () => ({
+    cameraTempPath: nodesCameraMocks.cameraTempPath,
+    parseCameraClipPayload: nodesCameraMocks.parseCameraClipPayload,
+    parseCameraSnapPayload: nodesCameraMocks.parseCameraSnapPayload,
+    writeCameraClipPayloadToFile: nodesCameraMocks.writeCameraClipPayloadToFile,
+    writeCameraPayloadToFile: nodesCameraMocks.writeCameraPayloadToFile,
+  }));
+  vi.doMock("../../cli/nodes-screen.js", () => ({
+    parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
+    screenRecordTempPath: screenMocks.screenRecordTempPath,
+    writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
+  }));
+  ({ createNodesTool } = await import("./nodes-tool.js"));
+}
 
 describe("createNodesTool screen_record duration guardrails", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     gatewayMocks.callGatewayTool.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReset();
     gatewayMocks.readGatewayCallOptions.mockReturnValue({});
@@ -80,6 +107,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.cameraTempPath.mockClear();
     nodesCameraMocks.parseCameraSnapPayload.mockClear();
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
+    await loadFreshNodesToolModuleForTest();
   });
 
   it("marks nodes as owner-only", () => {
