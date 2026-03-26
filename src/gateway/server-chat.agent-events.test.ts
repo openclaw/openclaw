@@ -404,6 +404,80 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("client-old")).toBe(false);
   });
 
+  it("ignores deferred lifecycle errors after a newer run has already completed", async () => {
+    vi.useFakeTimers();
+    const { broadcast, broadcastToConnIds, chatRunState, handler, sessionEventSubscribers } =
+      createHarness({
+        resolveSessionKeyForRun: (runId) =>
+          runId === "run-old-complete" || runId === "run-new-complete"
+            ? "session-complete"
+            : undefined,
+      });
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("run-old-complete", {
+      sessionKey: "session-complete",
+      clientRunId: "client-old-complete",
+    });
+    chatRunState.registry.add("run-new-complete", {
+      sessionKey: "session-complete",
+      clientRunId: "client-new-complete",
+    });
+
+    handler({
+      runId: "run-old-complete",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitLifecycleError(handler, "run-old-complete", "temporary fallback", 2);
+    handler({
+      runId: "run-new-complete",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 2_000,
+      data: { phase: "start", startedAt: 2_000 },
+    });
+    emitLifecycleEnd(handler, "run-new-complete", 2);
+
+    broadcastToConnIds.mockClear();
+    persistGatewaySessionLifecycleEventMock.mockClear();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    const oldRunErrorPayloads = chatBroadcastCalls(broadcast).filter(([, payload]) => {
+      const typed = payload as { state?: string; runId?: string };
+      return typed.state === "error" && typed.runId === "client-old-complete";
+    });
+    expect(oldRunErrorPayloads).toHaveLength(0);
+
+    const sessionErrorCalls = broadcastToConnIds.mock.calls.filter(([event, payload]) => {
+      const typed = payload as { phase?: string; runId?: string };
+      return (
+        event === "sessions.changed" &&
+        typed.phase === "error" &&
+        typed.runId === "run-old-complete"
+      );
+    });
+    expect(sessionErrorCalls).toHaveLength(0);
+
+    const persistedErrorCalls = persistGatewaySessionLifecycleEventMock.mock.calls.filter(
+      ([params]) => {
+        const typed = params as {
+          sessionKey?: string;
+          event?: { runId?: string; data?: { phase?: string } };
+        };
+        return (
+          typed.sessionKey === "session-complete" &&
+          typed.event?.runId === "run-old-complete" &&
+          typed.event?.data?.phase === "error"
+        );
+      },
+    );
+    expect(persistedErrorCalls).toHaveLength(0);
+    expect(chatRunState.registry.peek("run-old-complete")).toBeUndefined();
+  });
+
   it("strips inline directives from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

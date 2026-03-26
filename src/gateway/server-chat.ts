@@ -482,7 +482,7 @@ export function createAgentEventHandler({
       isControlUiVisible: boolean;
     }
   >();
-  const sessionActiveRuns = new Map<string, string>();
+  const sessionLatestRuns = new Map<string, string>();
 
   const clearPendingLifecycleError = (runId: string) => {
     const pending = pendingLifecycleErrors.get(runId);
@@ -491,15 +491,6 @@ export function createAgentEventHandler({
     }
     clearTimeout(pending.timer);
     pendingLifecycleErrors.delete(runId);
-  };
-
-  const clearSessionActiveRunIfMatch = (sessionKey: string | undefined, runId: string) => {
-    if (!sessionKey) {
-      return;
-    }
-    if (sessionActiveRuns.get(sessionKey) === runId) {
-      sessionActiveRuns.delete(sessionKey);
-    }
   };
 
   const cleanupLifecycleTerminalState = (params: {
@@ -517,7 +508,6 @@ export function createAgentEventHandler({
     clearAgentRunContext(params.runId);
     agentRunSeq.delete(params.runId);
     agentRunSeq.delete(params.clientRunId);
-    clearSessionActiveRunIfMatch(params.sessionKey, params.runId);
   };
 
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
@@ -795,8 +785,8 @@ export function createAgentEventHandler({
       pendingLifecycleErrors.delete(params.evt.runId);
       if (
         pending.sessionKey &&
-        sessionActiveRuns.has(pending.sessionKey) &&
-        sessionActiveRuns.get(pending.sessionKey) !== pending.evt.runId
+        sessionLatestRuns.get(pending.sessionKey) &&
+        sessionLatestRuns.get(pending.sessionKey) !== pending.evt.runId
       ) {
         cleanupLifecycleTerminalState({
           runId: pending.evt.runId,
@@ -857,7 +847,7 @@ export function createAgentEventHandler({
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     if (sessionKey && lifecyclePhase === "start") {
-      sessionActiveRuns.set(sessionKey, evt.runId);
+      sessionLatestRuns.set(sessionKey, evt.runId);
     }
     if (lifecyclePhase !== "error" && evt.seq > last) {
       clearPendingLifecycleError(evt.runId);
