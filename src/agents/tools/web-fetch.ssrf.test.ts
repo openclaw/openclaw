@@ -62,6 +62,14 @@ describe("web_fetch SSRF protection", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
+    // Ensure proxy env vars are cleared so SSRF tests run in direct mode.
+    // web_fetch uses useEnvProxy:true which routes through env proxy when configured.
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
     );
@@ -71,6 +79,7 @@ describe("web_fetch SSRF protection", () => {
     global.fetch = priorFetch;
     lookupMock.mockClear();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
