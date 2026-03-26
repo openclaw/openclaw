@@ -232,7 +232,9 @@ describe("RealtimeCallHandler", () => {
       expect(result).toBe("manager-gen-id");
     });
 
-    it("falls back to providerCallId when manager has no record", () => {
+    it("returns null when manager does not create a record (inbound policy rejection)", () => {
+      // Simulate inboundPolicy rejecting the caller: processEvent is a no-op,
+      // getCallByProviderCallId returns undefined (no record was created).
       const manager = {
         processEvent: vi.fn(),
         getCallByProviderCallId: vi.fn(() => undefined),
@@ -241,10 +243,17 @@ describe("RealtimeCallHandler", () => {
       const handler = new RealtimeCallHandler(baseRealtimeConfig, manager, makeProvider(), null);
 
       const result = (
-        handler as unknown as { registerCallInManager: (sid: string) => string }
-      ).registerCallInManager("CA_fallback");
+        handler as unknown as {
+          registerCallInManager: (sid: string) => string | null;
+        }
+      ).registerCallInManager("CA_rejected");
 
-      expect(result).toBe("CA_fallback");
+      expect(result).toBeNull();
+      // call.answered must NOT have been emitted — only call.initiated was sent
+      const types = vi
+        .mocked(manager.processEvent)
+        .mock.calls.map(([e]) => (e as { type: string }).type);
+      expect(types).not.toContain("call.answered");
     });
   });
 

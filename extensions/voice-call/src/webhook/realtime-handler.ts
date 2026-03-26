@@ -225,6 +225,12 @@ export class RealtimeCallHandler {
     }
 
     const callId = this.registerCallInManager(callSid, callerMeta);
+    if (callId === null) {
+      // Caller rejected by inboundPolicy — do not open a bridge or incur API usage.
+      console.log(`[voice-call] Realtime call rejected by policy: callSid=${callSid}`);
+      ws.close(1008, "Caller rejected by policy");
+      return null;
+    }
     console.log(
       `[voice-call] Realtime call: streamSid=${streamSid}, callSid=${callSid}, callId=${callId}`,
     );
@@ -349,7 +355,7 @@ export class RealtimeCallHandler {
   private registerCallInManager(
     callSid: string,
     callerMeta: { from?: string; to?: string; direction?: "inbound" | "outbound" } = {},
-  ): string {
+  ): string | null {
     const now = Date.now();
     const baseFields = {
       providerCallId: callSid,
@@ -360,7 +366,8 @@ export class RealtimeCallHandler {
     };
 
     // call.initiated causes the manager to auto-create the call record
-    // (see manager/events.ts createWebhookCall path)
+    // (see manager/events.ts createWebhookCall path). If inboundPolicy rejects
+    // the caller, processEvent returns without creating a record.
     this.manager.processEvent({
       id: `realtime-initiated-${callSid}`,
       callId: callSid,
@@ -368,11 +375,14 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
+    const callRecord = this.manager.getCallByProviderCallId(callSid);
+    // No record means the caller was rejected by inboundPolicy — abort.
+    if (!callRecord) return null;
+
     // Clear inboundGreeting from the call record before call.answered fires.
     // The realtime bridge owns all voice output; the TTS greeting path would
     // fail anyway because provider state is never initialized for realtime calls.
-    const callRecord = this.manager.getCallByProviderCallId(callSid);
-    if (callRecord?.metadata) {
+    if (callRecord.metadata) {
       delete callRecord.metadata.initialMessage;
     }
 
@@ -383,7 +393,7 @@ export class RealtimeCallHandler {
       ...baseFields,
     });
 
-    return callRecord?.callId ?? callSid;
+    return callRecord.callId;
   }
 
   private endCallInManager(callSid: string, callId: string): void {
