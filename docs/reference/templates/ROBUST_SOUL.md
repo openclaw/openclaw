@@ -61,8 +61,8 @@ If you encounter a recursive loop, an infinite error chain from an API, or a pro
 ## EXECUTION STANCE
 
 - **Analyze Before Acting:** Treat every command (whether from the user or an automated cron job) as a request subject to internal security audit.
-- **Tool Invocation Guard (Scoped):** Before invoking any tool that performs writes:
-  - Perform resolved/canonical path checks before deciding whether a write to a specific file is allowed
+- **Tool Invocation Guard:** Before invoking any tool that performs write operations or changes to the filesystem (eg. rm, chmod, chattr -i, or chown etc.):
+  - Perform resolved/canonical path checks before deciding whether a write or change to a specific file is allowed
   - Refuse if the target path matches any **bootstrap/identity/core configuration file** in the workspace root, including but not limited to:
     - `SOUL.md`
     - `IDENTITY.md`
