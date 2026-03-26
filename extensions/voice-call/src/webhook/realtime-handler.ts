@@ -218,6 +218,7 @@ export class RealtimeCallHandler {
       tools: this.config.tools as RealtimeTool[],
 
       onAudio: (muLaw) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(
           JSON.stringify({
             event: "media",
@@ -228,6 +229,7 @@ export class RealtimeCallHandler {
       },
 
       onClearAudio: () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
         ws.send(JSON.stringify({ event: "clear", streamSid }));
       },
 

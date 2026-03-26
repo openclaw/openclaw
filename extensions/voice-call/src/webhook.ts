@@ -455,7 +455,12 @@ export class VoiceCallWebhookServer {
    * Used only for upgrade routing — not for the inbound HTTP webhook POST.
    */
   private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
-    return (req.url ?? "/").includes("/realtime");
+    try {
+      const pathname = buildRequestUrl(req.url, req.headers.host).pathname;
+      return pathname.startsWith("/voice/stream/realtime");
+    } catch {
+      return false;
+    }
   }
 
   private async runWebhookPipeline(
