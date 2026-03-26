@@ -54,6 +54,11 @@ command path:
 
 That’s it. No keys, no extra auth config needed beyond the CLI itself.
 
+If you use a bundled CLI backend as the **primary message provider** on a
+gateway host, OpenClaw now auto-loads the owning bundled plugin when your config
+explicitly references that backend in a model ref or under
+`agents.defaults.cliBackends`.
+
 ## Using it as a fallback
 
 Add a CLI backend to your fallback list so it only runs when primary models fail:
