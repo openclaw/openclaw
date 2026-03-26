@@ -90,6 +90,7 @@ export async function readAgentMemoryFile(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  userId?: string;
 }): Promise<MemoryReadResult> {
   const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
   if (!settings) {
@@ -104,5 +105,6 @@ export async function readAgentMemoryFile(params: {
     lines: params.lines,
     defaultLines: contextLimits?.memoryGetDefaultLines,
     maxChars: contextLimits?.memoryGetMaxChars,
+    userId: settings.isolation.enabled ? params.userId : undefined,
   });
 }

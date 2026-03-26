@@ -39,23 +39,23 @@ export default definePluginEntry({
     });
 
     api.registerTool(
-      (ctx) => {
-        const memorySearchTool = api.runtime.tools.createMemorySearchTool({
+      (ctx) =>
+        api.runtime.tools.createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
           senderId: ctx.requesterSenderId,
-        });
-        const memoryGetTool = api.runtime.tools.createMemoryGetTool({
+        }),
+      { names: ["memory_search"] },
+    );
+
+    api.registerTool(
+      (ctx) =>
+        api.runtime.tools.createMemoryGetTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
           senderId: ctx.requesterSenderId,
-        });
-        if (!memorySearchTool || !memoryGetTool) {
-          return null;
-        }
-        return [memorySearchTool, memoryGetTool];
-      },
-      { names: ["memory_search", "memory_get"] },
+        }),
+      { names: ["memory_get"] },
     );
 
     api.registerCli(
