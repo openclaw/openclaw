@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import {
   colorize,
   defaultRuntime,
@@ -23,7 +22,8 @@ import {
   withManager,
   withProgress,
   withProgressTotals,
-} from "openclaw/plugin-sdk/memory-core";
+  type OpenClawConfig,
+} from "./api.js";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
