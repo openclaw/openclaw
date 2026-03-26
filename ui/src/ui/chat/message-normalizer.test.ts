@@ -112,6 +112,15 @@ describe("message-normalizer", () => {
       expect(result.content[0].args).toEqual({ foo: "bar" });
     });
 
+    it("handles input field for anthropic tool_use blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "tool_use", name: "Bash", input: { command: "pwd" } }],
+      });
+
+      expect(result.content[0].args).toEqual({ command: "pwd" });
+    });
+
     it("preserves top-level sender labels", () => {
       const result = normalizeMessage({
         role: "user",
