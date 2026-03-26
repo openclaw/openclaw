@@ -5,18 +5,30 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
+export function handleAutoCompactionStart(
+  ctx: EmbeddedPiSubscribeContext,
+  evt?: AgentEvent & { reason?: unknown },
+) {
   ctx.state.compactionInFlight = true;
   ctx.ensureCompactionPromise();
-  ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
+  const reason = typeof evt?.reason === "string" ? evt.reason : "unknown";
+  ctx.log.warn("embedded run compaction start", {
+    event: "embedded_run_compaction_start",
+    runId: ctx.params.runId,
+    sessionKey: ctx.params.sessionKey,
+    reason,
+    messageCount: ctx.params.session.messages?.length ?? 0,
+    sessionFile: ctx.params.session.sessionFile,
+    consoleMessage: `embedded run compaction start: runId=${ctx.params.runId} reason=${reason} sessionKey=${ctx.params.sessionKey ?? "-"}`,
+  });
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "compaction",
-    data: { phase: "start" },
+    data: { phase: "start", reason },
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "start" },
+    data: { phase: "start", reason },
   });
 
   // Run before_compaction plugin hook (fire-and-forget)
@@ -41,7 +53,12 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
 
 export function handleAutoCompactionEnd(
   ctx: EmbeddedPiSubscribeContext,
-  evt: AgentEvent & { willRetry?: unknown; result?: unknown; aborted?: unknown },
+  evt: AgentEvent & {
+    willRetry?: unknown;
+    result?: unknown;
+    aborted?: unknown;
+    errorMessage?: unknown;
+  },
 ) {
   ctx.state.compactionInFlight = false;
   const willRetry = Boolean(evt.willRetry);
@@ -51,6 +68,8 @@ export function handleAutoCompactionEnd(
   // and context was trimmed — the counter must reflect that.  (#38905)
   const hasResult = evt.result != null;
   const wasAborted = Boolean(evt.aborted);
+  const completed = hasResult && !wasAborted;
+  const errorMessage = typeof evt.errorMessage === "string" ? evt.errorMessage : undefined;
   if (hasResult && !wasAborted) {
     ctx.incrementCompactionCount();
     const observedCompactionCount = ctx.getCompactionCount();
@@ -66,19 +85,40 @@ export function handleAutoCompactionEnd(
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
-    ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
+    ctx.log.warn("embedded run compaction retry", {
+      event: "embedded_run_compaction_retry",
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      hasResult,
+      completed,
+      wasAborted,
+      errorMessage,
+      consoleMessage: `embedded run compaction retry: runId=${ctx.params.runId} sessionKey=${ctx.params.sessionKey ?? "-"} completed=${completed} hasResult=${hasResult} aborted=${wasAborted}${errorMessage ? ` error=${errorMessage}` : ""}`,
+    });
   } else {
     ctx.maybeResolveCompactionWait();
     clearStaleAssistantUsageOnSessionMessages(ctx);
+    ctx.log.warn("embedded run compaction end", {
+      event: "embedded_run_compaction_end",
+      runId: ctx.params.runId,
+      sessionKey: ctx.params.sessionKey,
+      hasResult,
+      completed,
+      wasAborted,
+      errorMessage,
+      compactionCount: ctx.getCompactionCount(),
+      messageCount: ctx.params.session.messages?.length ?? 0,
+      consoleMessage: `embedded run compaction end: runId=${ctx.params.runId} sessionKey=${ctx.params.sessionKey ?? "-"} completed=${completed} hasResult=${hasResult} aborted=${wasAborted} willRetry=${willRetry}${errorMessage ? ` error=${errorMessage}` : ""}`,
+    });
   }
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+    data: { phase: "end", willRetry, completed, errorMessage },
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+    data: { phase: "end", willRetry, completed, errorMessage },
   });
 
   // Run after_compaction plugin hook (fire-and-forget)

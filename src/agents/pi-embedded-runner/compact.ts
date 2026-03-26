@@ -91,6 +91,7 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
+import { installEmbeddedCompactionFallback } from "./compaction-model-fallback.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
@@ -701,6 +702,16 @@ export async function compactEmbeddedPiSessionDirect(
         sessionManager,
         settingsManager,
         resourceLoader,
+      });
+      installEmbeddedCompactionFallback({
+        session,
+        cfg: params.config,
+        agentDir,
+        provider,
+        model: modelId,
+        currentModel: effectiveModel,
+        modelRegistry,
+        runId,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       const providerStreamFn = registerProviderStreamForModel({

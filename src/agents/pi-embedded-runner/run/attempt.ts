@@ -99,6 +99,9 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import type { CompactEmbeddedPiSessionParams } from "../compact.js";
+import { installEmbeddedCompactionFallback } from "../compaction-model-fallback.js";
+import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -846,6 +849,16 @@ export async function runEmbeddedAttempt(
         settingsManager,
         resourceLoader,
       }));
+      installEmbeddedCompactionFallback({
+        session,
+        cfg: params.config,
+        agentDir,
+        provider: params.provider,
+        model: params.modelId,
+        currentModel: params.model,
+        modelRegistry: params.modelRegistry,
+        runId: params.runId,
+      });
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");

@@ -63,6 +63,45 @@ import type { TypingSignaler } from "./typing-mode.js";
 // See: https://github.com/openclaw/openclaw/issues/58348
 export const MAX_LIVE_SWITCH_RETRIES = 2;
 
+const RECENT_COMPACTION_NOTICE_BY_SESSION = new Map<string, number>();
+const COMPACTION_NOTICE_SUPPRESSION_WINDOW_MS = 5 * 60 * 1000;
+
+function resolveCompactionNoticeKey(sessionKey?: string, sessionId?: string): string | undefined {
+  if (sessionId) {
+    return `${sessionKey ?? "session"}::${sessionId}`;
+  }
+  return sessionKey;
+}
+
+function pruneRecentCompactionNoticeSessions(now = Date.now()): void {
+  const cutoff = now - COMPACTION_NOTICE_SUPPRESSION_WINDOW_MS;
+  for (const [sessionKey, seenAt] of RECENT_COMPACTION_NOTICE_BY_SESSION.entries()) {
+    if (seenAt < cutoff) {
+      RECENT_COMPACTION_NOTICE_BY_SESSION.delete(sessionKey);
+    }
+  }
+}
+
+function shouldEmitCompactionStartNotice(sessionKey?: string, now = Date.now()): boolean {
+  if (!sessionKey) {
+    return true;
+  }
+  pruneRecentCompactionNoticeSessions(now);
+  const seenAt = RECENT_COMPACTION_NOTICE_BY_SESSION.get(sessionKey);
+  if (typeof seenAt === "number" && now - seenAt < COMPACTION_NOTICE_SUPPRESSION_WINDOW_MS) {
+    return false;
+  }
+  RECENT_COMPACTION_NOTICE_BY_SESSION.set(sessionKey, now);
+  return true;
+}
+
+function clearRecentCompactionStartNotice(sessionKey?: string): void {
+  if (!sessionKey) {
+    return;
+  }
+  RECENT_COMPACTION_NOTICE_BY_SESSION.delete(sessionKey);
+}
+
 export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
@@ -494,10 +533,17 @@ export async function runAgentTurnWithFallback(params: {
                   // Track auto-compaction and notify higher layers.
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+                    const compactionNoticeKey = resolveCompactionNoticeKey(
+                      params.sessionKey,
+                      params.getActiveSessionEntry()?.sessionId,
+                    );
                     if (phase === "start") {
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (params.opts?.onBlockReply) {
+                      } else if (
+                        params.opts?.onBlockReply &&
+                        shouldEmitCompactionStartNotice(compactionNoticeKey)
+                      ) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
@@ -521,9 +567,12 @@ export async function runAgentTurnWithFallback(params: {
                       }
                     }
                     const completed = evt.data?.completed === true;
-                    if (phase === "end" && completed) {
-                      attemptCompactionCount += 1;
-                      await params.opts?.onCompactionEnd?.();
+                    if (phase === "end") {
+                      if (completed) {
+                        attemptCompactionCount += 1;
+                        clearRecentCompactionStartNotice(compactionNoticeKey);
+                        await params.opts?.onCompactionEnd?.();
+                      }
                     }
                   }
                 },
