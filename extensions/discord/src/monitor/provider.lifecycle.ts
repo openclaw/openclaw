@@ -128,6 +128,12 @@ export async function runDiscordGatewayLifecycle(params: {
     if (!gateway) {
       return;
     }
+    // Transition the supervisor to teardown phase *before* disconnecting so
+    // that the synchronous "Max reconnect attempts (0)" error emitted by
+    // @buape/carbon during disconnect is suppressed instead of being routed
+    // to the lifecycle handler and eventually surfacing as an uncaught
+    // exception that crashes the entire gateway process.  See #54931.
+    params.gatewaySupervisor.detachLifecycle();
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
@@ -402,7 +408,16 @@ export async function runDiscordGatewayLifecycle(params: {
       },
     });
   } catch (err) {
-    if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
+    // During an intentional abort (health-monitor restart, manual stop, etc.)
+    // the onAbort handler sets maxAttempts to 0 and disconnects, which causes
+    // @buape/carbon to emit a "Max reconnect attempts" error.  If the
+    // supervisor has already transitioned to teardown the error is suppressed
+    // there, but as an additional safety net we also swallow it here when the
+    // lifecycle is already stopping — re-throwing would crash the gateway.
+    // See #54931.
+    if (lifecycleStopping) {
+      // Intentional shutdown — swallow the error.
+    } else if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
       throw err;
     }
   } finally {
