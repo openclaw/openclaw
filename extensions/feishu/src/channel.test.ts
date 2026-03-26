@@ -61,6 +61,41 @@ function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
 }
 
+function createLegacyFeishuButtonCard(value: { command?: string; text?: string }) {
+  return {
+    schema: "2.0",
+    body: {
+      elements: [
+        {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "Run /new" },
+              value,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: unknown) {
+  await expect(
+    feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never),
+  ).rejects.toThrow(
+    "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+  );
+  expect(sendCardFeishuMock).not.toHaveBeenCalled();
+}
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
@@ -248,69 +283,17 @@ describe("feishuPlugin actions", () => {
   });
 
   it("rejects raw legacy card command payloads", async () => {
-    const legacyCard = {
-      schema: "2.0",
-      body: {
-        elements: [
-          {
-            tag: "action",
-            actions: [
-              {
-                tag: "button",
-                text: { tag: "plain_text", content: "Run /new" },
-                value: { command: "/new" },
-              },
-            ],
-          },
-        ],
-      },
-    };
-
-    await expect(
-      feishuPlugin.actions?.handleAction?.({
-        action: "send",
-        params: { to: "chat:oc_group_1", card: legacyCard },
-        cfg,
-        accountId: undefined,
-        toolContext: {},
-      } as never),
-    ).rejects.toThrow(
-      "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ command: "/new" }),
     );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("rejects raw legacy card text payloads", async () => {
-    const legacyCard = {
-      schema: "2.0",
-      body: {
-        elements: [
-          {
-            tag: "action",
-            actions: [
-              {
-                tag: "button",
-                text: { tag: "plain_text", content: "Run /new" },
-                value: { text: "/new" },
-              },
-            ],
-          },
-        ],
-      },
-    };
-
-    await expect(
-      feishuPlugin.actions?.handleAction?.({
-        action: "send",
-        params: { to: "chat:oc_group_1", card: legacyCard },
-        cfg,
-        accountId: undefined,
-        toolContext: {},
-      } as never),
-    ).rejects.toThrow(
-      "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ text: "/new" }),
     );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
   });
 
   it("allows non-button controls to carry text metadata values", async () => {
