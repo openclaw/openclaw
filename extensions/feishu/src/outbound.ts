@@ -40,6 +40,33 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   return raw;
 }
 
+/** Markdown image pattern: ![alt](url) — only HTTP(S) URLs. */
+const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/(?:[^)(]|\((?:[^)(]*)\))*)\)/g;
+
+/**
+ * Extract markdown image URLs from text and return cleaned text with
+ * image references removed. Only extracts HTTP(S) URLs.
+ * Skips images inside fenced code blocks to avoid mangling code examples.
+ */
+function extractMarkdownImageUrls(text: string): { imageUrls: string[]; cleanedText: string } {
+  const imageUrls: string[] = [];
+  // Split on fenced code blocks to avoid extracting images from code examples.
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  const processed = parts.map((part, i) => {
+    // Odd-indexed parts are fenced code blocks — leave them intact.
+    if (i % 2 === 1) return part;
+    return part.replace(MARKDOWN_IMAGE_RE, (_match, _alt: string, url: string) => {
+      imageUrls.push(url);
+      return "";
+    });
+  });
+  const cleanedText = processed
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { imageUrls, cleanedText };
+}
+
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
@@ -64,14 +91,32 @@ async function sendOutboundText(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
+  identity?: { name?: string; emoji?: string };
 }) {
-  const { cfg, to, text, accountId, replyToMessageId } = params;
+  const { cfg, to, text, accountId, replyToMessageId, replyInThread, identity } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
   if (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) {
-    return sendMarkdownCardFeishu({ cfg, to, text, accountId, replyToMessageId });
+    const header = identity
+      ? {
+          title: identity.emoji
+            ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+            : (identity.name ?? ""),
+          template: "blue" as const,
+        }
+      : undefined;
+    return sendStructuredCardFeishu({
+      cfg,
+      to,
+      text,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+      header: header?.title ? header : undefined,
+    });
   }
 
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
@@ -112,6 +157,47 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         } catch (err) {
           console.error(`[feishu] local image path auto-send failed:`, err);
           // fall through to plain text as last resort
+        }
+      }
+
+      // Extract markdown image URLs from LLM output and upload as native
+      // Feishu images instead of sending them as plain text links.
+      const extracted = extractMarkdownImageUrls(text);
+      if (extracted.imageUrls.length > 0) {
+        let remainingText = extracted.cleanedText;
+        let lastMediaResult: Awaited<ReturnType<typeof sendMediaFeishu>> | undefined;
+        for (const url of extracted.imageUrls) {
+          try {
+            lastMediaResult = await sendMediaFeishu({
+              cfg,
+              to,
+              mediaUrl: url,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+              replyInThread: threadId != null && !replyToId,
+              mediaLocalRoots,
+            });
+          } catch (err) {
+            console.error(`[feishu] image URL upload failed for ${url}:`, err);
+            // Preserve the URL as a plain link so the user still sees it.
+            remainingText = [remainingText, `📎 ${url}`].filter(Boolean).join("\n\n");
+          }
+        }
+        // Send remaining text if any content is left after removing image references.
+        if (remainingText) {
+          return await sendOutboundText({
+            cfg,
+            to,
+            text: remainingText,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread: threadId != null && !replyToId,
+            identity,
+          });
+        }
+        // Only images, no remaining text.
+        if (lastMediaResult) {
+          return lastMediaResult;
         }
       }
 

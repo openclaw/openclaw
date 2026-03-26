@@ -311,7 +311,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledWith(
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "chat_1",
         text: "| a | b |\n| - | - |",
@@ -353,6 +353,154 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         text: "caption",
         replyToMessageId: "om_thread_1",
         accountId: "main",
+      }),
+    );
+  });
+});
+
+describe("feishuOutbound.sendText markdown image extraction", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("extracts markdown image URL and sends as native image", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "Here is the result:\n\n![generated image](https://example.com/image.png)",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        mediaUrl: "https://example.com/image.png",
+        accountId: "main",
+      }),
+    );
+    // Remaining text should still be sent
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "Here is the result:",
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("handles multiple markdown images", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "![img1](https://example.com/a.png)\n\n![img2](https://example.com/b.jpg)",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/a.png" }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaUrl: "https://example.com/b.jpg" }),
+    );
+    // No remaining text, so text send should not be called
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("sends only text when no markdown images present", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "No images here, just text.",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "No images here, just text." }),
+    );
+  });
+
+  it("falls back gracefully when image upload fails", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "Check this:\n\n![img](https://example.com/broken.png)\n\nDone.",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    // Remaining text should still be sent
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("📎 https://example.com/broken.png"),
+      }),
+    );
+  });
+
+  it("does not extract non-HTTP image URLs", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "![local](file:///tmp/secret.png) and ![data](data:image/png;base64,abc)",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles image-only text without remaining content", async () => {
+    const result = await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "![only image](https://example.com/photo.jpg)",
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+
+  it("preserves replyToId when extracting images", async () => {
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: "Reply with image:\n\n![pic](https://example.com/reply.png)",
+      replyToId: "om_reply_1",
+      accountId: "main",
+    } as any);
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_reply_1",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_reply_1",
+      }),
+    );
+  });
+
+  it("does not extract images inside fenced code blocks", async () => {
+    const codeExample =
+      "Here is how to write markdown:\n\n```\n![example](https://example.com/demo.png)\n```";
+    await sendText({
+      cfg: {} as any,
+      to: "chat_1",
+      text: codeExample,
+      accountId: "main",
+    });
+
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+    // Text contains code block, so it should use card rendering
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: codeExample,
       }),
     );
   });
