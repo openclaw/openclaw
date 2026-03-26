@@ -1,6 +1,7 @@
 {
   "id": "google",
   "providers": ["google", "google-gemini-cli"],
+  "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },

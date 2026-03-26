@@ -8,6 +8,7 @@ function manifest(id: string): PluginManifestRecord {
     id,
     channels: [],
     providers: [],
+    cliBackends: [],
     skills: [],
     hooks: [],
     origin: "bundled",

@@ -61,6 +61,7 @@ function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): Plugi
       id: p.id,
       channels: p.channels,
       providers: [],
+      cliBackends: [],
       skills: [],
       hooks: [],
       origin: "config" as const,
