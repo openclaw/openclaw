@@ -14,7 +14,9 @@ export function resolveActiveRunQueueAction(params: {
   if (params.isHeartbeat) {
     return "drop";
   }
-  if (params.shouldFollowup || params.queueMode === "steer") {
+  // "interrupt" is deprecated and remapped to "collect" upstream, but if it
+  // somehow arrives here, enqueue instead of running concurrently.
+  if (params.shouldFollowup || params.queueMode === "steer" || params.queueMode === "interrupt") {
     return "enqueue-followup";
   }
   return "run-now";

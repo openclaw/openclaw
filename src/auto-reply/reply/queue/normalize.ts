@@ -9,7 +9,9 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
     return "steer";
   }
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
-    return "interrupt";
+    // Deprecated: interrupt mode caused confusing "Agent was aborted" messages
+    // when users sent follow-up messages. Now treated as collect (queue silently).
+    return "collect";
   }
   if (cleaned === "steer" || cleaned === "steering") {
     return "steer";

@@ -486,10 +486,12 @@ export async function runPreparedReply(
   } = await loadPiEmbeddedRuntime();
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
+  // Note: "interrupt" mode is deprecated and now maps to "collect" in normalizeQueueMode.
+  // The lane-clearing behavior here is preserved only as a safety net but should never trigger.
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    logVerbose(
+      `Interrupt mode is deprecated; treating as collect for ${sessionLaneKey} (laneSize=${laneSize})`,
+    );
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);

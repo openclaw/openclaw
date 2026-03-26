@@ -45,4 +45,15 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("enqueue-followup");
   });
+
+  it("enqueues interrupt mode runs instead of running concurrently (deprecated)", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        shouldFollowup: false,
+        queueMode: "interrupt",
+      }),
+    ).toBe("enqueue-followup");
+  });
 });

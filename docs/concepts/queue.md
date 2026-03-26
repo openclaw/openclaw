@@ -30,7 +30,7 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 - `followup`: enqueue for the next agent turn after the current run ends.
 - `collect`: coalesce all queued messages into a **single** followup turn (default). If messages target different channels/threads, they drain individually to preserve routing.
 - `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the message for a followup turn.
-- `interrupt` (legacy): abort the active run for that session, then run the newest message.
+- `interrupt` (deprecated): previously aborted the active run; now remapped to `collect` to avoid confusing "Agent was aborted" messages when users send follow-up messages.
 - `queue` (legacy alias): same as `steer`.
 
 Steer-backlog means you can get a followup response after the steered run, so
