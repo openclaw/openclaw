@@ -287,6 +287,10 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
       completedAt: null,
     };
   } else if (phase === "end") {
+    const willRetry = data.willRetry === true;
+    if (willRetry) {
+      return;
+    }
     host.compactionStatus = {
       active: false,
       startedAt: host.compactionStatus?.startedAt ?? null,
