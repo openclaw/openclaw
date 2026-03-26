@@ -67,10 +67,26 @@ const targetedUnitProxyFiles = [
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
-function runPlannerPlan(args: string[], env: NodeJS.ProcessEnv): string {
+function createPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...clearPlannerShardEnv(process.env),
+    ...overrides,
+  };
+}
+
+function createLocalPlannerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return createPlannerEnv({
+    CI: "",
+    GITHUB_ACTIONS: "",
+    OPENCLAW_TEST_LOAD_AWARE: "0",
+    ...overrides,
+  });
+}
+
+function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): string {
   return execFileSync("node", ["scripts/test-parallel.mjs", ...args], {
     cwd: REPO_ROOT,
-    env,
+    env: createPlannerEnv(envOverrides),
     encoding: "utf8",
   });
 }
@@ -78,15 +94,11 @@ function runPlannerPlan(args: string[], env: NodeJS.ProcessEnv): string {
 function runHighMemoryLocalMultiSurfacePlan(): string {
   return runPlannerPlan(
     ["--plan", "--surface", "unit", "--surface", "extensions", "--surface", "channels"],
-    {
-      ...clearPlannerShardEnv(process.env),
-      CI: "",
-      GITHUB_ACTIONS: "",
+    createLocalPlannerEnv({
       RUNNER_OS: "macOS",
       OPENCLAW_TEST_HOST_CPU_COUNT: "12",
       OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-      OPENCLAW_TEST_LOAD_AWARE: "0",
-    },
+    }),
   );
 }
 
@@ -191,14 +203,8 @@ describe("scripts/test-parallel memory trace parsing", () => {
 
 describe("scripts/test-parallel lane planning", () => {
   it("keeps serial profile on split unit lanes instead of one giant unit worker", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        OPENCLAW_TEST_PROFILE: "serial",
-      },
-      encoding: "utf8",
+    const output = runPlannerPlan(["--plan"], {
+      OPENCLAW_TEST_PROFILE: "serial",
     });
 
     expect(output).toContain("unit-fast");
@@ -206,16 +212,10 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("recycles default local unit-fast runs into bounded batches", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--plan"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        CI: "",
-        OPENCLAW_TEST_UNIT_FAST_LANES: "1",
-        OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
-      },
-      encoding: "utf8",
+    const output = runPlannerPlan(["--plan"], {
+      CI: "",
+      OPENCLAW_TEST_UNIT_FAST_LANES: "1",
+      OPENCLAW_TEST_UNIT_FAST_BATCH_TARGET_MS: "1",
     });
 
     expect(output).toContain("unit-fast-batch-");
@@ -223,44 +223,24 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("keeps legacy base-pinned targeted reruns on dedicated forks lanes", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      [
-        "scripts/test-parallel.mjs",
-        "--plan",
-        "--files",
-        "src/auto-reply/reply/followup-runner.test.ts",
-      ],
-      {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      },
-    );
+    const output = runPlannerPlan([
+      "--plan",
+      "--files",
+      "src/auto-reply/reply/followup-runner.test.ts",
+    ]);
 
     expect(output).toContain("base-pinned-followup-runner");
     expect(output).not.toContain("base-followup-runner");
   });
 
   it("reports capability-derived output for mid-memory local macOS hosts", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      ["scripts/test-parallel.mjs", "--plan", "--surface", "unit", "--surface", "extensions"],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "10",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
+    const output = runPlannerPlan(
+      ["--plan", "--surface", "unit", "--surface", "extensions"],
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      }),
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=mid");
@@ -269,40 +249,21 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("uses higher shared extension worker counts on high-memory local hosts", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const highMemoryOutput = execFileSync(
-      "node",
-      ["scripts/test-parallel.mjs", "--plan", "--surface", "extensions"],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
+    const highMemoryOutput = runPlannerPlan(
+      ["--plan", "--surface", "extensions"],
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
-    const midMemoryOutput = execFileSync(
-      "node",
-      ["scripts/test-parallel.mjs", "--plan", "--surface", "extensions"],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "10",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
+    const midMemoryOutput = runPlannerPlan(
+      ["--plan", "--surface", "extensions"],
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      }),
     );
 
     expect(midMemoryOutput).toContain("extensions-batch-1 filters=all maxWorkers=3");
@@ -335,29 +296,18 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("uses earlier targeted channel batching on high-memory local hosts", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
+    const output = runPlannerPlan(
       [
-        "scripts/test-parallel.mjs",
         "--plan",
         "--surface",
         "channels",
         ...targetedChannelProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
 
     expect(output).toContain("channels-batch-1 filters=33");
@@ -366,29 +316,18 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("uses targeted unit batching on high-memory local hosts", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
+    const output = runPlannerPlan(
       [
-        "scripts/test-parallel.mjs",
         "--plan",
         "--surface",
         "unit",
         ...targetedUnitProxyFiles.flatMap((file) => ["--files", file]),
       ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "macOS",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "12",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-          OPENCLAW_TEST_LOAD_AWARE: "0",
-        },
-        encoding: "utf8",
-      },
+      createLocalPlannerEnv({
+        RUNNER_OS: "macOS",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "12",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
 
     expect(output).toContain("unit-batch-1 filters=50");
@@ -397,16 +336,7 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("explains targeted file ownership and execution policy", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      ["scripts/test-parallel.mjs", "--explain", "src/auto-reply/reply/followup-runner.test.ts"],
-      {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      },
-    );
+    const output = runPlannerPlan(["--explain", "src/auto-reply/reply/followup-runner.test.ts"]);
 
     expect(output).toContain("surface=base");
     expect(output).toContain("reasons=base-surface,base-pinned-manifest");
@@ -414,23 +344,17 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("prints the planner-backed CI manifest as JSON", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--ci-manifest"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        GITHUB_EVENT_NAME: "pull_request",
-        OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_DOCS_CHANGED: "false",
-        OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_MACOS: "true",
-        OPENCLAW_CI_RUN_ANDROID: "false",
-        OPENCLAW_CI_RUN_WINDOWS: "true",
-        OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
-        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
-        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
-      },
-      encoding: "utf8",
+    const output = runPlannerPlan(["--ci-manifest"], {
+      GITHUB_EVENT_NAME: "pull_request",
+      OPENCLAW_CI_DOCS_ONLY: "false",
+      OPENCLAW_CI_DOCS_CHANGED: "false",
+      OPENCLAW_CI_RUN_NODE: "true",
+      OPENCLAW_CI_RUN_MACOS: "true",
+      OPENCLAW_CI_RUN_ANDROID: "false",
+      OPENCLAW_CI_RUN_WINDOWS: "true",
+      OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
+      OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
+      OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
     });
 
     const manifest = JSON.parse(output);
@@ -514,28 +438,13 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("passes through vitest --mode values that are not wrapper runtime overrides", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync(
-      "node",
-      [
-        "scripts/test-parallel.mjs",
-        "--plan",
-        "--mode",
-        "development",
-        "src/infra/outbound/deliver.test.ts",
-      ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...clearPlannerShardEnv(process.env),
-          CI: "",
-          GITHUB_ACTIONS: "",
-          RUNNER_OS: "Linux",
-          OPENCLAW_TEST_HOST_CPU_COUNT: "16",
-          OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
-        },
-        encoding: "utf8",
-      },
+    const output = runPlannerPlan(
+      ["--plan", "--mode", "development", "src/infra/outbound/deliver.test.ts"],
+      createLocalPlannerEnv({
+        RUNNER_OS: "Linux",
+        OPENCLAW_TEST_HOST_CPU_COUNT: "16",
+        OPENCLAW_TEST_HOST_MEMORY_GIB: "128",
+      }),
     );
 
     expect(output).toContain("mode=local intent=normal memoryBand=high");
@@ -543,90 +452,43 @@ describe("scripts/test-parallel lane planning", () => {
   });
 
   it("rejects removed machine-name profiles", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--profile", "macmini"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Unsupported test profile "macmini"/u);
+    expect(() => runPlannerPlan(["--plan", "--profile", "macmini"])).toThrowError(
+      /Unsupported test profile "macmini"/u,
+    );
   });
 
   it("rejects unknown explicit surface names", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--surface", "channel"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Unsupported --surface value\(s\): channel/u);
+    expect(() => runPlannerPlan(["--plan", "--surface", "channel"])).toThrowError(
+      /Unsupported --surface value\(s\): channel/u,
+    );
   });
 
   it("rejects wrapper --files values that look like options", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--files", "--config"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Invalid --files value/u);
+    expect(() => runPlannerPlan(["--plan", "--files", "--config"])).toThrowError(
+      /Invalid --files value/u,
+    );
   });
 
   it("rejects missing --profile values", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--profile"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Invalid --profile value/u);
+    expect(() => runPlannerPlan(["--plan", "--profile"])).toThrowError(/Invalid --profile value/u);
   });
 
   it("rejects missing --surface values", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--surface"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Invalid --surface value/u);
+    expect(() => runPlannerPlan(["--plan", "--surface"])).toThrowError(/Invalid --surface value/u);
   });
 
   it("rejects missing --explain values", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-    expect(() =>
-      execFileSync("node", ["scripts/test-parallel.mjs", "--explain"], {
-        cwd: repoRoot,
-        env: clearPlannerShardEnv(process.env),
-        encoding: "utf8",
-      }),
-    ).toThrowError(/Invalid --explain value/u);
+    expect(() => runPlannerPlan(["--explain"])).toThrowError(/Invalid --explain value/u);
   });
 
   it("rejects explicit existing files that are not known test files", () => {
-    const repoRoot = path.resolve(import.meta.dirname, "../..");
     const tempFilePath = path.join(os.tmpdir(), `openclaw-non-test-${Date.now()}.ts`);
     fs.writeFileSync(tempFilePath, "export const notATest = true;\n", "utf8");
 
     try {
-      expect(() =>
-        execFileSync("node", ["scripts/test-parallel.mjs", "--plan", "--files", tempFilePath], {
-          cwd: repoRoot,
-          env: clearPlannerShardEnv(process.env),
-          encoding: "utf8",
-        }),
-      ).toThrowError(/is not a known test file/u);
+      expect(() => runPlannerPlan(["--plan", "--files", tempFilePath])).toThrowError(
+        /is not a known test file/u,
+      );
     } finally {
       fs.rmSync(tempFilePath, { force: true });
     }
