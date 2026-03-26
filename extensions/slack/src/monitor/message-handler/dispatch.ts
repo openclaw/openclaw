@@ -340,6 +340,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
       const reply = resolveSendableOutboundReplyParts(payload);
       const slackBlocks = readSlackReplyBlocks(payload);
+      // Flush pending draft so messageId is available — prevents double messages
+      // when the LLM finishes before the throttle fires (#54857)
+      if (hasStreamedMessage && draftStream && !draftStream.messageId()) await draftStream.flush();
       const draftMessageId = draftStream?.messageId();
       const draftChannelId = draftStream?.channelId();
       const finalText = reply.text;
