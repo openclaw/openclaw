@@ -84,6 +84,30 @@ export function isProfileInCooldown(
   return unusableUntil ? ts < unusableUntil : false;
 }
 
+export function isProfileInCooldownWithTimestamp(
+  store: AuthProfileStore,
+  profileId: string,
+  now: number,
+  forModel?: string,
+): boolean {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return false;
+  }
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return false;
+  }
+  // Model-aware bypass: if the cooldown was caused by a rate_limit on a
+  // specific model and the caller is requesting a *different* model, allow it.
+  // We still honour any active billing/auth disable (`disabledUntil`) — those
+  // are profile-wide and must not be short-circuited by model scoping.
+  if (shouldBypassModelScopedCooldown(stats, now, forModel)) {
+    return false;
+  }
+  const unusableUntil = resolveProfileUnusableUntil(stats);
+  return unusableUntil ? now < unusableUntil : false;
+}
+
 function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
   return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
 }
@@ -185,6 +209,32 @@ export function getSoonestCooldownExpiry(
       continue;
     }
     if (shouldBypassModelScopedCooldown(stats, ts, options?.forModel)) {
+      continue;
+    }
+    const until = resolveProfileUnusableUntil(stats);
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
+      continue;
+    }
+    if (soonest === null || until < soonest) {
+      soonest = until;
+    }
+  }
+  return soonest;
+}
+
+export function getSoonestCooldownExpiryWithTimestamp(
+  store: AuthProfileStore,
+  profileIds: string[],
+  now: number,
+  forModel?: string,
+): number | null {
+  let soonest: number | null = null;
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    if (shouldBypassModelScopedCooldown(stats, now, forModel)) {
       continue;
     }
     const until = resolveProfileUnusableUntil(stats);

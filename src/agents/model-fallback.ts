@@ -303,9 +303,12 @@ function resolveFallbackSoonestCooldownExpiry(params: {
       store: refreshedStore,
       provider: candidate.provider,
     });
-    const candidateSoonest = getSoonestCooldownExpiry(refreshedStore, ids, {
-      forModel: candidate.model,
-    });
+    const candidateSoonest = getSoonestCooldownExpiryWithTimestamp(
+      refreshedStore,
+      ids,
+      params.now,
+      candidate.model,
+    );
     if (
       typeof candidateSoonest === "number" &&
       Number.isFinite(candidateSoonest) &&
