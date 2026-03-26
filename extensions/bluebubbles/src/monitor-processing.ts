@@ -1658,6 +1658,19 @@ export async function processReaction(
   const peerId = reaction.isGroup
     ? (chatGuid ?? chatIdentifier ?? (chatId ? String(chatId) : "group"))
     : reaction.senderId;
+  const requireMention =
+    reaction.isGroup &&
+    core.channel.groups.resolveRequireMention({
+      cfg: config,
+      channel: "bluebubbles",
+      groupId: peerId,
+      accountId: account.accountId,
+    });
+
+  if (requireMention) {
+    logVerbose(core, runtime, "bluebubbles: skipping group reaction (requireMention=true)");
+    return;
+  }
 
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,

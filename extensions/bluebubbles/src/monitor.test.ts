@@ -1318,6 +1318,28 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("skips group reactions when requireMention=true", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(true);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
     it("enqueues system event for reaction added", async () => {
       mockEnqueueSystemEvent.mockClear();
 
@@ -1325,6 +1347,31 @@ describe("BlueBubbles webhook monitor", () => {
 
       const payload = createTimestampedMessageReactionPayloadForTest({
         associatedMessageType: 2000, // Heart reaction added
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("reacted with ❤️ [[reply_to:"),
+        expect.any(Object),
+      );
+    });
+
+    it("enqueues group reactions when requireMention=false", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "open",
+        }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
       });
 
       await dispatchWebhookPayload(payload);
