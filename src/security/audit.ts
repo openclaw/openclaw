@@ -256,6 +256,8 @@ async function collectFilesystemFindings(params: {
         severity: "warn",
         title: "State dir is a symlink",
         detail: `${params.stateDir} is a symlink; treat this as an extra trust boundary.`,
+        remediation:
+          "Prefer a real directory for OPENCLAW_STATE_DIR, or verify that the symlink target is private and fully trusted.",
       });
     }
     if (stateDirPerms.worldWritable) {
@@ -316,6 +318,8 @@ async function collectFilesystemFindings(params: {
         severity: "warn",
         title: "Config file is a symlink",
         detail: `${params.configPath} is a symlink; make sure you trust its target.`,
+        remediation:
+          "Prefer a real config file path for openclaw.json, or verify that the symlink target is only writable by trusted operators.",
       });
     }
     if (configPerms.worldWritable || configPerms.groupWritable) {
@@ -636,6 +640,8 @@ function collectGatewayConfigFindings(
       severity: "warn",
       title: "Gateway token looks short",
       detail: `gateway auth token is ${token.length} chars; prefer a long random token.`,
+      remediation:
+        "Generate a longer random token for gateway.auth.token (recommended 24+ chars) and restart the gateway.",
     });
   }
 
@@ -875,6 +881,7 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
         severity: "critical",
         title: "Elevated exec allowlist contains wildcard",
         detail: `tools.elevated.allowFrom.${provider} includes "*" which effectively approves everyone on that channel for elevated mode.`,
+        remediation: `Replace tools.elevated.allowFrom.${provider} "*" with a short explicit allowlist of trusted operator ids.`,
       });
     } else if (normalized.length > 25) {
       findings.push({
@@ -882,6 +889,7 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
         severity: "warn",
         title: "Elevated exec allowlist is large",
         detail: `tools.elevated.allowFrom.${provider} has ${normalized.length} entries; consider tightening elevated access.`,
+        remediation: `Reduce tools.elevated.allowFrom.${provider} to the minimum trusted set, or move broad access back to non-elevated tools.`,
       });
     }
   }
