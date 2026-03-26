@@ -174,6 +174,7 @@ describe("plugin contract registry", () => {
     expect(findImageGenerationProviderIdsForPlugin("fal")).toEqual(["fal"]);
     expect(findImageGenerationProviderIdsForPlugin("google")).toEqual(["google"]);
     expect(findImageGenerationProviderIdsForPlugin("openai")).toEqual(["openai"]);
+    expect(findImageGenerationProviderIdsForPlugin("xai")).toEqual(["xai"]);
   });
 
   it("keeps bundled provider and web search tool ownership explicit", () => {
@@ -217,6 +218,13 @@ describe("plugin contract registry", () => {
       mediaUnderstandingProviderIds: ["google"],
       imageGenerationProviderIds: ["google"],
       webSearchProviderIds: ["gemini"],
+    });
+    expect(findRegistrationForPlugin("xai")).toMatchObject({
+      providerIds: ["xai"],
+      speechProviderIds: [],
+      mediaUnderstandingProviderIds: [],
+      imageGenerationProviderIds: ["xai"],
+      webSearchProviderIds: ["grok"],
     });
     expect(findRegistrationForPlugin("openai")).toMatchObject({
       providerIds: ["openai", "openai-codex"],

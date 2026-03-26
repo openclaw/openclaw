@@ -1,6 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyXaiModelCompat } from "openclaw/plugin-sdk/provider-models";
 import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
@@ -60,6 +61,7 @@ export default defineSingleProviderPluginEntry({
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },
   register(api) {
+    api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
     api.registerWebSearchProvider(createXaiWebSearchProvider());
   },
 });

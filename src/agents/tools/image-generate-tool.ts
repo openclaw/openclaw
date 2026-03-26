@@ -38,10 +38,11 @@ import {
 } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
-const MAX_COUNT = 4;
+const MAX_COUNT = 10;
 const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const SUPPORTED_ASPECT_RATIOS = new Set([
+  "auto",
   "1:1",
   "2:3",
   "3:2",
@@ -49,9 +50,15 @@ const SUPPORTED_ASPECT_RATIOS = new Set([
   "4:3",
   "4:5",
   "5:4",
+  "2:1",
+  "1:2",
   "9:16",
   "16:9",
   "21:9",
+  "19.5:9",
+  "9:19.5",
+  "20:9",
+  "9:20",
 ]);
 
 const ImageGenerateToolSchema = Type.Object({
@@ -90,7 +97,7 @@ const ImageGenerateToolSchema = Type.Object({
   aspectRatio: Type.Optional(
     Type.String({
       description:
-        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9.",
+        "Optional aspect ratio hint: auto, 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 2:1, 1:2, 9:16, 16:9, 21:9, 19.5:9, 9:19.5, 20:9, or 9:20.",
     }),
   ),
   resolution: Type.Optional(
@@ -202,7 +209,7 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
     return normalized;
   }
   throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+    "aspectRatio must be one of auto, 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 2:1, 1:2, 9:16, 16:9, 21:9, 19.5:9, 9:19.5, 20:9, or 9:20",
   );
 }
 
@@ -454,6 +461,31 @@ async function inferResolutionFromInputImages(
   return DEFAULT_RESOLUTION;
 }
 
+function clampInferredResolutionToProvider(params: {
+  resolution: ImageGenerationResolution;
+  provider: ImageGenerationProvider | undefined;
+}): ImageGenerationResolution {
+  const supported = params.provider?.capabilities.geometry?.resolutions;
+  if (!Array.isArray(supported) || supported.length === 0) {
+    return params.resolution;
+  }
+
+  const ordered: ImageGenerationResolution[] = ["1K", "2K", "4K"];
+  const targetIndex = ordered.indexOf(params.resolution);
+  if (targetIndex < 0) {
+    return params.resolution;
+  }
+
+  for (let index = targetIndex; index >= 0; index -= 1) {
+    const candidate = ordered[index];
+    if (supported.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return params.resolution;
+}
+
 export function createImageGenerateTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -553,18 +585,25 @@ export function createImageGenerateTool(options?: {
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
-      const resolution =
+      const selectedProvider = resolveSelectedImageGenerationProvider({
+        config: effectiveCfg,
+        imageGenerationModelConfig,
+        modelOverride: model,
+      });
+      const inferredResolution =
         explicitResolution ??
         (size
           ? undefined
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
             : undefined);
-      const selectedProvider = resolveSelectedImageGenerationProvider({
-        config: effectiveCfg,
-        imageGenerationModelConfig,
-        modelOverride: model,
-      });
+      const resolution =
+        inferredResolution && !explicitResolution
+          ? clampInferredResolutionToProvider({
+              resolution: inferredResolution,
+              provider: selectedProvider,
+            })
+          : inferredResolution;
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,

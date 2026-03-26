@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as imageGenerationRuntime from "../../image-generation/runtime.js";
+import type { ImageGenerationResolution } from "../../image-generation/types.js";
 import * as imageOps from "../../media/image-ops.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
@@ -155,6 +156,36 @@ function createFalEditProvider(params?: {
             },
           }
         : {}),
+    },
+    generateImage: vi.fn(async () => {
+      throw new Error("not used");
+    }),
+  };
+}
+
+function createXaiEditProvider() {
+  return {
+    id: "xai",
+    aliases: ["xai-images"],
+    defaultModel: "grok-imagine-image",
+    models: ["grok-imagine-image", "grok-imagine-image-pro"],
+    capabilities: {
+      generate: {
+        maxCount: 10,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      edit: {
+        enabled: true,
+        maxCount: 10,
+        maxInputImages: 5,
+        supportsAspectRatio: true,
+        supportsResolution: true,
+      },
+      geometry: {
+        resolutions: ["1K", "2K"] as ImageGenerationResolution[],
+        aspectRatios: ["1:1", "16:9", "3:2"],
+      },
     },
     generateImage: vi.fn(async () => {
       throw new Error("not used");
@@ -347,8 +378,8 @@ describe("createImageGenerateTool", () => {
       throw new Error("expected image_generate tool");
     }
 
-    await expect(tool.execute("call-2", { prompt: "too many cats", count: 5 })).rejects.toThrow(
-      "count must be between 1 and 4",
+    await expect(tool.execute("call-2", { prompt: "too many cats", count: 11 })).rejects.toThrow(
+      "count must be between 1 and 10",
     );
   });
 
@@ -401,6 +432,27 @@ describe("createImageGenerateTool", () => {
     expect(generateImage.mock.calls[0]?.[0].inputImages).toHaveLength(5);
   });
 
+  it("clamps inferred edit resolution to the selected provider's supported max", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createXaiEditProvider(),
+    ]);
+    const generateImage = stubEditedImageFlow({ width: 4032, height: 3024 });
+    const tool = createToolWithPrimaryImageModel("xai/grok-imagine-image", {
+      workspaceDir: process.cwd(),
+    });
+
+    await tool.execute("call-xai-edit", {
+      prompt: "Keep the composition, replace the background lighting.",
+      image: "./fixtures/reference.png",
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolution: "2K",
+      }),
+    );
+  });
+
   it("rejects unsupported aspect ratios", async () => {
     const tool = createImageGenerateTool({
       config: {
@@ -422,7 +474,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
     ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+      "aspectRatio must be one of auto, 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 2:1, 1:2, 9:16, 16:9, 21:9, 19.5:9, 9:19.5, 20:9, or 9:20",
     );
   });
 

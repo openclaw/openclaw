@@ -48,11 +48,43 @@ The bundled `grok` web-search provider uses `XAI_API_KEY` too:
 openclaw config set tools.web.search.provider grok
 ```
 
+## Image generation
+
+OpenClaw also supports xAI image generation through the shared `image_generate`
+tool.
+
+Example config:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "xai/grok-imagine-image",
+        fallbacks: ["xai/grok-imagine-image-pro"],
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `xai/grok-imagine-image` is the default bundled image model.
+- `xai/grok-imagine-image-pro` is also supported.
+- For compatibility with older custom configs, `xai-images/*` model refs keep
+  working too.
+- If you want separate image credentials from text credentials, configure
+  `models.providers.xai-images.apiKey` and point `imageGenerationModel` at
+  `xai-images/<model>`.
+
 ## Known limits
 
 - Auth is API-key only today. There is no xAI OAuth/device-code flow in OpenClaw yet.
 - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the normal xAI provider path because it requires a different upstream API surface than the standard OpenClaw xAI transport.
 - Native xAI server-side tools such as `x_search` and `code_execution` are not yet first-class model-provider features in the bundled plugin.
+- xAI image generation follows the current xAI image API surface, including
+  aspect-ratio overrides, `1K`/`2K` resolution, and reference-image edits.
 
 ## Notes
 
