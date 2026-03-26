@@ -13,11 +13,12 @@
         "mode": "off"
       },
       "model": {
-        "primary": "anthropic/claude-opus-4-6",
-        "fallbacks": ["openai-codex/gpt-5.4"]
+        "primary": "openai-codex/gpt-5.4",
+        "fallbacks": ["anthropic/claude-opus-4-6"]
       },
       "models": {
         "openai-codex/gpt-5.4": {
+          "contextWindow": 1000000,
           "params": {
             "thinking": "xhigh"
           }
