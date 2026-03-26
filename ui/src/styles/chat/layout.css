@@ -497,8 +497,8 @@
   height: 30px;
   border-radius: var(--radius-md);
   border: none;
-  background: var(--muted-strong);
-  color: var(--text-strong);
+  background: transparent;
+  color: var(--muted);
   cursor: pointer;
   flex-shrink: 0;
   transition:
@@ -518,8 +518,8 @@
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--muted);
-  box-shadow: none;
+  color: var(--text);
+  background: var(--bg-hover);
 }
 
 .chat-send-btn:disabled {
