@@ -297,7 +297,13 @@ export async function runVoyageEmbeddingBatches(
               continue;
             }
             const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-            applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+            applyEmbeddingBatchOutputLine({
+              line,
+              remaining,
+              errors,
+              byCustomId,
+              encodingFormat: params.client.encodingFormat,
+            });
           }
         },
       });

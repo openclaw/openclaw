@@ -474,14 +474,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       source,
       provider: "openai",
       enabled: Boolean(openAi),
-      buildRequest: (chunk) => ({
-        method: "POST",
-        url: OPENAI_BATCH_ENDPOINT,
-        body: {
-          model: openAi?.model ?? this.provider?.model ?? "text-embedding-3-small",
+      buildRequest: (chunk) => {
+        const model = openAi?.model ?? this.provider?.model ?? "text-embedding-3-small";
+        const body: { model: string; input: string; encoding_format?: string } = {
+          model,
           input: chunk.text,
-        },
-      }),
+        };
+        if (openAi?.encodingFormat) {
+          body.encoding_format = openAi.encodingFormat;
+        }
+        return {
+          method: "POST",
+          url: OPENAI_BATCH_ENDPOINT,
+          body,
+        };
+      },
       runBatch: async (runnerOptions) =>
         await runOpenAiEmbeddingBatches({
           openAi: openAi!,

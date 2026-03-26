@@ -12,6 +12,7 @@ export type OpenAiEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  encodingFormat?: "float" | "base64";
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
