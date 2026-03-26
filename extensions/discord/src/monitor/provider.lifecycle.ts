@@ -123,6 +123,10 @@ export async function runDiscordGatewayLifecycle(params: {
   const onAbort = () => {
     lifecycleStopping = true;
     reconnectStallWatchdog.disarm();
+    // Transition supervisor to teardown phase before disconnecting so that
+    // any asynchronous WebSocket close events emitted after disconnect() are
+    // suppressed instead of propagating as uncaught exceptions.
+    params.gatewaySupervisor.detachLifecycle();
     const at = Date.now();
     pushStatus({ connected: false, lastEventAt: at });
     if (!gateway) {
