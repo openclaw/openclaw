@@ -91,8 +91,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
       pollingSession?.markForceRestarted();
+      pollingSession?.markTransportDirty();
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
+      log("[telegram][diag] marking transport dirty after polling network failure");
       log(
         `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
       );
@@ -180,9 +182,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     }
 
     // Create transport once to preserve sticky IPv4 fallback state across polling restarts
-    const telegramTransport = resolveTelegramTransport(proxyFetch, {
-      network: account.config.network,
-    });
+    const createTelegramTransportForPolling = () =>
+      resolveTelegramTransport(proxyFetch, {
+        network: account.config.network,
+      });
+    const telegramTransport = createTelegramTransportForPolling();
 
     pollingSession = new TelegramPollingSession({
       token,
@@ -196,6 +200,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       persistUpdateId,
       log,
       telegramTransport,
+      createTelegramTransport: createTelegramTransportForPolling,
     });
     await pollingSession.runUntilAbort();
   } finally {
