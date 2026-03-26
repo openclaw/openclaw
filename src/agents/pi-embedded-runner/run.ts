@@ -14,6 +14,42 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import { createEmbeddedBundleMcpRuntime, type BundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+
+// Session-level MCP runtime cache: keyed by sessionId so stateful MCP servers
+// (e.g. patchright browser) survive across message turns within the same conversation.
+const sessionMcpRuntimes = new Map<string, BundleMcpToolRuntime>();
+
+async function disposeAllSessionMcpRuntimes() {
+  const entries = Array.from(sessionMcpRuntimes.values());
+  sessionMcpRuntimes.clear();
+  await Promise.allSettled(entries.map((r) => r.dispose()));
+}
+
+/**
+ * Dispose and remove the MCP runtime for a specific session.
+ * Call this when a session is reset (/new or /reset) to release transient
+ * MCP subprocesses for the old session without affecting other live sessions.
+ */
+export function disposeSessionMcpRuntime(sessionId: string): void {
+  const runtime = sessionMcpRuntimes.get(sessionId);
+  if (runtime) {
+    sessionMcpRuntimes.delete(sessionId);
+    void runtime.dispose();
+  }
+}
+
+process.once("exit", () => {
+  void disposeAllSessionMcpRuntimes();
+});
+process.once("SIGINT", async () => {
+  await disposeAllSessionMcpRuntimes();
+  process.exit(0);
+});
+process.once("SIGTERM", async () => {
+  await disposeAllSessionMcpRuntimes();
+  process.exit(0);
+});
 import {
   type AuthProfileFailureReason,
   isProfileInCooldown,
@@ -836,6 +872,17 @@ export async function runEmbeddedPiAgent(
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
+      // Reuse MCP runtime across turns within the same session so stateful MCP servers
+      // (e.g. patchright browser) stay alive between message turns.
+      const mcpCacheKey = params.sessionId;
+      let sharedMcpRuntime = sessionMcpRuntimes.get(mcpCacheKey);
+      if (!sharedMcpRuntime) {
+        sharedMcpRuntime = await createEmbeddedBundleMcpRuntime({
+          workspaceDir: resolvedWorkspace,
+          cfg: params.config,
+        });
+        sessionMcpRuntimes.set(mcpCacheKey, sharedMcpRuntime);
+      }
       try {
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
@@ -1002,6 +1049,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            bundleMcpRuntime: sharedMcpRuntime,
           });
 
           const {
@@ -1852,6 +1900,8 @@ export async function runEmbeddedPiAgent(
         }
       } finally {
         await contextEngine.dispose?.();
+        // sharedMcpRuntime is kept alive in sessionMcpRuntimes cache across turns.
+        // It is disposed by disposeSessionMcpRuntime() on /new or /reset, or when the process exits.
         stopRuntimeAuthRefreshTimer();
       }
     }),

@@ -63,7 +63,7 @@ import { createConfiguredOllamaStreamFn } from "../../ollama-stream.js";
 import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
+import { createEmbeddedBundleMcpRuntime } from "../../pi-bundle-mcp-tools.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   isCloudCodeAssistFormatError,
@@ -1839,16 +1839,19 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
-    const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
-          workspaceDir: effectiveWorkspace,
-          cfg: params.config,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
-        })
-      : undefined;
+    const injectedMcpRuntime = params.bundleMcpRuntime;
+    const bundleMcpRuntime =
+      injectedMcpRuntime ??
+      (toolsEnabled
+        ? await createEmbeddedBundleMcpRuntime({
+            workspaceDir: effectiveWorkspace,
+            cfg: params.config,
+            reservedToolNames: [
+              ...tools.map((tool) => tool.name),
+              ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ],
+          })
+        : undefined);
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -3230,7 +3233,9 @@ export async function runEmbeddedAttempt(
       });
       session?.dispose();
       releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
+      if (!injectedMcpRuntime) {
+        await bundleMcpRuntime?.dispose();
+      }
       await bundleLspRuntime?.dispose();
       await sessionLock.release();
     }

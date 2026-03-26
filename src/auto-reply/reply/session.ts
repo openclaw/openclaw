@@ -7,6 +7,7 @@ import {
 } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { disposeSessionMcpRuntime } from "../../agents/pi-embedded-runner.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -353,6 +354,9 @@ export async function initSessionState(params: {
     sessionKey,
     previousSessionId: previousSessionEntry?.sessionId,
   });
+  if (previousSessionEntry?.sessionId) {
+    disposeSessionMcpRuntime(previousSessionEntry.sessionId);
+  }
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;

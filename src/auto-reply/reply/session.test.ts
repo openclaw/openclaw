@@ -15,6 +15,7 @@ import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
+
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
 vi.mock("../../agents/session-write-lock.js", () => ({
   acquireSessionWriteLock: async () => ({ release: async () => {} }),
@@ -2218,5 +2219,106 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("+15555550123");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
+  });
+});
+
+import * as piEmbeddedRunner from "../../agents/pi-embedded-runner.js";
+
+describe("initSessionState disposeSessionMcpRuntime on session rollover", () => {
+  let disposeSpy: ReturnType<typeof vi.spyOn>;
+
+  async function seedStore(storePath: string, sessionKey: string, sessionId: string): Promise<void> {
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    });
+  }
+
+  beforeEach(() => {
+    disposeSpy = vi.spyOn(piEmbeddedRunner, "disposeSessionMcpRuntime").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    disposeSpy.mockRestore();
+  });
+
+  it("calls disposeSessionMcpRuntime with the old sessionId on /new", async () => {
+    const storePath = await makeStorePath("mcp-dispose-new-");
+    const sessionKey = "agent:main:telegram:dm:user-mcp-new";
+    const oldSessionId = "old-session-mcp-new";
+    await seedStore(storePath, sessionKey, oldSessionId);
+
+    await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-mcp-new",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(disposeSpy).toHaveBeenCalledOnce();
+    expect(disposeSpy).toHaveBeenCalledWith(oldSessionId);
+  });
+
+  it("calls disposeSessionMcpRuntime on stale (daily-reset) session rollover", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await makeStorePath("mcp-dispose-stale-");
+      const sessionKey = "agent:main:telegram:dm:user-mcp-stale";
+      const oldSessionId = "old-session-mcp-stale";
+      const staleUpdatedAt = new Date(2026, 0, 17, 3, 0, 0).getTime();
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId: oldSessionId, updatedAt: staleUpdatedAt },
+      });
+
+      await initSessionState({
+        ctx: {
+          Body: "hello",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            reset: { schedule: "daily", hour: 4 },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(disposeSpy).toHaveBeenCalledOnce();
+      expect(disposeSpy).toHaveBeenCalledWith(oldSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does NOT call disposeSessionMcpRuntime when session is still fresh", async () => {
+    const storePath = await makeStorePath("mcp-dispose-fresh-");
+    const sessionKey = "agent:main:telegram:dm:user-mcp-fresh";
+    const sessionId = "fresh-session-mcp";
+    await seedStore(storePath, sessionKey, sessionId);
+
+    await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(disposeSpy).not.toHaveBeenCalled();
   });
 });
