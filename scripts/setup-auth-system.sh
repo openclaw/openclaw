@@ -60,21 +60,42 @@ echo "  OpenClaw message: Send warning via OpenClaw itself"
 echo "Enter your phone number for alerts (or leave blank to skip):"
 read -r PHONE_NUMBER
 
-# Update service file
-SERVICE_FILE="$SCRIPT_DIR/systemd/openclaw-auth-monitor.service"
-if [ -n "$NTFY_TOPIC" ]; then
-    sed -i "s|# Environment=NOTIFY_NTFY=.*|Environment=NOTIFY_NTFY=$NTFY_TOPIC|" "$SERVICE_FILE"
-fi
-if [ -n "$PHONE_NUMBER" ]; then
-    sed -i "s|# Environment=NOTIFY_PHONE=.*|Environment=NOTIFY_PHONE=$PHONE_NUMBER|" "$SERVICE_FILE"
-fi
-
 # Install systemd units
+SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/openclaw-auth-monitor.service"
+SERVICE_TARGET="$HOME/.config/systemd/user/openclaw-auth-monitor.service"
+TIMER_TARGET="$HOME/.config/systemd/user/openclaw-auth-monitor.timer"
+AUTH_MONITOR_PATH="$SCRIPT_DIR/auth-monitor.sh"
+
 echo ""
 echo "Installing systemd timer..."
 mkdir -p ~/.config/systemd/user
-cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.service" ~/.config/systemd/user/
-cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.timer" ~/.config/systemd/user/
+cp "$SERVICE_TEMPLATE" "$SERVICE_TARGET"
+cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.timer" "$TIMER_TARGET"
+
+python3 - "$SERVICE_TARGET" "$AUTH_MONITOR_PATH" "$NTFY_TOPIC" "$PHONE_NUMBER" <<'PY'
+from pathlib import Path
+import sys
+
+service_path = Path(sys.argv[1])
+auth_monitor_path = sys.argv[2]
+ntfy_topic = sys.argv[3]
+phone_number = sys.argv[4]
+
+content = service_path.read_text()
+content = content.replace("ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh", f"ExecStart={auth_monitor_path}")
+if ntfy_topic:
+    content = content.replace(
+        "# Environment=NOTIFY_NTFY=openclaw-alerts",
+        f"Environment=NOTIFY_NTFY={ntfy_topic}",
+    )
+if phone_number:
+    content = content.replace(
+        "# Environment=NOTIFY_PHONE=+1234567890",
+        f"Environment=NOTIFY_PHONE={phone_number}",
+    )
+service_path.write_text(content)
+PY
+
 systemctl --user daemon-reload
 systemctl --user enable --now openclaw-auth-monitor.timer
 
