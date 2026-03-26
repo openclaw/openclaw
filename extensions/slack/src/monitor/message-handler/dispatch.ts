@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/config-runtime";
+import { triggerInternalHook, createInternalHookEvent } from "openclaw/plugin-sdk/hook-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -263,6 +264,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
     const reply = resolveSendableOutboundReplyParts(payload);
+    console.error(
+      `[slack-trace] deliverWithStreaming enter channel=${message.channel} ts=${message.ts ?? "-"} streamFailed=${streamFailed} hasMedia=${reply.hasMedia} hasText=${reply.hasText} streamSession=${streamSession ? "active" : "null"}`,
+    );
     if (streamFailed || reply.hasMedia || readSlackReplyBlocks(payload)?.length || !reply.hasText) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
@@ -301,6 +305,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         text: "\n" + text,
       });
     } catch (err) {
+      console.error(
+        `[slack-trace] deliverWithStreaming error channel=${message.channel} ts=${message.ts ?? "-"}: ${String(err)}`,
+      );
       runtime.error?.(
         danger(`slack-stream: streaming API call failed: ${String(err)}, falling back`),
       );
@@ -313,6 +320,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload) => {
+      console.error(
+        `[slack-trace] dispatch deliver channel=${message.channel} ts=${message.ts ?? "-"} useStreaming=${useStreaming} previewStreaming=${previewStreamingEnabled} text_len=${payload.text?.length ?? 0}`,
+      );
       if (useStreaming) {
         await deliverWithStreaming(payload);
         return;
@@ -376,6 +386,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       await deliverNormally(payload);
     },
     onError: (err, info) => {
+      console.error(
+        `[slack-trace] dispatch onError channel=${message.channel} ts=${message.ts ?? "-"} kind=${info.kind}: ${String(err)}`,
+      );
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       replyPipeline.typingCallbacks?.onIdle?.();
     },
@@ -522,7 +535,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  // Also check usedReplyThreadTs: when the model produces multiple turns and the
+  // last turn is empty, dispatchInboundMessage counts show 0 despite a reply having
+  // been delivered in an earlier turn. usedReplyThreadTs is set in deliverNormally
+  // only after deliverReplies completes, so it's a reliable "something was sent" signal.
+  // When the inner dispatcher (inside dispatchReplyFromConfig) delivers directly to
+  // Slack without routing through the outer dispatcher's deliver callback, counts stay
+  // at 0 and usedReplyThreadTs is never set. Use elapsed time as a proxy: any dispatch
+  // that actually ran the model takes multiple seconds; filtered/empty exits are <100ms.
+  const dispatchElapsedMs = Date.now() - dispatchStartedAt;
+  const likelyDelivered = dispatchElapsedMs > 2000 && !!statusThreadTs;
+  console.error(
+    `[slack-trace] pre-hook-check queuedFinal=${queuedFinal} blockCount=${counts?.block ?? 0} finalCount=${counts?.final ?? 0} usedReplyThreadTs=${usedReplyThreadTs ?? "undefined"} statusThreadTs=${statusThreadTs ?? "undefined"} elapsedMs=${dispatchElapsedMs} likelyDelivered=${likelyDelivered}`,
+  );
+  const anyReplyDelivered =
+    queuedFinal ||
+    (counts.block ?? 0) > 0 ||
+    (counts.final ?? 0) > 0 ||
+    !!usedReplyThreadTs ||
+    likelyDelivered;
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
@@ -530,6 +561,26 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
   if (anyReplyDelivered && participationThreadTs) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
+
+    // Fire internal message:sent hook so workspace hooks (e.g., steerer/reviewer)
+    // can react to completed deliveries. The Slack extension uses a custom send path
+    // that bypasses the generic outbound delivery module, so we fire the hook here.
+    console.error(
+      `[slack-trace] firing internal message:sent hook session=${prepared.ctxPayload.SessionKey ?? "-"} channel=${message.channel} thread=${participationThreadTs}`,
+    );
+    void triggerInternalHook(
+      createInternalHookEvent("message", "sent", prepared.ctxPayload.SessionKey ?? "", {
+        channelId: message.channel,
+        conversationId: participationThreadTs,
+        to: prepared.replyTarget,
+        success: true,
+        accountId: account.accountId,
+        botUserId: ctx.botUserId,
+        cfg,
+      }),
+    ).catch((err) => {
+      console.error(`[slack-trace] internal message:sent hook failed: ${String(err)}`);
+    });
   }
 
   if (!anyReplyDelivered) {

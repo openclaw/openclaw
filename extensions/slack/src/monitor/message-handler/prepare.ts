@@ -179,7 +179,16 @@ async function authorizeSlackInboundMessage(params: {
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
-      return null;
+      // Allow reviewer messages through so the GPT-5.4 review loop works:
+      // steerer posts "🔍 *Reviewer:*" in-thread using the bot token, and we
+      // need the agent to pick it up as inbound instead of dropping it.
+      const isReviewerMessage =
+        typeof message.text === "string" &&
+        (message.text.startsWith("🔍 *Reviewer:*") || message.text.startsWith(":mag: *Reviewer:*"));
+      if (!isReviewerMessage) {
+        return null;
+      }
+      logVerbose("slack: allowing reviewer self-message through");
     }
     if (!allowBots) {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
