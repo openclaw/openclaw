@@ -35,6 +35,14 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+export function getFollowupQueueSize(key: string): number {
+  const queue = getExistingFollowupQueue(key);
+  if (!queue) {
+    return 0;
+  }
+  return queue.items.length + queue.droppedCount;
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {

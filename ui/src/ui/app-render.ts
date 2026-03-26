@@ -78,6 +78,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadChatSessionActivity } from "./controllers/session-activity.ts";
 import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -1449,6 +1450,8 @@ export function renderApp(state: AppViewState) {
                   state.chatStream = null;
                   state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  state.chatStopping = false;
+                  state.chatSessionActivity = null;
                   state.chatQueue = [];
                   state.resetToolStream();
                   state.resetChatScroll();
@@ -1459,6 +1462,7 @@ export function renderApp(state: AppViewState) {
                   });
                   void state.loadAssistantIdentity();
                   void loadChatHistory(state);
+                  void loadChatSessionActivity(state);
                   void refreshChatAvatar(state);
                 },
                 thinkingLevel: state.chatThinkingLevel,
@@ -1484,7 +1488,11 @@ export function renderApp(state: AppViewState) {
                 focusMode: chatFocus,
                 onRefresh: () => {
                   state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                  return Promise.all([
+                    loadChatHistory(state),
+                    loadChatSessionActivity(state),
+                    refreshChatAvatar(state),
+                  ]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {
@@ -1502,8 +1510,36 @@ export function renderApp(state: AppViewState) {
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
                 onSend: () => state.handleSendChat(),
-                canAbort: Boolean(state.chatRunId),
+                canAbort: Boolean(
+                  state.chatRunId || state.chatStopping || state.chatSessionActivity?.canStop,
+                ),
+                abortTitle: state.chatSessionActivity?.canStop
+                  ? "Stop autonomous session tasks"
+                  : undefined,
                 onAbort: () => void state.handleAbortChat(),
+                heartbeatsEnabled: state.heartbeatsEnabled,
+                heartbeatStopping: state.heartbeatStopping,
+                onStopHeartbeats: async () => {
+                  if (!state.client || !state.connected || state.heartbeatStopping) {
+                    return;
+                  }
+                  state.heartbeatStopping = true;
+                  try {
+                    // Abort active run if one is in progress
+                    if (state.chatRunId || state.chatSessionActivity?.canStop) {
+                      await state.handleAbortChat();
+                    }
+                    // Also disable the heartbeat system if it's enabled
+                    if (state.heartbeatsEnabled) {
+                      await state.client.request("set-heartbeats", { enabled: false });
+                      state.heartbeatsEnabled = false;
+                    }
+                  } catch (err) {
+                    state.lastError = `Failed to stop: ${String(err)}`;
+                  } finally {
+                    state.heartbeatStopping = false;
+                  }
+                },
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 onClearHistory: async () => {
@@ -1515,7 +1551,10 @@ export function renderApp(state: AppViewState) {
                     state.chatMessages = [];
                     state.chatStream = null;
                     state.chatRunId = null;
+                    state.chatStopping = false;
+                    state.chatSessionActivity = null;
                     await loadChatHistory(state);
+                    await loadChatSessionActivity(state);
                   } catch (err) {
                     state.lastError = String(err);
                   }
@@ -1527,12 +1566,15 @@ export function renderApp(state: AppViewState) {
                   state.chatMessages = [];
                   state.chatStream = null;
                   state.chatRunId = null;
+                  state.chatStopping = false;
+                  state.chatSessionActivity = null;
                   state.applySettings({
                     ...state.settings,
                     sessionKey: state.sessionKey,
                     lastActiveSessionKey: state.sessionKey,
                   });
                   void loadChatHistory(state);
+                  void loadChatSessionActivity(state);
                   void state.loadAssistantIdentity();
                 },
                 onNavigateToAgent: () => {

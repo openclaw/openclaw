@@ -535,6 +535,28 @@
   background: color-mix(in srgb, var(--danger) 85%, #fff);
 }
 
+.btn--heartbeat-stop svg {
+  color: var(--danger);
+}
+
+.btn--heartbeat-stop:disabled svg {
+  opacity: 0.4;
+}
+
+@keyframes heartbeat-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+}
+
+.btn--heartbeat-stop:not(:disabled) svg {
+  animation: heartbeat-pulse 1.2s ease-in-out infinite;
+}
+
 .slash-menu {
   position: absolute;
   bottom: 100%;

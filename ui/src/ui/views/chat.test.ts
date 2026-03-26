@@ -118,6 +118,7 @@ function createChatHeaderState(
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatStopping: false,
     chatQueue: [],
     chatMessages: [],
     chatLoading: false,
@@ -660,6 +661,33 @@ describe("chat view", () => {
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
+  });
+
+  it("shows a secondary stop button for autonomous tasks when chat is idle", () => {
+    const container = document.createElement("div");
+    const onAbort = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          canAbort: true,
+          sending: false,
+          stream: null,
+          onAbort,
+        }),
+      ),
+      container,
+    );
+
+    const stopButton = container.querySelector<HTMLButtonElement>(
+      'button[title="Stop session tasks"]',
+    );
+    const sendButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send message"]',
+    );
+    expect(stopButton).not.toBeNull();
+    expect(sendButton).not.toBeNull();
+    stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onAbort).toHaveBeenCalledTimes(1);
   });
 
   it("shows sender labels from sanitized gateway messages instead of generic You", () => {

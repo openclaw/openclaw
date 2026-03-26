@@ -22,6 +22,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  ChatSessionActivity,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -68,6 +69,8 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatStopping: boolean;
+  chatSessionActivity: ChatSessionActivity | null;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
@@ -280,6 +283,8 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    heartbeatsEnabled: boolean;
+    heartbeatStopping: boolean;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
     debugHealth: HealthSummary | null;

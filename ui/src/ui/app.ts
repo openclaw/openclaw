@@ -72,6 +72,7 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  ChatSessionActivity,
   ConfigSnapshot,
   ConfigUiHints,
   ChatModelOverride,
@@ -161,6 +162,8 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+  @state() chatStopping = false;
+  @state() chatSessionActivity: ChatSessionActivity | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
@@ -417,6 +420,9 @@ export class OpenClawApp extends LitElement {
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
+
+  @state() heartbeatsEnabled = false;
+  @state() heartbeatStopping = false;
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
