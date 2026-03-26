@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { updateModelCapability, type CapabilityStatus } from "./capabilities-cache.js";
+import { isUnsupportedToolError } from "./react-fallback-stream.js";
 
 /**
  * Runs a background request to verify if a model supports native tool calling.
@@ -51,26 +52,37 @@ export async function runBackgroundCapabilityProbe(params: {
     );
 
     let finalStatus: CapabilityStatus = "unknown";
+    let hasReActEvidence = false;
+    const reactMarkerRegex = /(?:^|[\r\n])\s*(?:Action|Thought):/i;
+
     for await (const chunk of stream) {
       if (chunk.type === "done") {
-        const content = chunk.message.content as unknown as Array<{ type: string }>;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const content = chunk.message.content as any[];
         if (
           content.some(
             (p) => p.type === "toolCall" || p.type === "toolUse" || p.type === "functionCall",
           )
         ) {
           finalStatus = "native";
-        } else {
-          // If we got clear assistant content but no tool call, it's effectively a fallback model
-          finalStatus = "react";
+        }
+
+        const textOutput = content
+          .filter((p) => p.type === "text")
+          .map((p) => p.text ?? "")
+          .join("");
+        if (reactMarkerRegex.test(textOutput)) {
+          hasReActEvidence = true;
         }
       } else if (chunk.type === "error") {
-        const error = chunk.error as unknown as Record<string, unknown>;
-        const msg = (error?.message as string) || (error?.errorMessage as string) || "";
-        if (msg.includes("does not support tools") || msg.includes("not support tool")) {
+        if (isUnsupportedToolError(JSON.stringify(chunk.error || {}))) {
           finalStatus = "react";
         }
       }
+    }
+
+    if (finalStatus === "unknown" && hasReActEvidence) {
+      finalStatus = "react";
     }
 
     // Only update if we got a definitive result (not unknown)
@@ -80,10 +92,7 @@ export async function runBackgroundCapabilityProbe(params: {
   } catch (err: unknown) {
     const error = err as Record<string, unknown>;
     const errorMessage = (error?.message as string) || String(err);
-    if (
-      errorMessage.includes("does not support tools") ||
-      errorMessage.includes("not support tool")
-    ) {
+    if (isUnsupportedToolError(errorMessage)) {
       await updateModelCapability(configDir, providerId, modelId, "react");
     }
     console.error(`[CapabilityProber] Failed to probe ${providerId}:${modelId}`, errorMessage);

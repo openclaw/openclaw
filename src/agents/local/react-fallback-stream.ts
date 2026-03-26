@@ -66,7 +66,7 @@ Only output ONE Action per turn. If you do not need to use a tool, simply respon
 /**
  * Detects provider errors indicating lack of native tool support.
  */
-function isUnsupportedToolError(errorMessage: string): boolean {
+export function isUnsupportedToolError(errorMessage: string): boolean {
   return (
     errorMessage.includes("does not support tools") || errorMessage.includes("not support tool")
   );
