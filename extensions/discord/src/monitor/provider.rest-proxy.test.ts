@@ -130,9 +130,9 @@ describe("applyProxyToRequestClient", () => {
     // A fetch call that is NOT initiated from inside executeRequest should NOT
     // go through the undici proxy.  The ALS store is empty here, so the
     // wrapper delegates to the original fetch (vitest's global fetch mock).
-    const directFetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response("direct", { status: 200 }),
-    );
+    const directFetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("direct", { status: 200 }));
 
     await globalThis.fetch("https://example.com/unrelated");
 
