@@ -10,6 +10,8 @@ import {
   SILENT_REPLY_TOKEN,
 } from "openclaw/plugin-sdk/memory-core";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerMemoryCli } from "./src/cli.js";
+import { createMemoryGetTool, createMemorySearchTool } from "./src/tools.js";
 
 export const buildPromptSection: MemoryPromptSectionBuilder = ({
   availableTools,
@@ -190,7 +192,7 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) =>
-        api.runtime.tools.createMemorySearchTool({
+        createMemorySearchTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         }),
@@ -199,7 +201,7 @@ export default definePluginEntry({
 
     api.registerTool(
       (ctx) =>
-        api.runtime.tools.createMemoryGetTool({
+        createMemoryGetTool({
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         }),
@@ -208,9 +210,17 @@ export default definePluginEntry({
 
     api.registerCli(
       ({ program }) => {
-        api.runtime.tools.registerMemoryCli(program);
+        registerMemoryCli(program);
       },
-      { commands: ["memory"] },
+      {
+        descriptors: [
+          {
+            name: "memory",
+            description: "Search, inspect, and reindex memory files",
+            hasSubcommands: true,
+          },
+        ],
+      },
     );
   },
 });
