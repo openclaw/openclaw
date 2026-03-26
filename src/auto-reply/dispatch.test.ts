@@ -10,6 +10,7 @@ function createDispatcher(record: string[]): ReplyDispatcher {
     sendBlockReply: () => true,
     sendFinalReply: () => true,
     getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
     markComplete: () => {
       record.push("markComplete");
     },
@@ -71,6 +72,7 @@ describe("withReplyDispatcher", () => {
         return true;
       },
       getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+      getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
       markComplete: () => {
         order.push("markComplete");
       },

@@ -80,6 +80,7 @@ export type ReplyDispatcher = {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  getFailedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
 };
 
@@ -121,6 +122,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   let sentFirstBlock = false;
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
+  const failedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
     block: 0,
     final: 0,
@@ -167,6 +173,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
+        failedCounts[kind] += 1;
         options.onError?.(err, { kind });
       })
       .finally(() => {
@@ -213,6 +220,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
   };
 }
