@@ -398,6 +398,92 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(botsInfo).toHaveBeenCalledTimes(1);
   });
 
+  it("retries bot identity lookup after a transient bots.info failure", async () => {
+    const botsInfo = vi
+      .fn()
+      .mockRejectedValueOnce({ code: "slack_webapi_request_error", statusCode: 429 })
+      .mockResolvedValueOnce({
+        bot: {
+          app_id: "A1",
+          user_id: "B1",
+        },
+      });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true, allowBots: true },
+        },
+      } as OpenClawConfig,
+      appClient: { bots: { info: botsInfo } } as unknown as App["client"],
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+    const account = createSlackAccount({ allowBots: true });
+
+    const firstPrepared = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: undefined,
+        bot_id: "B0SELF",
+        subtype: "bot_message",
+        text: "assistant reply",
+        ts: "1.100",
+      }),
+    );
+    const secondPrepared = await prepareMessageWith(
+      slackCtx,
+      account,
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: undefined,
+        bot_id: "B0SELF",
+        subtype: "bot_message",
+        text: "assistant reply again",
+        ts: "1.101",
+      }),
+    );
+
+    expect(firstPrepared).toBeTruthy();
+    expect(secondPrepared).toBeNull();
+    expect(botsInfo).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not look up bot identity when allowBots is false", async () => {
+    const botsInfo = vi.fn();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true, allowBots: false },
+        },
+      } as OpenClawConfig,
+      appClient: { bots: { info: botsInfo } } as unknown as App["client"],
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: false }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: undefined,
+        bot_id: "B0SELF",
+        subtype: "bot_message",
+        text: "assistant reply",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(botsInfo).not.toHaveBeenCalled();
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {

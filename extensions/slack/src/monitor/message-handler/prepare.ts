@@ -20,6 +20,7 @@ import {
   resolveConversationLabel,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
@@ -53,6 +54,7 @@ import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
+const SLACK_BOT_IDENTITY_CACHE_MAX = 512;
 const slackBotIdentityCache = new WeakMap<
   SlackMonitorContext,
   Map<string, { appId?: string; userId?: string } | null>
@@ -94,6 +96,32 @@ function getSlackBotIdentityCache(ctx: SlackMonitorContext) {
   return cache;
 }
 
+function setSlackBotIdentityCacheEntry(
+  cache: Map<string, { appId?: string; userId?: string } | null>,
+  botId: string,
+  value: { appId?: string; userId?: string } | null,
+) {
+  cache.delete(botId);
+  cache.set(botId, value);
+  pruneMapToMaxSize(cache, SLACK_BOT_IDENTITY_CACHE_MAX);
+}
+
+function formatSlackBotIdentityLookupError(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "unknown_error";
+  }
+  const details = err as {
+    code?: unknown;
+    statusCode?: unknown;
+    data?: { error?: unknown };
+  };
+  const code = normalizeOptionalSlackId(details.code);
+  const slackError = normalizeOptionalSlackId(details.data?.error);
+  const statusCode =
+    typeof details.statusCode === "number" ? `status=${details.statusCode}` : undefined;
+  return [code, slackError, statusCode].filter(Boolean).join(" ") || "unknown_error";
+}
+
 async function resolveSlackBotIdentity(params: {
   ctx: SlackMonitorContext;
   botId: string;
@@ -113,7 +141,7 @@ async function resolveSlackBotIdentity(params: {
     };
   };
   if (typeof client.bots?.info !== "function") {
-    cache.set(botId, null);
+    setSlackBotIdentityCacheEntry(cache, botId, null);
     return null;
   }
 
@@ -124,11 +152,12 @@ async function resolveSlackBotIdentity(params: {
       userId: normalizeOptionalSlackId(info.bot?.user_id),
     };
     const normalized = identity.appId || identity.userId ? identity : null;
-    cache.set(botId, normalized);
+    setSlackBotIdentityCacheEntry(cache, botId, normalized);
     return normalized;
   } catch (err) {
-    logVerbose(`slack: failed to resolve bot identity for ${botId}: ${String(err)}`);
-    cache.set(botId, null);
+    logVerbose(
+      `slack: failed to resolve bot identity for ${botId}: ${formatSlackBotIdentityLookupError(err)}`,
+    );
     return null;
   }
 }
@@ -148,6 +177,9 @@ async function isOwnSlackBotMessage(params: {
   const inlineBotAppId = normalizeOptionalSlackId(message.bot_profile?.app_id);
   if (inlineBotAppId && ctx.apiAppId && inlineBotAppId === ctx.apiAppId) {
     return true;
+  }
+  if (!ctx.apiAppId && !ctx.botUserId) {
+    return false;
   }
 
   const botIdentity = await resolveSlackBotIdentity({ ctx, botId: message.bot_id });
@@ -265,12 +297,12 @@ async function authorizeSlackInboundMessage(params: {
     conversation;
 
   if (isBotMessage) {
-    if (await isOwnSlackBotMessage({ ctx, message })) {
-      logVerbose(`slack: drop own bot message ${message.bot_id ?? "unknown"}`);
-      return null;
-    }
     if (!allowBots) {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
+      return null;
+    }
+    if (await isOwnSlackBotMessage({ ctx, message })) {
+      logVerbose(`slack: drop own bot message ${message.bot_id ?? "unknown"}`);
       return null;
     }
   }
