@@ -4,7 +4,6 @@ import type { LogEntry, LogLevel } from "../types.ts";
 /** Strip ANSI escape codes (SGR, OSC-8) for readable log display. */
 function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex -- stripping ANSI escape sequences requires matching ESC
-  return text.replace(/\x1b\]8;;.*?\x1b\\|\x1b\]8;;\x1b\\/g, "").replace(/\x1b\[[0-9;]*m/g, "");
   return text.replace(/\x1b\]8;;.*?(\x1b\\|\x07)/g, "").replace(/\x1b\[[0-9;]*m/g, "");
 }
 
