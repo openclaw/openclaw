@@ -662,6 +662,46 @@ describe("subagent registry steer restarts", () => {
     expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
   });
 
+  it("removes delete-mode runs on termination and keeps repeated cleanup idempotent", async () => {
+    const childSessionKey = "agent:main:subagent:killed-delete";
+
+    mod.registerSubagentRun({
+      runId: "run-killed-delete",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill and delete me",
+      cleanup: "delete",
+    });
+
+    const updated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete",
+      childSessionKey,
+      reason: "manual kill",
+    });
+    expect(updated).toBe(1);
+    expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: childSessionKey,
+        runId: "run-killed-delete",
+        reason: "subagent-killed",
+      }),
+      expect.objectContaining({
+        runId: "run-killed-delete",
+        childSessionKey,
+      }),
+    );
+
+    const repeated = mod.markSubagentRunTerminated({
+      runId: "run-killed-delete",
+      childSessionKey,
+      reason: "manual kill",
+    });
+    expect(repeated).toBe(0);
+  });
+
   it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
     await withPendingAgentWait(async () => {
       vi.useFakeTimers();

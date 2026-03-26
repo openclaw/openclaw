@@ -287,16 +287,18 @@ function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
-  const shouldDeleteAttachments =
-    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
-  if (shouldDeleteAttachments) {
-    void safeRemoveAttachmentsDir(params.entry);
-  }
-  const removed = subagentRuns.delete(params.runId);
-  resumedRuns.delete(params.runId);
+  const removed = subagentRuns.has(params.runId);
+  finalizeCleanupState({
+    runId: params.runId,
+    entry: params.entry,
+    cleanup: "delete",
+    completedAt: now,
+    prune: true,
+  });
   if (!removed && !changed) {
     return false;
   }
+  retryDeferredCompletedAnnounces(params.runId);
   defaultRuntime.log(
     `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
   );
@@ -1137,17 +1139,34 @@ function completeCleanupBookkeeping(params: {
   entry: SubagentRunRecord;
   cleanup: "delete" | "keep";
   completedAt: number;
+  prune?: boolean;
 }) {
-  if (params.cleanup === "delete") {
-    clearPendingLifecycleError(params.runId);
+  finalizeCleanupState(params);
+  persistSubagentRuns();
+  retryDeferredCompletedAnnounces(params.runId);
+}
+
+function finalizeCleanupState(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  cleanup: "delete" | "keep";
+  completedAt: number;
+  prune?: boolean;
+}) {
+  clearPendingLifecycleError(params.runId);
+  resumedRuns.delete(params.runId);
+  const shouldDeleteAttachments =
+    params.prune || params.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    void safeRemoveAttachmentsDir(params.entry);
+  }
+  if (params.prune || params.cleanup === "delete") {
     void notifyContextEngineSubagentEnded({
       childSessionKey: params.entry.childSessionKey,
       reason: "deleted",
       workspaceDir: params.entry.workspaceDir,
     });
     subagentRuns.delete(params.runId);
-    persistSubagentRuns();
-    retryDeferredCompletedAnnounces(params.runId);
     return;
   }
   void notifyContextEngineSubagentEnded({
@@ -1156,8 +1175,6 @@ function completeCleanupBookkeeping(params: {
     workspaceDir: params.entry.workspaceDir,
   });
   params.entry.cleanupCompletedAt = params.completedAt;
-  persistSubagentRuns();
-  retryDeferredCompletedAnnounces(params.runId);
 }
 
 function retryDeferredCompletedAnnounces(excludeRunId?: string) {
@@ -1639,7 +1656,6 @@ export function markSubagentRunTerminated(params: {
   let updated = 0;
   const entriesByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const runId of runIds) {
-    clearPendingLifecycleError(runId);
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;
@@ -1651,8 +1667,13 @@ export function markSubagentRunTerminated(params: {
     entry.outcome = { status: "error", error: reason };
     entry.endedReason = SUBAGENT_ENDED_REASON_KILLED;
     entry.cleanupHandled = true;
-    entry.cleanupCompletedAt = now;
     entry.suppressAnnounceReason = "killed";
+    finalizeCleanupState({
+      runId,
+      entry,
+      cleanup: entry.cleanup,
+      completedAt: now,
+    });
     if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
       entriesByChildSessionKey.set(entry.childSessionKey, entry);
     }
@@ -1660,6 +1681,7 @@ export function markSubagentRunTerminated(params: {
   }
   if (updated > 0) {
     persistSubagentRuns();
+    retryDeferredCompletedAnnounces();
     for (const entry of entriesByChildSessionKey.values()) {
       void persistSubagentSessionTiming(entry).catch((err) => {
         log.warn("failed to persist killed subagent session timing", {
@@ -1667,16 +1689,6 @@ export function markSubagentRunTerminated(params: {
           runId: entry.runId,
           childSessionKey: entry.childSessionKey,
         });
-      });
-      const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-      if (shouldDeleteAttachments) {
-        void safeRemoveAttachmentsDir(entry);
-      }
-      completeCleanupBookkeeping({
-        runId: entry.runId,
-        entry,
-        cleanup: entry.cleanup,
-        completedAt: now,
       });
       const cfg = loadConfig();
       ensureRuntimePluginsLoaded({
