@@ -1,6 +1,9 @@
-import { isWSL, isWSLEnv } from "../infra/wsl.js";
+import { isRemoteEnvironment } from "../infra/remote-env.js";
+import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./setup-binary.js";
+
+export { isRemoteEnvironment } from "../infra/remote-env.js";
 
 function shouldSkipBrowserOpenInTests(): boolean {
   if (process.env.VITEST) {
@@ -59,27 +62,6 @@ async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   }
 
   return { argv: null };
-}
-
-export function isRemoteEnvironment(): boolean {
-  if (process.env.SSH_CLIENT || process.env.SSH_TTY || process.env.SSH_CONNECTION) {
-    return true;
-  }
-
-  if (process.env.REMOTE_CONTAINERS || process.env.CODESPACES) {
-    return true;
-  }
-
-  if (
-    process.platform === "linux" &&
-    !process.env.DISPLAY &&
-    !process.env.WAYLAND_DISPLAY &&
-    !isWSLEnv()
-  ) {
-    return true;
-  }
-
-  return false;
 }
 
 export async function openUrl(url: string): Promise<boolean> {
