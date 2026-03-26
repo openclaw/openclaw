@@ -5,6 +5,12 @@
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 /**
  * Normalize a raw message object into a consistent structure.
  */
@@ -21,7 +27,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const hasToolContent =
     Array.isArray(contentItems) &&
     contentItems.some((item) => {
-      const x = item as Record<string, unknown>;
+      const x = asObjectRecord(item);
+      if (!x) {
+        return false;
+      }
       const t = (typeof x.type === "string" ? x.type : "").toLowerCase();
       return t === "toolresult" || t === "tool_result";
     });
@@ -38,12 +47,20 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (typeof m.content === "string") {
     content = [{ type: "text", text: m.content }];
   } else if (Array.isArray(m.content)) {
-    content = m.content.map((item: Record<string, unknown>) => ({
-      type: (item.type as MessageContentItem["type"]) || "text",
-      text: item.text as string | undefined,
-      name: item.name as string | undefined,
-      args: item.args || item.arguments,
-    }));
+    content = m.content.flatMap((item) => {
+      const record = asObjectRecord(item);
+      if (!record) {
+        return [];
+      }
+      return [
+        {
+          type: (record.type as MessageContentItem["type"]) || "text",
+          text: record.text as string | undefined,
+          name: record.name as string | undefined,
+          args: record.args || record.arguments,
+        },
+      ];
+    });
   } else if (typeof m.text === "string") {
     content = [{ type: "text", text: m.text }];
   }
