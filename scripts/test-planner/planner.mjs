@@ -336,6 +336,7 @@ const buildDefaultUnits = (context, request) => {
   const noIsolateArgs = context.noIsolateArgs;
   const selectedSurfaces = buildRequestedSurfaces(request, env);
   const selectedSurfaceSet = new Set(selectedSurfaces);
+  const channelsOnlyRun = selectedSurfaceSet.size === 1 && selectedSurfaceSet.has("channels");
 
   const {
     heavyUnitLaneCount,
@@ -615,7 +616,7 @@ const buildDefaultUnits = (context, request) => {
           id: unitId,
           surface: "channels",
           isolate: false,
-          serialPhase: "channels",
+          serialPhase: channelsOnlyRun ? undefined : "channels",
           includeFiles: batch,
           estimatedDurationMs: estimateEntryFilesDurationMs(
             { args: ["vitest", "run", "--config", "vitest.channels.config.ts"] },
@@ -764,6 +765,15 @@ const buildTargetedUnits = (context, request) => {
     return [];
   }
   const unitMemoryIsolatedFiles = request.unitMemoryIsolatedFiles ?? [];
+  const estimateChannelDurationMs = (file) =>
+    context.channelTimingManifest.files[file]?.durationMs ??
+    context.channelTimingManifest.defaultDurationMs;
+  const defaultTargetedChannelsBatchTargetMs = 12_000;
+  const targetedChannelsBatchTargetMs = parseEnvNumber(
+    context.env,
+    "OPENCLAW_TEST_TARGETED_CHANNELS_BATCH_TARGET_MS",
+    defaultTargetedChannelsBatchTargetMs,
+  );
   const groups = request.fileFilters.reduce((acc, fileFilter) => {
     const matchedFiles = context.catalog.resolveFilterMatches(fileFilter);
     if (matchedFiles.length === 0) {
@@ -803,6 +813,28 @@ const buildTargetedUnits = (context, request) => {
           [file],
         ),
       );
+    }
+    if (
+      classification.surface === "channels" &&
+      uniqueFilters.length > 4 &&
+      targetedChannelsBatchTargetMs > 0
+    ) {
+      const estimatedTotalDurationMs = uniqueFilters.reduce(
+        (totalMs, file) => totalMs + estimateChannelDurationMs(file),
+        0,
+      );
+      if (estimatedTotalDurationMs > targetedChannelsBatchTargetMs) {
+        return splitFilesByDurationBudget(
+          uniqueFilters,
+          targetedChannelsBatchTargetMs,
+          estimateChannelDurationMs,
+        ).map((batch, batchIndex) =>
+          createExecutionUnit(context, {
+            ...createTargetedUnit(context, classification, batch),
+            id: `channels-batch-${String(batchIndex + 1)}`,
+          }),
+        );
+      }
     }
     return [createTargetedUnit(context, classification, uniqueFilters)];
   });
