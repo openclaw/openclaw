@@ -1886,6 +1886,8 @@ export type PluginHookGatewayStopEvent = {
 
 // before_llm_call hook (modifying — sequential)
 export type PluginHookBeforeLlmCallEvent = {
+  /** Stable run identifier — correlates with context_assembled and loop_iteration events. */
+  runId: string;
   messages: AgentMessage[];
   systemPrompt: string;
   model: string;
@@ -1909,6 +1911,8 @@ export type PluginHookBeforeLlmCallResult = {
 // Decisions are stored as a Promise and enforced deterministically by the
 // tool wrapper before each tool executes.
 export type PluginHookAfterLlmCallEvent = {
+  /** Stable run identifier — correlates with context_assembled and loop_iteration events. */
+  runId: string;
   response: AgentMessage;
   toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
   iteration: number;

@@ -69,6 +69,7 @@ export function wrapStreamFnWithHooks(
       try {
         result = await hookRunner.runBeforeLlmCall(
           {
+            runId: params.runId ?? "",
             messages: context.messages as AgentMessage[],
             systemPrompt: context.systemPrompt ?? "",
             model: modelId,
@@ -151,6 +152,7 @@ export function wrapStreamFnWithHooks(
                   finalMessage,
                   iterationRef.current,
                   modelId,
+                  params.runId,
                   gateKey,
                 );
               }
@@ -200,6 +202,7 @@ function fireAfterLlmCallGate(
   finalMessage: AgentMessage,
   iteration: number,
   modelId: string,
+  runId: string | undefined,
   gateKey: string,
 ): void {
   // Extract tool calls from the message content.
@@ -230,6 +233,7 @@ function fireAfterLlmCallGate(
   // the hook itself may be async. The tool wrapper will await it.
   const hookPromise = hookRunner.runAfterLlmCall(
     {
+      runId: runId ?? "",
       response: finalMessage,
       toolCalls,
       iteration,
