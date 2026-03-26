@@ -605,6 +605,11 @@ export async function runHeartbeatOnce(opts: {
     const hookResult = await runPreHook(preHookConfig, opts.abortSignal);
     if (hookResult.outcome === "skip") {
       log.info({ stdout: hookResult.stdout, stderr: hookResult.stderr }, "heartbeat: pre-hook returned skip");
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "pre-hook-skip",
+        durationMs: Date.now() - startedAt,
+      });
       return { status: "skipped", reason: "pre-hook-skip" };
     }
     if (hookResult.outcome === "error") {
@@ -612,6 +617,11 @@ export async function runHeartbeatOnce(opts: {
         { exitCode: hookResult.exitCode, stdout: hookResult.stdout, stderr: hookResult.stderr },
         `heartbeat: pre-hook failed: ${hookResult.message}`,
       );
+      emitHeartbeatEvent({
+        status: "failed",
+        reason: `pre-hook: ${hookResult.message}`,
+        durationMs: Date.now() - startedAt,
+      });
       return { status: "failed", reason: `pre-hook: ${hookResult.message}` };
     }
   }
