@@ -3,27 +3,27 @@
 **Created:** 2026-03-26
 **Granularity:** Fine
 **Total phases:** 10
-**Coverage:** 49/49 v1 requirements mapped
+**Coverage:** 51/51 v1 requirements mapped (corrected from stated 49 -- actual count: DATA:8 + PARSE:4 + SYNC:7 + CONC:5 + AGNT:9 + GATE:4 + UI:9 + CLI:5)
 
 ## Phases
 
-- [ ] **Phase 1: Types & Schemas** - Zod schemas, typed frontmatter parser, and data model definitions
+- [ ] **Phase 1: Types & Schemas** - Zod schemas, typed frontmatter parser, data model definitions including task dependencies
 - [ ] **Phase 2: File Structure & Scaffolding** - Project folder creation, task ID generation, sub-project support
-- [ ] **Phase 3: Sync Pipeline** - File watcher, .index/ JSON generation, atomic writes
+- [ ] **Phase 3: Sync Pipeline** - File watcher, .index/ JSON generation, atomic writes, startup reindex
 - [ ] **Phase 4: Concurrency** - mkdir-based file locking for queue write safety
-- [ ] **Phase 5: Context Injection** - PROJECT.md pickup, bootstrap hook, capability tags
-- [ ] **Phase 6: Queue & Heartbeat** - Agent task claiming, checkpoints, dependency resolution
-- [ ] **Phase 7: Gateway & CLI** - WebSocket RPC methods, events, ProjectService, CLI commands
-- [ ] **Phase 8: Sidebar & Project List** - Projects tab, list view, WebSocket subscriptions, sub-project navigation
-- [ ] **Phase 9: Kanban Board** - Read-only kanban with live agent indicators and session peek
-- [ ] **Phase 10: Dashboard & Widgets** - Configurable project dashboard with widget system
+- [ ] **Phase 5: Context Injection** - PROJECT.md cwd pickup, bootstrap hook, capability tags
+- [ ] **Phase 6: Queue & Heartbeat** - Agent task claiming, checkpoint/resume, dependency resolution
+- [ ] **Phase 7: Gateway Service** - ProjectService lifecycle, WebSocket RPC methods, event broadcasting
+- [ ] **Phase 8: CLI Commands** - create, list, status, reindex, validate commands
+- [ ] **Phase 9: Project Views & Dashboard** - Sidebar tab, project list, dashboard widgets, WebSocket live updates, sub-project nav
+- [ ] **Phase 10: Kanban Board & Agent Indicators** - Read-only kanban with live agent badges and session peek
 
 ## Phase Details
 
 ### Phase 1: Types & Schemas
 **Goal**: All project data has typed, validated representations that downstream code can rely on
 **Depends on**: Nothing (foundation)
-**Requirements**: PARSE-01, PARSE-02, PARSE-03, PARSE-04, DATA-03, DATA-04, DATA-05, DATA-08
+**Requirements**: PARSE-01, PARSE-02, PARSE-03, PARSE-04, DATA-03, DATA-04, DATA-05, DATA-07, DATA-08
 **Success Criteria** (what must be TRUE):
   1. A PROJECT.md with valid YAML frontmatter (name, status, description, owner, tags, columns, dashboard widgets) can be parsed into a typed object and validated without error
   2. A task file with valid YAML frontmatter (title, status, priority, assignee, capabilities, depends_on, created, updated) can be parsed into a typed object and validated without error
@@ -85,7 +85,7 @@
 ### Phase 6: Queue & Heartbeat
 **Goal**: Agents autonomously discover, claim, and work on tasks with interruption resilience
 **Depends on**: Phase 4, Phase 5
-**Requirements**: AGNT-05, AGNT-06, AGNT-07, AGNT-08, AGNT-09, DATA-07
+**Requirements**: AGNT-05, AGNT-06, AGNT-07, AGNT-08, AGNT-09
 **Success Criteria** (what must be TRUE):
   1. On heartbeat, an idle agent scans queue.md and claims an Available task matching its capabilities
   2. An agent with an active claimed task skips queue scanning on subsequent heartbeats
@@ -95,41 +95,52 @@
 **Plans**: TBD
 **Estimated complexity**: L
 
-### Phase 7: Gateway & CLI
-**Goal**: Project data is accessible to the web UI via WebSocket and to humans via CLI commands
+### Phase 7: Gateway Service
+**Goal**: Project data is accessible over WebSocket so the UI and external tools can read project state in real time
 **Depends on**: Phase 2, Phase 3
-**Requirements**: GATE-01, GATE-02, GATE-03, GATE-04, CLI-01, CLI-02, CLI-03, CLI-04, CLI-05
+**Requirements**: GATE-01, GATE-02, GATE-03, GATE-04
 **Success Criteria** (what must be TRUE):
   1. ProjectService starts when the gateway starts and stops when it stops
   2. A WebSocket client can call `projects.list`, `projects.get`, `projects.board.get`, `projects.queue.get` and receive typed responses
   3. When a project file changes on disk, connected WebSocket clients receive `projects.changed` (or `.board.changed` / `.queue.changed`) events
-  4. `openclaw projects create myproject` creates a valid project folder on disk
-  5. `openclaw projects list` displays all projects with status summaries
-  6. `openclaw projects status myproject` shows task counts and agent activity
-  7. `openclaw projects reindex` regenerates all .index/ JSON and clears stale locks
-  8. `openclaw projects validate` reports frontmatter parse errors across all projects
+  4. All project methods and events are registered in `server-methods-list.ts` following existing gateway patterns
 **Plans**: TBD
-**Estimated complexity**: L
-
-### Phase 8: Sidebar & Project List
-**Goal**: Users can navigate to a Projects tab and browse all projects with live updates
-**Depends on**: Phase 7
-**Requirements**: UI-01, UI-02, UI-08, UI-09
-**Success Criteria** (what must be TRUE):
-  1. A "Projects" tab appears in the web UI sidebar navigation alongside existing tabs
-  2. Clicking the Projects tab shows a list of all projects with name, status, and task counts
-  3. When a project changes on disk, the list view updates within seconds without manual refresh
-  4. Sub-projects are navigable from a parent project view
-**Plans**: TBD
-**UI hint**: yes
 **Estimated complexity**: M
 
-### Phase 9: Kanban Board
-**Goal**: Users can see task status on a kanban board with live agent activity indicators
-**Depends on**: Phase 8
+### Phase 8: CLI Commands
+**Goal**: Users can create, inspect, and maintain projects from the terminal without touching the web UI
+**Depends on**: Phase 2, Phase 3, Phase 4
+**Requirements**: CLI-01, CLI-02, CLI-03, CLI-04, CLI-05
+**Success Criteria** (what must be TRUE):
+  1. `openclaw projects create myproject` creates a valid project folder on disk with PROJECT.md, queue.md, and tasks/
+  2. `openclaw projects list` displays all projects with status summaries
+  3. `openclaw projects status myproject` shows task counts by status and active agent activity
+  4. `openclaw projects reindex` regenerates all .index/ JSON and clears stale locks
+  5. `openclaw projects validate` reports frontmatter parse errors across all project files
+**Plans**: TBD
+**Estimated complexity**: M
+
+### Phase 9: Project Views & Dashboard
+**Goal**: Users can browse projects, see task summaries, and monitor agent activity from the web UI sidebar
+**Depends on**: Phase 7
+**Requirements**: UI-01, UI-02, UI-03, UI-04, UI-08, UI-09
+**Success Criteria** (what must be TRUE):
+  1. A "Projects" tab appears in the web UI sidebar navigation alongside existing tabs
+  2. The project list view shows all projects with name, status, and task count summaries
+  3. Each project has a dashboard view showing task summary, recent activity, and agent status widgets
+  4. Dashboard widget configuration in PROJECT.md frontmatter is respected, with sensible defaults when unconfigured
+  5. UI updates reflect file changes within seconds via WebSocket subscriptions -- no manual refresh needed
+  6. Sub-projects are navigable from the parent project view
+**Plans**: TBD
+**UI hint**: yes
+**Estimated complexity**: L
+
+### Phase 10: Kanban Board & Agent Indicators
+**Goal**: Users can see task status as a kanban board with live agent presence, making the system feel like a real-time mission control
+**Depends on**: Phase 7, Phase 9
 **Requirements**: UI-05, UI-06, UI-07
 **Success Criteria** (what must be TRUE):
-  1. Selecting a project shows a read-only kanban board with columns populated from task frontmatter status
+  1. A read-only kanban board displays tasks in configurable columns populated from task frontmatter status
   2. Kanban columns match the project's configured column names (or defaults: Backlog, In Progress, Review, Done)
   3. Tasks claimed by an agent show a pulsing badge with the agent name
   4. Hovering or clicking an agent indicator shows the current task checkpoint and recent log entries
@@ -137,37 +148,87 @@
 **UI hint**: yes
 **Estimated complexity**: M
 
-### Phase 10: Dashboard & Widgets
-**Goal**: Each project has a configurable dashboard that surfaces the most important information at a glance
-**Depends on**: Phase 8
-**Requirements**: UI-03, UI-04
-**Success Criteria** (what must be TRUE):
-  1. Each project has a dashboard view showing task summary, recent activity, and agent status widgets
-  2. Widget configuration in PROJECT.md frontmatter controls which widgets appear and their arrangement
-  3. Projects without custom widget config display sensible defaults
-**Plans**: TBD
-**UI hint**: yes
-**Estimated complexity**: M
-
-## Dependencies
+## Dependency Graph
 
 ```
 Phase 1 (Types & Schemas)
   |
-  +---> Phase 2 (File Structure) --+
-  |                                 +--> Phase 7 (Gateway & CLI) --> Phase 8 (Sidebar & List) --+--> Phase 9 (Kanban)
-  +---> Phase 3 (Sync Pipeline) ---+                                                           |
-  |                                                                                             +--> Phase 10 (Dashboard)
-  +---> Phase 4 (Concurrency) --+
-  |                             +--> Phase 6 (Queue & Heartbeat)
-  +---> Phase 5 (Context Injection) -+
+  +---> Phase 2 (File Structure) --+---> Phase 7 (Gateway Service) --+--> Phase 9 (Project Views) --> Phase 10 (Kanban)
+  |                                |                                 |
+  +---> Phase 3 (Sync Pipeline) ---+---> Phase 8 (CLI Commands)      |
+  |                                |                                 |
+  +---> Phase 4 (Concurrency) -----+---> Phase 6 (Queue & Heartbeat) |
+  |                                |                                 |
+  +---> Phase 5 (Context Injection) +                                |
 ```
 
 **Parallelizable sets after Phase 1:**
 - Phases 2, 3, 4, 5 can all proceed in parallel (independent concerns)
 - Phase 6 needs Phases 4 + 5
 - Phase 7 needs Phases 2 + 3
-- Phases 9 and 10 can proceed in parallel (both need Phase 8)
+- Phase 8 needs Phases 2 + 3 + 4
+- Phases 7 and 8 can proceed in parallel with Phase 6
+- Phase 10 needs Phase 9
+
+**Critical path to UI:** Phase 1 -> Phase 3 -> Phase 7 -> Phase 9 -> Phase 10
+
+## Coverage
+
+| Requirement | Phase | Category |
+|-------------|-------|----------|
+| DATA-01 | Phase 2 | Data Model |
+| DATA-02 | Phase 2 | Data Model |
+| DATA-03 | Phase 1 | Data Model |
+| DATA-04 | Phase 1 | Data Model |
+| DATA-05 | Phase 1 | Data Model |
+| DATA-06 | Phase 2 | Data Model |
+| DATA-07 | Phase 1 | Data Model |
+| DATA-08 | Phase 1 | Data Model |
+| PARSE-01 | Phase 1 | Frontmatter Parsing |
+| PARSE-02 | Phase 1 | Frontmatter Parsing |
+| PARSE-03 | Phase 1 | Frontmatter Parsing |
+| PARSE-04 | Phase 1 | Frontmatter Parsing |
+| SYNC-01 | Phase 3 | Sync Process |
+| SYNC-02 | Phase 3 | Sync Process |
+| SYNC-03 | Phase 3 | Sync Process |
+| SYNC-04 | Phase 3 | Sync Process |
+| SYNC-05 | Phase 3 | Sync Process |
+| SYNC-06 | Phase 3 | Sync Process |
+| SYNC-07 | Phase 3 | Sync Process |
+| CONC-01 | Phase 4 | Concurrency |
+| CONC-02 | Phase 4 | Concurrency |
+| CONC-03 | Phase 4 | Concurrency |
+| CONC-04 | Phase 4 | Concurrency |
+| CONC-05 | Phase 4 | Concurrency |
+| AGNT-01 | Phase 5 | Agent Integration |
+| AGNT-02 | Phase 5 | Agent Integration |
+| AGNT-03 | Phase 5 | Agent Integration |
+| AGNT-04 | Phase 5 | Agent Integration |
+| AGNT-05 | Phase 6 | Agent Integration |
+| AGNT-06 | Phase 6 | Agent Integration |
+| AGNT-07 | Phase 6 | Agent Integration |
+| AGNT-08 | Phase 6 | Agent Integration |
+| AGNT-09 | Phase 6 | Agent Integration |
+| GATE-01 | Phase 7 | Gateway |
+| GATE-02 | Phase 7 | Gateway |
+| GATE-03 | Phase 7 | Gateway |
+| GATE-04 | Phase 7 | Gateway |
+| CLI-01 | Phase 8 | CLI |
+| CLI-02 | Phase 8 | CLI |
+| CLI-03 | Phase 8 | CLI |
+| CLI-04 | Phase 8 | CLI |
+| CLI-05 | Phase 8 | CLI |
+| UI-01 | Phase 9 | UI |
+| UI-02 | Phase 9 | UI |
+| UI-03 | Phase 9 | UI |
+| UI-04 | Phase 9 | UI |
+| UI-05 | Phase 10 | UI |
+| UI-06 | Phase 10 | UI |
+| UI-07 | Phase 10 | UI |
+| UI-08 | Phase 9 | UI |
+| UI-09 | Phase 9 | UI |
+
+**Coverage: 51/51 requirements mapped. No orphans.**
 
 ## Progress
 
@@ -179,10 +240,10 @@ Phase 1 (Types & Schemas)
 | 4. Concurrency | 0/? | Not started | - |
 | 5. Context Injection | 0/? | Not started | - |
 | 6. Queue & Heartbeat | 0/? | Not started | - |
-| 7. Gateway & CLI | 0/? | Not started | - |
-| 8. Sidebar & Project List | 0/? | Not started | - |
-| 9. Kanban Board | 0/? | Not started | - |
-| 10. Dashboard & Widgets | 0/? | Not started | - |
+| 7. Gateway Service | 0/? | Not started | - |
+| 8. CLI Commands | 0/? | Not started | - |
+| 9. Project Views & Dashboard | 0/? | Not started | - |
+| 10. Kanban Board & Agent Indicators | 0/? | Not started | - |
 
 ---
 *Created: 2026-03-26*
