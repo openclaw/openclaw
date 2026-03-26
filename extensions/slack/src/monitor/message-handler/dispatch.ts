@@ -532,25 +532,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
   }
 
-  if (!anyReplyDelivered) {
-    await draftStream?.clear();
-    if (prepared.isRoomish) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: ctx.channelHistories,
-        historyKey: prepared.historyKey,
-        limit: ctx.historyLimit,
-      });
-    }
-    return;
-  }
-
-  if (shouldLogVerbose()) {
-    const finalCount = counts.final;
-    logVerbose(
-      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
-    );
-  }
-
+  // Always clean up ack/typing reactions after dispatch completes, even when
+  // regular text was suppressed — the message tool may still have delivered a reply.
   removeAckReactionAfterReply({
     removeAfterReply: ctx.removeAckAfterReply,
     ackReactionPromise: prepared.ackReactionPromise,
@@ -574,6 +557,25 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
   });
+
+  if (!anyReplyDelivered) {
+    await draftStream?.clear();
+    if (prepared.isRoomish) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: ctx.channelHistories,
+        historyKey: prepared.historyKey,
+        limit: ctx.historyLimit,
+      });
+    }
+    return;
+  }
+
+  if (shouldLogVerbose()) {
+    const finalCount = counts.final;
+    logVerbose(
+      `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
+    );
+  }
 
   if (prepared.isRoomish) {
     clearHistoryEntriesIfEnabled({
