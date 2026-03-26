@@ -14,6 +14,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Module mocks (must be hoisted before imports) ---
 
+vi.mock("../../config/sessions.js", () => ({
+  resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
+  resolveMainSessionKey: vi.fn(() => "global"),
+}));
+
 vi.mock("../../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
 }));
@@ -39,6 +44,10 @@ vi.mock("../../logger.js", () => ({
   logError: vi.fn(),
 }));
 
+vi.mock("../../infra/system-events.js", () => ({
+  enqueueSystemEvent: vi.fn(),
+}));
+
 vi.mock("./subagent-followup.js", () => ({
   expectsSubagentFollowup: vi.fn().mockReturnValue(false),
   isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
@@ -49,6 +58,7 @@ vi.mock("./subagent-followup.js", () => ({
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import {
   dispatchCronDelivery,
@@ -93,6 +103,8 @@ function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
   runSessionId?: string;
+  sessionTarget?: string;
+  deliveryBestEffort?: boolean;
 }) {
   const resolvedDelivery = makeResolvedDelivery();
   return {
@@ -102,6 +114,7 @@ function makeBaseParams(overrides: {
     job: {
       id: "test-job",
       name: "Test Job",
+      sessionTarget: overrides.sessionTarget ?? "isolated",
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
@@ -114,7 +127,7 @@ function makeBaseParams(overrides: {
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
     skipHeartbeatDelivery: false,
-    deliveryBestEffort: false,
+    deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloadHasStructuredContent: false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
     synthesizedText: overrides.synthesizedText ?? "on it",
@@ -255,6 +268,73 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         isCronSystemEvent: () => true,
       }),
     ).toBe(false);
+  });
+
+  it("queues main-session awareness for isolated cron jobs after delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
+      sessionKey: "agent:main:main",
+      contextKey: "cron-direct-delivery:v1:run-123:telegram::123456:",
+    });
+  });
+
+  it("keeps the cron run successful when awareness queueing throws after delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(enqueueSystemEvent).mockImplementation(() => {
+      throw new Error("queue unavailable");
+    });
+
+    const params = makeBaseParams({ synthesizedText: "Morning briefing complete." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips main-session awareness for session-bound cron jobs", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Session-bound cron update.",
+      sessionTarget: "session:agent:main:main:thread:9999",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("skips main-session awareness for best-effort deliveries", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Best-effort cron update.",
+      deliveryBestEffort: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("skips stale cron deliveries while still suppressing fallback main summary", async () => {

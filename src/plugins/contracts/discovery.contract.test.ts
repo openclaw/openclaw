@@ -457,7 +457,7 @@ describe("provider discovery contract", () => {
         apiKey: "minimax-key",
         models: expect.arrayContaining([
           expect.objectContaining({ id: "MiniMax-M2.7" }),
-          expect.objectContaining({ id: "MiniMax-VL-01" }),
+          expect.objectContaining({ id: "MiniMax-M2.7-highspeed" }),
         ]),
       },
     });
