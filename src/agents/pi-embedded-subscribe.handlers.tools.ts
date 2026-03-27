@@ -13,9 +13,9 @@ import type {
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
-  extractToolResultMediaArtifact,
-  extractMessagingToolSend,
+  extractMessagingToolSends,
   extractToolErrorMessage,
+  extractToolResultMediaArtifact,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -399,9 +399,13 @@ export async function handleToolExecutionStart(
     const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
-      const sendTarget = extractMessagingToolSend(toolName, argsRecord);
-      if (sendTarget) {
-        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
+      const sendTargets = extractMessagingToolSends(toolName, argsRecord, {
+        currentChannelProvider: ctx.params.currentChannelProvider,
+        currentChannelId: ctx.params.currentChannelId,
+        currentThreadTs: ctx.params.currentThreadTs,
+      });
+      if (sendTargets.length > 0) {
+        ctx.state.pendingMessagingTargets.set(toolCallId, sendTargets);
       }
       // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
       const text = (argsRecord.content as string) ?? (argsRecord.message as string);
@@ -502,7 +506,7 @@ export async function handleToolExecutionEnd(
 
   // Commit messaging tool text on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);
-  const pendingTarget = ctx.state.pendingMessagingTargets.get(toolCallId);
+  const pendingTargets = ctx.state.pendingMessagingTargets.get(toolCallId) ?? [];
   if (pendingText) {
     ctx.state.pendingMessagingTexts.delete(toolCallId);
     if (!isToolError) {
@@ -512,10 +516,10 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-  if (pendingTarget) {
+  if (pendingTargets.length > 0) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);
     if (!isToolError) {
-      ctx.state.messagingToolSentTargets.push(pendingTarget);
+      ctx.state.messagingToolSentTargets.push(...pendingTargets);
       ctx.trimMessagingToolSent();
     }
   }

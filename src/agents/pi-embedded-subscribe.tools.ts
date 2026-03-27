@@ -358,54 +358,108 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return normalizeToolErrorText(text);
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = typeof args.to === "string" ? args.to : undefined;
-  if (toRaw) {
-    return toRaw;
+function normalizeMessageToolTarget(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
   }
-  return typeof args.target === "string" ? args.target : undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+type ExtractMessagingToolSendOptions = {
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+};
+
+export function extractMessagingToolSends(
+  toolName: string,
+  args: Record<string, unknown>,
+  options?: ExtractMessagingToolSendOptions,
+): MessagingToolSend[] {
+  // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
+  const action = typeof args.action === "string" ? args.action.trim() : "";
+  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountId = accountIdRaw ? accountIdRaw : undefined;
+  const threadIdRaw =
+    typeof args.threadId === "string" || typeof args.threadId === "number"
+      ? String(args.threadId).trim()
+      : typeof args.messageThreadId === "string" || typeof args.messageThreadId === "number"
+        ? String(args.messageThreadId).trim()
+        : undefined;
+  const threadId = threadIdRaw ? threadIdRaw : undefined;
+  if (toolName === "message") {
+    if (action !== "send" && action !== "thread-reply") {
+      return [];
+    }
+    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
+    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerHint = providerRaw || channelRaw || options?.currentChannelProvider;
+    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : undefined);
+    // Keep dedupe target parsing string-only: reject numeric target/to/channelId values
+    const resolvedTarget =
+      normalizeMessageToolTarget(args.target) ??
+      normalizeMessageToolTarget(args.to) ??
+      normalizeMessageToolTarget(args.channelId) ??
+      (options?.currentChannelId
+        ? normalizeMessageToolTarget(options.currentChannelId)
+        : undefined);
+    if (!resolvedTarget) {
+      return [];
+    }
+    const normalizedCurrentTarget = provider
+      ? normalizeTargetForProvider(provider, options?.currentChannelId)
+      : options?.currentChannelId;
+    const implicitThreadId = options?.currentThreadTs?.trim();
+    const to = provider ? normalizeTargetForProvider(provider, resolvedTarget) : resolvedTarget;
+    if (!to) {
+      return [];
+    }
+    const shouldUseImplicitThreadId =
+      !threadId &&
+      provider === "telegram" &&
+      Boolean(implicitThreadId) &&
+      Boolean(normalizedCurrentTarget) &&
+      to === normalizedCurrentTarget;
+    return [
+      {
+        tool: toolName,
+        ...(provider ? { provider } : {}),
+        ...(accountId ? { accountId } : {}),
+        ...(threadId ? { threadId } : {}),
+        ...(!threadId && shouldUseImplicitThreadId ? { threadId: implicitThreadId } : {}),
+        to,
+      },
+    ];
+  }
+  const providerId = normalizeChannelId(toolName);
+  if (!providerId) {
+    return [];
+  }
+  const plugin = getChannelPlugin(providerId);
+  const extracted = plugin?.actions?.extractToolSend?.({ args });
+  if (!extracted?.to) {
+    return [];
+  }
+  const to = normalizeTargetForProvider(providerId, extracted.to);
+  return to
+    ? [
+        {
+          tool: toolName,
+          provider: providerId,
+          accountId: extracted.accountId ?? accountId,
+          ...(threadId ? { threadId } : {}),
+          to,
+        },
+      ]
+    : [];
 }
 
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
+  options?: ExtractMessagingToolSendOptions,
 ): MessagingToolSend | undefined {
-  // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
-  const action = typeof args.action === "string" ? args.action.trim() : "";
-  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-  const accountId = accountIdRaw ? accountIdRaw : undefined;
-  if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
-      return undefined;
-    }
-    const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
-      return undefined;
-    }
-    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
-    const providerHint = providerRaw || channelRaw;
-    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
-    const to = normalizeTargetForProvider(provider, toRaw);
-    return to ? { tool: toolName, provider, accountId, to } : undefined;
-  }
-  const providerId = normalizeChannelId(toolName);
-  if (!providerId) {
-    return undefined;
-  }
-  const plugin = getChannelPlugin(providerId);
-  const extracted = plugin?.actions?.extractToolSend?.({ args });
-  if (!extracted?.to) {
-    return undefined;
-  }
-  const to = normalizeTargetForProvider(providerId, extracted.to);
-  return to
-    ? {
-        tool: toolName,
-        provider: providerId,
-        accountId: extracted.accountId ?? accountId,
-        to,
-      }
-    : undefined;
+  return extractMessagingToolSends(toolName, args, options)[0];
 }

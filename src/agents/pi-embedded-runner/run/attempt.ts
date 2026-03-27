@@ -384,6 +384,10 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const routeMessageProvider = resolveRouteMessageProvider({
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+    });
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -393,7 +397,7 @@ export async function runEmbeddedAttempt(
             elevated: params.bashElevated,
           },
           sandbox,
-          messageProvider: params.messageChannel ?? params.messageProvider,
+          messageProvider: routeMessageProvider,
           agentAccountId: params.agentAccountId,
           messageTo: params.messageTo,
           messageThreadId: params.messageThreadId,
@@ -1177,6 +1181,9 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        messageProvider: routeMessageProvider,
+        originatingTo: params.messageTo ?? undefined,
+        accountId: params.agentAccountId ?? undefined,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
@@ -1195,6 +1202,9 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
+        currentChannelProvider: routeMessageProvider,
+        currentChannelId: params.currentChannelId,
+        currentThreadTs: params.currentThreadTs,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
         agentId: sessionAgentId,
