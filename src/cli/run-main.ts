@@ -149,7 +149,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
-    const { installUnhandledRejectionHandler, isAbortError, isTransientNetworkError } =
+    const { installUnhandledRejectionHandler, isAbortError, isStrictTransientNetworkError } =
       await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
@@ -161,7 +161,7 @@ export async function runCli(argv: string[] = process.argv) {
         console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
         return;
       }
-      if (isTransientNetworkError(error)) {
+      if (isStrictTransientNetworkError(error)) {
         console.warn(
           "[openclaw] Non-fatal uncaught exception (continuing):",
           formatUncaughtError(error),

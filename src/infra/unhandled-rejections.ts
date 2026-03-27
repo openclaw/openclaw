@@ -146,6 +146,69 @@ function isConfigError(err: unknown): boolean {
  * Checks if an error is a transient network error that shouldn't crash the gateway.
  * These are typically temporary connectivity issues that will resolve on their own.
  */
+// Strict subset of message snippets that are unambiguously I/O-layer TLS/socket
+// errors. Used by the uncaughtException handler where continuing after a false
+// positive is riskier than in the unhandledRejection path.
+const STRICT_NETWORK_MESSAGE_SNIPPETS = [
+  "client network socket disconnected before secure tls connection was established",
+  "socket hang up",
+  "tlsv1 alert",
+  "ssl routines",
+  "write eproto",
+];
+
+/**
+ * Stricter variant of isTransientNetworkError for the uncaughtException path.
+ * Only matches error codes, error names, and unambiguous TLS/socket messages.
+ * Does NOT match broad patterns like "fetch failed" or "network error" that
+ * could mask application-level bugs.
+ */
+export function isStrictTransientNetworkError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
+
+    const name = readErrorName(candidate);
+    if (name && TRANSIENT_NETWORK_ERROR_NAMES.has(name)) {
+      return true;
+    }
+
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase().trim() : "";
+    if (!message) {
+      continue;
+    }
+    if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
+      return true;
+    }
+    if (STRICT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isTransientNetworkError(err: unknown): boolean {
   if (!err) {
     return false;

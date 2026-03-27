@@ -6,7 +6,7 @@ import { isMainModule } from "./infra/is-main.js";
 import {
   installUnhandledRejectionHandler,
   isAbortError,
-  isTransientNetworkError,
+  isStrictTransientNetworkError,
 } from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
@@ -103,7 +103,7 @@ if (isMain) {
       console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
       return;
     }
-    if (isTransientNetworkError(error)) {
+    if (isStrictTransientNetworkError(error)) {
       console.warn(
         "[openclaw] Non-fatal uncaught exception (continuing):",
         formatUncaughtError(error),
