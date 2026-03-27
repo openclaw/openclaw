@@ -232,13 +232,6 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
-  const headers =
-    params.headers || params.model.headers
-      ? {
-          ...params.model.headers,
-          ...params.headers,
-        }
-      : undefined;
   for (const chunk of chunks) {
     summary = await retryAsync(
       () =>
@@ -247,7 +240,6 @@ async function summarizeChunks(params: {
           params.model,
           params.reserveTokens,
           params.apiKey,
-          headers,
           params.signal,
           effectiveInstructions,
           summary,
