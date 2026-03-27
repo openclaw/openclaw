@@ -25,6 +25,7 @@ import {
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
   formatInternalExecPersistenceDeniedText,
+  formatInternalVerboseCurrentReplyOnlyText,
   formatInternalVerbosePersistenceDeniedText,
   enqueueModeSwitchEvents,
   withOptions,
@@ -469,11 +470,13 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
-      directives.verboseLevel === "off"
-        ? formatDirectiveAck("Verbose logging disabled.")
-        : directives.verboseLevel === "full"
-          ? formatDirectiveAck("Verbose logging set to full.")
-          : formatDirectiveAck("Verbose logging enabled."),
+      !allowInternalVerbosePersistence
+        ? formatDirectiveAck(formatInternalVerboseCurrentReplyOnlyText())
+        : directives.verboseLevel === "off"
+          ? formatDirectiveAck("Verbose logging disabled.")
+          : directives.verboseLevel === "full"
+            ? formatDirectiveAck("Verbose logging set to full.")
+            : formatDirectiveAck("Verbose logging enabled."),
     );
   }
   if (

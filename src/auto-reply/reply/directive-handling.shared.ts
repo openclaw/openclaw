@@ -20,7 +20,10 @@ export const formatInternalExecPersistenceDeniedText = () =>
 export const formatInternalVerbosePersistenceDeniedText = () =>
   "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
 
-export function canPersistInternalExecDirective(params: {
+export const formatInternalVerboseCurrentReplyOnlyText = () =>
+  "Verbose logging set for the current reply only.";
+
+function canPersistInternalDirective(params: {
   surface?: string;
   gatewayClientScopes?: string[];
 }): boolean {
@@ -31,16 +34,8 @@ export function canPersistInternalExecDirective(params: {
   return scopes.includes("operator.admin");
 }
 
-export function canPersistInternalVerboseDirective(params: {
-  surface?: string;
-  gatewayClientScopes?: string[];
-}): boolean {
-  if (!isInternalMessageChannel(params.surface)) {
-    return true;
-  }
-  const scopes = params.gatewayClientScopes ?? [];
-  return scopes.includes("operator.admin");
-}
+export const canPersistInternalExecDirective = canPersistInternalDirective;
+export const canPersistInternalVerboseDirective = canPersistInternalDirective;
 
 export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

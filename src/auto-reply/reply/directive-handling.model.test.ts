@@ -597,7 +597,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       }),
     );
 
-    expect(result?.text).toContain("Verbose logging set to full.");
+    expect(result?.text).toContain("Verbose logging set for the current reply only.");
     expect(result?.text).toContain("operator.admin");
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
