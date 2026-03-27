@@ -3,14 +3,27 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { clearInternalHooks, registerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import { applyResetModelOverride } from "./session-reset-model.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
@@ -431,7 +444,7 @@ describe("initSessionState RawBody", () => {
     expect(resetResult.bodyStripped).toBe("");
   });
 
-  it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
+  it("preserves argument casing while matching reset triggers case-insensitively across whitespace separators", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-case-");
     const storePath = path.join(root, "sessions.json");
 
@@ -443,7 +456,7 @@ describe("initSessionState RawBody", () => {
     } as OpenClawConfig;
 
     const ctx = {
-      RawBody: "/NEW KeepThisCase",
+      RawBody: "/NEW\tKeepThisCase",
       ChatType: "direct",
       SessionKey: "agent:main:whatsapp:dm:s1",
     };
@@ -457,6 +470,76 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.bodyStripped).toBe("KeepThisCase");
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
+  });
+
+  it.each([
+    {
+      body: "/new: KeepThisCase",
+    },
+    {
+      body: "/new@openclaw KeepThisCase",
+      botUsername: "openclaw",
+    },
+    {
+      body: "/new@openclaw: KeepThisCase",
+      botUsername: "openclaw",
+    },
+  ])(
+    "treats normalized /new forms as manual reset commands: $body",
+    async ({ body, botUsername }) => {
+      const root = await makeCaseDir("openclaw-rawbody-reset-normalized-");
+      const storePath = path.join(root, "sessions.json");
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          CommandBody: body,
+          ChatType: "direct",
+          SessionKey: "agent:main:whatsapp:dm:s1",
+          ...(botUsername ? { BotUsername: botUsername } : {}),
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(true);
+      expect(result.bodyStripped).toBe("KeepThisCase");
+    },
+  );
+
+  it("keeps custom reset triggers working when the trigger uses a non-canonical command alias", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-custom-alias-");
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/dock_telegram"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/dock_telegram KeepThisCase",
+        CommandBody: "/dock_telegram KeepThisCase",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.bodyStripped).toBe("KeepThisCase");
   });
 
   it("does not rotate local session state for /new on bound ACP sessions", async () => {
@@ -515,6 +598,440 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(false);
   });
 
+  it.each(["/new", "/reset"])(
+    "does not emit automatic reset hooks for stale bound ACP sessions on %s",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const root = await makeCaseDir("openclaw-rawbody-acp-stale-reset-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+      const existingSessionId = "session-existing";
+      const captured: string[] = [];
+      registerInternalHook("session:daily_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+      registerInternalHook("session:idle_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          systemSent: true,
+          sendPolicy: "deny",
+          queueMode: "coalesce",
+          queueDebounceMs: 250,
+          queueCap: 3,
+          queueDrop: "old",
+          label: "keep-me",
+        },
+      });
+
+      const cfg = {
+        session: { store: storePath },
+        bindings: [
+          {
+            type: "acp",
+            agentId: "codex",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: "1478836151241412759" },
+            },
+            acp: { mode: "persistent" },
+          },
+        ],
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: commandBody,
+          CommandBody: commandBody,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "1478836151241412759",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry.sendPolicy).toBe("deny");
+      expect(result.sessionEntry.queueMode).toBe("coalesce");
+      expect(result.sessionEntry.queueDebounceMs).toBe(250);
+      expect(result.sessionEntry.queueCap).toBe(3);
+      expect(result.sessionEntry.queueDrop).toBe("old");
+      expect(result.sessionEntry.label).toBe("keep-me");
+      expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each(["/new", "/reset"])(
+    "does not emit automatic reset hooks for stale bound ACP sessions on %s when resetTriggers exclude default commands",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const root = await makeCaseDir("openclaw-rawbody-acp-stale-custom-reset-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+      const existingSessionId = "session-existing";
+      const captured: string[] = [];
+      registerInternalHook("session:daily_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+      registerInternalHook("session:idle_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          systemSent: true,
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/fresh"],
+        },
+        bindings: [
+          {
+            type: "acp",
+            agentId: "codex",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: "1478836151241412759" },
+            },
+            acp: { mode: "persistent" },
+          },
+        ],
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: commandBody,
+          CommandBody: commandBody,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "1478836151241412759",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each(["/new", "/reset"])(
+    "does not emit automatic reset hooks for stale non-ACP sessions on %s when resetTriggers exclude default commands",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const root = await makeCaseDir("openclaw-rawbody-stale-custom-reset-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:stale-custom-reset";
+      const existingSessionId = "session-existing";
+      const captured: string[] = [];
+      registerInternalHook("session:daily_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+      registerInternalHook("session:idle_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          systemSent: true,
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/fresh"],
+        },
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: commandBody,
+          CommandBody: commandBody,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "channel:stale-custom-reset",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each(["/new", "/reset"])(
+    "keeps automatic reset hooks enabled for %s on native-command surfaces when commands.text is disabled",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const pluginRegistryState = Symbol.for("openclaw.pluginRegistryState");
+      const runtimeState = (
+        globalThis as typeof globalThis & {
+          [pluginRegistryState]?: {
+            registry?: Parameters<typeof setActivePluginRegistry>[0] | null;
+            key?: string | null;
+          };
+        }
+      )[pluginRegistryState];
+      const previousRegistry = getActivePluginRegistry() ?? runtimeState?.registry ?? null;
+      const previousRegistryKey = getActivePluginRegistryKey() ?? runtimeState?.key ?? null;
+      try {
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "discord",
+              source: "test",
+              plugin: createChannelTestPluginBase({
+                id: "discord",
+                capabilities: { nativeCommands: true, chatTypes: ["direct", "group"] },
+              }),
+            },
+          ]),
+        );
+        const root = await makeCaseDir("openclaw-rawbody-stale-text-disabled-");
+        const storePath = path.join(root, "sessions.json");
+        const sessionKey = "agent:main:discord:channel:stale-text-disabled";
+        const existingSessionId = "session-existing";
+        const captured: string[] = [];
+        registerInternalHook("session:daily_reset", async (event) => {
+          captured.push(`${event.type}:${event.action}`);
+        });
+        registerInternalHook("session:idle_reset", async (event) => {
+          captured.push(`${event.type}:${event.action}`);
+        });
+
+        await writeSessionStoreFast(storePath, {
+          [sessionKey]: {
+            sessionId: existingSessionId,
+            updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+            systemSent: true,
+          },
+        });
+
+        const cfg = {
+          commands: {
+            text: false,
+          },
+          session: {
+            store: storePath,
+            resetTriggers: ["/fresh"],
+            reset: {
+              mode: "daily",
+              atHour: 4,
+              idleMinutes: 120,
+            },
+          },
+          channels: {
+            discord: {
+              allowFrom: ["*"],
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await initSessionState({
+          ctx: {
+            RawBody: commandBody,
+            CommandBody: commandBody,
+            Provider: "discord",
+            Surface: "discord",
+            CommandSource: "text",
+            SenderId: "12345",
+            From: "discord:12345",
+            To: "channel:stale-text-disabled",
+            SessionKey: sessionKey,
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+
+        expect(result.resetTriggered).toBe(false);
+        expect(result.isNewSession).toBe(true);
+        expect(result.sessionId).not.toBe(existingSessionId);
+        expect(captured).toEqual(["session:daily_reset"]);
+      } finally {
+        if (previousRegistry) {
+          setActivePluginRegistry(previousRegistry, previousRegistryKey ?? undefined);
+        } else {
+          resetPluginRuntimeStateForTest();
+        }
+      }
+    },
+  );
+
+  it.each(["/new\tkeep", "/reset\tkeep"])(
+    "suppresses automatic reset hooks for stale non-ACP sessions on %s with non-space separators when resetTriggers exclude default commands",
+    async (commandBody) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const root = await makeCaseDir("openclaw-rawbody-stale-custom-reset-tab-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:stale-custom-reset-tab";
+      const existingSessionId = "session-existing";
+      const captured: string[] = [];
+      registerInternalHook("session:daily_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+      registerInternalHook("session:idle_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          systemSent: true,
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/fresh"],
+        },
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: commandBody,
+          CommandBody: commandBody,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "channel:stale-custom-reset-tab",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    {
+      body: "/new: keep",
+    },
+    {
+      body: "/new@openclaw keep",
+      botUsername: "openclaw",
+    },
+    {
+      body: "/new@openclaw: keep",
+      botUsername: "openclaw",
+    },
+  ])(
+    "suppresses automatic reset hooks for stale non-ACP sessions when $body normalizes to /new",
+    async ({ body, botUsername }) => {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const root = await makeCaseDir("openclaw-rawbody-stale-custom-reset-normalized-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:stale-custom-reset-normalized";
+      const existingSessionId = "session-existing";
+      const captured: string[] = [];
+      registerInternalHook("session:daily_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+      registerInternalHook("session:idle_reset", async (event) => {
+        captured.push(`${event.type}:${event.action}`);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          systemSent: true,
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/fresh"],
+        },
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          CommandBody: body,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "channel:stale-custom-reset-normalized",
+          SessionKey: sessionKey,
+          ...(botUsername ? { BotUsername: botUsername } : {}),
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(captured).toHaveLength(0);
+    },
+  );
+
   it("does not rotate local session state for ACP /new when conversation IDs are unavailable", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-reset-no-conversation-");
     const storePath = path.join(root, "sessions.json");
@@ -559,6 +1076,58 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionId).toBe(existingSessionId);
     expect(result.isNewSession).toBe(false);
   });
+
+  it.each(["/new", "/reset"])(
+    "falls back to a new local session for bound ACP conversations without an existing session entry on %s",
+    async (commandBody) => {
+      const root = await makeCaseDir("openclaw-rawbody-acp-missing-entry-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:codex:acp:binding:discord:default:feedface";
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetTriggers: ["/fresh"],
+        },
+        bindings: [
+          {
+            type: "acp",
+            agentId: "codex",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: "1478836151241412759" },
+            },
+            acp: { mode: "persistent" },
+          },
+        ],
+        channels: {
+          discord: {
+            allowFrom: ["*"],
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: commandBody,
+          CommandBody: commandBody,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "1478836151241412759",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered).toBe(false);
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).toBeTruthy();
+    },
+  );
 
   it("keeps custom reset triggers working on bound ACP sessions", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-custom-reset-");
@@ -861,6 +1430,7 @@ describe("initSessionState reset policy", () => {
 
   afterEach(() => {
     clearBootstrapSnapshotOnSessionRolloverSpy.mockRestore();
+    clearInternalHooks();
     vi.useRealTimers();
   });
 
@@ -891,6 +1461,115 @@ describe("initSessionState reset policy", () => {
       sessionKey,
       previousSessionId: existingSessionId,
     });
+  });
+
+  it.each([
+    {
+      name: "daily reset",
+      action: "daily_reset",
+      sessionKey: "agent:main:whatsapp:dm:daily-hook",
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      now: new Date(2026, 0, 18, 5, 0, 0),
+      cfg: (storePath: string, root: string) =>
+        ({
+          agents: { defaults: { workspace: root } },
+          session: { store: storePath },
+        }) as OpenClawConfig,
+    },
+    {
+      name: "idle reset",
+      action: "idle_reset",
+      sessionKey: "agent:main:whatsapp:dm:idle-hook",
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      cfg: (storePath: string, root: string) =>
+        ({
+          agents: { defaults: { workspace: root } },
+          session: {
+            store: storePath,
+            reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+          },
+        }) as OpenClawConfig,
+    },
+  ])(
+    "emits session:$action internal hook on $name",
+    async ({ action, cfg, now, sessionKey, updatedAt }) => {
+      vi.setSystemTime(now);
+      const root = await makeCaseDir("openclaw-reset-hook-");
+      const storePath = path.join(root, "sessions.json");
+      const existingSessionId = `existing-${action}`;
+      const captured: Array<{
+        action: string;
+        sessionKey: string;
+        context: Record<string, unknown>;
+      }> = [];
+      registerInternalHook(`session:${action}`, async (event) => {
+        captured.push(event);
+      });
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt,
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey, Surface: "telegram" },
+        cfg: cfg(storePath, root),
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]).toMatchObject({
+        action,
+        sessionKey,
+        context: expect.objectContaining({
+          commandSource: "telegram",
+          workspaceDir: root,
+          previousSessionEntry: expect.objectContaining({ sessionId: existingSessionId }),
+          sessionEntry: expect.objectContaining({ sessionId: result.sessionId }),
+        }),
+      });
+    },
+  );
+
+  it("emits daily_reset when the daily boundary expires before idle timeout", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 6, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-priority-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:daily-priority";
+    const existingSessionId = "daily-priority-session-id";
+    const captured: string[] = [];
+    registerInternalHook("session:daily_reset", async (event) => {
+      captured.push(`${event.type}:${event.action}`);
+    });
+    registerInternalHook("session:idle_reset", async (event) => {
+      captured.push(`${event.type}:${event.action}`);
+    });
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 50, 0).getTime(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Surface: "telegram" },
+      cfg: {
+        agents: { defaults: { workspace: root } },
+        session: {
+          store: storePath,
+          reset: { mode: "daily", atHour: 4, idleMinutes: 120 },
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(captured).toEqual(["session:daily_reset"]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -946,6 +1625,72 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("fires automatic reset hooks before archiving legacy transcripts", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-memory-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionKey = "agent:main:whatsapp:dm:daily-memory";
+    const existingSessionId = "daily-memory-session-id";
+    await fs.writeFile(
+      path.join(sessionsDir, `${existingSessionId}.jsonl`),
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: existingSessionId,
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "m1",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "Remember this after automatic reset" },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "m2",
+          parentId: "m1",
+          timestamp: new Date().toISOString(),
+          message: { role: "assistant", content: "Recovered from pre-archive transcript" },
+        }),
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const { default: sessionMemoryHandler } =
+      await import("../../hooks/bundled/session-memory/handler.js");
+    registerInternalHook("session:daily_reset", sessionMemoryHandler);
+
+    await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Surface: "telegram" },
+      cfg: {
+        agents: { defaults: { workspace: root } },
+        session: { store: storePath },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    const memoryDir = path.join(root, "memory");
+    const memoryFiles = await fs.readdir(memoryDir);
+    expect(memoryFiles).toHaveLength(1);
+
+    const memoryContent = await fs.readFile(path.join(memoryDir, memoryFiles[0]), "utf-8");
+    expect(memoryContent).toContain("user: Remember this after automatic reset");
+    expect(memoryContent).toContain("assistant: Recovered from pre-archive transcript");
   });
 
   it("uses per-type overrides for thread sessions", async () => {
@@ -1259,6 +2004,101 @@ describe("initSessionState reset triggers in Slack channels", () => {
   });
 });
 
+describe("applyResetModelOverride", () => {
+  it("selects a model hint and strips it from the body", async () => {
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
+      resetTriggered: true,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+    });
+
+    expect(sessionEntry.providerOverride).toBe("minimax");
+    expect(sessionEntry.modelOverride).toBe("m2.7");
+    expect(sessionCtx.BodyStripped).toBe("summarize");
+  });
+
+  it("clears auth profile overrides when reset applies a model", async () => {
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      authProfileOverride: "anthropic:default",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
+      resetTriggered: true,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+    });
+
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("skips when resetTriggered is false", async () => {
+    const cfg = {} as OpenClawConfig;
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:dm:1": sessionEntry };
+    const sessionCtx = { BodyStripped: "minimax summarize" };
+    const ctx = { ChatType: "direct" };
+
+    await applyResetModelOverride({
+      cfg,
+      resetTriggered: false,
+      bodyStripped: "minimax summarize",
+      sessionCtx,
+      ctx,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex,
+    });
+
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionCtx.BodyStripped).toBe("minimax summarize");
+  });
+});
+
 describe("initSessionState preserves behavior overrides across /new and /reset", () => {
   async function seedSessionStoreWithOverrides(params: {
     storePath: string;
@@ -1443,23 +2283,25 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
   });
 
   it("archives the old session store entry on /new", async () => {
+    vi.resetModules();
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";
     const existingSessionId = "existing-session-archive";
-    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
     await seedSessionStoreWithOverrides({
       storePath,
       sessionKey,
       sessionId: existingSessionId,
       overrides: { verboseLevel: "on" },
     });
-    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+    const sessionArchive = await import("../../gateway/session-archive.fs.js");
+    const archiveSpy = vi.spyOn(sessionArchive, "archiveSessionTranscripts");
+    const { initSessionState: initSessionStateFresh } = await import("./session.js");
 
     const cfg = {
       session: { store: storePath, idleMinutes: 999 },
     } as OpenClawConfig;
 
-    const result = await initSessionState({
+    const result = await initSessionStateFresh({
       ctx: {
         Body: "/new",
         RawBody: "/new",
@@ -1477,11 +2319,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
     expect(result.isNewSession).toBe(true);
     expect(result.resetTriggered).toBe(true);
-    expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
-    const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
-      entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+    expect(archiveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: existingSessionId,
+        storePath,
+        reason: "reset",
+      }),
     );
-    expect(archived).toHaveLength(1);
+    archiveSpy.mockRestore();
   });
 
   it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
@@ -1490,12 +2335,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     // old transcript files orphaned on disk. Refs #35481.
     vi.useFakeTimers();
     try {
+      vi.resetModules();
       // Simulate: it is 5am, session was last active at 3am (before 4am daily boundary)
       vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
       const storePath = await createStorePath("openclaw-stale-archive-");
       const sessionKey = "agent:main:telegram:dm:archive-stale-user";
       const existingSessionId = "stale-session-to-be-archived";
-      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
 
       await writeSessionStoreFast(storePath, {
         [sessionKey]: {
@@ -1503,10 +2348,13 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
         },
       });
-      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const sessionArchive = await import("../../gateway/session-archive.fs.js");
+      const archiveSpy = vi.spyOn(sessionArchive, "archiveSessionTranscripts");
+      const { initSessionState: initSessionStateFresh } = await import("./session.js");
 
       const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const result = await initSessionState({
+      const result = await initSessionStateFresh({
         ctx: {
           Body: "hello",
           RawBody: "hello",
@@ -1525,11 +2373,14 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession).toBe(true);
       expect(result.resetTriggered).toBe(false);
       expect(result.sessionId).not.toBe(existingSessionId);
-      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
-      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
-        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      expect(archiveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: existingSessionId,
+          storePath,
+          reason: "reset",
+        }),
       );
-      expect(archived).toHaveLength(1);
+      archiveSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }

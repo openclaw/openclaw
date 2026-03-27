@@ -1,7 +1,7 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
+ * Saves session context to memory when a session reset is triggered
  * Creates a new dated memory file with LLM-generated slug
  */
 
@@ -28,6 +28,16 @@ import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } fro
 
 const log = createSubsystemLogger("hooks/session-memory");
 
+function isSessionResetEvent(event: Parameters<HookHandler>[0]): boolean {
+  if (event.type === "command") {
+    return event.action === "new" || event.action === "reset";
+  }
+  if (event.type === "session") {
+    return event.action === "idle_reset" || event.action === "daily_reset";
+  }
+  return false;
+}
+
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -48,17 +58,18 @@ function resolveDisplaySessionKey(params: {
 }
 
 /**
- * Save session context to memory when /new or /reset command is triggered
+ * Save session context to memory when a manual or automatic reset is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  if (!isSessionResetEvent(event)) {
     return;
   }
 
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Hook triggered for session reset", {
+      type: event.type,
+      action: event.action,
+    });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;

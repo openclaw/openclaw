@@ -68,24 +68,21 @@ async function runNewWithPreviousSessionEntry(params: {
   tempDir: string;
   previousSessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
-  action?: "new" | "reset";
+  action?: "new" | "reset" | "idle_reset" | "daily_reset";
   sessionKey?: string;
   workspaceDirOverride?: string;
 }): Promise<{ files: string[]; memoryContent: string }> {
-  const event = createHookEvent(
-    "command",
-    params.action ?? "new",
-    params.sessionKey ?? "agent:main:main",
-    {
-      cfg:
-        params.cfg ??
-        ({
-          agents: { defaults: { workspace: params.tempDir } },
-        } satisfies OpenClawConfig),
-      previousSessionEntry: params.previousSessionEntry,
-      ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
-    },
-  );
+  const action = params.action ?? "new";
+  const eventType = action === "idle_reset" || action === "daily_reset" ? "session" : "command";
+  const event = createHookEvent(eventType, action, params.sessionKey ?? "agent:main:main", {
+    cfg:
+      params.cfg ??
+      ({
+        agents: { defaults: { workspace: params.tempDir } },
+      } satisfies OpenClawConfig),
+    previousSessionEntry: params.previousSessionEntry,
+    ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
+  });
 
   await handler(event);
 
@@ -99,7 +96,7 @@ async function runNewWithPreviousSessionEntry(params: {
 async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
-  action?: "new" | "reset";
+  action?: "new" | "reset" | "idle_reset" | "daily_reset";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -186,7 +183,7 @@ function expectMemoryConversation(params: {
 }
 
 describe("session-memory hook", () => {
-  it("skips non-command events", async () => {
+  it("skips unrelated events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
@@ -246,6 +243,35 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Please reset and keep notes");
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
+
+  it.each([
+    {
+      action: "idle_reset" as const,
+      user: "Remember this after idle timeout",
+      assistant: "Recovered after idle reset",
+    },
+    {
+      action: "daily_reset" as const,
+      user: "Daily rollover note",
+      assistant: "Recovered after daily reset",
+    },
+  ])(
+    "creates memory file with session content on session:$action",
+    async ({ action, user, assistant }) => {
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: user },
+        { role: "assistant", content: assistant },
+      ]);
+      const { files, memoryContent } = await runNewWithPreviousSession({
+        sessionContent,
+        action,
+      });
+
+      expect(files.length).toBe(1);
+      expect(memoryContent).toContain(`user: ${user}`);
+      expect(memoryContent).toContain(`assistant: ${assistant}`);
+    },
+  );
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
