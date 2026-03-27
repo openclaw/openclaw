@@ -103,10 +103,14 @@ function warnOrInfo(logger: { warn: (msg: string) => void; info?: (msg: string) 
 }
 
 export function createMemoryOpenVikingContextEngine(
-  cfg: MemoryOpenVikingConfig & { enabled?: boolean },
-  getClient: () => Promise<OpenVikingClient>,
-  logger: { warn: (msg: string) => void; info?: (msg: string) => void },
+  opts: MemoryOpenVikingConfig & {
+    enabled?: boolean;
+    logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+    getClient: () => Promise<OpenVikingClient>;
+    resolveAgentId: (sessionId: string) => string;
+  },
 ): MemoryOpenVikingContextEngine {
+  const { cfg, logger, getClient, resolveAgentId } = opts;
   async function tryLegacyCompact(params: CompactParams): Promise<CompactResult | null> {
     return null;
   }
@@ -136,7 +140,7 @@ export function createMemoryOpenVikingContextEngine(
       const lockKey = sessionKey ?? afterTurnParams.sessionId ?? "unknown";
       
       if (commitLocks.has(lockKey)) {
-        logger.info("openviking: auto-capture skipped (commit in progress for " + lockKey + ")");
+        warnOrInfo(logger, "openviking: auto-capture skipped (commit in progress for " + lockKey + ")");
         return;
       }
       commitLocks.add(lockKey);
@@ -146,7 +150,7 @@ export function createMemoryOpenVikingContextEngine(
 
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
-          logger.info("openviking: auto-capture skipped (messages=0)");
+          warnOrInfo(logger, "openviking: auto-capture skipped (messages=0)");
           return;
         }
 
@@ -159,21 +163,21 @@ export function createMemoryOpenVikingContextEngine(
         const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start);
 
         if (newTexts.length === 0) {
-          logger.info("openviking: auto-capture skipped (no new user/assistant messages)");
+          warnOrInfo(logger, "openviking: auto-capture skipped (no new user/assistant messages)");
           return;
         }
 
         const turnText = newTexts.join("\n");
         const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
         const preview = turnText.length > 80 ? turnText.slice(0, 80) + "..." : turnText;
-        logger.info(
+        warnOrInfo(logger,
           "openviking: capture-check " +
             "shouldCapture=" + String(decision.shouldCapture) + " " +
             "reason=" + decision.reason + " newMsgCount=" + newCount + " text=\"" + preview + "\"",
         );
 
         if (!decision.shouldCapture) {
-          logger.info("openviking: auto-capture skipped (capture decision rejected)");
+          warnOrInfo(logger, "openviking: auto-capture skipped (capture decision rejected)");
           return;
         }
 
@@ -181,7 +185,7 @@ export function createMemoryOpenVikingContextEngine(
         const OVSessionId = sessionKey ?? afterTurnParams.sessionId;
         await client.addSessionMessage(OVSessionId, "user", decision.normalizedText, agentId);
         const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
-        logger.info(
+        warnOrInfo(logger,
           "openviking: committed " + newCount + " messages in session=" + OVSessionId + ", " +
             "archived=" + (commitResult.archived ?? false) + ", memories=" + (commitResult.memories_extracted ?? 0) + ", " +
             "task_id=" + (commitResult.task_id ?? "none"),
@@ -214,3 +218,5 @@ export function createMemoryOpenVikingContextEngine(
 
   return contextEnginePlugin;
 }
+
+export type ContextEngineWithSessionMapping = MemoryOpenVikingContextEngine;

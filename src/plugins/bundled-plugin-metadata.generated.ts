@@ -11453,7 +11453,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
     packageName: "@openclaw/openviking",
     packageVersion: "2026.2.6-3",
-    packageDescription: "OpenClaw OpenViking-backed long-term memory plugin",
+    packageDescription:
+      "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
     packageManifest: {
       extensions: ["./index.ts"],
     },
