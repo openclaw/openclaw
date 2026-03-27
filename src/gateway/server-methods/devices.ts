@@ -23,6 +23,7 @@ import {
   validateDeviceTokenRevokeParams,
   validateDeviceTokenRotateParams,
 } from "../protocol/index.js";
+import { invalidateNodeListCache } from "./nodes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -117,6 +118,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    invalidateNodeListCache();
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
   },
   "device.pair.reject": async ({ params, respond, context }) => {
@@ -149,6 +151,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    invalidateNodeListCache();
     respond(true, rejected, undefined);
   },
   "device.pair.remove": async ({ params, respond, context }) => {
@@ -172,6 +175,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+    invalidateNodeListCache();
     respond(true, removed, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {

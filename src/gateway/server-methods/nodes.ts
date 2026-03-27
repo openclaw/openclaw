@@ -68,8 +68,8 @@ type NodeListCacheEntry = {
 };
 let nodeListCache: NodeListCacheEntry | null = null;
 
-/** @internal Test-only: reset the node.list response cache. */
-export function resetNodeListCacheForTests(): void {
+/** Invalidate the node.list response cache so the next call reads fresh data. */
+export function invalidateNodeListCache(): void {
   nodeListCache = null;
 }
 
