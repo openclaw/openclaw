@@ -52,6 +52,7 @@ describe("deviceHandlers", () => {
     const opts = createOptions("device.pair.remove", { deviceId: " device-1 " });
 
     await deviceHandlers["device.pair.remove"](opts);
+    await Promise.resolve();
 
     expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
     expect(opts.context.disconnectClientsForDevice).toHaveBeenCalledWith("device-1");
@@ -84,6 +85,7 @@ describe("deviceHandlers", () => {
     });
 
     await deviceHandlers["device.token.revoke"](opts);
+    await Promise.resolve();
 
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",

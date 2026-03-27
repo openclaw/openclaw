@@ -171,9 +171,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
-    context.disconnectClientsForDevice?.(removed.deviceId);
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     respond(true, removed, undefined);
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(removed.deviceId);
+    });
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
     if (!validateDeviceTokenRotateParams(params)) {
@@ -285,7 +287,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = deviceId.trim();
-    context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
     context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
     respond(
       true,
@@ -296,5 +297,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueMicrotask(() => {
+      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+    });
   },
 };
