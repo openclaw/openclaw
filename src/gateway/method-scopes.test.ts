@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
   isGatewayMethodClassified,
@@ -6,6 +8,10 @@ import {
 } from "./method-scopes.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+});
 
 describe("method scope resolution", () => {
   it.each([
@@ -30,6 +36,18 @@ describe("method scope resolution", () => {
 
   it("returns empty scopes for unknown methods", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+  });
+
+  it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayMethodScopes = {
+      "browser.request": "operator.write",
+    };
+    setActivePluginRegistry(registry);
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
+      "operator.write",
+    ]);
   });
 });
 

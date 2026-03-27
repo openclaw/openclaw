@@ -6,7 +6,7 @@ const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
-const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
 const maybeRunCliInContainerMock = vi.hoisted(() =>
@@ -40,8 +40,8 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
-vi.mock("../memory/search-manager.js", () => ({
-  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
+vi.mock("../plugins/memory-runtime.js", () => ({
+  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("./program/root-help.js", () => ({
@@ -69,7 +69,7 @@ describe("runCli exit behavior", () => {
 
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -85,7 +85,7 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -104,7 +104,7 @@ describe("runCli exit behavior", () => {
     ]);
     expect(loadDotEnvMock).not.toHaveBeenCalled();
     expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(closeAllMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
   it("propagates a handled container-target exit code", async () => {

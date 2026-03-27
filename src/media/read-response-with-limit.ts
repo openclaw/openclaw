@@ -1,6 +1,7 @@
 async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
+  onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
 ): Promise<Awaited<ReturnType<typeof reader.read>>> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -17,7 +18,10 @@ async function readChunkWithIdleTimeout(
       timedOut = true;
       clear();
       void reader.cancel().catch(() => undefined);
-      reject(new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`));
+      reject(
+        onIdleTimeout?.({ chunkTimeoutMs }) ??
+          new Error(`Media download stalled: no data received for ${chunkTimeoutMs}ms`),
+      );
     }, chunkTimeoutMs);
 
     void reader.read().then(
@@ -48,6 +52,7 @@ async function readResponsePrefix(
   maxBytes: number,
   opts?: {
     chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<ReadResponsePrefixResult> {
   const chunkTimeoutMs = opts?.chunkTimeoutMs;
@@ -72,7 +77,7 @@ async function readResponsePrefix(
   try {
     while (true) {
       const { done, value } = chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(reader, chunkTimeoutMs)
+        ? await readChunkWithIdleTimeout(reader, chunkTimeoutMs, opts?.onIdleTimeout)
         : await reader.read();
       if (done) {
         size = total;
@@ -121,13 +126,17 @@ export async function readResponseWithLimit(
   opts?: {
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
     chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<Buffer> {
   const onOverflow =
     opts?.onOverflow ??
     ((params: { size: number; maxBytes: number }) =>
       new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
-  const prefix = await readResponsePrefix(res, maxBytes, { chunkTimeoutMs: opts?.chunkTimeoutMs });
+  const prefix = await readResponsePrefix(res, maxBytes, {
+    chunkTimeoutMs: opts?.chunkTimeoutMs,
+    onIdleTimeout: opts?.onIdleTimeout,
+  });
   if (prefix.truncated) {
     throw onOverflow({ size: prefix.size, maxBytes, res });
   }
@@ -140,11 +149,15 @@ export async function readResponseTextSnippet(
     maxBytes?: number;
     maxChars?: number;
     chunkTimeoutMs?: number;
+    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
   },
 ): Promise<string | undefined> {
   const maxBytes = opts?.maxBytes ?? 8 * 1024;
   const maxChars = opts?.maxChars ?? 200;
-  const prefix = await readResponsePrefix(res, maxBytes, { chunkTimeoutMs: opts?.chunkTimeoutMs });
+  const prefix = await readResponsePrefix(res, maxBytes, {
+    chunkTimeoutMs: opts?.chunkTimeoutMs,
+    onIdleTimeout: opts?.onIdleTimeout,
+  });
   if (prefix.buffer.length === 0) {
     return undefined;
   }

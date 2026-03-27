@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  "src/cli/memory-cli.runtime.ts",
+  "extensions/memory-core/src/cli.runtime.ts",
   "src/cli/qr-cli.ts",
   "src/commands/agent.ts",
   "src/commands/channels/resolve.ts",

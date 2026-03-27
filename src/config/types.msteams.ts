@@ -134,3 +134,9 @@ export type MSTeamsConfig = {
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
 };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    msteams?: MSTeamsConfig;
+  }
+}

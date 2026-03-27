@@ -197,10 +197,13 @@ export function renderCommandPalette(props: CommandPaletteProps) {
   const grouped = groupItems(items);
 
   return html`
-    <div class="cmd-palette-overlay" @click=${() => {
-      props.onToggle();
-      restoreFocus();
-    }}>
+    <div
+      class="cmd-palette-overlay"
+      @click=${() => {
+        props.onToggle();
+        restoreFocus();
+      }}
+    >
       <div
         class="cmd-palette"
         @click=${(e: Event) => e.stopPropagation()}
@@ -217,40 +220,42 @@ export function renderCommandPalette(props: CommandPaletteProps) {
           }}
         />
         <div class="cmd-palette__results">
-          ${
-            grouped.length === 0
-              ? html`<div class="cmd-palette__empty">
-                  <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px">${icons.search}</span>
-                  <span>${t("overview.palette.noResults")}</span>
-                </div>`
-              : grouped.map(
-                  ([category, groupedItems]) => html`
-                <div class="cmd-palette__group-label">${CATEGORY_LABELS[category] ?? category}</div>
-                ${groupedItems.map((item) => {
-                  const globalIndex = items.indexOf(item);
-                  const isActive = globalIndex === props.activeIndex;
-                  return html`
-                    <div
-                      class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
-                      @click=${(e: Event) => {
-                        e.stopPropagation();
-                        selectItem(item, props);
-                      }}
-                      @mouseenter=${() => props.onActiveIndexChange(globalIndex)}
-                    >
-                      <span class="nav-item__icon">${icons[item.icon]}</span>
-                      <span>${item.label}</span>
-                      ${
-                        item.description
-                          ? html`<span class="cmd-palette__item-desc muted">${item.description}</span>`
-                          : nothing
-                      }
-                    </div>
-                  `;
-                })}
-              `,
-                )
-          }
+          ${grouped.length === 0
+            ? html`<div class="cmd-palette__empty">
+                <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
+                  >${icons.search}</span
+                >
+                <span>${t("overview.palette.noResults")}</span>
+              </div>`
+            : grouped.map(
+                ([category, groupedItems]) => html`
+                  <div class="cmd-palette__group-label">
+                    ${CATEGORY_LABELS[category] ?? category}
+                  </div>
+                  ${groupedItems.map((item) => {
+                    const globalIndex = items.indexOf(item);
+                    const isActive = globalIndex === props.activeIndex;
+                    return html`
+                      <div
+                        class="cmd-palette__item ${isActive ? "cmd-palette__item--active" : ""}"
+                        @click=${(e: Event) => {
+                          e.stopPropagation();
+                          selectItem(item, props);
+                        }}
+                        @mouseenter=${() => props.onActiveIndexChange(globalIndex)}
+                      >
+                        <span class="nav-item__icon">${icons[item.icon]}</span>
+                        <span>${item.label}</span>
+                        ${item.description
+                          ? html`<span class="cmd-palette__item-desc muted"
+                              >${item.description}</span
+                            >`
+                          : nothing}
+                      </div>
+                    `;
+                  })}
+                `,
+              )}
         </div>
         <div class="cmd-palette__footer">
           <span><kbd>↑↓</kbd> navigate</span>

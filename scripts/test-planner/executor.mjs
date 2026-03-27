@@ -107,6 +107,54 @@ const getShardLabel = (args) => {
   return typeof args[shardIndex + 1] === "string" ? args[shardIndex + 1] : "";
 };
 
+const normalizeEnvFlag = (value) => value?.trim().toLowerCase();
+
+const isEnvFlagEnabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "1" || normalized === "true";
+};
+
+const isEnvFlagDisabled = (value) => {
+  const normalized = normalizeEnvFlag(value);
+  return normalized === "0" || normalized === "false";
+};
+
+const isWindowsEnv = (env, platform = process.platform) => {
+  if (platform === "win32") {
+    return true;
+  }
+  return normalizeEnvFlag(env.RUNNER_OS) === "windows";
+};
+
+const isFsModuleCacheEnabled = (env, platform = process.platform) => {
+  if (isWindowsEnv(env, platform)) {
+    return isEnvFlagEnabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+  }
+  return !isEnvFlagDisabled(env.OPENCLAW_VITEST_FS_MODULE_CACHE);
+};
+
+export const resolveVitestFsModuleCachePath = ({
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  unitId = "",
+} = {}) => {
+  const explicitPath = env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.trim();
+  if (!isFsModuleCacheEnabled(env, platform)) {
+    return undefined;
+  }
+  if (explicitPath) {
+    return explicitPath;
+  }
+  const pathImpl = isWindowsEnv(env, platform) ? path.win32 : path.posix;
+  return pathImpl.join(
+    cwd,
+    "node_modules",
+    ".experimental-vitest-cache",
+    sanitizeArtifactName(unitId || "default"),
+  );
+};
+
 export function formatPlanOutput(plan) {
   return [
     `runtime=${plan.runtimeCapabilities.runtimeProfileName} mode=${plan.runtimeCapabilities.mode} intent=${plan.runtimeCapabilities.intentProfile} memoryBand=${plan.runtimeCapabilities.memoryBand} loadBand=${plan.runtimeCapabilities.loadBand} vitestMaxWorkers=${String(plan.executionBudget.vitestMaxWorkers ?? "default")} topLevelParallel=${plan.topLevelParallelEnabled ? String(plan.topLevelParallelLimit) : "off"}`,
@@ -131,6 +179,62 @@ export function formatExplanation(explanation) {
     `command=${explanation.args.join(" ")}`,
   ].join("\n");
 }
+
+const buildOrderedParallelSegments = (units) => {
+  const segments = [];
+  let deferredUnits = [];
+  for (const unit of units) {
+    if (unit.serialPhase) {
+      if (deferredUnits.length > 0) {
+        segments.push({ type: "deferred", units: deferredUnits });
+        deferredUnits = [];
+      }
+      const lastSegment = segments.at(-1);
+      if (lastSegment?.type === "serialPhase" && lastSegment.phase === unit.serialPhase) {
+        lastSegment.units.push(unit);
+      } else {
+        segments.push({ type: "serialPhase", phase: unit.serialPhase, units: [unit] });
+      }
+      continue;
+    }
+    deferredUnits.push(unit);
+  }
+  if (deferredUnits.length > 0) {
+    segments.push({ type: "deferred", units: deferredUnits });
+  }
+  return segments;
+};
+
+const prioritizeDeferredUnitsForPhase = (units, phase) => {
+  const preferredSurface =
+    phase === "extensions" || phase === "channels" ? phase : phase === "unit-fast" ? "unit" : null;
+  if (preferredSurface === null) {
+    return units;
+  }
+  const preferred = [];
+  const remaining = [];
+  for (const unit of units) {
+    if (unit.surface === preferredSurface) {
+      preferred.push(unit);
+    } else {
+      remaining.push(unit);
+    }
+  }
+  return preferred.length > 0 ? [...preferred, ...remaining] : units;
+};
+
+const partitionUnitsBySurface = (units, surface) => {
+  const matching = [];
+  const remaining = [];
+  for (const unit of units) {
+    if (unit.surface === surface) {
+      matching.push(unit);
+    } else {
+      remaining.push(unit);
+    }
+  }
+  return { matching, remaining };
+};
 
 export async function executePlan(plan, options = {}) {
   const env = options.env ?? process.env;
@@ -402,14 +506,24 @@ export async function executePlan(plan, options = {}) {
         );
       };
       try {
+        const childEnv = {
+          ...env,
+          ...unit.env,
+          VITEST_GROUP: unit.id,
+          NODE_OPTIONS: resolvedNodeOptions,
+        };
+        const vitestFsModuleCachePath = resolveVitestFsModuleCachePath({
+          env: childEnv,
+          platform: process.platform,
+          unitId: unit.id,
+        });
+        if (vitestFsModuleCachePath) {
+          childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = vitestFsModuleCachePath;
+          laneLogStream.write(`[test-parallel] fsModuleCachePath=${vitestFsModuleCachePath}\n`);
+        }
         child = spawn(pnpmInvocation.command, spawnArgs, {
           stdio: ["inherit", "pipe", "pipe"],
-          env: {
-            ...env,
-            ...unit.env,
-            VITEST_GROUP: unit.id,
-            NODE_OPTIONS: resolvedNodeOptions,
-          },
+          env: childEnv,
           shell: false,
         });
         captureTreeSample("spawn");
@@ -632,23 +746,116 @@ export async function executePlan(plan, options = {}) {
   }
 
   if (plan.serialPrefixUnits.length > 0) {
-    const failedSerialPrefix = await runUnitsWithLimit(
-      plan.serialPrefixUnits,
-      plan.passthroughOptionArgs,
-      1,
-    );
-    if (failedSerialPrefix !== undefined) {
-      return failedSerialPrefix;
+    const orderedSegments = buildOrderedParallelSegments(plan.parallelUnits);
+    let pendingDeferredSegment = null;
+    let carriedDeferredPromise = null;
+    let carriedDeferredSurface = null;
+    for (const segment of orderedSegments) {
+      if (segment.type === "deferred") {
+        pendingDeferredSegment = segment;
+        continue;
+      }
+      // Preserve phase ordering, but let batches inside the same shared phase use
+      // the normal top-level concurrency budget.
+      let deferredPromise = null;
+      let deferredCarryPromise = carriedDeferredPromise;
+      let deferredCarrySurface = carriedDeferredSurface;
+      if (
+        segment.phase === "unit-fast" &&
+        pendingDeferredSegment !== null &&
+        plan.topLevelParallelEnabled
+      ) {
+        const availableSlots = Math.max(0, plan.topLevelParallelLimit - segment.units.length);
+        if (availableSlots > 0) {
+          const prePhaseDeferred = pendingDeferredSegment.units;
+          if (prePhaseDeferred.length > 0) {
+            deferredCarryPromise = runUnitsWithLimit(
+              prePhaseDeferred,
+              plan.passthroughOptionArgs,
+              availableSlots,
+            );
+            deferredCarrySurface = prePhaseDeferred.some((unit) => unit.surface === "channels")
+              ? "channels"
+              : null;
+            pendingDeferredSegment = null;
+          }
+        }
+      }
+      if (pendingDeferredSegment !== null) {
+        const prioritizedDeferred = prioritizeDeferredUnitsForPhase(
+          pendingDeferredSegment.units,
+          segment.phase,
+        );
+        if (segment.phase === "extensions") {
+          const { matching: channelDeferred, remaining: otherDeferred } = partitionUnitsBySurface(
+            prioritizedDeferred,
+            "channels",
+          );
+          deferredPromise =
+            otherDeferred.length > 0
+              ? runUnitsWithLimit(
+                  otherDeferred,
+                  plan.passthroughOptionArgs,
+                  plan.deferredRunConcurrency ?? 1,
+                )
+              : null;
+          deferredCarryPromise =
+            channelDeferred.length > 0
+              ? runUnitsWithLimit(
+                  channelDeferred,
+                  plan.passthroughOptionArgs,
+                  plan.deferredRunConcurrency ?? 1,
+                )
+              : carriedDeferredPromise;
+          deferredCarrySurface = channelDeferred.length > 0 ? "channels" : carriedDeferredSurface;
+        } else {
+          deferredPromise = runUnitsWithLimit(
+            prioritizedDeferred,
+            plan.passthroughOptionArgs,
+            plan.deferredRunConcurrency ?? 1,
+          );
+        }
+      }
+      pendingDeferredSegment = null;
+      // eslint-disable-next-line no-await-in-loop
+      const failedSerialPhase = await runUnits(segment.units, plan.passthroughOptionArgs);
+      if (failedSerialPhase !== undefined) {
+        return failedSerialPhase;
+      }
+      if (deferredCarryPromise !== null && deferredCarrySurface === segment.phase) {
+        // eslint-disable-next-line no-await-in-loop
+        const failedCarriedDeferred = await deferredCarryPromise;
+        if (failedCarriedDeferred !== undefined) {
+          return failedCarriedDeferred;
+        }
+        deferredCarryPromise = null;
+        deferredCarrySurface = null;
+      }
+      if (deferredPromise !== null) {
+        // eslint-disable-next-line no-await-in-loop
+        const failedDeferredPhase = await deferredPromise;
+        if (failedDeferredPhase !== undefined) {
+          return failedDeferredPhase;
+        }
+      }
+      carriedDeferredPromise = deferredCarryPromise;
+      carriedDeferredSurface = deferredCarrySurface;
     }
-    const failedDeferredParallel = plan.deferredRunConcurrency
-      ? await runUnitsWithLimit(
-          plan.deferredParallelUnits,
-          plan.passthroughOptionArgs,
-          plan.deferredRunConcurrency,
-        )
-      : await runUnits(plan.deferredParallelUnits, plan.passthroughOptionArgs);
-    if (failedDeferredParallel !== undefined) {
-      return failedDeferredParallel;
+    if (pendingDeferredSegment !== null) {
+      const failedDeferredParallel = await runUnitsWithLimit(
+        pendingDeferredSegment.units,
+        plan.passthroughOptionArgs,
+        plan.deferredRunConcurrency ?? 1,
+      );
+      if (failedDeferredParallel !== undefined) {
+        return failedDeferredParallel;
+      }
+    }
+    if (carriedDeferredPromise !== null) {
+      const failedCarriedDeferred = await carriedDeferredPromise;
+      if (failedCarriedDeferred !== undefined) {
+        return failedCarriedDeferred;
+      }
     }
   } else {
     const failedParallel = await runUnits(plan.parallelUnits, plan.passthroughOptionArgs);
