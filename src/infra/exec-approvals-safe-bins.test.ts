@@ -186,6 +186,18 @@ describe("exec approvals safe bins", () => {
       expected: false,
     },
     {
+      name: "blocks jq $ENV builtin variable even when jq is explicitly opted in",
+      argv: ["jq", "$ENV"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq $ENV property access even when jq is explicitly opted in",
+      argv: ["jq", "($ENV).OPENAI_API_KEY"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
       name: "blocks safe bins with file args",
       argv: ["jq", ".foo", "secret.json"],
       resolvedPath: "/usr/bin/jq",
