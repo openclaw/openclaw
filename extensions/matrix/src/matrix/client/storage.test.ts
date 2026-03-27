@@ -28,6 +28,7 @@ vi.mock("../../../../../src/infra/backup-create.js", async (importOriginal) => {
 });
 
 let maybeMigrateLegacyStorage: typeof import("./storage.js").maybeMigrateLegacyStorage;
+let resolveMatrixStateFilePath: typeof import("./storage.js").resolveMatrixStateFilePath;
 let resolveMatrixStoragePaths: typeof import("./storage.js").resolveMatrixStoragePaths;
 
 describe("matrix client storage paths", () => {
@@ -39,7 +40,8 @@ describe("matrix client storage paths", () => {
   };
 
   beforeAll(async () => {
-    ({ maybeMigrateLegacyStorage, resolveMatrixStoragePaths } = await import("./storage.js"));
+    ({ maybeMigrateLegacyStorage, resolveMatrixStateFilePath, resolveMatrixStoragePaths } =
+      await import("./storage.js"));
   });
 
   afterEach(() => {
@@ -110,6 +112,26 @@ describe("matrix client storage paths", () => {
       env: {},
     });
   }
+
+  it("resolves state file paths inside the selected storage root", () => {
+    setupStateDir();
+    const filePath = resolveMatrixStateFilePath({
+      auth: {
+        ...defaultStorageAuth,
+        accountId: "ops",
+        deviceId: "DEVICE1",
+      },
+      filename: "thread-bindings.json",
+      env: {},
+    });
+
+    expect(filePath).toBe(
+      path.join(
+        resolveDefaultStoragePaths({ accountId: "ops", deviceId: "DEVICE1" }).rootDir,
+        "thread-bindings.json",
+      ),
+    );
+  });
 
   function writeLegacyMatrixStorage(
     stateDir: string,

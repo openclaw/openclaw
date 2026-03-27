@@ -1,5 +1,14 @@
+import { Command } from "commander";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { describe, expect, it, vi } from "vitest";
-import plugin, { buildPromptSection } from "./index.js";
+import plugin, {
+  buildMemoryFlushPlan,
+  buildPromptSection,
+  DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
+  DEFAULT_MEMORY_FLUSH_PROMPT,
+  DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+} from "./index.js";
+import { memoryRuntime } from "./src/runtime-provider.js";
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
@@ -45,39 +54,182 @@ describe("buildPromptSection", () => {
 });
 
 describe("plugin registration", () => {
-  it("registers memory tools independently so one unavailable tool does not suppress the other", () => {
+  it("registers memory tools + cli through extension-local modules", () => {
     const registerTool = vi.fn();
     const registerMemoryPromptSection = vi.fn();
+    const registerMemoryFlushPlan = vi.fn();
+    const registerMemoryRuntime = vi.fn();
+    const registerMemoryEmbeddingProvider = vi.fn();
     const registerCli = vi.fn();
-    const searchTool = { name: "memory_search" };
-    const getTool = null;
     const api = {
       registerTool,
       registerMemoryPromptSection,
+      registerMemoryFlushPlan,
+      registerMemoryRuntime,
+      registerMemoryEmbeddingProvider,
       registerCli,
-      runtime: {
-        tools: {
-          createMemorySearchTool: vi.fn(() => searchTool),
-          createMemoryGetTool: vi.fn(() => getTool),
-          registerMemoryCli: vi.fn(),
-        },
-      },
     };
 
     plugin.register(api as never);
 
     expect(registerMemoryPromptSection).toHaveBeenCalledWith(buildPromptSection);
+    expect(registerMemoryFlushPlan).toHaveBeenCalledWith(buildMemoryFlushPlan);
+    expect(registerMemoryRuntime).toHaveBeenCalledWith(memoryRuntime);
+    expect(registerMemoryEmbeddingProvider).toHaveBeenCalledTimes(6);
     expect(registerTool).toHaveBeenCalledTimes(2);
     expect(registerTool.mock.calls[0]?.[1]).toEqual({ names: ["memory_search"] });
     expect(registerTool.mock.calls[1]?.[1]).toEqual({ names: ["memory_get"] });
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+      descriptors: [
+        {
+          name: "memory",
+          description: "Search, inspect, and reindex memory files",
+          hasSubcommands: true,
+        },
+      ],
+    });
 
     const searchFactory = registerTool.mock.calls[0]?.[0] as
       | ((ctx: unknown) => unknown)
       | undefined;
     const getFactory = registerTool.mock.calls[1]?.[0] as ((ctx: unknown) => unknown) | undefined;
+    const cliRegistrar = registerCli.mock.calls[0]?.[0] as
+      | ((ctx: { program: unknown }) => void)
+      | undefined;
     const ctx = { config: { plugins: {} }, sessionKey: "agent:main:slack:dm:u123" };
+    const program = new Command();
 
-    expect(searchFactory?.(ctx)).toBe(searchTool);
-    expect(getFactory?.(ctx)).toBeNull();
+    expect((searchFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_search");
+    expect((getFactory?.(ctx) as { name?: string } | null)?.name).toBe("memory_get");
+    expect(() => cliRegistrar?.({ program } as never)).not.toThrow();
+    expect(program.commands.map((command) => command.name())).toContain("memory");
+  });
+});
+
+describe("buildMemoryFlushPlan", () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        userTimezone: "America/New_York",
+        timeFormat: "12",
+      },
+    },
+  } as OpenClawConfig;
+
+  it("replaces YYYY-MM-DD using user timezone and appends current time", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            compaction: {
+              memoryFlush: {
+                prompt: "Store durable notes in memory/YYYY-MM-DD.md",
+              },
+            },
+          },
+        },
+      },
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+    });
+
+    expect(plan?.prompt).toContain("memory/2026-02-16.md");
+    expect(plan?.prompt).toContain(
+      "Current time: Monday, February 16th, 2026 — 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+    );
+    expect(plan?.relativePath).toBe("memory/2026-02-16.md");
+  });
+
+  it("does not append a duplicate current time line", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            compaction: {
+              memoryFlush: {
+                prompt: "Store notes.\nCurrent time: already present",
+              },
+            },
+          },
+        },
+      },
+      nowMs: Date.UTC(2026, 1, 16, 15, 0, 0),
+    });
+
+    expect(plan?.prompt).toContain("Current time: already present");
+    expect((plan?.prompt.match(/Current time:/g) ?? []).length).toBe(1);
+  });
+
+  it("defaults to safe prompts and gating values", () => {
+    const plan = buildMemoryFlushPlan();
+    expect(plan).not.toBeNull();
+    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(plan?.prompt).toContain("memory/");
+    expect(plan?.prompt).toContain("MEMORY.md");
+    expect(plan?.systemPrompt).toContain("MEMORY.md");
+  });
+
+  it("respects disable flag", () => {
+    expect(
+      buildMemoryFlushPlan({
+        cfg: {
+          agents: {
+            defaults: { compaction: { memoryFlush: { enabled: false } } },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("falls back to defaults when numeric values are invalid", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokensFloor: Number.NaN,
+              memoryFlush: {
+                softThresholdTokens: -100,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
+    expect(plan?.reserveTokensFloor).toBe(20_000);
+  });
+
+  it("parses forceFlushTranscriptBytes from byte-size strings", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                forceFlushTranscriptBytes: "3mb",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan?.forceFlushTranscriptBytes).toBe(3 * 1024 * 1024);
+  });
+
+  it("keeps overwrite guards in the default prompt", () => {
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toMatch(/APPEND/i);
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("do not overwrite");
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("timestamped variant");
+    expect(DEFAULT_MEMORY_FLUSH_PROMPT).toContain("YYYY-MM-DD.md");
   });
 });

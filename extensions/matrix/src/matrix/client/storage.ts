@@ -11,6 +11,7 @@ import {
   resolveMatrixAccountStorageRoot,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../storage-paths.js";
+import type { MatrixAuth } from "./types.js";
 import type { MatrixStoragePaths } from "./types.js";
 
 export const DEFAULT_ACCOUNT_KEY = "default";
@@ -291,6 +292,25 @@ export function resolveMatrixStoragePaths(params: {
     accountKey: canonical.accountKey,
     tokenHash,
   };
+}
+
+export function resolveMatrixStateFilePath(params: {
+  auth: MatrixAuth;
+  filename: string;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+}): string {
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.auth.homeserver,
+    userId: params.auth.userId,
+    accessToken: params.auth.accessToken,
+    accountId: params.accountId ?? params.auth.accountId,
+    deviceId: params.auth.deviceId,
+    env: params.env,
+    stateDir: params.stateDir,
+  });
+  return path.join(storagePaths.rootDir, params.filename);
 }
 
 export async function maybeMigrateLegacyStorage(params: {
