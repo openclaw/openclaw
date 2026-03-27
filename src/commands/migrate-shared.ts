@@ -322,13 +322,17 @@ export async function resolveMigratePlanFromDisk(params: {
     }
   }
 
+  // Only include workspace dirs that were actually exported (not skipped as
+  // missing/covered), so import remapping indexes match the real archive contents.
+  const exportedWorkspaceDirs = included
+    .filter((a) => a.kind === "workspace")
+    .map((a) => a.sourcePath);
+
   return {
     stateDir,
     configPath,
     oauthDir,
-    workspaceDirs: await Promise.all(
-      workspaceDirs.map((entry) => canonicalizeExistingPath(path.resolve(entry))),
-    ),
+    workspaceDirs: exportedWorkspaceDirs,
     included,
     skipped,
   };

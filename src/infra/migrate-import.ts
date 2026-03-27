@@ -553,6 +553,20 @@ export async function importMigrateArchive(
         `Refusing --remap-workspace target "${resolvedRemapWorkspace}": path resolves to "${canonicalRemap}" which is too broad and could cause data loss.`,
       );
     }
+    // Reject if the target exists and is not a directory.
+    try {
+      const stat = await fs.lstat(canonicalRemap);
+      if (!stat.isDirectory()) {
+        throw new Error(
+          `--remap-workspace target "${resolvedRemapWorkspace}" exists but is not a directory.`,
+        );
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+      // ENOENT is fine — directory will be created on import.
+    }
   }
 
   // Build import plan: map each manifest asset to a local target path.
@@ -619,8 +633,10 @@ export async function importMigrateArchive(
   // Extract to a temporary directory.
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-import-"));
   try {
-    // Hard-links and special types are dangerous — abort extraction.
-    const abortEntryTypes = new Set(["Link", "BlockDevice", "CharacterDevice", "FIFO", "Socket"]);
+    // Special device types are dangerous — abort extraction.
+    // Hard links (Link) are allowed since they reference other entries within
+    // the same archive and are safe with preservePaths: false.
+    const abortEntryTypes = new Set(["BlockDevice", "CharacterDevice", "FIFO", "Socket"]);
     // Symlinks are skipped (not extracted) but don't abort the whole archive,
     // since self-generated archives may contain workspace symlinks.
     let entryCount = 0;
