@@ -97,7 +97,14 @@ function stripRawContentMeta(raw: string, role: "user" | "assistant"): string {
   if (!afterMeta.includes("[[")) {
     return afterMeta;
   }
-  // Only strip directive tags at leading control-tag positions (start of text).
+  // Only strip directive tags at leading control-tag positions (start of text),
+  // and only for user messages. Assistant responses may legitimately begin with
+  // [[reply_to_current]] or [[reply_to:...]] (e.g. structured reply formatting,
+  // tool output quoting, or discussion of the directive protocol) — silently
+  // rewriting them would corrupt the searchable transcript index.
+  if (role !== "user") {
+    return afterTs;
+  }
   // Inline mid-text mentions (e.g. discussing [[reply_to_current]] in docs)
   // are left intact so they remain searchable in the memory index.
   return afterMeta.replace(LEADING_DIRECTIVE_TAGS_RE, "");
