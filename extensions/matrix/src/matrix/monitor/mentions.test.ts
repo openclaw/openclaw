@@ -194,6 +194,21 @@ describe("resolveMentions", () => {
       expect(result.wasMentioned).toBe(true);
     });
 
+    it("detects mention when the visible label encodes the bot's displayName", () => {
+      const result = resolveMentions({
+        content: {
+          msgtype: "m.text",
+          body: "R&D Bot: hello",
+          formatted_body: '<a href="https://matrix.to/#/@bot:matrix.org">R&amp;D Bot</a>: hello',
+        },
+        userId,
+        displayName: "R&D Bot",
+        text: "R&D Bot: hello",
+        mentionRegexes: [],
+      });
+      expect(result.wasMentioned).toBe(true);
+    });
+
     it("does not detect mention when displayName is spoofed", () => {
       const result = resolveMentions({
         content: {

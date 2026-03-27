@@ -1,10 +1,34 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
+const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
+    const normalized = entity.toLowerCase();
+    if (normalized.startsWith("#x")) {
+      const codePoint = Number.parseInt(normalized.slice(2), 16);
+      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+    }
+    if (normalized.startsWith("#")) {
+      const codePoint = Number.parseInt(normalized.slice(1), 10);
+      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint);
+    }
+    return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
+  });
+}
+
 function normalizeVisibleMentionText(value: string): string {
-  return value
-    .replace(/<[^>]+>/g, " ")
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+  return decodeHtmlEntities(
+    value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+  )
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -41,13 +65,11 @@ function isVisibleMentionLabel(params: {
   }
   const localpart = resolveMatrixUserLocalpart(params.userId);
   const candidates = [
-    params.userId.trim().toLowerCase(),
-    localpart,
-    localpart ? `@${localpart}` : null,
+    extractVisibleMentionText(params.userId),
+    localpart ? extractVisibleMentionText(localpart) : null,
+    localpart ? extractVisibleMentionText(`@${localpart}`) : null,
     params.displayName ? extractVisibleMentionText(params.displayName) : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.toLowerCase());
+  ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
 
