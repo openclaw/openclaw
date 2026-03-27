@@ -111,6 +111,7 @@ describe("runDiscordGatewayLifecycle", () => {
       }),
       dispose: vi.fn(),
       emitter: gateway.emitter,
+      markIntentionalAbort: vi.fn(),
     };
     const statusSink = vi.fn();
     const runtime: RuntimeEnv = {
