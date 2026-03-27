@@ -658,6 +658,107 @@ describe("gateway agent handler", () => {
     expect(context.chatAbortControllers.get("run-replacement-error")).toBe(replacement);
   });
 
+  it("rejects late runId collisions before overwriting the abort-controller entry", async () => {
+    const childSessionKey = "agent:main:subagent:late-collision";
+    const runId = "run-late-collision";
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      outcome: { status: "ok" as const },
+    };
+    const context = makeContext();
+    const collisionEntry = createActiveRun(runId, {
+      sessionId: "collision-session",
+      sessionKey: "agent:other:main",
+    });
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "sess-followup",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [childSessionKey]: {
+          sessionId: "sess-followup",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.replaceSubagentRunAfterSteer.mockImplementationOnce(() => {
+      context.chatAbortControllers.set(runId, collisionEntry);
+      return true;
+    });
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "follow-up",
+        sessionKey: childSessionKey,
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        respond,
+        context,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.get(runId)).toBe(collisionEntry);
+    expect(context.dedupe.get(`agent:${runId}`)).toEqual(
+      expect.objectContaining({
+        ok: false,
+        payload: expect.objectContaining({
+          runId,
+          status: "error",
+        }),
+        error: expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenNthCalledWith(
+      1,
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+    expect(respond).toHaveBeenNthCalledWith(
+      2,
+      false,
+      expect.objectContaining({
+        runId,
+        status: "error",
+      }),
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `idempotencyKey "${runId}" already belongs to an active run; use a unique key.`,
+      }),
+      { runId },
+    );
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";

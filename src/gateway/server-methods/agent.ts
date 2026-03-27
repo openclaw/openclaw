@@ -196,6 +196,29 @@ function dispatchAgentRunFromGateway(params: {
     }
   };
   if (registeredAbortController) {
+    if (params.context.chatAbortControllers.has(params.runId)) {
+      const error = errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `idempotencyKey "${params.idempotencyKey}" already belongs to an active run; use a unique key.`,
+      );
+      const payload = {
+        runId: params.runId,
+        status: "error" as const,
+        summary: error.message,
+      };
+      setGatewayDedupeEntry({
+        dedupe: params.context.dedupe,
+        key: `agent:${params.idempotencyKey}`,
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          payload,
+          error,
+        },
+      });
+      params.respond(false, payload, error, { runId: params.runId });
+      return;
+    }
     const isSubagentLane =
       typeof params.ingressOpts.lane === "string" &&
       params.ingressOpts.lane.trim() === String(AGENT_LANE_SUBAGENT);
@@ -517,10 +540,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `idempotencyKey "${idem}" already belongs to an active run; use a unique key.`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `idempotencyKey "${idem}" already belongs to an active run; use a unique key.`),
       );
       return;
     }

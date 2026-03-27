@@ -28,7 +28,10 @@ export async function applyAuthChoice(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult> {
   const normalizedAuthChoice =
-    normalizeLegacyOnboardAuthChoice(params.authChoice) ?? params.authChoice;
+    normalizeLegacyOnboardAuthChoice(params.authChoice, {
+      config: params.config,
+      env: process.env,
+    }) ?? params.authChoice;
   const normalizedProviderAuthChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: normalizedAuthChoice,
     tokenProvider: params.opts?.tokenProvider,

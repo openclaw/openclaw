@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1452,
+            "line": 1484,
             "path": "src/plugins/types.ts"
           }
         },
@@ -397,7 +397,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1105,
+            "line": 1137,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1496,
+            "line": 1528,
             "path": "src/plugins/types.ts"
           }
         },
@@ -523,7 +523,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1080,
+            "line": 1112,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3549,7 +3549,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1105,
+            "line": 1137,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3567,7 +3567,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1496,
+            "line": 1528,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3576,7 +3576,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1222,
+            "line": 1254,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3594,7 +3594,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1478,
+            "line": 1510,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3603,7 +3603,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1445,
+            "line": 1477,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3612,7 +3612,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1437,
+            "line": 1469,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3639,7 +3639,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1120,
+            "line": 1152,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3648,7 +3648,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1251,
+            "line": 1283,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3972,7 +3972,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1080,
+            "line": 1112,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4064,7 +4064,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1105,
+            "line": 1137,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4082,7 +4082,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1496,
+            "line": 1528,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4091,7 +4091,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1222,
+            "line": 1254,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4109,7 +4109,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1478,
+            "line": 1510,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4118,7 +4118,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1445,
+            "line": 1477,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4127,7 +4127,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1437,
+            "line": 1469,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4154,7 +4154,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1120,
+            "line": 1152,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4163,7 +4163,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1251,
+            "line": 1283,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4433,7 +4433,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1080,
+            "line": 1112,
             "path": "src/plugins/types.ts"
           }
         }

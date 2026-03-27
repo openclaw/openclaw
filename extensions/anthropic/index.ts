@@ -378,6 +378,12 @@ export default definePluginEntry({
       docsPath: "/providers/models",
       envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
       deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
+      oauthProfileIdRepairs: [
+        {
+          legacyProfileId: "anthropic:default",
+          promptLabel: "Anthropic",
+        },
+      ],
       auth: [
         {
           id: "cli",

@@ -22,30 +22,42 @@ import {
   resolveProviderAuthLoginCommand,
 } from "./provider-auth-guidance.js";
 
-export async function maybeRepairAnthropicOAuthProfileId(
+export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore();
-  const repair = repairOAuthProfileIdMismatch({
-    cfg,
-    store,
-    provider: "anthropic",
-    legacyProfileId: "anthropic:default",
+  let nextCfg = cfg;
+  const providers = resolvePluginProviders({
+    config: cfg,
+    env: process.env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
   });
-  if (!repair.migrated || repair.changes.length === 0) {
-    return cfg;
-  }
+  for (const provider of providers) {
+    for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
+      const repair = repairOAuthProfileIdMismatch({
+        cfg: nextCfg,
+        store,
+        provider: provider.id,
+        legacyProfileId: repairSpec.legacyProfileId,
+      });
+      if (!repair.migrated || repair.changes.length === 0) {
+        continue;
+      }
 
-  note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-  const apply = await prompter.confirm({
-    message: "Update Anthropic OAuth profile id in config now?",
-    initialValue: true,
-  });
-  if (!apply) {
-    return cfg;
+      note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
+      const apply = await prompter.confirm({
+        message: `Update ${repairSpec.promptLabel ?? provider.label} OAuth profile id in config now?`,
+        initialValue: true,
+      });
+      if (!apply) {
+        continue;
+      }
+      nextCfg = repair.config;
+    }
   }
-  return repair.config;
+  return nextCfg;
 }
 
 function pruneAuthOrder(
