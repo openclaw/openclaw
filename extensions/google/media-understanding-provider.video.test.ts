@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../src/infra/net/ssrf.js";
-import { createRequestCaptureJsonFetch } from "../../src/media-understanding/audio.test-helpers.js";
-import { withFetchPreconnect } from "../../src/test-utils/fetch-mock.js";
+import { withFetchPreconnect } from "../../test/helpers/extensions/fetch-mock.js";
+import { createRequestCaptureJsonFetch } from "../../test/helpers/extensions/media-understanding.js";
 import { describeGeminiVideo } from "./media-understanding-provider.js";
 
 const TEST_NET_IP = "203.0.113.10";
