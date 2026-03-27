@@ -3,6 +3,7 @@ export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+export { isAbortTrigger } from "../auto-reply/reply/abort-primitives.js";
 export {
   createDirectDmPreCryptoGuardPolicy,
   dispatchInboundDirectDmWithRuntime,

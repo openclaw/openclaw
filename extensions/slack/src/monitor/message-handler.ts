@@ -1,5 +1,6 @@
 import {
   createChannelInboundDebouncer,
+  isAbortTrigger,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -293,6 +294,30 @@ export function createSlackMessageHandler(params: {
       console.error(
         `[slack-trace] handler remember-pending conversationKey=${conversationKey} debounceKey=${debounceKey} total=${pendingKeys.size}`,
       );
+    }
+    // EMERGENCY BYPASS: Abort triggers skip the debouncer entirely to avoid
+    // being serialized behind active LLM turns via keyChains. The debouncer's
+    // enqueue() awaits runFlush which blocks behind any pending chain tasks.
+    if (!canDebounce) {
+      const textForAbortCheck = stripSlackMentionsForCommandDetection(resolvedMessage.text ?? "");
+      if (isAbortTrigger(textForAbortCheck)) {
+        console.error(
+          `[slack-trace] handler abort-bypass source=${opts.source} channel=${resolvedMessage.channel} ts=${resolvedMessage.ts ?? "-"}`,
+        );
+        const prepared = await prepareSlackMessage({
+          ctx,
+          account,
+          message: resolvedMessage,
+          opts,
+        });
+        if (prepared) {
+          await dispatchPreparedSlackMessage(prepared);
+        }
+        console.error(
+          `[slack-trace] handler abort-bypass-done source=${opts.source} channel=${resolvedMessage.channel} ts=${resolvedMessage.ts ?? "-"}`,
+        );
+        return;
+      }
     }
     await debouncer.enqueue({ message: resolvedMessage, opts });
     console.error(
