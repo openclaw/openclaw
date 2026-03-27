@@ -1015,7 +1015,7 @@
           "exportName": "BlockStreamingCoalesceSchema",
           "kind": "const",
           "source": {
-            "line": 339,
+            "line": 341,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1033,7 +1033,7 @@
           "exportName": "DmConfigSchema",
           "kind": "const",
           "source": {
-            "line": 293,
+            "line": 295,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1042,7 +1042,7 @@
           "exportName": "DmPolicySchema",
           "kind": "const",
           "source": {
-            "line": 337,
+            "line": 339,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1060,7 +1060,7 @@
           "exportName": "GroupPolicySchema",
           "kind": "const",
           "source": {
-            "line": 335,
+            "line": 337,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1078,7 +1078,7 @@
           "exportName": "MarkdownConfigSchema",
           "kind": "const",
           "source": {
-            "line": 371,
+            "line": 373,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1096,7 +1096,7 @@
           "exportName": "ReplyRuntimeConfigSchemaShape",
           "kind": "const",
           "source": {
-            "line": 347,
+            "line": 349,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1105,7 +1105,7 @@
           "exportName": "requireOpenAllowFrom",
           "kind": "const",
           "source": {
-            "line": 486,
+            "line": 488,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1395,7 +1395,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -3509,7 +3509,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {

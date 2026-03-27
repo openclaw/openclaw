@@ -44912,6 +44912,26 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.reactProfile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.toolFallback",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "nodeHost",
       "kind": "core",
       "type": "object",
