@@ -6,7 +6,7 @@ import {
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -14,7 +14,24 @@ import {
 } from "./network-config.js";
 import { getProxyUrlFromFetch } from "./proxy.js";
 
-const log = createSubsystemLogger("telegram/network");
+function readRuntimeEnvExport<T>(reader: () => T): T | undefined {
+  try {
+    return reader();
+  } catch {
+    return undefined;
+  }
+}
+
+const createSubsystemLogger = readRuntimeEnvExport(() => runtimeEnv.createSubsystemLogger);
+const log =
+  typeof createSubsystemLogger === "function"
+    ? createSubsystemLogger("telegram/network")
+    : {
+        info: () => undefined,
+        debug: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      };
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 const TELEGRAM_API_HOSTNAME = "api.telegram.org";

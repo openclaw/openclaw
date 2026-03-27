@@ -1,8 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
-import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -36,9 +34,10 @@ const {
 const sendMessageIrcMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
-    ...actual,
+    GROUP_POLICY_BLOCKED_LABEL: {
+      channel: "channel messages",
+    },
     createChannelPairingController: createChannelPairingControllerMock,
     deliverFormattedTextWithAttachments: deliverFormattedTextWithAttachmentsMock,
     dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
@@ -56,6 +55,15 @@ vi.mock("./runtime-api.js", async () => {
 vi.mock("./send.js", () => ({
   sendMessageIrc: sendMessageIrcMock,
 }));
+
+let handleIrcInbound: typeof import("./inbound.js").handleIrcInbound;
+let setIrcRuntime: typeof import("./runtime.js").setIrcRuntime;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ handleIrcInbound } = await import("./inbound.js"));
+  ({ setIrcRuntime } = await import("./runtime.js"));
+});
 
 function installIrcRuntime() {
   setIrcRuntime({

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config msteams", () => {
   it("accepts replyStyle at global/team/channel levels", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: {
         msteams: {
           replyStyle: "top-level",
@@ -29,7 +29,7 @@ describe("config msteams", () => {
   });
 
   it("rejects invalid replyStyle", () => {
-    const res = validateConfigObject({
+    const res = validateConfigObjectWithPlugins({
       channels: { msteams: { replyStyle: "nope" } },
     });
     expect(res.ok).toBe(false);

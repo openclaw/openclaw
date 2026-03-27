@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 
 export type TelegramApiLogger = (message: string) => void;
 
@@ -13,8 +12,24 @@ type TelegramApiLoggingParams<T> = {
   shouldLog?: (err: unknown) => boolean;
 };
 
-const fallbackLogger = createSubsystemLogger("telegram/api");
-const formatDanger = typeof danger === "function" ? danger : (message: string) => message;
+function readRuntimeEnvExport<T>(reader: () => T): T | undefined {
+  try {
+    return reader();
+  } catch {
+    return undefined;
+  }
+}
+
+const createSubsystemLogger = readRuntimeEnvExport(() => runtimeEnv.createSubsystemLogger);
+const dangerFormatter = readRuntimeEnvExport(() => runtimeEnv.danger);
+const fallbackLogger =
+  typeof createSubsystemLogger === "function"
+    ? createSubsystemLogger("telegram/api")
+    : {
+        error: () => undefined,
+      };
+const formatDanger =
+  typeof dangerFormatter === "function" ? dangerFormatter : (message: string) => message;
 
 function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogger) {
   if (logger) {

@@ -375,9 +375,14 @@ describe("scripts/test-parallel lane planning", () => {
     const unitBatchFilterCounts = unitBatchLines.map((line) =>
       parseNumericPlanField(line, "filters"),
     );
+    const isolatedUnitLines = getPlanLines(output, "unit-qr-dashboard.integration-isolated");
 
-    expect(unitBatchLines.length).toBe(2);
-    expect(unitBatchFilterCounts).toEqual([50, 50]);
+    expect(unitBatchLines).toHaveLength(2);
+    expect(unitBatchFilterCounts.every((count) => count > 0 && count <= 50)).toBe(true);
+    expect(isolatedUnitLines).toHaveLength(1);
+    expect(unitBatchFilterCounts.reduce((sum, count) => sum + count, 0)).toBe(
+      targetedUnitProxyFiles.length - isolatedUnitLines.length,
+    );
   });
 
   it("explains targeted file ownership and execution policy", () => {

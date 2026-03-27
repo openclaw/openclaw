@@ -15,7 +15,28 @@ export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
-export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
+class LazyWebAuthDir {
+  #value: string | null = null;
+
+  #read(): string {
+    this.#value ??= resolveDefaultWebAuthDir();
+    return this.#value;
+  }
+
+  toString(): string {
+    return this.#read();
+  }
+
+  valueOf(): string {
+    return this.#read();
+  }
+
+  [Symbol.toPrimitive](): string {
+    return this.#read();
+  }
+}
+
+export const WA_WEB_AUTH_DIR = new LazyWebAuthDir() as unknown as string;
 
 export function resolveWebCredsPath(authDir: string): string {
   return path.join(authDir, "creds.json");
