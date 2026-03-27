@@ -57,7 +57,7 @@ function applyFeishuSDKReconnectPatch(): void {
         return await origHandleControlData.call(this, data);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("PingInterval") || msg.includes("undefined")) {
+        if (msg.includes("PingInterval")) {
           this.logger?.warn?.(
             "[feishu-ws-patch]",
             "swallowed PingInterval error in pong handler (Feishu system_busy?)",
@@ -73,6 +73,10 @@ function applyFeishuSDKReconnectPatch(): void {
   const origReConnect = proto.reConnect as ((isStart?: boolean) => Promise<void>) | undefined;
   if (origReConnect) {
     (proto as Record<string, unknown>).reConnect = async function (isStart = false) {
+      if (isStart) {
+        // Reset backoff counter on a fresh start
+        (this as Record<string, unknown>)._feishuReconnectCount = 0;
+      }
       if (!isStart) {
         // Exponential backoff: doubles each retry, capped at MAX_RECONNECT_BACKOFF_MS
         this._feishuReconnectCount = ((this as Record<string, unknown>)._feishuReconnectCount as number) + 1 || 1;
