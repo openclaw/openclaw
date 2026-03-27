@@ -53,6 +53,7 @@ export {
 } from "openclaw/plugin-sdk/telegram-core";
 export type { TelegramProbe } from "./src/probe.js";
 export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";
+export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";
 export {
   buildTelegramExecApprovalPendingPayload,
   shouldSuppressTelegramExecApprovalForwardingFallback,
