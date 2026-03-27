@@ -21,6 +21,19 @@ OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
+### Civic Google
+
+Zero-config Google Workspace OAuth for OpenClaw. Civic handles credentials,
+token refresh, and least-privilege scope selection automatically — no
+`gog auth add` or Google Cloud project needed.
+
+- **npm:** `@civic/openclaw-google`
+- **repo:** [github.com/civicteam/openclaw-google](https://github.com/civicteam/openclaw-google)
+
+```bash
+openclaw plugins install @civic/openclaw-google
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
