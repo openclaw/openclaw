@@ -300,7 +300,7 @@ describe("stageBundledPluginRuntime", () => {
 
     stageBundledPluginRuntime({ repoRoot });
 
-    expect(platformSpy).toBeDefined();
+    expect(platformSpy).toHaveBeenCalled();
     expect(fs.existsSync(runtimeAssetPath)).toBe(true);
     expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
