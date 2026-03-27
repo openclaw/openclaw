@@ -96,13 +96,14 @@
   "mattermost",
   "memory-core",
   "memory-core-engine-runtime",
-  "memory-core-host",
-  "memory-core-host-engine",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-foundation",
   "memory-core-host-engine-qmd",
   "memory-core-host-engine-storage",
-  "memory-core-host-runtime",
+  "memory-core-host-multimodal",
+  "memory-core-host-query",
+  "memory-core-host-secret",
+  "memory-core-host-status",
   "memory-core-host-runtime-cli",
   "memory-core-host-runtime-core",
   "memory-core-host-runtime-files",
@@ -151,5 +152,6 @@
   "whatsapp-core",
   "whatsapp-shared",
   "zalo",
-  "zalouser"
+  "zalouser",
+  "zod"
 ]

@@ -473,17 +473,16 @@ describe("config strict validation", () => {
     }
   });
 
-  it("flags legacy config entries without auto-migrating", async () => {
+  it("rejects removed legacy config entries without auto-migrating", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
-        agents: { list: [{ id: "pi" }] },
-        routing: { allowFrom: ["+15555550123"] },
+        memorySearch: { provider: "local", fallback: "none" },
       });
 
       const snap = await readConfigFileSnapshot();
 
       expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues).not.toHaveLength(0);
+      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
     });
   });
 
