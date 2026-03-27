@@ -202,40 +202,48 @@ jobs:
       - name: Detect committed secrets in changed files
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-        run: |
+        run: | # pragma: allowlist secret
           set -euo pipefail
 
-          run_scan() {
-            if [ "$#" -eq 0 ]; then
-              echo "No added or modified files to scan for secrets."
-              return 0
+          has_usable_base="false"
+          if [ -n "${BASE_SHA:-}" ] \
+            && [ "${BASE_SHA}" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            has_usable_base="true"
+          fi
+
+          trusted_baseline="$RUNNER_TEMP/secrets-baseline-base.json"
+          if [ "$has_usable_base" = "true" ]; then
+            if ! git show "${BASE_SHA}:.secrets.baseline" > "$trusted_baseline" 2>/dev/null; then
+              cp .secrets.baseline "$trusted_baseline"
             fi
-            printf 'Scanning %s changed files with detect-secrets.\n' "$#"
-            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" detect-secrets --files "$@"
-          }
-
-          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
-            echo "No usable base SHA detected; scanning all files."
-            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-secrets
-            exit 0
+          else
+            cp .secrets.baseline "$trusted_baseline"
           fi
 
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} is unavailable; scanning all files."
-            pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-secrets
-            exit 0
-          fi
+          python -m pip install detect-secrets==1.5.0
 
           mapfile -t changed_files < <(
-            git diff --diff-filter=ACMR --name-only "${BASE_SHA}" HEAD \
-              | while IFS= read -r path; do
-                  if [ -f "$path" ]; then
-                    printf '%s\n' "$path"
-                  fi
-                done
+            if [ "$has_usable_base" = "true" ]; then
+              git diff --diff-filter=ACMR --name-only "${BASE_SHA}" HEAD
+            else
+              git ls-files
+            fi | while IFS= read -r path; do
+              if [ -f "$path" ]; then
+                printf '%s\n' "$path"
+              fi
+            done
           )
 
-          run_scan "${changed_files[@]}"
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "No added or modified files to scan for secrets."
+            exit 0
+          fi
+
+          printf 'Scanning %s files with detect-secrets-hook.\n' "${#changed_files[@]}"
+          detect-secrets-hook \
+            --baseline "$trusted_baseline" \
+            "${changed_files[@]}"
 
       - name: Detect secrets in PR title/body
         if: github.event_name == 'pull_request'
