@@ -260,7 +260,7 @@ const contextEnginePlugin = {
           try {
             const c = await getClient();
             if (!sessionId && sessionKeyIn && contextEngineRef) {
-              sessionId = await contextEngineRef.resolveOVSession(sessionKeyIn);
+              sessionId = await contextEngineRef.resolveOVSession?.(sessionKeyIn);
               usedMappedSession = true;
             }
             if (!sessionId) {
@@ -564,7 +564,7 @@ const contextEnginePlugin = {
       const sessionKey = ctx?.sessionKey;
       if (sessionKey && contextEngineRef) {
         try {
-          await contextEngineRef.commitOVSession(sessionKey);
+          await contextEngineRef.commitOVSession?.(sessionKey);
           api.logger.info(`openviking: committed OV session on reset for sessionKey=${sessionKey}`);
         } catch (err) {
           api.logger.warn(`openviking: failed to commit OV session on reset: ${String(err)}`);

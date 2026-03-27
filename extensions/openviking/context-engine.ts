@@ -103,7 +103,8 @@ function warnOrInfo(logger: { warn: (msg: string) => void; info?: (msg: string) 
 }
 
 export function createMemoryOpenVikingContextEngine(
-  opts: MemoryOpenVikingConfig & {
+  opts: {
+    cfg: MemoryOpenVikingConfig;
     enabled?: boolean;
     logger: { warn: (msg: string) => void; info?: (msg: string) => void };
     getClient: () => Promise<OpenVikingClient>;
@@ -218,6 +219,18 @@ export function createMemoryOpenVikingContextEngine(
         compacted: false,
         reason: "legacy_compact_unavailable",
       };
+    },
+  };
+
+    resolveOVSession: async (sessionKey: string): Promise<string> => {
+      return sessionKey;
+    },
+    commitOVSession: async (sessionKey: string): Promise<void> => {
+      const client = await getClient();
+      const agentId = resolveAgentId(sessionKey);
+      await client.addSessionMessage(sessionKey, "user", "[session reset commit]", agentId);
+      await client.commitSession(sessionKey, { wait: true, agentId });
+      warnOrInfo(logger, "openviking: committed OV session on reset for sessionKey=" + sessionKey);
     },
   };
 
