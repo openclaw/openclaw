@@ -83,7 +83,9 @@ async function discoverOllamaModels(
     }));
   } catch (error) {
     if (!opts?.quiet) {
-      log.warn(`Failed to discover Ollama models: ${String(error)}`);
+      const cause =
+        error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+      log.warn(`Failed to discover Ollama models: ${String(error)}${cause}`);
     }
     return [];
   }
