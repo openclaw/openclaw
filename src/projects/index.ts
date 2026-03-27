@@ -33,3 +33,19 @@ export type { QueueEntry, ParsedQueue } from "./queue-parser.js";
 export { ProjectManager } from "./scaffold.js";
 export type { CreateProjectOpts, CreateSubProjectOpts } from "./scaffold.js";
 export { generateProjectMd, generateQueueMd } from "./templates.js";
+
+// Sync types
+export type { SyncEvent, ProjectIndex, TaskIndex, BoardIndex, QueueIndex } from "./sync-types.js";
+
+// Index generation
+export {
+  generateProjectIndex,
+  generateTaskIndex,
+  generateBoardIndex,
+  generateQueueIndex,
+  writeIndexFile,
+  generateAllIndexes,
+} from "./index-generator.js";
+
+// Sync service
+export { ProjectSyncService } from "./sync-service.js";
