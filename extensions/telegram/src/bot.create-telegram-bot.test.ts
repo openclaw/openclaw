@@ -2540,4 +2540,34 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
+
+  it("detects document messages as having inbound media", async () => {
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    // Verify that a document message triggers getFile (media download attempt).
+    // The download itself may fail in the test harness (no real Telegram API),
+    // but the handler must recognize documents as media and attempt getFile.
+    const getFileSpy = vi.fn(async () => ({ file_path: "documents/report.pdf" }));
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 500,
+        date: 1736380800,
+        document: {
+          file_id: "doc1",
+          file_name: "report.pdf",
+          mime_type: "application/pdf",
+        },
+        from: { id: 999, username: "pdfuser" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: getFileSpy,
+    });
+
+    // The handler must call getFile for document attachments, proving the
+    // document field is recognized as inbound media.
+    expect(getFileSpy).toHaveBeenCalledTimes(1);
+  });
 });

@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
+import { hasInboundMedia, resolveInboundMediaFileId } from "../bot-handlers.media.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
@@ -12,6 +13,7 @@ import {
   resolveTelegramDirectPeerId,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
+  resolveTelegramMediaPlaceholder,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -613,5 +615,80 @@ describe("expandTextLinks", () => {
     const text = " Hello world";
     const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
     expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
+  });
+});
+
+describe("resolveTelegramMediaPlaceholder", () => {
+  it("returns <media:document> for document attachments", () => {
+    const msg = {
+      document: { file_id: "doc1", file_name: "report.pdf", mime_type: "application/pdf" },
+    } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBe("<media:document>");
+  });
+
+  it("returns <media:image> for photo attachments", () => {
+    const msg = { photo: [{ file_id: "p1" }] } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBe("<media:image>");
+  });
+
+  it("returns <media:video> for video attachments", () => {
+    const msg = { video: { file_id: "v1" } } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBe("<media:video>");
+  });
+
+  it("returns <media:audio> for audio attachments", () => {
+    const msg = { audio: { file_id: "a1" } } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBe("<media:audio>");
+  });
+
+  it("returns <media:audio> for voice attachments", () => {
+    const msg = { voice: { file_id: "v1" } } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBe("<media:audio>");
+  });
+
+  it("returns undefined for text-only messages", () => {
+    const msg = { text: "hello" } as unknown as Message;
+    expect(resolveTelegramMediaPlaceholder(msg)).toBeUndefined();
+  });
+});
+
+describe("hasInboundMedia (document attachments)", () => {
+  it("recognizes document field as inbound media", () => {
+    const msg = {
+      document: { file_id: "doc1", file_name: "report.pdf" },
+    } as unknown as Message;
+    expect(hasInboundMedia(msg)).toBe(true);
+  });
+
+  it("recognizes photo, video, audio, voice, sticker as inbound media", () => {
+    expect(hasInboundMedia({ photo: [{ file_id: "p1" }] } as unknown as Message)).toBe(true);
+    expect(hasInboundMedia({ video: { file_id: "v1" } } as unknown as Message)).toBe(true);
+    expect(hasInboundMedia({ audio: { file_id: "a1" } } as unknown as Message)).toBe(true);
+    expect(hasInboundMedia({ voice: { file_id: "v1" } } as unknown as Message)).toBe(true);
+    expect(hasInboundMedia({ sticker: { file_id: "s1" } } as unknown as Message)).toBe(true);
+  });
+
+  it("returns false for text-only messages", () => {
+    expect(hasInboundMedia({ text: "hello" } as unknown as Message)).toBe(false);
+  });
+});
+
+describe("resolveInboundMediaFileId", () => {
+  it("resolves file_id from document attachments", () => {
+    const msg = {
+      document: { file_id: "doc-file-id", file_name: "report.pdf" },
+    } as unknown as Message;
+    expect(resolveInboundMediaFileId(msg)).toBe("doc-file-id");
+  });
+
+  it("resolves file_id from photo (largest size)", () => {
+    const msg = {
+      photo: [{ file_id: "small" }, { file_id: "large" }],
+    } as unknown as Message;
+    expect(resolveInboundMediaFileId(msg)).toBe("large");
+  });
+
+  it("returns undefined for text-only messages", () => {
+    expect(resolveInboundMediaFileId({ text: "hello" } as unknown as Message)).toBeUndefined();
   });
 });

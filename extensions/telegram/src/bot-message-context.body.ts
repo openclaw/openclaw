@@ -217,7 +217,10 @@ export async function resolveTelegramInboundBody(params: {
     if (hasAudio) {
       bodyText = preflightTranscript || "<media:audio>";
     } else {
-      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+      // Use the type-aware placeholder so documents, videos, etc. are not
+      // misidentified as images in the agent-facing body text.
+      const fallback = placeholder || "<media:document>";
+      bodyText = allMedia.length > 1 ? `${fallback} (${allMedia.length} files)` : fallback;
     }
   }
 
