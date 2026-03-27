@@ -87,6 +87,8 @@ export type SpawnAcpContext = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
+  agentGroupId?: string;
   sandboxed?: boolean;
 };
 
@@ -390,6 +392,7 @@ function prepareAcpThreadBinding(params: {
   accountId?: string;
   to?: string;
   threadId?: string | number;
+  groupId?: string;
 }): { ok: true; binding: PreparedAcpThreadBinding } | { ok: false; error: string } {
   const channel = params.channel?.trim().toLowerCase();
   if (!channel) {
@@ -444,11 +447,18 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const conversationId = resolveConversationIdForThreadBinding({
+  const conversationIdRaw = resolveConversationIdForThreadBinding({
     channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
   });
+  // When the resolved ID is a bare topic number (no leading "-"), prefer the
+  // explicit group chat ID so the bind adapter receives a usable chat ID.
+  const groupId = params.groupId?.trim();
+  const conversationId =
+    conversationIdRaw && !conversationIdRaw.startsWith("-") && groupId
+      ? groupId
+      : conversationIdRaw;
   if (!conversationId) {
     return {
       ok: false,
@@ -819,6 +829,7 @@ export async function spawnAcpDirect(
       accountId: ctx.agentAccountId,
       to: ctx.agentTo,
       threadId: ctx.agentThreadId,
+      groupId: ctx.agentGroupId,
     });
     if (!prepared.ok) {
       return {

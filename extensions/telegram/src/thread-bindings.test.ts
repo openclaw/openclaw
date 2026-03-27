@@ -82,6 +82,30 @@ describe("telegram thread bindings", () => {
     });
   });
 
+  it("rejects child placement when parentConversationId is also a bare topic ID", async () => {
+    createTelegramThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "agent:main:acp:child-acp-1",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "77",
+          parentConversationId: "99",
+        },
+        placement: "child",
+      }),
+    ).rejects.toMatchObject({
+      code: "BINDING_CREATE_FAILED",
+    });
+  });
+
   it("shares binding state across distinct module instances", async () => {
     const bindingsA = await importFreshModule<typeof import("./thread-bindings.js")>(
       import.meta.url,
