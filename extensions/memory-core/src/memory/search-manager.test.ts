@@ -111,7 +111,6 @@ vi.mock("./manager-runtime.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./search-manager.js";
-// eslint-disable-next-line @typescript-eslint/unbound-method -- mocked static function
 const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
@@ -169,8 +168,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: "main" });
 
     expect(first.manager).toBe(second.manager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(1);
   });
 
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
@@ -191,8 +189,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);
     expect(second.manager).not.toBe(first.manager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 
   it("does not cache qmd managers for status-only requests", async () => {
@@ -210,8 +207,7 @@ describe("getMemorySearchManager caching", () => {
       model: "qmd",
       requestedProvider: "qmd",
     });
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(2);
     expect(mockMemoryIndexGet).not.toHaveBeenCalled();
 
     await first.manager?.close?.();
@@ -244,8 +240,7 @@ describe("getMemorySearchManager caching", () => {
       chunks: 42,
       sourceCounts: [{ source: "memory", files: 10, chunks: 42 }],
     });
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledWith(
+    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ agentId, mode: "status" }),
     );
   });
@@ -260,8 +255,7 @@ describe("getMemorySearchManager caching", () => {
     requireManager(full);
     requireManager(status);
     expect(status.manager).not.toBe(full.manager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(1);
     await status.manager?.close?.();
     expect(mockPrimary.close).not.toHaveBeenCalled();
 
@@ -280,8 +274,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
     requireManager(second);
 
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(2);
     expect(mockPrimary.close).toHaveBeenCalledTimes(1);
   });
 
@@ -305,8 +298,7 @@ describe("getMemorySearchManager caching", () => {
 
     const third = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     expect(third.manager).toBe(secondManager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 
   it("falls back to builtin search when qmd fails with sqlite busy", async () => {
@@ -346,8 +338,7 @@ describe("getMemorySearchManager caching", () => {
     const second = await getMemorySearchManager({ cfg, agentId: "teardown-agent" });
     expect(second.manager).toBeTruthy();
     expect(second.manager).not.toBe(firstManager);
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock.mock.calls).toHaveLength(2);
   });
 
   it("closes builtin index managers on teardown after runtime is loaded", async () => {
