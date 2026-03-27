@@ -4,14 +4,14 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createOpenShellSandboxBackendFactory } from "../extensions/openshell/src/backend.js";
-import { resolveOpenShellPluginConfig } from "../extensions/openshell/src/config.js";
-import { createSandboxTestContext } from "../src/agents/sandbox/test-fixtures.js";
+import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
-} from "./helpers/sandbox-fixtures.js";
+} from "../../../test/helpers/sandbox-fixtures.js";
+import { createOpenShellSandboxBackendFactory } from "./backend.js";
+import { resolveOpenShellPluginConfig } from "./config.js";
 
 const OPENCLAW_OPENSHELL_E2E = process.env.OPENCLAW_E2E_OPENSHELL === "1";
 const OPENCLAW_OPENSHELL_E2E_TIMEOUT_MS = 12 * 60_000;

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeGeminiVideo } from "../../extensions/google/media-understanding-provider.js";
-import * as ssrf from "../infra/net/ssrf.js";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { createRequestCaptureJsonFetch } from "./audio.test-helpers.js";
+import * as ssrf from "../../src/infra/net/ssrf.js";
+import { createRequestCaptureJsonFetch } from "../../src/media-understanding/audio.test-helpers.js";
+import { withFetchPreconnect } from "../../src/test-utils/fetch-mock.js";
+import { describeGeminiVideo } from "./media-understanding-provider.js";
 
 const TEST_NET_IP = "203.0.113.10";
 
@@ -21,7 +21,6 @@ describe("describeGeminiVideo", () => {
   let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    // Stub both entry points so fetch-guard never does live DNS (CI can use either path).
     resolvePinnedHostnameWithPolicySpy = vi
       .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
       .mockImplementation(async (hostname) => stubPinnedHostname(hostname));

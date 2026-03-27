@@ -16,6 +16,18 @@ describe("brave web search provider", () => {
       search_lang: "jp",
       ui_lang: "en-US",
     });
+    expect(__testing.normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual(
+      {
+        search_lang: "tr",
+        ui_lang: "tr-TR",
+      },
+    );
+    expect(__testing.normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual(
+      {
+        search_lang: "en",
+        ui_lang: "en-US",
+      },
+    );
   });
 
   it("flags invalid brave language fields", () => {
@@ -24,6 +36,12 @@ describe("brave web search provider", () => {
         search_lang: "xx",
       }),
     ).toEqual({ invalidField: "search_lang" });
+    expect(__testing.normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(__testing.normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+      invalidField: "ui_lang",
+    });
   });
 
   it("defaults brave mode to web unless llm-context is explicitly selected", () => {

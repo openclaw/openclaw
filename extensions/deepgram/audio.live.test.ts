@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { transcribeDeepgramAudio } from "../../extensions/deepgram/audio.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
+import { transcribeDeepgramAudio } from "./audio.js";
 
 const DEEPGRAM_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const DEEPGRAM_MODEL = process.env.DEEPGRAM_MODEL?.trim() || "nova-3";

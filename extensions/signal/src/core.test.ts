@@ -114,12 +114,31 @@ describe("classifySignalCliLogLine", () => {
 });
 
 describe("signal setup parsing", () => {
+  it("accepts already normalized numbers", () => {
+    expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
+  });
+
   it("normalizes valid E.164 numbers", () => {
     expect(normalizeSignalAccountInput(" +1 (555) 555-0123 ")).toBe("+15555550123");
   });
 
+  it("rejects empty input", () => {
+    expect(normalizeSignalAccountInput("   ")).toBeNull();
+  });
+
   it("rejects invalid values", () => {
     expect(normalizeSignalAccountInput("abc")).toBeNull();
+    expect(normalizeSignalAccountInput("++--")).toBeNull();
+  });
+
+  it("rejects inputs with stray + characters", () => {
+    expect(normalizeSignalAccountInput("++12345")).toBeNull();
+    expect(normalizeSignalAccountInput("+1+2345")).toBeNull();
+  });
+
+  it("rejects numbers that are too short or too long", () => {
+    expect(normalizeSignalAccountInput("+1234")).toBeNull();
+    expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 
   it("parses e164, uuid and wildcard entries", () => {

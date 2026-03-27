@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { transcribeDeepgramAudio } from "../../extensions/deepgram/audio.js";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "./audio.test-helpers.js";
+} from "../../src/media-understanding/audio.test-helpers.js";
+import { transcribeDeepgramAudio } from "./audio.js";
 
 installPinnedHostnameTestHooks();
 
