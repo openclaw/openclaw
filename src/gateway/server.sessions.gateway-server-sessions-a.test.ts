@@ -304,6 +304,7 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        sessionFile?: string;
       };
     }>(ws, "sessions.create", {
       agentId: "ops",
@@ -318,6 +319,7 @@ describe("gateway server sessions", () => {
     expect(created.payload?.entry?.providerOverride).toBe("openai");
     expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    expect(created.payload?.entry?.sessionFile).toBeTruthy();
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -330,6 +332,7 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        sessionFile?: string;
       }
     >;
     const key = created.payload?.key as string;
@@ -340,6 +343,7 @@ describe("gateway server sessions", () => {
       modelOverride: "gpt-test-a",
       parentSessionKey: "agent:main:main",
     });
+    expect(created.payload?.entry?.sessionFile).toBe(rawStore[key]?.sessionFile);
 
     const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
     const transcript = await fs.readFile(transcriptPath, "utf-8");
