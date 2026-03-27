@@ -288,6 +288,132 @@ describe("agents.create", () => {
     expect(mocks.writeConfigFile).toHaveBeenCalled();
   });
 
+  it("refreshes runtime snapshot so follow-up RPCs can resolve the new agent", async () => {
+    mocks.loadConfigReturn = { gateway: { reload: { mode: "off" } } };
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Ready Agent",
+      workspace: "/home/user/agents/ready",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "ready-agent",
+      }),
+      undefined,
+    );
+    expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshRuntimeConfigFromDisk).toHaveBeenCalledWith();
+
+    const { respond: filesRespond, promise: filesPromise } = makeCall("agents.files.list", {
+      agentId: "ready-agent",
+    });
+    await filesPromise;
+    expect(filesRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: "ready-agent" }),
+      undefined,
+    );
+  });
+
+  it("retries runtime refresh during readiness polling after transient failures", async () => {
+    const previousTimeout = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+    const previousPoll = process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = "250";
+    process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = "10";
+    mocks.state.runtimeConfig = null;
+    let refreshAttempts = 0;
+    mocks.refreshRuntimeConfigFromDisk.mockImplementation(async () => {
+      refreshAttempts += 1;
+      if (refreshAttempts === 1) {
+        throw new Error("temporary refresh failure");
+      }
+      mocks.state.runtimeConfig = mocks.state.writtenConfig
+        ? { ...mocks.state.writtenConfig }
+        : null;
+    });
+    try {
+      const { respond, promise } = makeCall("agents.create", {
+        name: "Retry Agent",
+        workspace: "/home/user/agents/retry",
+      });
+      await promise;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          ok: true,
+          agentId: "retry-agent",
+        }),
+        undefined,
+      );
+      expect(refreshAttempts).toBeGreaterThan(1);
+    } finally {
+      mocks.refreshRuntimeConfigFromDisk.mockImplementation(async () => {
+        if (!mocks.state.runtimeSnapshotActive) {
+          return;
+        }
+        mocks.state.runtimeConfig = mocks.state.writtenConfig
+          ? { ...mocks.state.writtenConfig }
+          : mocks.state.runtimeConfig;
+      });
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_TIMEOUT_MS = previousTimeout;
+      }
+      if (previousPoll === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS;
+      } else {
+        process.env.OPENCLAW_GATEWAY_AGENT_CREATE_READY_POLL_MS = previousPoll;
+      }
+    }
+  });
+
+  it("uses the latest disk-visible config during readiness refresh", async () => {
+    mocks.state.runtimeConfig = null;
+    let refreshAttempts = 0;
+    const refreshPayloads: Array<Record<string, unknown> | undefined> = [];
+    mocks.refreshRuntimeConfigFromDisk.mockImplementation(async (cfg?: Record<string, unknown>) => {
+      refreshAttempts += 1;
+      refreshPayloads.push(cfg ? { ...cfg } : undefined);
+      if (refreshAttempts === 1) {
+        // Simulate a concurrent config write landing after agents.create wrote its initial config.
+        mocks.state.writtenConfig = {
+          ...mocks.state.writtenConfig,
+          __agentIds: ["stale-safe-agent", "newer-agent"],
+        };
+        return;
+      }
+      mocks.state.runtimeConfig = mocks.state.writtenConfig
+        ? { ...mocks.state.writtenConfig }
+        : null;
+    });
+
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Stale Safe Agent",
+      workspace: "/home/user/agents/stale-safe",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        agentId: "stale-safe-agent",
+      }),
+      undefined,
+    );
+    expect(refreshAttempts).toBeGreaterThan(1);
+    const lastRefresh = refreshPayloads.at(-1);
+    expect(lastRefresh).toBeUndefined();
+    expect((mocks.state.runtimeConfig as { __agentIds?: string[] } | null)?.__agentIds).toEqual(
+      expect.arrayContaining(["stale-safe-agent", "newer-agent"]),
+    );
+  });
+
   it("ensures workspace is set up before writing config", async () => {
     const callOrder: string[] = [];
     mocks.ensureAgentWorkspace.mockImplementation(async () => {

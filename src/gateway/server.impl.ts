@@ -1132,6 +1132,26 @@ export async function startGatewayServer(
         const active = getActiveSecretsRuntimeSnapshot();
         if (!active) {
           throw new Error("Secrets runtime snapshot is not active.");
+
+  const refreshRuntimeConfigFromDisk: import("./server-methods/types.js").GatewayRequestContext["refreshRuntimeConfigFromDisk"] =
+    async (configOverride) => {
+      if (!getActiveSecretsRuntimeSnapshot()) {
+        return;
+      }
+      if (configOverride) {
+        await activateRuntimeSecrets(configOverride, { reason: "reload", activate: true });
+        return;
+      }
+      const reloadMode = resolveGatewayReloadSettings(loadConfig()).mode;
+      if (reloadMode === "off" || reloadMode === "restart") {
+        return;
+      }
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.exists || !snapshot.valid) {
+        return;
+      }
+      await activateRuntimeSecrets(snapshot.config, { reason: "reload", activate: true });
+    };
         }
         const prepared = await activateRuntimeSecrets(active.sourceConfig, {
           reason: "reload",
@@ -1287,6 +1307,81 @@ export async function startGatewayServer(
         }));
       }
       ({ pluginServices } = await startGatewaySidecars({
+
+        return false;
+    },
+    nodeRegistry,
+    agentRunSeq,
+    chatAbortControllers,
+    chatAbortedRuns: chatRunState.abortedRuns,
+    chatRunBuffers: chatRunState.buffers,
+    chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
+    addChatRun,
+    removeChatRun,
+    subscribeSessionEvents: sessionEventSubscribers.subscribe,
+    unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
+    unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+    unsubscribeAllSessionEvents: (connId: string) => {
+      sessionEventSubscribers.unsubscribe(connId);
+      sessionMessageSubscribers.unsubscribeAll(connId);
+    },
+    getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
+    registerToolEventRecipient: toolEventRecipients.add,
+    dedupe,
+    wizardSessions,
+    findRunningWizard,
+    purgeWizardSession,
+    getRuntimeSnapshot,
+    startChannel,
+    stopChannel,
+    markChannelLoggedOut,
+    wizardRunner,
+    broadcastVoiceWakeChanged,
+    refreshRuntimeConfigFromDisk,
+  };
+
+  // Register a lazy fallback for plugin subagent dispatch in non-WS paths
+  // (Telegram polling, WhatsApp, etc.) so later runtime swaps can expose the
+  // current gateway context without relying on a startup snapshot.
+  setFallbackGatewayContextResolver(() => gatewayRequestContext);
+
+  attachGatewayWsHandlers({
+    wss,
+    clients,
+    port,
+    gatewayHost: bindHost ?? undefined,
+    canvasHostEnabled: Boolean(canvasHost),
+    canvasHostServerPort,
+    resolvedAuth,
+    rateLimiter: authRateLimiter,
+    browserRateLimiter: browserAuthRateLimiter,
+    gatewayMethods,
+    events: GATEWAY_EVENTS,
+    logGateway: log,
+    logHealth,
+    logWsControl,
+    extraHandlers: {
+      ...pluginRegistry.gatewayHandlers,
+      ...execApprovalHandlers,
+      ...secretsHandlers,
+    },
+    broadcast,
+    context: gatewayRequestContext,
+  });
+  logGatewayStartup({
+    cfg: cfgAtStart,
+    bindHost,
+    bindHosts: httpBindHosts,
+    port,
+    tlsEnabled: gatewayTls.enabled,
+    log,
+    isNixMode,
+  });
+  const stopGatewayUpdateCheck = minimalTestGateway
+    ? () => {}
+    : scheduleGatewayUpdateCheck({
         cfg: cfgAtStart,
         pluginRegistry,
         defaultWorkspaceDir,
