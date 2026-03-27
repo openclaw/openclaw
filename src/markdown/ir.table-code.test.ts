@@ -86,4 +86,42 @@ describe("markdownToIR tableMode code - style overlap", () => {
       expect(overlaps).toBe(false);
     }
   });
+
+  it("pads code tables using display width for CJK cells", () => {
+    const md = `
+|          | Surge Ponte              | Tailscale           |
+|----------|--------------------------|---------------------|
+| 本质      | Surge 加密 Mesh 网络       | WireGuard VPN       |
+| 协调同步   | iCloud                   | 协调服务器            |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(
+      [
+        "|          | Surge Ponte          | Tailscale     |",
+        "| -------- | -------------------- | ------------- |",
+        "| 本质     | Surge 加密 Mesh 网络 | WireGuard VPN |",
+        "| 协调同步 | iCloud               | 协调服务器    |",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("pads code tables using grapheme width for emoji cells", () => {
+    const md = `
+| Icon | Label  |
+|------|--------|
+| 👨‍👩‍👧‍👦 | Family |
+| 📸   | Camera |
+`.trim();
+
+    const ir = markdownToIR(md, { tableMode: "code" });
+
+    expect(ir.text).toBe(
+      ["| Icon | Label  |", "| ---- | ------ |", "| 👨‍👩‍👧‍👦   | Family |", "| 📸   | Camera |", ""].join(
+        "\n",
+      ),
+    );
+  });
 });

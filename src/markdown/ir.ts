@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { chunkText } from "../auto-reply/chunk.js";
 import type { MarkdownTableMode } from "../config/types.base.js";
+import { displayWidth } from "../shared/text/display-width.js";
 
 type ListState = {
   type: "bullet" | "ordered";
@@ -501,7 +502,7 @@ function renderTableAsCode(state: RenderState) {
   const updateWidths = (cells: TableCell[]) => {
     for (let i = 0; i < columnCount; i += 1) {
       const cell = cells[i];
-      const width = cell?.text.length ?? 0;
+      const width = displayWidth(cell?.text ?? "");
       if (widths[i] < width) {
         widths[i] = width;
       }
@@ -523,7 +524,7 @@ function renderTableAsCode(state: RenderState) {
         // Use text-only append to avoid overlapping styles with code_block
         appendCellTextOnly(state, cell);
       }
-      const pad = widths[i] - (cell?.text.length ?? 0);
+      const pad = widths[i] - displayWidth(cell?.text ?? "");
       if (pad > 0) {
         state.text += " ".repeat(pad);
       }
