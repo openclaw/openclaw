@@ -526,7 +526,7 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
