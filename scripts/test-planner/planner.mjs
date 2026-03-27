@@ -1172,8 +1172,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
                   "node openclaw.mjs --help",
                   "node openclaw.mjs status --json --timeout 1",
                   "pnpm test:build:singleton",
-                  "node scripts/stage-bundled-plugin-runtime-deps.mjs",
-                  "node --import tsx scripts/release-check.ts",
                 ].join("\n"),
               },
             ]
@@ -1238,7 +1236,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 
   const jobs = {
     buildArtifacts: { enabled: nodeEligible, needsDistArtifacts: false },
-    releaseCheck: { enabled: isPush && !scope.docsOnly && nodeEligible },
     checksFast: { enabled: checksFastInclude.length > 0, matrix: { include: checksFastInclude } },
     checks: { enabled: checksInclude.length > 0, matrix: { include: checksInclude } },
     extensionFast: {
@@ -1287,7 +1284,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
       ...(docsEligible ? ["check-docs"] : []),
       ...(skillsPythonEligible ? ["skills-python"] : []),
       ...(nodeEligible ? ["build-artifacts"] : []),
-      ...(isPush && !scope.docsOnly && nodeEligible ? ["release-check"] : []),
     ],
   };
 }

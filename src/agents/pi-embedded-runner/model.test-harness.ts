@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.js";
-import { discoverModels } from "../pi-model-discovery.js";
+
+type DiscoverModelsMock = typeof import("../pi-model-discovery.js").discoverModels;
 
 export const makeModel = (id: string): ModelDefinitionConfig => ({
   id,
@@ -25,16 +26,26 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
-function mockTemplateModel(provider: string, modelId: string, templateModel: unknown): void {
-  mockDiscoveredModel({
+function mockTemplateModel(
+  discoverModelsMock: DiscoverModelsMock,
+  provider: string,
+  modelId: string,
+  templateModel: unknown,
+): void {
+  mockDiscoveredModel(discoverModelsMock, {
     provider,
     modelId,
     templateModel,
   });
 }
 
-export function mockOpenAICodexTemplateModel(): void {
-  mockTemplateModel("openai-codex", "gpt-5.2-codex", OPENAI_CODEX_TEMPLATE_MODEL);
+export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
+  mockTemplateModel(
+    discoverModelsMock,
+    "openai-codex",
+    "gpt-5.2-codex",
+    OPENAI_CODEX_TEMPLATE_MODEL,
+  );
 }
 
 export function buildOpenAICodexForwardCompatExpectation(
@@ -88,39 +99,46 @@ export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
   maxTokens: 64000,
 };
 
-export function mockGoogleGeminiCliProTemplateModel(): void {
+export function mockGoogleGeminiCliProTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
   mockTemplateModel(
+    discoverModelsMock,
     "google-gemini-cli",
     "gemini-3-pro-preview",
     GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
   );
 }
 
-export function mockGoogleGeminiCliFlashTemplateModel(): void {
+export function mockGoogleGeminiCliFlashTemplateModel(
+  discoverModelsMock: DiscoverModelsMock,
+): void {
   mockTemplateModel(
+    discoverModelsMock,
     "google-gemini-cli",
     "gemini-3-flash-preview",
     GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
   );
 }
 
-export function resetMockDiscoverModels(): void {
-  vi.mocked(discoverModels).mockReturnValue({
+export function resetMockDiscoverModels(discoverModelsMock: DiscoverModelsMock): void {
+  vi.mocked(discoverModelsMock).mockReturnValue({
     find: vi.fn(() => null),
-  } as unknown as ReturnType<typeof discoverModels>);
+  } as unknown as ReturnType<DiscoverModelsMock>);
 }
 
-export function mockDiscoveredModel(params: {
-  provider: string;
-  modelId: string;
-  templateModel: unknown;
-}): void {
-  vi.mocked(discoverModels).mockReturnValue({
+export function mockDiscoveredModel(
+  discoverModelsMock: DiscoverModelsMock,
+  params: {
+    provider: string;
+    modelId: string;
+    templateModel: unknown;
+  },
+): void {
+  vi.mocked(discoverModelsMock).mockReturnValue({
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {
         return params.templateModel;
       }
       return null;
     }),
-  } as unknown as ReturnType<typeof discoverModels>);
+  } as unknown as ReturnType<DiscoverModelsMock>);
 }

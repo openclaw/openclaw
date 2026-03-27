@@ -38,6 +38,10 @@ type FeishuMessageLike = {
 
 export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
+type FeishuLogger = {
+  (...args: unknown[]): void;
+};
+
 export type ResolvedFeishuGroupSession = {
   peerId: string;
   parentPeer: { kind: "group"; id: string } | null;
@@ -182,10 +186,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
   }
 }
 
-export function parseMergeForwardContent(params: {
-  content: string;
-  log?: (...args: any[]) => void;
-}): string {
+export function parseMergeForwardContent(params: { content: string; log?: FeishuLogger }): string {
   const { content, log } = params;
   const maxMessages = 50;
   log?.("feishu: parsing merge_forward sub-messages from API response");

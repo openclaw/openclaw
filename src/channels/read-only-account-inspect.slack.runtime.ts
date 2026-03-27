@@ -1,8 +1,8 @@
-import { inspectSlackAccount as inspectSlackAccountImpl } from "../../extensions/slack/api.js";
+import { inspectSlackAccount as inspectSlackAccountImpl } from "../plugin-sdk/slack.js";
 
-export type { InspectedSlackAccount } from "../../extensions/slack/api.js";
+export type { InspectedSlackAccount } from "../plugin-sdk/slack.js";
 
-type InspectSlackAccount = typeof import("../../extensions/slack/api.js").inspectSlackAccount;
+type InspectSlackAccount = typeof import("../plugin-sdk/slack.js").inspectSlackAccount;
 
 export function inspectSlackAccount(
   ...args: Parameters<InspectSlackAccount>

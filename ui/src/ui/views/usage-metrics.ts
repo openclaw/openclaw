@@ -197,7 +197,9 @@ function renderUsageMosaic(
             <div class="usage-mosaic-title">${t("usage.mosaic.title")}</div>
             <div class="usage-mosaic-sub">${t("usage.mosaic.subtitleEmpty")}</div>
           </div>
-          <div class="usage-mosaic-total">${formatTokens(0)} ${t("usage.metrics.tokens").toLowerCase()}</div>
+          <div class="usage-mosaic-total">
+            ${formatTokens(0)} ${t("usage.metrics.tokens").toLowerCase()}
+          </div>
         </div>
         <div class="usage-empty-block usage-empty-block--compact">
           ${t("usage.mosaic.noTimelineData")}

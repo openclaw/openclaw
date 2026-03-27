@@ -100,10 +100,16 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
         </div>
         ${
           canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
+            ? html`<span class="chat-tool-card__action"
+              >${hasText ? "View" : ""} ${icons.check}</span
+            >`
             : nothing
         }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${
+          isEmpty && !canClick
+            ? html`<span class="chat-tool-card__status">${icons.check}</span>`
+            : nothing
+        }
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
       ${

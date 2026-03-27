@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../../test/helpers/extensions/env.js";
 import { __testing } from "./perplexity-web-search-provider.js";
+
+const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
+const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
+const openRouterPerplexityApiKey = ["sk", "or", "v1", "test"].join("-");
+const directPerplexityApiKey = ["pplx", "test"].join("-");
+const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
 describe("perplexity web search provider", () => {
   it("infers provider routing from api key prefixes", () => {
@@ -38,5 +45,68 @@ describe("perplexity web search provider", () => {
         apiKey: "pplx-secret",
       }).transport,
     ).toBe("search_api");
+  });
+
+  it("prefers explicit baseUrl over key-based defaults", () => {
+    expect(
+      __testing.resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123"),
+    ).toBe("https://example.com");
+  });
+
+  it("resolves OpenRouter env auth and transport", () => {
+    withEnv(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: openRouterPerplexityApiKey },
+      () => {
+        expect(__testing.resolvePerplexityApiKey(undefined)).toEqual({
+          apiKey: openRouterPerplexityApiKey,
+          source: "openrouter_env",
+        });
+        expect(__testing.resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://openrouter.ai/api/v1",
+          model: "perplexity/sonar-pro",
+          transport: "chat_completions",
+        });
+      },
+    );
+  });
+
+  it("uses native Search API for direct Perplexity when no legacy overrides exist", () => {
+    withEnv(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      () => {
+        expect(__testing.resolvePerplexityTransport(undefined)).toMatchObject({
+          baseUrl: "https://api.perplexity.ai",
+          model: "perplexity/sonar-pro",
+          transport: "search_api",
+        });
+      },
+    );
+  });
+
+  it("switches direct Perplexity to chat completions when model override is configured", () => {
+    expect(__testing.resolvePerplexityModel({ model: "perplexity/sonar-reasoning-pro" })).toBe(
+      "perplexity/sonar-reasoning-pro",
+    );
+    expect(
+      __testing.resolvePerplexityTransport({
+        apiKey: directPerplexityApiKey,
+        model: "perplexity/sonar-reasoning-pro",
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      model: "perplexity/sonar-reasoning-pro",
+      transport: "chat_completions",
+    });
+  });
+
+  it("treats unrecognized configured keys as direct Perplexity by default", () => {
+    expect(
+      __testing.resolvePerplexityTransport({
+        apiKey: enterprisePerplexityApiKey,
+      }),
+    ).toMatchObject({
+      baseUrl: "https://api.perplexity.ai",
+      transport: "search_api",
+    });
   });
 });

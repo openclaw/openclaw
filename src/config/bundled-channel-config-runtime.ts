@@ -1,40 +1,60 @@
-import { BlueBubblesChannelConfigSchema } from "../../extensions/bluebubbles/channel-config-api.js";
-import { DiscordChannelConfigSchema } from "../../extensions/discord/channel-config-api.js";
-import { GoogleChatChannelConfigSchema } from "../../extensions/googlechat/channel-config-api.js";
-import { IMessageChannelConfigSchema } from "../../extensions/imessage/channel-config-api.js";
-import { IrcChannelConfigSchema } from "../../extensions/irc/channel-config-api.js";
-import { MSTeamsChannelConfigSchema } from "../../extensions/msteams/channel-config-api.js";
-import { SignalChannelConfigSchema } from "../../extensions/signal/channel-config-api.js";
-import { SlackChannelConfigSchema } from "../../extensions/slack/channel-config-api.js";
-import { TelegramChannelConfigSchema } from "../../extensions/telegram/channel-config-api.js";
-import { WhatsAppChannelConfigSchema } from "../../extensions/whatsapp/channel-config-api.js";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
+import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import type {
+  ChannelConfigRuntimeSchema,
+  ChannelConfigSchema,
+} from "../channels/plugins/types.plugin.js";
+import { BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.js";
+import { MSTeamsConfigSchema } from "./zod-schema.providers-core.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 type BundledChannelRuntimeMap = ReadonlyMap<string, ChannelConfigRuntimeSchema>;
-
-const bundledChannelRuntimeEntries: ReadonlyArray<
-  readonly [string, ChannelConfigRuntimeSchema | undefined]
-> = [
-  ["bluebubbles", BlueBubblesChannelConfigSchema.runtime],
-  ["discord", DiscordChannelConfigSchema.runtime],
-  ["googlechat", GoogleChatChannelConfigSchema.runtime],
-  ["imessage", IMessageChannelConfigSchema.runtime],
-  ["irc", IrcChannelConfigSchema.runtime],
-  ["msteams", MSTeamsChannelConfigSchema.runtime],
-  ["signal", SignalChannelConfigSchema.runtime],
-  ["slack", SlackChannelConfigSchema.runtime],
-  ["telegram", TelegramChannelConfigSchema.runtime],
-  ["whatsapp", WhatsAppChannelConfigSchema.runtime],
-] as const;
+type BundledChannelConfigSchemaMap = ReadonlyMap<string, ChannelConfigSchema>;
 
 const bundledChannelRuntimeMap = new Map<string, ChannelConfigRuntimeSchema>();
-for (const [channelId, runtimeSchema] of bundledChannelRuntimeEntries) {
-  if (!runtimeSchema) {
+const bundledChannelConfigSchemaMap = new Map<string, ChannelConfigSchema>();
+const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
+  ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
+  ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
+]);
+for (const plugin of bundledChannelPlugins) {
+  const channelSchema = plugin.configSchema;
+  if (!channelSchema) {
     continue;
   }
-  bundledChannelRuntimeMap.set(channelId, runtimeSchema);
+  bundledChannelConfigSchemaMap.set(plugin.id, channelSchema);
+  if (channelSchema.runtime) {
+    bundledChannelRuntimeMap.set(plugin.id, channelSchema.runtime);
+  }
+}
+for (const entry of BUNDLED_PLUGIN_METADATA) {
+  const channelConfigs = entry.manifest.channelConfigs;
+  if (!channelConfigs) {
+    continue;
+  }
+  for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
+    const channelSchema = channelConfig?.schema as Record<string, unknown> | undefined;
+    if (!channelSchema) {
+      continue;
+    }
+    if (!bundledChannelConfigSchemaMap.has(channelId)) {
+      bundledChannelConfigSchemaMap.set(channelId, { schema: channelSchema });
+    }
+  }
+}
+for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
+  if (!bundledChannelConfigSchemaMap.has(channelId)) {
+    bundledChannelConfigSchemaMap.set(channelId, channelSchema);
+  }
+  if (channelSchema.runtime && !bundledChannelRuntimeMap.has(channelId)) {
+    bundledChannelRuntimeMap.set(channelId, channelSchema.runtime);
+  }
 }
 
 export function getBundledChannelRuntimeMap(): BundledChannelRuntimeMap {
   return bundledChannelRuntimeMap;
+}
+
+export function getBundledChannelConfigSchemaMap(): BundledChannelConfigSchemaMap {
+  return bundledChannelConfigSchemaMap;
 }

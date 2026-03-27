@@ -8388,6 +8388,74 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          plugin: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              mode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "session",
+                  },
+                  {
+                    type: "string",
+                    const: "targets",
+                  },
+                  {
+                    type: "string",
+                    const: "both",
+                  },
+                ],
+              },
+              agentFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              sessionFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              targets: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    channel: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    to: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    accountId: {
+                      type: "string",
+                    },
+                    threadId: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  required: ["channel", "to"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -11790,7 +11858,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "agents.list[].runtime.acp.agent": {
       label: "Agent ACP Harness Agent",
-      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+      help: "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
       tags: ["advanced"],
     },
     "agents.list[].runtime.acp.backend": {
@@ -12532,7 +12600,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     approvals: {
       label: "Approvals",
-      help: "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+      help: "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       tags: ["advanced"],
     },
     "approvals.exec": {
@@ -12583,6 +12651,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "approvals.exec.targets[].threadId": {
       label: "Approval Target Thread ID",
       help: "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin": {
+      label: "Plugin Approval Forwarding",
+      help: "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.enabled": {
+      label: "Forward Plugin Approvals",
+      help: "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.mode": {
+      label: "Plugin Approval Forwarding Mode",
+      help: 'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.agentFilter": {
+      label: "Plugin Approval Agent Filter",
+      help: 'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.sessionFilter": {
+      label: "Plugin Approval Session Filter",
+      help: 'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
+      tags: ["storage"],
+    },
+    "approvals.plugin.targets": {
+      label: "Plugin Approval Forwarding Targets",
+      help: "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].channel": {
+      label: "Plugin Approval Target Channel",
+      help: "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].to": {
+      label: "Plugin Approval Target Destination",
+      help: "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].accountId": {
+      label: "Plugin Approval Target Account ID",
+      help: "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].threadId": {
+      label: "Plugin Approval Target Thread ID",
+      help: "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
       tags: ["advanced"],
     },
     "tools.message.allowCrossContextSend": {

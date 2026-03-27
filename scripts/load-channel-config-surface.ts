@@ -1,18 +1,18 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createJiti } from "jiti";
+import { buildChannelConfigSchema } from "../src/channels/plugins/config-schema.js";
+import {
+  buildPluginLoaderJitiOptions,
+  resolvePluginSdkAliasFile,
+  resolvePluginSdkScopedAliasMap,
+} from "../src/plugins/sdk-alias.js";
 
-type BuiltChannelConfigSurface = {
-  schema: Record<string, unknown>;
-  uiHints?: Record<string, unknown>;
-};
-
-type JsonSchemaCapableSurface = {
-  toJSONSchema?: (params?: Record<string, unknown>) => unknown;
-  uiHints?: Record<string, unknown>;
-};
-
-function isBuiltChannelConfigSchema(value: unknown): value is BuiltChannelConfigSurface {
+function isBuiltChannelConfigSchema(
+  value: unknown,
+): value is { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -20,32 +20,9 @@ function isBuiltChannelConfigSchema(value: unknown): value is BuiltChannelConfig
   return Boolean(candidate.schema && typeof candidate.schema === "object");
 }
 
-function buildSchemaSurface(value: unknown): BuiltChannelConfigSurface | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const candidate = value as JsonSchemaCapableSurface;
-  if (typeof candidate.toJSONSchema === "function") {
-    return {
-      schema: candidate.toJSONSchema({
-        target: "draft-07",
-        unrepresentable: "any",
-      }) as Record<string, unknown>,
-      ...(candidate.uiHints ? { uiHints: candidate.uiHints } : {}),
-    };
-  }
-  return {
-    schema: {
-      type: "object",
-      additionalProperties: true,
-    },
-    ...(candidate.uiHints ? { uiHints: candidate.uiHints } : {}),
-  };
-}
-
-function resolveChannelConfigSurfaceExport(
+function resolveConfigSchemaExport(
   imported: Record<string, unknown>,
-): BuiltChannelConfigSurface | null {
+): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null {
   for (const [name, value] of Object.entries(imported)) {
     if (name.endsWith("ChannelConfigSchema") && isBuiltChannelConfigSchema(value)) {
       return value;
@@ -59,9 +36,8 @@ function resolveChannelConfigSurfaceExport(
     if (isBuiltChannelConfigSchema(value)) {
       return value;
     }
-    const wrapped = buildSchemaSurface(value);
-    if (wrapped) {
-      return wrapped;
+    if (value && typeof value === "object") {
+      return buildChannelConfigSchema(value as never);
     }
   }
 
@@ -97,7 +73,8 @@ function shouldRetryViaIsolatedCopy(error: unknown): boolean {
     return false;
   }
   const code = "code" in error ? error.code : undefined;
-  return code === "ERR_MODULE_NOT_FOUND";
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  return code === "ERR_MODULE_NOT_FOUND" && message.includes(`${path.sep}node_modules${path.sep}`);
 }
 
 const SOURCE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
@@ -212,10 +189,100 @@ export async function loadChannelConfigSurfaceModule(
   options?: { repoRoot?: string },
 ): Promise<{ schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null> {
   const repoRoot = options?.repoRoot ?? resolveRepoRoot();
+  const loaderRepoRoot = resolveRepoRoot();
+  const bunBuildChannelConfigSchemaUrl = pathToFileURL(
+    path.join(loaderRepoRoot, "src/channels/plugins/config-schema.ts"),
+  ).href;
+  const loadViaBun = (candidatePath: string) => {
+    const script = `
+      import { pathToFileURL } from "node:url";
+      const { buildChannelConfigSchema } = await import(${JSON.stringify(bunBuildChannelConfigSchemaUrl)});
+      const modulePath = process.env.OPENCLAW_CONFIG_SURFACE_MODULE;
+      if (!modulePath) {
+        throw new Error("missing OPENCLAW_CONFIG_SURFACE_MODULE");
+      }
+      const imported = await import(pathToFileURL(modulePath).href);
+      const isBuilt = (value) => Boolean(
+        value &&
+          typeof value === "object" &&
+          value.schema &&
+          typeof value.schema === "object"
+      );
+      const resolve = (mod) => {
+        for (const [name, value] of Object.entries(mod)) {
+          if (name.endsWith("ChannelConfigSchema") && isBuilt(value)) return value;
+        }
+        for (const [name, value] of Object.entries(mod)) {
+          if (!name.endsWith("ConfigSchema") || name.endsWith("AccountConfigSchema")) continue;
+          if (isBuilt(value)) return value;
+          if (value && typeof value === "object") return buildChannelConfigSchema(value);
+        }
+        for (const value of Object.values(mod)) {
+          if (isBuilt(value)) return value;
+        }
+        return null;
+      };
+      process.stdout.write(JSON.stringify(resolve(imported)));
+    `;
+    const result = spawnSync("bun", ["-e", script], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_CONFIG_SURFACE_MODULE: path.resolve(candidatePath),
+      },
+    });
+    if (result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || `bun loader failed for ${candidatePath}`);
+    }
+    return JSON.parse(result.stdout || "null") as {
+      schema: Record<string, unknown>;
+      uiHints?: Record<string, unknown>;
+    } | null;
+  };
+  const loadViaJiti = (candidatePath: string) => {
+    const resolvedPath = path.resolve(candidatePath);
+    const pluginSdkAlias = resolvePluginSdkAliasFile({
+      srcFile: "root-alias.cjs",
+      distFile: "root-alias.cjs",
+      modulePath: resolvedPath,
+      pluginSdkResolution: "src",
+    });
+    const aliasMap = {
+      ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
+      ...resolvePluginSdkScopedAliasMap({
+        modulePath: resolvedPath,
+        pluginSdkResolution: "src",
+      }),
+    };
+    const jiti = createJiti(import.meta.url, {
+      ...buildPluginLoaderJitiOptions(aliasMap),
+      interopDefault: true,
+      tryNative: false,
+      moduleCache: false,
+      fsCache: false,
+    });
+    return jiti(resolvedPath) as Record<string, unknown>;
+  };
+  const loadFromPath = (
+    candidatePath: string,
+  ): { schema: Record<string, unknown>; uiHints?: Record<string, unknown> } | null => {
+    try {
+      const bunLoaded = loadViaBun(candidatePath);
+      if (bunLoaded && isBuiltChannelConfigSchema(bunLoaded)) {
+        return bunLoaded;
+      }
+    } catch {
+      // Bun is the fastest happy path, but some plugin config modules only load
+      // correctly through the source-aware Jiti alias setup.
+    }
+
+    const imported = loadViaJiti(candidatePath);
+    return resolveConfigSchemaExport(imported);
+  };
 
   try {
-    const imported = (await import(pathToFileURL(modulePath).href)) as Record<string, unknown>;
-    return resolveChannelConfigSurfaceExport(imported);
+    return loadFromPath(modulePath);
   } catch (error) {
     if (!shouldRetryViaIsolatedCopy(error)) {
       throw error;
@@ -223,10 +290,7 @@ export async function loadChannelConfigSurfaceModule(
 
     const isolatedCopy = copyModuleImportGraphWithoutNodeModules({ modulePath, repoRoot });
     try {
-      const imported = (await import(
-        `${pathToFileURL(isolatedCopy.copiedModulePath).href}?isolated=${Date.now()}`
-      )) as Record<string, unknown>;
-      return resolveChannelConfigSurfaceExport(imported);
+      return loadFromPath(isolatedCopy.copiedModulePath);
     } finally {
       isolatedCopy.cleanup();
     }

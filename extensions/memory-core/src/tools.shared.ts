@@ -4,11 +4,11 @@ import {
   resolveSessionAgentId,
   type AnyAgentTool,
   type OpenClawConfig,
-} from "./api.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<
-  ReturnType<(typeof import("./runtime-api.js"))["getMemorySearchManager"]>
+  ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
 
 let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;

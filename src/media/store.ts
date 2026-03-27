@@ -239,7 +239,10 @@ async function downloadToFile(
                 size: total,
               });
             })
-            .catch(reject);
+            .catch(async (err) => {
+              await fs.rm(dest, { force: true }).catch(() => {});
+              reject(err);
+            });
         });
         req.on("error", reject);
         req.end();

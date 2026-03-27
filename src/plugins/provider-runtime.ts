@@ -2,11 +2,7 @@ import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-prof
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  augmentBundledProviderCatalog,
-  resolveBundledProviderBuiltInModelSuppression,
-} from "./provider-catalog-metadata.js";
-import {
-  resolveNonBundledProviderPluginIds,
+  resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "./providers.js";
 import { resolvePluginProviders } from "./providers.runtime.js";
@@ -15,8 +11,12 @@ import type {
   ProviderAuthDoctorHintContext,
   ProviderAugmentModelCatalogContext,
   ProviderBuildMissingAuthMessageContext,
+  ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderCacheTtlEligibilityContext,
+  ProviderCreateEmbeddingProviderContext,
+  ProviderResolveSyntheticAuthContext,
+  ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
@@ -141,7 +141,7 @@ function resolveProviderPluginsForCatalogHooks(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin[] {
-  const onlyPluginIds = resolveNonBundledProviderPluginIds({
+  const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -234,6 +234,16 @@ export function prepareProviderExtraParams(params: {
   return resolveProviderRuntimePlugin(params)?.prepareExtraParams?.(params.context) ?? undefined;
 }
 
+export function resolveProviderStreamFn(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderCreateStreamFnContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.createStreamFn?.(params.context) ?? undefined;
+}
+
 export function wrapProviderStreamFn(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -242,6 +252,16 @@ export function wrapProviderStreamFn(params: {
   context: ProviderWrapStreamFnContext;
 }) {
   return resolveProviderRuntimePlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+}
+
+export async function createProviderEmbeddingProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderCreateEmbeddingProviderContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.createEmbeddingProvider?.(params.context);
 }
 
 export async function prepareProviderRuntimeAuth(params: {
@@ -366,16 +386,32 @@ export function buildProviderMissingAuthMessageWithPlugin(params: {
   );
 }
 
+export function buildProviderUnknownModelHintWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderBuildUnknownModelHintContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.buildUnknownModelHint?.(params.context) ?? undefined;
+}
+
+export function resolveProviderSyntheticAuthWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveSyntheticAuthContext;
+}) {
+  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+}
+
 export function resolveProviderBuiltInModelSuppression(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderBuiltInModelSuppressionContext;
 }) {
-  const bundledResult = resolveBundledProviderBuiltInModelSuppression(params.context);
-  if (bundledResult?.suppress) {
-    return bundledResult;
-  }
   for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const result = plugin.suppressBuiltInModel?.(params.context);
     if (result?.suppress) {
@@ -391,9 +427,7 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderAugmentModelCatalogContext;
 }) {
-  const supplemental = [
-    ...augmentBundledProviderCatalog(params.context),
-  ] as ProviderAugmentModelCatalogContext["entries"];
+  const supplemental = [] as ProviderAugmentModelCatalogContext["entries"];
   for (const plugin of resolveProviderPluginsForCatalogHooks(params)) {
     const next = await plugin.augmentModelCatalog?.(params.context);
     if (!next || next.length === 0) {

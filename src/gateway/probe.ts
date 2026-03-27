@@ -42,6 +42,7 @@ export async function probeGateway(opts: {
   timeoutMs: number;
   includeDetails?: boolean;
   detailLevel?: "none" | "presence" | "full";
+  tlsFingerprint?: string;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -49,18 +50,29 @@ export async function probeGateway(opts: {
   let connectError: string | null = null;
   let close: GatewayProbeClose | null = null;
 
-  const disableDeviceIdentity = (() => {
+  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
+
+  const deviceIdentity = await (async () => {
+    let hostname: string;
     try {
-      const hostname = new URL(opts.url).hostname;
-      // Local authenticated probes should stay device-bound so read/detail RPCs
-      // are not scope-limited by the shared-auth scope stripping hardening.
-      return isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password);
+      hostname = new URL(opts.url).hostname;
     } catch {
-      return false;
+      return null;
+    }
+    // Local authenticated probes should stay device-bound so read/detail RPCs
+    // are not scope-limited by the shared-auth scope stripping hardening.
+    if (isLoopbackHost(hostname) && !(opts.auth?.token || opts.auth?.password)) {
+      return null;
+    }
+    try {
+      const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+      return loadOrCreateDeviceIdentity();
+    } catch {
+      // Read-only or restricted environments should still be able to run
+      // token/password-auth detail probes without crashing on identity persistence.
+      return null;
     }
   })();
-
-  const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -89,12 +101,13 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
+      tlsFingerprint: opts.tlsFingerprint,
       scopes: [READ_SCOPE],
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
       instanceId,
-      deviceIdentity: disableDeviceIdentity ? null : undefined,
+      deviceIdentity,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
       },

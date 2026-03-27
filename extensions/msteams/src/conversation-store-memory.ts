@@ -8,20 +8,22 @@ export function createMSTeamsConversationStoreMemory(
   initial: MSTeamsConversationStoreEntry[] = [],
 ): MSTeamsConversationStore {
   const map = new Map<string, StoredConversationReference>();
+  const normalizeConversationId = (raw: string): string => raw.split(";")[0] ?? raw;
   for (const { conversationId, reference } of initial) {
-    map.set(conversationId, reference);
+    map.set(normalizeConversationId(conversationId), reference);
   }
 
   return {
     upsert: async (conversationId, reference) => {
-      const existing = map.get(conversationId);
-      map.set(conversationId, {
+      const normalizedId = normalizeConversationId(conversationId);
+      const existing = map.get(normalizedId);
+      map.set(normalizedId, {
         ...(existing?.timezone && !reference.timezone ? { timezone: existing.timezone } : {}),
         ...reference,
       });
     },
     get: async (conversationId) => {
-      return map.get(conversationId) ?? null;
+      return map.get(normalizeConversationId(conversationId)) ?? null;
     },
     list: async () => {
       return Array.from(map.entries()).map(([conversationId, reference]) => ({
@@ -30,7 +32,7 @@ export function createMSTeamsConversationStoreMemory(
       }));
     },
     remove: async (conversationId) => {
-      return map.delete(conversationId);
+      return map.delete(normalizeConversationId(conversationId));
     },
     findByUserId: async (id) => {
       const target = id.trim();

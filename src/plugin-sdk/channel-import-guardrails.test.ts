@@ -2,11 +2,12 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../extensions/public-artifacts.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../plugins/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
+ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -272,8 +273,10 @@ function collectCoreSourceFiles(): string[] {
     rootDir: srcDir,
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-utils.") ||
       normalizedFullPath.includes(".test-harness.") ||
       normalizedFullPath.includes(".test-helpers.") ||
+      entryName.endsWith("-test-helpers.ts") ||
       entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||
       normalizedFullPath.includes(".suite.") ||

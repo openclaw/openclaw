@@ -36,6 +36,7 @@ export {
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
+  createSetupInputPresenceValidator,
   migrateBaseNameToDefaultAccount,
 } from "../channels/plugins/setup-helpers.js";
 export { createAccountStatusSink } from "./channel-lifecycle.js";
@@ -94,3 +95,4 @@ export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
+export { isMattermostSenderAllowed } from "../../extensions/mattermost/api.js";

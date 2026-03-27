@@ -21,7 +21,11 @@ import type {
   ChannelStructuredComponents,
 } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { CliBackendConfig, ModelProviderConfig } from "../config/types.js";
+import type {
+  CliBackendConfig,
+  ModelProviderAuthMode,
+  ModelProviderConfig,
+} from "../config/types.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -479,6 +483,22 @@ export type ProviderPrepareExtraParamsContext = {
 };
 
 /**
+ * Provider-owned transport creation.
+ *
+ * Use this when the provider needs to replace pi-ai's default transport with a
+ * custom StreamFn (for example a native API transport that cannot be expressed
+ * as a wrapper around `streamSimple`).
+ */
+export type ProviderCreateStreamFnContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  model: ProviderRuntimeModel;
+};
+
+/**
  * Provider-owned stream wrapper hook after OpenClaw applies its generic
  * transport-independent wrappers.
  *
@@ -486,7 +506,46 @@ export type ProviderPrepareExtraParamsContext = {
  * through the normal `pi-ai` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  model?: ProviderRuntimeModel;
   streamFn?: StreamFn;
+};
+
+/**
+ * Generic embedding provider shape returned by provider plugins.
+ *
+ * Keep this aligned with the memory embedding contract without forcing the
+ * plugin system to import memory internals directly.
+ */
+export type PluginEmbeddingProvider = {
+  id: string;
+  model: string;
+  maxInputTokens?: number;
+  embedQuery: (text: string) => Promise<number[]>;
+  embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  client?: unknown;
+};
+
+/**
+ * Provider-owned embedding transport creation.
+ *
+ * Use this when a provider wants memory embeddings to live with the provider
+ * plugin instead of the core memory switchboard.
+ */
+export type ProviderCreateEmbeddingProviderContext = {
+  config: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  model: string;
+  remote?: {
+    baseUrl?: string;
+    apiKey?: unknown;
+    headers?: Record<string, string>;
+  };
+  providerApiKey?: string;
+  outputDimensionality?: number;
+  taskType?: string;
 };
 
 /**
@@ -514,6 +573,22 @@ export type ProviderBuildMissingAuthMessageContext = {
   env: NodeJS.ProcessEnv;
   provider: string;
   listProfileIds: (providerId: string) => string[];
+};
+
+/**
+ * Provider-owned unknown-model hint override.
+ *
+ * Runs after catalog/runtime lookup misses for the requested provider. Return a
+ * hint suffix that OpenClaw should append to the generic `Unknown model`
+ * error.
+ */
+export type ProviderBuildUnknownModelHintContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  modelId: string;
 };
 
 /**
@@ -632,6 +707,17 @@ export type ProviderPluginWizardSetup = {
     initialSelections?: string[];
     message?: string;
   };
+  /**
+   * Optional default-model prompt policy for this auth/setup choice.
+   *
+   * Use this when selecting the auth choice should still force a model picker
+   * even if the choice was preseeded via CLI/configure, or when "keep current"
+   * would skip required provider-owned post-selection work.
+   */
+  modelSelection?: {
+    promptWhenAuthChoiceProvided?: boolean;
+    allowKeepCurrent?: boolean;
+  };
 };
 
 /** Optional model-picker metadata shown in interactive provider selection flows. */
@@ -647,12 +733,39 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
   prompter: WizardPrompter;
   agentDir?: string;
   workspaceDir?: string;
+};
+
+export type ProviderResolveSyntheticAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+};
+
+export type ProviderSyntheticAuthResult = {
+  apiKey: string;
+  source: string;
+  mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
 };
 
 /** Text-inference provider capability registered by a plugin. */
@@ -732,6 +845,13 @@ export type ProviderPlugin = {
     ctx: ProviderPrepareExtraParamsContext,
   ) => Record<string, unknown> | null | undefined;
   /**
+   * Provider-owned transport factory.
+   *
+   * Use this when the provider needs a fully custom StreamFn instead of a
+   * wrapper around the normal `streamSimple` path.
+   */
+  createStreamFn?: (ctx: ProviderCreateStreamFnContext) => StreamFn | null | undefined;
+  /**
    * Provider-owned stream wrapper applied after generic OpenClaw wrappers.
    *
    * Typical uses: provider attribution headers, request-body rewrites, or
@@ -739,6 +859,19 @@ export type ProviderPlugin = {
    * transport implementation.
    */
   wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Provider-owned embedding provider factory.
+   *
+   * Use this when memory embedding behavior belongs with the provider plugin
+   * rather than the core embedding switchboard.
+   */
+  createEmbeddingProvider?: (
+    ctx: ProviderCreateEmbeddingProviderContext,
+  ) =>
+    | Promise<PluginEmbeddingProvider | null | undefined>
+    | PluginEmbeddingProvider
+    | null
+    | undefined;
   /**
    * Runtime auth exchange hook.
    *
@@ -791,6 +924,14 @@ export type ProviderPlugin = {
   buildMissingAuthMessage?: (
     ctx: ProviderBuildMissingAuthMessageContext,
   ) => string | null | undefined;
+  /**
+   * Provider-owned unknown-model hint override.
+   *
+   * Return a suffix when the provider wants a more specific recovery hint than
+   * OpenClaw's generic `Unknown model` error after catalog/runtime lookup
+   * fails.
+   */
+  buildUnknownModelHint?: (ctx: ProviderBuildUnknownModelHintContext) => string | null | undefined;
   /**
    * Provider-owned built-in model suppression.
    *
@@ -864,6 +1005,14 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
+  /**
    * Provider-owned OAuth refresh.
    *
    * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
@@ -882,6 +1031,16 @@ export type ProviderPlugin = {
   buildAuthDoctorHint?: (
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
+  /**
+   * Provider-owned synthetic auth marker.
+   *
+   * Use this when the provider can operate without a real secret for certain
+   * configured local/self-hosted cases and wants auth resolution to treat that
+   * config as available.
+   */
+  resolveSyntheticAuth?: (
+    ctx: ProviderResolveSyntheticAuthContext,
+  ) => ProviderSyntheticAuthResult | null | undefined;
   onModelSelected?: (ctx: ProviderModelSelectedContext) => Promise<void>;
 };
 
@@ -916,6 +1075,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
@@ -1546,6 +1714,8 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 
 // Agent context shared across agent hooks
 export type PluginHookAgentContext = {
+  /** Unique identifier for this agent run. */
+  runId?: string;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -1828,10 +1998,35 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner — plugins should not set this. */
+    pluginId?: string;
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+  };
 };
 
 // after_tool_call hook

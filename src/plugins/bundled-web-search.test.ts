@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId } from "./bundled-web-search-provider-ids.js";
 import {
   listBundledWebSearchProviders,
   resolveBundledWebSearchPluginIds,
 } from "./bundled-web-search.js";
-import { webSearchProviderContractRegistry } from "./contracts/registry.js";
 
 describe("bundled web search metadata", () => {
   function toComparableEntry(params: {
@@ -105,6 +105,13 @@ describe("bundled web search metadata", () => {
 
   it("keeps bundled provider metadata aligned with bundled plugin contracts", async () => {
     const fastPathProviders = listBundledWebSearchProviders();
+    const bundledProviderEntries = loadBundledCapabilityRuntimeRegistry({
+      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
+    }).webSearchProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      ...entry.provider,
+    }));
 
     expect(
       sortComparableEntries(
@@ -117,7 +124,7 @@ describe("bundled web search metadata", () => {
       ),
     ).toEqual(
       sortComparableEntries(
-        webSearchProviderContractRegistry.map(({ pluginId, provider }) =>
+        bundledProviderEntries.map(({ pluginId, ...provider }) =>
           toComparableEntry({
             pluginId,
             provider,
@@ -127,12 +134,11 @@ describe("bundled web search metadata", () => {
     );
 
     for (const fastPathProvider of fastPathProviders) {
-      const contractEntry = webSearchProviderContractRegistry.find(
-        (entry) =>
-          entry.pluginId === fastPathProvider.pluginId && entry.provider.id === fastPathProvider.id,
+      const bundledEntry = bundledProviderEntries.find(
+        (entry) => entry.pluginId === fastPathProvider.pluginId && entry.id === fastPathProvider.id,
       );
-      expect(contractEntry).toBeDefined();
-      const contractProvider = contractEntry!.provider;
+      expect(bundledEntry).toBeDefined();
+      const contractProvider = bundledEntry!;
 
       const fastSearchConfig: Record<string, unknown> = {};
       const contractSearchConfig: Record<string, unknown> = {};

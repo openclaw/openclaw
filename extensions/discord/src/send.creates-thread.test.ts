@@ -413,6 +413,9 @@ describe("sendPollDiscord", () => {
 });
 
 function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
+  const request = new Request("https://discord.com/api/v10/channels/789/messages", {
+    method: "POST",
+  });
   const response = new Response(null, {
     status: 429,
     headers: {
@@ -420,11 +423,15 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return new RateLimitError(response, {
-    message: "You are being rate limited.",
-    retry_after: retryAfter,
-    global: false,
-  });
+  return new RateLimitError(
+    response,
+    {
+      message: "You are being rate limited.",
+      retry_after: retryAfter,
+      global: false,
+    },
+    request,
+  );
 }
 
 describe("retry rate limits", () => {

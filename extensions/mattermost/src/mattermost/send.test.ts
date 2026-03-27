@@ -3,8 +3,14 @@ import {
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
 } from "../../../../test/helpers/extensions/send-config.js";
-import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
-import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
+
+let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
+let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
+let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
+
+type SendMessageMattermostOptions = NonNullable<
+  Parameters<typeof import("./send.js").sendMessageMattermost>[2]
+>;
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -72,7 +78,8 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("sendMessageMattermost", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.loadConfig.mockReset();
     mockState.loadConfig.mockReturnValue({});
     mockState.resolveMattermostAccount.mockReset();
@@ -93,7 +100,6 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
-    resetMattermostOpaqueTargetCacheForTests();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
@@ -101,6 +107,9 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+    ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));
+    ({ resetMattermostOpaqueTargetCacheForTests } = await import("./target-resolution.js"));
+    resetMattermostOpaqueTargetCacheForTests();
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
@@ -118,9 +127,13 @@ describe("sendMessageMattermost", () => {
       config: {},
     });
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      cfg: providedCfg as any,
+    const options: SendMessageMattermostOptions = {
+      cfg: providedCfg,
       accountId: "work",
+    };
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      ...options,
     });
 
     expectProvidedCfgSkipsRuntimeLoad({

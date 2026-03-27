@@ -147,7 +147,7 @@ async function runCompactionScenario(params: {
   apiKey: string | null;
 }) {
   const compactionHandler = createCompactionHandler();
-  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey ?? undefined);
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
     getApiKeyMock,
@@ -1643,7 +1643,8 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
-    // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
+    // The handler should have resolved request auth with runtime.model
+    // (via ctx.model ?? runtime?.model).
     expect(getApiKeyMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)
@@ -1668,7 +1669,7 @@ describe("compaction-safeguard extension model fallback", () => {
 
     expect(result).toEqual({ cancel: true });
 
-    // Verify early return: getApiKey should NOT have been called when both models are missing
+    // Verify early return: request auth should NOT have been resolved when both models are missing.
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 });

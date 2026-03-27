@@ -95,18 +95,15 @@ export function renderLoginGate(state: AppViewState) {
               </button>
             </div>
           </label>
-          <button
-            class="btn primary login-gate__connect"
-            @click=${() => state.connect()}
-          >
+          <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
             ${t("common.connect")}
           </button>
         </div>
         ${
           state.lastError
             ? html`<div class="callout danger" style="margin-top: 14px;">
-                <div>${state.lastError}</div>
-              </div>`
+              <div>${state.lastError}</div>
+            </div>`
             : ""
         }
         <div class="login-gate__help">
@@ -122,7 +119,8 @@ export function renderLoginGate(state: AppViewState) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-            >${t("overview.connection.docsLink")}</a>
+              >${t("overview.connection.docsLink")}</a
+            >
           </div>
         </div>
       </div>

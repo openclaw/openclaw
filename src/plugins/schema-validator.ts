@@ -5,6 +5,15 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
 const require = createRequire(import.meta.url);
 type AjvLike = {
+  addFormat: (
+    name: string,
+    format:
+      | RegExp
+      | {
+          type?: string;
+          validate: (value: string) => boolean;
+        },
+  ) => AjvLike;
   compile: (schema: Record<string, unknown>) => ValidateFunction;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
@@ -24,6 +33,19 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
     strict: false,
     removeAdditional: false,
     ...(mode === "defaults" ? { useDefaults: true } : {}),
+  });
+  instance.addFormat("uri", {
+    type: "string",
+    validate: (value: string) => {
+      try {
+        // Accept absolute URIs so generated config schemas can keep JSON Schema
+        // `format: "uri"` without noisy AJV warnings during validation/build.
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
   });
   ajvSingletons.set(mode, instance);
   return instance;

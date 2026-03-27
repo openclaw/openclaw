@@ -37,6 +37,7 @@ export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
 } from "../channels/plugins/channel-config.js";
+export { getChatChannelMeta } from "./channel-plugin-common.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export {
   deleteAccountFromConfigSection,
@@ -156,19 +157,24 @@ export {
   findMatrixAccountEntry,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixChannelConfig,
-} from "../../extensions/matrix/src/account-selection.js";
+} from "../../extensions/matrix/helper-api.js";
 export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
 } from "../../extensions/matrix/helper-api.js";
-export { resolveMatrixAccountStringValues } from "../../extensions/matrix/src/auth-precedence.js";
+export { resolveMatrixAccountStringValues } from "../../extensions/matrix/runtime-api.js";
 export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "../../extensions/matrix/helper-api.js";
+export {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "../../extensions/matrix/api.js";
+export { setMatrixRuntime } from "../../extensions/matrix/runtime-api.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",
