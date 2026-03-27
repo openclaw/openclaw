@@ -82,7 +82,6 @@ and files.
 
 ```bash
 openclaw plugins install @sliverp/qqbot
-```
 
 
 ### Statocyst
