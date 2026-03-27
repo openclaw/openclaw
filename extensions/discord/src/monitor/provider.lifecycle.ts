@@ -118,7 +118,14 @@ export async function runDiscordGatewayLifecycle(params: {
       abortSignal: params.abortSignal,
       gatewaySupervisor: params.gatewaySupervisor,
       onGatewayEvent: handleGatewayEvent,
-      registerForceStop: reconnectController.registerForceStop,
+      registerForceStop: (callback) => {
+        reconnectController.registerForceStop(() => {
+          // Mark before the disconnect so the ensuing "Max reconnect attempts (0)"
+          // is classified as reconnect-aborted, not reconnect-exhausted.
+          params.gatewaySupervisor.markIntentionalAbort();
+          callback();
+        });
+      },
     });
   } catch (err) {
     if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
