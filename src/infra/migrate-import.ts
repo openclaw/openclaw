@@ -609,9 +609,9 @@ export async function importMigrateArchive(
     let extractedBytes = 0;
     // Use filter for entry counting, type blocking, and symlink skipping.
     // filter runs before extraction — returning false prevents the entry
-    // from being written to disk. onReadEntry only fires for entries that
+    // from being written to disk. Throwing from filter aborts the entire
+    // tar stream immediately. onReadEntry only fires for entries that
     // pass filter, so we use it only for byte-size tracking.
-    let filterError: Error | undefined;
     await tar.x({
       file: archivePath,
       cwd: tempDir,
@@ -621,15 +621,11 @@ export async function importMigrateArchive(
       filter: (_entryPath, entry) => {
         entryCount += 1;
         if (entryCount > MAX_EXTRACT_ENTRIES) {
-          filterError = new Error(
-            `Migration archive exceeds entry count limit (${MAX_EXTRACT_ENTRIES}).`,
-          );
-          return false;
+          throw new Error(`Migration archive exceeds entry count limit (${MAX_EXTRACT_ENTRIES}).`);
         }
         const entryType = "type" in entry ? (entry as { type: string }).type : "";
         if (abortEntryTypes.has(entryType)) {
-          filterError = new Error(`Blocked unsafe tar entry type "${entryType}": ${_entryPath}`);
-          return false;
+          throw new Error(`Blocked unsafe tar entry type "${entryType}": ${_entryPath}`);
         }
         // Skip symlinks — they won't be extracted to disk.
         if (entryType === "SymbolicLink") {
@@ -649,11 +645,6 @@ export async function importMigrateArchive(
         }
       },
     });
-
-    // Check if filter detected a blocking error (entry count or unsafe type).
-    if (filterError) {
-      throw filterError;
-    }
 
     const resolvedTempDir = await fs.realpath(tempDir);
     const payloadRoot = path.resolve(path.join(resolvedTempDir, manifest.archiveRoot, "payload"));
