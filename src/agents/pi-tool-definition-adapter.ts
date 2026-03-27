@@ -114,7 +114,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: HookContext,
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -133,6 +136,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               toolName: name,
               params,
               toolCallId,
+              ctx: hookContext,
             });
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
