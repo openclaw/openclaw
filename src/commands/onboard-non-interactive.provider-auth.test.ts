@@ -5,10 +5,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   MINIMAX_API_BASE_URL,
   MINIMAX_CN_API_BASE_URL,
+} from "../../extensions/minimax/api.js";
+import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
-} from "../plugins/provider-model-definitions.js";
+} from "../../extensions/zai/api.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
-import {
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../../src/plugins/provider-model-definitions.js";
+import { ZAI_CODING_CN_BASE_URL, ZAI_GLOBAL_BASE_URL } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
 
 describe("zai onboard", () => {
