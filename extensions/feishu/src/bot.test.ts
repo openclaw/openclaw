@@ -1,5 +1,6 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -31,6 +32,7 @@ function createReplyDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(),
     waitForIdle: vi.fn(),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -38,42 +40,59 @@ function createReplyDispatcher(): ReplyDispatcher {
 function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
   return {
     bindingResolution: {
-      configuredBinding: {
-        spec: {
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "ou_sender_1",
-          agentId: "codex",
-          mode: "persistent",
-        },
-        record: {
-          bindingId: "config:acp:feishu:default:ou_sender_1",
-          targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-          targetKind: "session",
-          conversation: {
-            channel: "feishu",
-            accountId: "default",
-            conversationId: "ou_sender_1",
-          },
-          status: "active",
-          boundAt: 0,
-          metadata: { source: "config" },
-        },
-      },
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        agentId: "codex",
-      },
-    },
-    configuredBinding: {
-      spec: {
+      conversation: {
         channel: "feishu",
         accountId: "default",
         conversationId: "ou_sender_1",
+      },
+      compiledBinding: {
+        channel: "feishu",
+        accountPattern: "default",
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "feishu",
+            accountId: "default",
+            peer: { kind: "direct", id: "ou_sender_1" },
+          },
+        },
+        bindingConversationId: "ou_sender_1",
+        target: {
+          conversationId: "ou_sender_1",
+        },
         agentId: "codex",
-        mode: "persistent",
+        provider: {
+          compileConfiguredBinding: () => ({ conversationId: "ou_sender_1" }),
+          matchInboundConversation: () => ({ conversationId: "ou_sender_1" }),
+        },
+        targetFactory: {
+          driverId: "acp",
+          materialize: () => ({
+            record: {
+              bindingId: "config:acp:feishu:default:ou_sender_1",
+              targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+              targetKind: "session",
+              conversation: {
+                channel: "feishu",
+                accountId: "default",
+                conversationId: "ou_sender_1",
+              },
+              status: "active",
+              boundAt: 0,
+              metadata: { source: "config" },
+            },
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+              agentId: "codex",
+            },
+          }),
+        },
+      },
+      match: {
+        conversationId: "ou_sender_1",
       },
       record: {
         bindingId: "config:acp:feishu:default:ou_sender_1",
@@ -88,6 +107,12 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
         boundAt: 0,
         metadata: { source: "config" },
       },
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+        agentId: "codex",
+      },
     },
     route: {
       agentId: "codex",
@@ -95,13 +120,14 @@ function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
       accountId: "default",
       sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
       mainSessionKey: "agent:codex:main",
+      lastRoutePolicy: "session",
       matchedBy: "binding.channel",
-    },
+    } as ResolvedAgentRoute,
   };
 }
 
 function createConfiguredBindingReadiness(ok: boolean, error?: string): BindingReadiness {
-  return ok ? { ok: true } : { ok: false, error: error ?? "unknown error" };
+  return (ok ? { ok: true } : { ok: false, error: error ?? "unknown error" }) as BindingReadiness;
 }
 
 function createBoundConversation(): NonNullable<BoundConversation> {
@@ -120,15 +146,22 @@ function createBoundConversation(): NonNullable<BoundConversation> {
   };
 }
 
-function buildDefaultResolveRoute() {
+function buildDefaultResolveRoute(): ResolvedAgentRoute {
   return {
     agentId: "main",
     channel: "feishu",
     accountId: "default",
     sessionKey: "agent:main:feishu:dm:ou-attacker",
     mainSessionKey: "agent:main:main",
+    lastRoutePolicy: "session",
     matchedBy: "default",
   };
+}
+
+function createUnboundConfiguredRoute(
+  route: NonNullable<ConfiguredBindingRoute>["route"],
+): ConfiguredBindingRoute {
+  return { bindingResolution: null, route };
 }
 
 const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
@@ -138,14 +171,11 @@ const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSession
 ) => mockReadSessionUpdatedAt(params);
 const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
   mockResolveStorePath(params);
-const resolveEnvelopeFormatOptionsMock: PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"] =
-  () => ({});
-const finalizeInboundContextMock: PluginRuntime["channel"]["reply"]["finalizeInboundContext"] = (
-  ctx,
-) => ctx;
-const withReplyDispatcherMock: PluginRuntime["channel"]["reply"]["withReplyDispatcher"] = async ({
+const resolveEnvelopeFormatOptionsMock = () => ({});
+const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
+const withReplyDispatcherMock = async ({
   run,
-}) => await run();
+}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
 
 const {
   mockCreateFeishuReplyDispatcher,
@@ -176,17 +206,22 @@ const {
     fileName: "clip.mp4",
   }),
   mockCreateFeishuClient: vi.fn(),
-  mockResolveAgentRoute: vi.fn(buildDefaultResolveRoute),
-  mockReadSessionUpdatedAt: vi.fn(),
-  mockResolveStorePath: vi.fn(() => "/tmp/feishu-sessions.json"),
+  mockResolveAgentRoute: vi.fn((_params?: unknown) => buildDefaultResolveRoute()),
+  mockReadSessionUpdatedAt: vi.fn((_params?: unknown): number | undefined => undefined),
+  mockResolveStorePath: vi.fn((_params?: unknown) => "/tmp/feishu-sessions.json"),
   mockResolveConfiguredBindingRoute: vi.fn(
-    ({ route }: { route: NonNullable<ConfiguredBindingRoute>["route"] }) => ({
+    ({
+      route,
+    }: {
+      route: NonNullable<ConfiguredBindingRoute>["route"];
+    }): ConfiguredBindingRoute => ({
       bindingResolution: null,
-      configuredBinding: null,
       route,
     }),
   ),
-  mockEnsureConfiguredBindingRouteReady: vi.fn(async () => ({ ok: true as const })),
+  mockEnsureConfiguredBindingRouteReady: vi.fn(
+    async (_params?: unknown): Promise<BindingReadiness> => ({ ok: true }),
+  ),
   mockResolveBoundConversation: vi.fn(() => null as BoundConversation),
   mockTouchBinding: vi.fn(),
 }));
@@ -213,7 +248,8 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    resolveConfiguredBindingRoute: (params: unknown) => mockResolveConfiguredBindingRoute(params),
+    resolveConfiguredBindingRoute: (params: unknown) =>
+      mockResolveConfiguredBindingRoute(params as { route: ResolvedAgentRoute }),
     ensureConfiguredBindingRouteReady: (params: unknown) =>
       mockEnsureConfiguredBindingRouteReady(params),
     getSessionBindingService: () => ({
@@ -243,13 +279,16 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
 describe("handleFeishuMessage ACP routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockResolveConfiguredBindingRoute
-      .mockReset()
-      .mockImplementation(({ route }: { route: NonNullable<ConfiguredBindingRoute>["route"] }) => ({
-        bindingResolution: null,
-        configuredBinding: null,
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
+      ({
         route,
-      }));
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
@@ -277,14 +316,15 @@ describe("handleFeishuMessage ACP routing", () => {
             resolveStorePath: resolveStorePathMock,
           },
           reply: {
-            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: finalizeInboundContextMock,
+            finalizeInboundContext: finalizeInboundContextMock as never,
             dispatchReplyFromConfig: vi.fn().mockResolvedValue({
               queuedFinal: false,
               counts: { final: 1 },
             }),
-            withReplyDispatcher: withReplyDispatcherMock,
+            withReplyDispatcher: withReplyDispatcherMock as never,
           },
           commands: {
             shouldComputeCommandAuthorized: vi.fn(() => false),
@@ -399,7 +439,10 @@ describe("handleFeishuMessage ACP routing", () => {
 });
 
 describe("handleFeishuMessage command authorization", () => {
-  const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ({
+    ...ctx,
+    CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+  }));
   const mockDispatchReplyFromConfig = vi
     .fn()
     .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
@@ -441,13 +484,16 @@ describe("handleFeishuMessage command authorization", () => {
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);
     mockReadSessionUpdatedAt.mockReturnValue(undefined);
     mockResolveStorePath.mockReturnValue("/tmp/feishu-sessions.json");
-    mockResolveConfiguredBindingRoute
-      .mockReset()
-      .mockImplementation(({ route }: { route: NonNullable<ConfiguredBindingRoute>["route"] }) => ({
-        bindingResolution: null,
-        configuredBinding: null,
+    mockResolveConfiguredBindingRoute.mockReset().mockImplementation(
+      ({
         route,
-      }));
+      }: {
+        route: NonNullable<ConfiguredBindingRoute>["route"];
+      }): ConfiguredBindingRoute => ({
+        bindingResolution: null,
+        route,
+      }),
+    );
     mockEnsureConfiguredBindingRouteReady.mockReset().mockResolvedValue({ ok: true });
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
@@ -474,11 +520,12 @@ describe("handleFeishuMessage command authorization", () => {
             resolveStorePath: resolveStorePathMock,
           },
           reply: {
-            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock,
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
             formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-            finalizeInboundContext: mockFinalizeInboundContext,
+            finalizeInboundContext: mockFinalizeInboundContext as never,
             dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-            withReplyDispatcher: mockWithReplyDispatcher,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
           },
           commands: {
             shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,

@@ -44,10 +44,6 @@
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
     },
-    "./plugin-sdk/ollama-setup": {
-      "types": "./dist/plugin-sdk/ollama-setup.d.ts",
-      "default": "./dist/plugin-sdk/ollama-setup.js"
-    },
     "./plugin-sdk/provider-setup": {
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
       "default": "./dist/plugin-sdk/provider-setup.js"
@@ -483,6 +479,10 @@
     "./plugin-sdk/nostr": {
       "types": "./dist/plugin-sdk/nostr.d.ts",
       "default": "./dist/plugin-sdk/nostr.js"
+    },
+    "./plugin-sdk/ollama": {
+      "types": "./dist/plugin-sdk/ollama.d.ts",
+      "default": "./dist/plugin-sdk/ollama.js"
     },
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",

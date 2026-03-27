@@ -19,6 +19,12 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -131,7 +137,6 @@ import {
   finalizeAttemptContextEngineTurn,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
-import { shouldInjectOllamaCompatNumCtx, wrapOllamaCompatNumCtx } from "./attempt.ollama-compat.js";
 import {
   buildAfterTurnRuntimeContext,
   prependSystemPromptAddition,
@@ -197,7 +202,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./attempt.ollama-compat.js";
+} from "../../../plugin-sdk/ollama.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
