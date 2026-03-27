@@ -86,9 +86,7 @@ function takeEntry(
 ): { entry: QueueEntry; remaining: QueueEntry[] } {
   const idx = entries.findIndex((e) => e.taskId === taskId);
   if (idx === -1) {
-    throw new QueueValidationError(
-      `Task ${taskId} not found in ${sectionName} section`,
-    );
+    throw new QueueValidationError(`Task ${taskId} not found in ${sectionName} section`);
   }
   const entry = entries[idx];
   const remaining = [...entries.slice(0, idx), ...entries.slice(idx + 1)];
@@ -198,10 +196,7 @@ export class QueueManager {
         return {
           ...parsed,
           claimed: remaining,
-          available: [
-            ...parsed.available,
-            { taskId: entry.taskId, metadata: cleanMeta },
-          ],
+          available: [...parsed.available, { taskId: entry.taskId, metadata: cleanMeta }],
         };
       },
       (reRead) => {

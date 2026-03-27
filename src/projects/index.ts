@@ -49,3 +49,13 @@ export {
 
 // Sync service
 export { ProjectSyncService } from "./sync-service.js";
+
+// Queue manager (concurrency-safe writes)
+export {
+  QueueManager,
+  serializeQueue,
+  QueueLockError,
+  QueueValidationError,
+  QUEUE_LOCK_OPTIONS,
+} from "./queue-manager.js";
+export type { QueueSection } from "./queue-manager.js";
