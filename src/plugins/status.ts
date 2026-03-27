@@ -10,7 +10,7 @@ import { withBundledPluginAllowlistCompat } from "./bundled-compat.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
@@ -145,21 +145,20 @@ export function buildPluginStatusReport(params?: {
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
       resolveDefaultAgentWorkspaceDir());
 
-  // Apply bundled-allowlist compat so that `plugins list` and `doctor` report
-  // the same loaded/disabled status the gateway uses at runtime.  Without this,
-  // bundled plugins are incorrectly shown as "disabled" when `plugins.allow` is
-  // set because the allowlist check runs before the bundled-default-enable check.
-  const manifestRegistry = loadPluginManifestRegistry({
+  // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
+  // report the same loaded/disabled status the gateway uses at runtime.  Without
+  // this, bundled provider plugins are incorrectly shown as "disabled" when
+  // `plugins.allow` is set because the allowlist check runs before the
+  // bundled-default-enable check.  Scoped to bundled providers only (not all
+  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
+  const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
     workspaceDir,
     env: params?.env,
   });
-  const bundledPluginIds = manifestRegistry.plugins
-    .filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => plugin.id);
   const effectiveConfig = withBundledPluginAllowlistCompat({
     config,
-    pluginIds: bundledPluginIds,
+    pluginIds: bundledProviderIds,
   });
 
   const registry = loadOpenClawPlugins({

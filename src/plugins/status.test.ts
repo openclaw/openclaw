@@ -11,7 +11,7 @@ import {
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
-const loadPluginManifestRegistryMock = vi.fn();
+const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
 let buildPluginStatusReport: typeof import("./status.js").buildPluginStatusReport;
 let buildPluginInspectReport: typeof import("./status.js").buildPluginInspectReport;
@@ -29,8 +29,9 @@ vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
 }));
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistryMock(...args),
+vi.mock("./providers.js", () => ({
+  resolveBundledProviderCompatPluginIds: (...args: unknown[]) =>
+    resolveBundledProviderCompatPluginIdsMock(...args),
 }));
 
 vi.mock("./bundled-compat.js", () => ({
@@ -61,10 +62,10 @@ describe("buildPluginStatusReport", () => {
     vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
-    loadPluginManifestRegistryMock.mockReset();
+    resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
     loadConfigMock.mockReturnValue({});
-    loadPluginManifestRegistryMock.mockReturnValue({ plugins: [] });
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
     withBundledPluginAllowlistCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
     );
@@ -98,16 +99,10 @@ describe("buildPluginStatusReport", () => {
     );
   });
 
-  it("applies bundled allowlist compat before loading plugins", () => {
+  it("applies bundled provider allowlist compat before loading plugins", () => {
     const config = { plugins: { allow: ["telegram"] } };
     loadConfigMock.mockReturnValue(config);
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        { id: "anthropic", origin: "bundled" },
-        { id: "openai", origin: "bundled" },
-        { id: "my-custom-plugin", origin: "workspace" },
-      ],
-    });
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(["anthropic", "openai"]);
     const compatConfig = { plugins: { allow: ["telegram", "anthropic", "openai"] } };
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
 
