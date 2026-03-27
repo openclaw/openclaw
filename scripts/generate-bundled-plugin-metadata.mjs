@@ -198,6 +198,17 @@ function resolveRootDescription(source, channelId) {
   return undefined;
 }
 
+function resolveRootPreferOver(source, channelId) {
+  const channelMeta = resolvePackageChannelMeta(source.packageJson);
+  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.preferOver)) {
+    return undefined;
+  }
+  const preferOver = channelMeta.preferOver
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+  return preferOver.length > 0 ? preferOver : undefined;
+}
+
 async function collectBundledChannelConfigsForSource({ source, manifest }) {
   const channelIds = Array.isArray(manifest.channels)
     ? manifest.channels.filter((entry) => typeof entry === "string" && entry.trim())
@@ -238,6 +249,7 @@ async function collectBundledChannelConfigsForSource({ source, manifest }) {
         : undefined;
     const label = existing?.label ?? resolveRootLabel(source, channelId);
     const description = existing?.description ?? resolveRootDescription(source, channelId);
+    const preferOver = existing?.preferOver ?? resolveRootPreferOver(source, channelId);
     const uiHints =
       surface.uiHints || existing?.uiHints
         ? {
@@ -255,6 +267,7 @@ async function collectBundledChannelConfigsForSource({ source, manifest }) {
       ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
+      ...(preferOver?.length ? { preferOver } : {}),
     };
   }
 

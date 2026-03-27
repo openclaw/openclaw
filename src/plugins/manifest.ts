@@ -13,6 +13,7 @@ export type PluginManifestChannelConfig = {
   uiHints?: Record<string, PluginConfigUiHint>;
   label?: string;
   description?: string;
+  preferOver?: string[];
 };
 
 export type PluginManifest = {
@@ -202,11 +203,13 @@ function normalizeChannelConfigs(
       : undefined;
     const label = typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
     const description = typeof rawEntry.description === "string" ? rawEntry.description.trim() : "";
+    const preferOver = normalizeStringList(rawEntry.preferOver);
     normalized[channelId] = {
       schema,
       ...(uiHints ? { uiHints } : {}),
       ...(label ? { label } : {}),
       ...(description ? { description } : {}),
+      ...(preferOver.length > 0 ? { preferOver } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
