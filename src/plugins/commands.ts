@@ -142,7 +142,6 @@ function parseDiscordBindingTarget(raw: string | undefined): {
   }
   return /^\d+$/.test(normalized.trim()) ? { conversationId: `user:${normalized.trim()}` } : null;
 }
-
 function resolveBindingConversationFromCommand(params: {
   channel: string;
   from?: string;
@@ -175,9 +174,12 @@ function resolveBindingConversationFromCommand(params: {
     };
   }
   if (params.channel === "discord") {
-    const source = params.from ?? params.to;
+    const source =
+      params.to?.startsWith("slash:") || !params.to?.trim()
+        ? (params.from ?? params.to)
+        : params.to;
     const rawTarget = source?.startsWith("discord:") ? stripPrefix(source, "discord:") : source;
-    if (!rawTarget) {
+    if (!rawTarget || rawTarget.startsWith("slash:")) {
       return null;
     }
     const target =
@@ -188,10 +190,7 @@ function resolveBindingConversationFromCommand(params: {
     return {
       channel: "discord",
       accountId,
-      conversationId:
-        "conversationId" in target
-          ? target.conversationId
-          : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
+      conversationId: target.conversationId,
     };
   }
   return null;

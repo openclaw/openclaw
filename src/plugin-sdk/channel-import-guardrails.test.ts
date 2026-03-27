@@ -273,8 +273,10 @@ function collectCoreSourceFiles(): string[] {
     rootDir: srcDir,
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
       normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-utils.") ||
       normalizedFullPath.includes(".test-harness.") ||
       normalizedFullPath.includes(".test-helpers.") ||
+      entryName.endsWith("-test-helpers.ts") ||
       entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||
       normalizedFullPath.includes(".suite.") ||
