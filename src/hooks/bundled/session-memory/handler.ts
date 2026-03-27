@@ -3,7 +3,11 @@
  *
  * Saves session context to memory when /new or /reset command is triggered.
  * Also saves memory when a subagent session ends (subagent_ended event).
- * Creates a new dated memory file with LLM-generated slug.
+ *
+ * Progressive loading strategy:
+ * - Detailed content goes to memory/YYYY-MM-DD-HHMM.md
+ * - Daily index (YYYY-MM-DD.md) stores session references and summaries
+ * - Agent loads the compact index, reads detail files on demand
  */
 
 import fs from "node:fs/promises";
@@ -65,6 +69,10 @@ function deriveSubagentWorkspace(
 /**
  * Save session context to memory when /new or /reset command is triggered.
  * Also saves memory when a subagent session ends (subagent_ended event).
+ *
+ * Writes to two files:
+ * 1. memory/YYYY-MM-DD-HHMM.md - detailed session content
+ * 2. memory/YYYY-MM-DD.md - daily index with session references
  */
 const saveSessionToMemory: HookHandler = async (event) => {
   // Check event type
@@ -226,57 +234,73 @@ const saveSessionToMemory: HookHandler = async (event) => {
       }
     }
 
-    // If no slug, use timestamp
+    // If no slug, use timestamp as HHMM
     if (!slug) {
       const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
-    const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
-    });
-
-    // Format time as HH:MM:SS UTC
     const timeStr = now.toISOString().split("T")[1].split(".")[0];
-
-    // Extract context details
     const sessionId = currentSessionId || "unknown";
     const source = isSubagentEnded ? "subagent_ended" : ((context.commandSource as string) || "unknown");
 
-    // Build Markdown entry
-    const entryParts = [
+    // Progressive loading: write detail file (YYYY-MM-DD-HHMM.md)
+    const detailFilename = `${dateStr}-${slug}.md`;
+    const detailFilePath = path.join(memoryDir, detailFilename);
+    const detailContent = [
       `# Session: ${dateStr} ${timeStr} UTC`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
       `- **Source**: ${source}`,
-      "",
+      `- **Time**: ${timeStr} UTC`,
+      ""
     ];
-
-    // Include conversation content if available
     if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+      detailContent.push("## Conversation Summary", "", sessionContent);
     }
 
-    const entry = entryParts.join("\n");
-
-    // Write under memory root with alias-safe file validation.
     await writeFileWithinRoot({
       rootDir: memoryDir,
-      relativePath: filename,
-      data: entry,
+      relativePath: detailFilename,
+      data: detailContent.join("\n"),
       encoding: "utf-8",
     });
-    log.debug("Memory file written successfully");
+    log.debug("Detail file written", { path: detailFilePath.replace(os.homedir(), "~") });
 
-    // Log completion
-    const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
+    // Write index entry to YYYY-MM-DD.md with reference to detail file
+    const indexFilename = `${dateStr}.md`;
+    const indexFilePath = path.join(memoryDir, indexFilename);
+    const indexEntry = [
+      `## Session: ${timeStr} UTC`,
+      "",
+      `- **Source**: ${source}`,
+      `- **Session**: ${detailFilename}`,
+      `- **Summary**: ${sessionContent ? sessionContent.split("\n").slice(0, 3).join(" ") + "..." : "(no content)"}`,
+      ""
+    ].join("\n");
+
+    let existingIndex = "";
+    try {
+      existingIndex = await fs.readFile(indexFilePath, "utf-8");
+    } catch {
+      // File doesn't exist yet
+    }
+    const newIndex = existingIndex
+      ? existingIndex.trim() + "\n\n" + indexEntry
+      : "# Daily Memory: " + dateStr + "\n\n" + indexEntry;
+
+    await writeFileWithinRoot({
+      rootDir: memoryDir,
+      relativePath: indexFilename,
+      data: newIndex,
+      encoding: "utf-8",
+    });
+    log.debug("Index file updated", { path: indexFilePath.replace(os.homedir(), "~") });
+
+    const relPath = detailFilePath.replace(os.homedir(), "~");
+    log.info(`Session memory saved: ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {
       log.error("Failed to save session memory", {
