@@ -169,11 +169,14 @@ vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  fetchRemoteMedia: mediaMocks.fetchRemoteMedia,
-  saveMediaBuffer: mediaMocks.saveMediaBuffer,
-  getAgentScopedMediaLocalRoots: vi.fn(() => ({ images: "/tmp/media" })),
-}));
+const mediaRuntimeModule = await import("openclaw/plugin-sdk/media-runtime");
+vi.spyOn(mediaRuntimeModule, "fetchRemoteMedia").mockImplementation(((...args: unknown[]) =>
+  mediaMocks.fetchRemoteMedia(...args)) as never);
+vi.spyOn(mediaRuntimeModule, "saveMediaBuffer").mockImplementation(((...args: unknown[]) =>
+  mediaMocks.saveMediaBuffer(...args)) as never);
+vi.spyOn(mediaRuntimeModule, "getAgentScopedMediaLocalRoots").mockImplementation((() => ({
+  images: "/tmp/media",
+})) as never);
 
 const BASE_CHANNEL_ROUTE = {
   agentId: "main",
