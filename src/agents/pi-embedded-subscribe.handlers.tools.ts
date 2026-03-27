@@ -330,8 +330,11 @@ async function emitToolResultOutput(params: {
 
 /**
  * Build a compact, redacted summary of tool call arguments for log output.
- * Truncates long values to keep log lines readable while still providing
- * enough context to diagnose tool call issues.
+ * Truncates the raw serialized form *before* redaction so that large tool
+ * inputs (e.g. write/edit calls carrying full file contents) don't incur
+ * full JSON allocation + regex redaction cost for a 200-char preview.
+ * A 2× preview buffer is kept before redaction so that secret patterns
+ * straddling the boundary are still caught by `redactSensitiveText`.
  */
 function buildSanitizedArgSummary(args: unknown, maxLen = 200): string {
   if (args == null) {
@@ -339,7 +342,10 @@ function buildSanitizedArgSummary(args: unknown, maxLen = 200): string {
   }
   try {
     const raw = typeof args === "string" ? args : JSON.stringify(args);
-    const redacted = redactSensitiveText(raw);
+    // Truncate to bounded window before running regex-heavy redaction.
+    const previewWindow = maxLen * 2;
+    const bounded = raw.length > previewWindow ? raw.slice(0, previewWindow) : raw;
+    const redacted = redactSensitiveText(bounded);
     return redacted.length > maxLen ? `${redacted.slice(0, maxLen)}…` : redacted;
   } catch {
     return "[unserializable]";
