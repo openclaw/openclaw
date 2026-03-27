@@ -143,11 +143,18 @@ export async function monitorWebInbox(options: {
     resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
 
   const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
-    const messageId =
-      typeof result === "object" && result && "key" in result
-        ? String((result as { key?: { id?: string } }).key?.id ?? "")
-        : "";
-    if (!messageId) {
+    let messageId = "";
+
+    // Support send.ts return format: { messageId, toJid }
+    if (typeof result === "object" && result && "messageId" in result) {
+      messageId = String((result as { messageId?: string }).messageId ?? "");
+    }
+    // Fallback to Baileys format: { key: { id } }
+    else if (typeof result === "object" && result && "key" in result) {
+      messageId = String((result as { key?: { id?: string } }).key?.id ?? "");
+    }
+
+    if (!messageId || messageId === "unknown") {
       return;
     }
     rememberRecentOutboundMessage({
