@@ -1,11 +1,41 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType } from "discord-api-types/v10";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
+
+const { logVerboseMock } = vi.hoisted(() => ({
+  logVerboseMock: vi.fn(),
+}));
+const { loggerWarnMock } = vi.hoisted(() => ({
+  loggerWarnMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({
+      child: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: loggerWarnMock,
+      debug: vi.fn(),
+    }),
+    logVerbose: logVerboseMock,
+  };
+});
+
 let listNativeCommandSpecs: typeof import("../../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
 
 function createNativeCommand(
   name: string,
+  opts?: {
+    cfg?: ReturnType<typeof loadConfig>;
+    discordConfig?: NonNullable<OpenClawConfig["channels"]>["discord"];
+  },
 ): ReturnType<typeof import("./native-command.js").createDiscordNativeCommand> {
   const command = listNativeCommandSpecs({ provider: "discord" }).find(
     (entry) => entry.name === name,
@@ -13,8 +43,10 @@ function createNativeCommand(
   if (!command) {
     throw new Error(`missing native command: ${name}`);
   }
-  const cfg = {} as ReturnType<typeof loadConfig>;
-  const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
+  const cfg = (opts?.cfg ?? {}) as ReturnType<typeof loadConfig>;
+  const discordConfig = (opts?.discordConfig ?? {}) as NonNullable<
+    OpenClawConfig["channels"]
+  >["discord"];
   return createDiscordNativeCommand({
     command,
     cfg,
@@ -64,11 +96,15 @@ function readChoices(option: CommandOption | undefined): unknown[] | undefined {
 }
 
 describe("createDiscordNativeCommand option wiring", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ listNativeCommandSpecs } = await import("../../../../src/auto-reply/commands-registry.js"));
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
+  });
+
+  beforeEach(() => {
+    logVerboseMock.mockReset();
+    loggerWarnMock.mockReset();
   });
 
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
@@ -82,10 +118,22 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     expect(readChoices(action)).toBeUndefined();
     await autocomplete({
+      user: {
+        id: "owner",
+        username: "tester",
+        globalName: "Tester",
+      },
+      channel: {
+        type: ChannelType.DM,
+        id: "dm-1",
+      },
+      guild: undefined,
+      rawData: {},
       options: {
         getFocused: () => ({ value: "st" }),
       },
       respond,
+      client: {},
     } as never);
     expect(respond).toHaveBeenCalledWith([
       { name: "steer", value: "steer" },
@@ -105,5 +153,81 @@ describe("createDiscordNativeCommand option wiring", () => {
         expect.objectContaining({ name: expect.any(String), value: expect.any(String) }),
       ]),
     );
+  });
+
+  it("returns no autocomplete choices for unauthorized users", async () => {
+    const command = createNativeCommand("think", {
+      cfg: {
+        commands: {
+          allowFrom: {
+            discord: ["user:allowed-user"],
+          },
+        },
+      } as ReturnType<typeof loadConfig>,
+    });
+    const level = requireOption(command, "level");
+    const autocomplete = readAutocomplete(level);
+    if (typeof autocomplete !== "function") {
+      throw new Error("think level option did not wire autocomplete");
+    }
+    const respond = vi.fn(async (_choices: unknown[]) => undefined);
+
+    await autocomplete({
+      user: {
+        id: "blocked-user",
+        username: "blocked",
+        globalName: "Blocked",
+      },
+      channel: {
+        type: ChannelType.GuildText,
+        id: "channel-1",
+        name: "general",
+      },
+      guild: {
+        id: "guild-1",
+      },
+      rawData: {
+        member: { roles: [] },
+      },
+      options: {
+        getFocused: () => ({ value: "xh" }),
+      },
+      respond,
+      client: {},
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith([]);
+  });
+
+  it("truncates Discord command and option descriptions to Discord's limit", () => {
+    const longDescription = "x".repeat(140);
+    const cfg = {} as ReturnType<typeof loadConfig>;
+    const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "longdesc",
+        description: longDescription,
+        acceptsArgs: true,
+        args: [
+          {
+            name: "input",
+            description: longDescription,
+            type: "string",
+            required: false,
+          },
+        ],
+      },
+      cfg,
+      discordConfig,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    expect(command.description).toHaveLength(100);
+    expect(command.description).toBe("x".repeat(100));
+    expect(requireOption(command, "input").description).toHaveLength(100);
+    expect(requireOption(command, "input").description).toBe("x".repeat(100));
   });
 });

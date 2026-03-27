@@ -1,3 +1,5 @@
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
@@ -61,6 +63,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.providers",
     "models.list",
     "tools.catalog",
+    "tools.effective",
     "agents.list",
     "agent.identity.get",
     "skills.status",
@@ -111,7 +114,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
-    "browser.request",
     "push.test",
     "node.pending.enqueue",
   ],
@@ -154,6 +156,10 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
   if (explicitScope) {
     return explicitScope;
+  }
+  const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
+  if (pluginScope) {
+    return pluginScope;
   }
   if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
     return ADMIN_SCOPE;

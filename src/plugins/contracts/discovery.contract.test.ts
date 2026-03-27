@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { QWEN_OAUTH_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
@@ -12,7 +11,6 @@ const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
 let runProviderCatalog: typeof import("../provider-discovery.js").runProviderCatalog;
-let qwenPortalProvider: Awaited<ReturnType<typeof requireProvider>>;
 let githubCopilotProvider: Awaited<ReturnType<typeof requireProvider>>;
 let ollamaProvider: Awaited<ReturnType<typeof requireProvider>>;
 let vllmProvider: Awaited<ReturnType<typeof requireProvider>>;
@@ -51,21 +49,6 @@ function setRuntimeAuthStore(store?: AuthProfileStore) {
         .filter(([, credential]) => credential.provider === providerId)
         .map(([profileId]) => profileId),
   );
-}
-
-function setQwenPortalOauthSnapshot() {
-  setRuntimeAuthStore({
-    version: 1,
-    profiles: {
-      "qwen-portal:default": {
-        type: "oauth",
-        provider: "qwen-portal",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
-    },
-  });
 }
 
 function setGithubCopilotProfileSnapshot() {
@@ -159,17 +142,8 @@ describe("provider discovery contract", () => {
         buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
       };
     });
-    vi.doMock("openclaw/plugin-sdk/ollama-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/ollama-setup");
-      return {
-        ...actual,
-        buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-      };
-    });
-
     ({ runProviderCatalog } = await import("../provider-discovery.js"));
     const [
-      { default: qwenPortalPlugin },
       { default: githubCopilotPlugin },
       { default: ollamaPlugin },
       { default: vllmPlugin },
@@ -178,7 +152,6 @@ describe("provider discovery contract", () => {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      import("../../../extensions/qwen-portal-auth/index.js"),
       import("../../../extensions/github-copilot/index.js"),
       import("../../../extensions/ollama/index.js"),
       import("../../../extensions/vllm/index.js"),
@@ -187,7 +160,6 @@ describe("provider discovery contract", () => {
       import("../../../extensions/modelstudio/index.js"),
       import("../../../extensions/cloudflare-ai-gateway/index.js"),
     ]);
-    qwenPortalProvider = requireProvider(registerProviders(qwenPortalPlugin), "qwen-portal");
     githubCopilotProvider = requireProvider(
       registerProviders(githubCopilotPlugin),
       "github-copilot",
@@ -213,42 +185,6 @@ describe("provider discovery contract", () => {
     buildSglangProviderMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
-  });
-
-  it("keeps qwen portal oauth marker fallback provider-owned", async () => {
-    setQwenPortalOauthSnapshot();
-
-    await expect(
-      runCatalog({
-        provider: qwenPortalProvider,
-      }),
-    ).resolves.toEqual({
-      provider: {
-        baseUrl: "https://portal.qwen.ai/v1",
-        apiKey: QWEN_OAUTH_MARKER,
-        api: "openai-completions",
-        models: [
-          expect.objectContaining({ id: "coder-model", name: "Qwen Coder" }),
-          expect.objectContaining({ id: "vision-model", name: "Qwen Vision" }),
-        ],
-      },
-    });
-  });
-
-  it("keeps qwen portal env api keys higher priority than oauth markers", async () => {
-    setQwenPortalOauthSnapshot();
-
-    await expect(
-      runCatalog({
-        provider: qwenPortalProvider,
-        env: { QWEN_PORTAL_API_KEY: "env-key" } as NodeJS.ProcessEnv,
-        resolveProviderApiKey: () => ({ apiKey: "env-key" }),
-      }),
-    ).resolves.toMatchObject({
-      provider: {
-        apiKey: "env-key",
-      },
-    });
   });
 
   it("keeps GitHub Copilot catalog disabled without env tokens or profiles", async () => {
@@ -457,7 +393,7 @@ describe("provider discovery contract", () => {
         apiKey: "minimax-key",
         models: expect.arrayContaining([
           expect.objectContaining({ id: "MiniMax-M2.7" }),
-          expect.objectContaining({ id: "MiniMax-VL-01" }),
+          expect.objectContaining({ id: "MiniMax-M2.7-highspeed" }),
         ]),
       },
     });

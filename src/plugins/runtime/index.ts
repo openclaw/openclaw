@@ -12,34 +12,14 @@ import {
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
-import { createRuntimeTools } from "./runtime-tools.js";
 import type { PluginRuntime } from "./types.js";
-
-function defineCachedValue<T extends object, K extends PropertyKey>(
-  target: T,
-  key: K,
-  create: () => unknown,
-): void {
-  let cached: unknown;
-  let ready = false;
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (!ready) {
-        cached = create();
-        ready = true;
-      }
-      return cached;
-    },
-  });
-}
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -203,7 +183,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
-    tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),

@@ -6,12 +6,22 @@ const loadDotEnvMock = vi.hoisted(() => vi.fn());
 const normalizeEnvMock = vi.hoisted(() => vi.fn());
 const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
-const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const maybeRunCliInContainerMock = vi.hoisted(() =>
+  vi.fn<
+    (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
+  >((argv: string[]) => ({ handled: false, argv })),
+);
 
 vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
+}));
+
+vi.mock("./container-target.js", () => ({
+  maybeRunCliInContainer: maybeRunCliInContainerMock,
+  parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
 
 vi.mock("./dotenv.js", () => ({
@@ -30,8 +40,8 @@ vi.mock("../infra/runtime-guard.js", () => ({
   assertSupportedRuntime: assertRuntimeMock,
 }));
 
-vi.mock("../memory/search-manager.js", () => ({
-  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
+vi.mock("../plugins/memory-runtime.js", () => ({
+  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
 }));
 
 vi.mock("./program/root-help.js", () => ({
@@ -57,8 +67,9 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "status"]);
 
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -70,11 +81,39 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "--help"]);
 
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "--help"]);
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(outputRootHelpMock).toHaveBeenCalledTimes(1);
     expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledTimes(1);
+    expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("returns after a handled container-target invocation", async () => {
+    maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 0 });
+
+    await runCli(["node", "openclaw", "--container", "demo", "status"]);
+
+    expect(maybeRunCliInContainerMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "--container",
+      "demo",
+      "status",
+    ]);
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates a handled container-target exit code", async () => {
+    const exitCode = process.exitCode;
+    maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 7 });
+
+    await runCli(["node", "openclaw", "--container", "demo", "status"]);
+
+    expect(process.exitCode).toBe(7);
+    process.exitCode = exitCode;
   });
 });

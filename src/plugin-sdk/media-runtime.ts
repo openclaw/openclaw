@@ -13,6 +13,8 @@ export * from "../media/local-roots.js";
 export * from "../media/mime.js";
 export * from "../media/outbound-attachment.js";
 export * from "../media/png-encode.ts";
+export * from "../media/qr-image.ts";
+export * from "../media/read-response-with-limit.js";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";

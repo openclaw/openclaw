@@ -283,8 +283,8 @@ vi.mock("../../model-tool-support.js", () => ({
   supportsModelTools: () => true,
 }));
 
-vi.mock("../../ollama-stream.js", () => ({
-  createConfiguredOllamaStreamFn: vi.fn(),
+vi.mock("../../provider-stream.js", () => ({
+  registerProviderStreamForModel: vi.fn(),
 }));
 
 vi.mock("../../owner-display.js", () => ({
@@ -425,7 +425,7 @@ let runEmbeddedAttemptPromise:
   | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
   | undefined;
 
-export async function loadRunEmbeddedAttempt() {
+async function loadRunEmbeddedAttempt() {
   runEmbeddedAttemptPromise ??= import("./attempt.js").then((mod) => mod.runEmbeddedAttempt);
   return await runEmbeddedAttemptPromise;
 }

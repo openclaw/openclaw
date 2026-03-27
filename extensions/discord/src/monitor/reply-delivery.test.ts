@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -11,6 +10,31 @@ const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendWebhookMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendDiscordTextMock = vi.hoisted(() => vi.fn());
+const retryAsyncMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      fn: () => Promise<unknown>,
+      opts?: {
+        attempts?: number;
+        shouldRetry?: (err: unknown) => boolean;
+      },
+    ) => {
+      const attempts = Math.max(1, opts?.attempts ?? 1);
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          return await fn();
+        } catch (error) {
+          lastError = error;
+          if (attempt >= attempts || opts?.shouldRetry?.(error) === false) {
+            throw error;
+          }
+        }
+      }
+      throw lastError;
+    },
+  ),
+);
 
 vi.mock("../send.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../send.js")>();
@@ -25,6 +49,16 @@ vi.mock("../send.js", async (importOriginal) => {
 vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    retryAsync: retryAsyncMock,
+  };
+});
+
+let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
@@ -78,7 +112,9 @@ describe("deliverDiscordReply", () => {
     return threadBindings;
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ deliverDiscordReply } = await import("./reply-delivery.js"));
     sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
@@ -95,6 +131,7 @@ describe("deliverDiscordReply", () => {
       id: "msg-direct-1",
       channel_id: "channel-1",
     });
+    retryAsyncMock.mockClear();
     threadBindingTesting.resetThreadBindingsForTests();
   });
 

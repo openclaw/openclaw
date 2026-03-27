@@ -2,8 +2,6 @@ name: Docker Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
     paths-ignore:
@@ -20,7 +18,7 @@ on:
         type: string
 
 concurrency:
-  group: docker-release-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || format('docker-release-push-{0}', github.run_id) }}
   cancel-in-progress: false
 
 env:

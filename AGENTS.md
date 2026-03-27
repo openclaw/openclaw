@@ -60,7 +60,7 @@
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
 - If deps are missing (for example `node_modules` missing, `vitest not found`, or `command not found`), run the repo’s package-manager install command (prefer lockfile/README-defined PM), then rerun the exact requested command once. Apply this to test/build/lint/typecheck/dev commands; if retry still fails, report the command and first actionable error.
-- Pre-commit hooks: `prek install` (runs same checks as CI)
+- Pre-commit hooks: `prek install`. The hook runs the repo verification flow, including `pnpm check`.
 - Also supported: `bun install` (keep `pnpm-lock.yaml` + Bun patching in sync when touching deps/patches).
 - Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
 - Run CLI in dev: `pnpm openclaw ...` (bun) or `pnpm dev`.
@@ -77,10 +77,13 @@
 - Plugin SDK API drift uses `pnpm plugin-sdk:api:gen` / `pnpm plugin-sdk:api:check`.
 - If you change config schema/help or the public Plugin SDK surface, update the matching baseline artifact and keep the two drift-check flows adjacent in scripts/workflows/docs guidance rather than inventing a third pattern.
 - For narrowly scoped changes, prefer narrowly scoped tests that directly validate the touched behavior. If no meaningful scoped test exists, say so explicitly and use the next most direct validation available.
-- Preferred landing bar for pushes to `main`: `pnpm check` and `pnpm test`, with a green result when feasible.
+- Verification modes for work on `main`:
+  - Default mode: `main` is relatively stable. Count pre-commit hook coverage when it already verified the current tree, avoid rerunning the exact same checks just for ceremony, and prefer keeping CI/main green before landing.
+  - YOLO mode: `main` is moving fast and the repo is effectively in a party-now-cleanup-after phase. Prefer explicit local verification close to the final landing point, and it is acceptable to use `--no-verify` for intermediate or catch-up commits after equivalent checks have already run locally.
+- Preferred landing bar for pushes to `main`: in Default mode, favor `pnpm check` and `pnpm test` near the final rebase/push point when feasible. In YOLO mode, verify the touched surface locally near landing without insisting every intermediate commit replay the full hook.
 - Scoped tests prove the change itself. `pnpm test` remains the default `main` landing bar; scoped tests do not replace full-suite gates by default.
 - Hard gate: if the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces, `pnpm build` MUST be run and MUST pass before pushing `main`.
-- Default rule: do not commit or push with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface.
+- Default rule: do not land changes with failing format, lint, type, build, or required test checks when those failures are caused by the change or plausibly related to the touched surface. YOLO mode changes how verification is sequenced; it does not lower the requirement to validate and clean up the touched surface before final landing.
 - For narrowly scoped changes, if unrelated failures already exist on latest `origin/main`, state that clearly, report the scoped tests you ran, and ask before broadening scope into unrelated fixes or landing despite those failures.
 - Do not use scoped tests as permission to ignore plausibly related failures.
 
@@ -119,8 +122,8 @@
 - Agents MUST NOT modify baseline, inventory, ignore, snapshot, or expected-failure files to silence failing checks without explicit approval in this chat.
 - For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
 - Do not set test workers above 16; tried already.
-- Do not reintroduce Vitest VM pools by default without fresh green evidence on current `main`; keep CI on `forks`.
-- If local Vitest runs cause memory pressure (common on non-Mac-Studio hosts), use `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test` for land/gate runs.
+- Keep Vitest on `forks` only. Do not introduce or reintroduce any non-`forks` Vitest pool or alternate execution mode in configs, wrapper scripts, or default test commands without explicit approval in this chat. This includes `threads`, `vmThreads`, `vmForks`, and any future/nonstandard pool variant.
+- If local Vitest runs cause memory pressure, the wrapper now derives budgets from host capabilities (CPU, memory band, current load). For a conservative explicit override during land/gate runs, use `OPENCLAW_TEST_PROFILE=serial OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test`.
 - Live tests (real keys): `OPENCLAW_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
 - Full kit + what’s covered: `docs/help/testing.md`.
 - Changelog: user-facing changes only; no internal/meta notes (version alignment, appcast reminders, release process).

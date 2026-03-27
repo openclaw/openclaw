@@ -1,8 +1,13 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
+
 export type MattermostClient = {
   baseUrl: string;
   apiBaseUrl: string;
   token: string;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
+  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 export type MattermostUser = {
@@ -21,17 +26,21 @@ export type MattermostChannel = {
   team_id?: string | null;
 };
 
-export type MattermostPost = {
-  id: string;
-  user_id?: string | null;
-  channel_id?: string | null;
-  message?: string | null;
-  file_ids?: string[] | null;
-  type?: string | null;
-  root_id?: string | null;
-  create_at?: number | null;
-  props?: Record<string, unknown> | null;
-};
+export const MattermostPostSchema = z
+  .object({
+    id: z.string(),
+    user_id: z.string().nullable().optional(),
+    channel_id: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+    file_ids: z.array(z.string()).nullable().optional(),
+    type: z.string().nullable().optional(),
+    root_id: z.string().nullable().optional(),
+    create_at: z.number().nullable().optional(),
+    props: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .passthrough();
+
+export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
 export type MattermostFileInfo = {
   id: string;
@@ -74,6 +83,8 @@ export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
   fetchImpl?: typeof fetch;
+  /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
+  allowPrivateNetwork?: boolean;
 }): MattermostClient {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
   if (!baseUrl) {
@@ -81,7 +92,40 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
-  const fetchImpl = params.fetchImpl ?? fetch;
+  // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
+  // that validates the target URL before making the request (DNS rebinding protection etc.).
+  // A custom fetchImpl is accepted for testing and special cases.
+  const externalFetchImpl = params.fetchImpl;
+
+  // Guarded fetch adapter: calls fetchWithSsrFGuard and returns a plain Response.
+  // Body is buffered before releasing the dispatcher so callers get a complete Response.
+  // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
+  const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+  const guardedFetchImpl: typeof fetch = async (input, init) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : (input as Request).url;
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init,
+      auditContext: "mattermost-api",
+      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+    });
+    try {
+      const bodyBytes = NULL_BODY_STATUSES.has(response.status)
+        ? null
+        : await response.arrayBuffer();
+      return new Response(bodyBytes, { status: response.status, headers: response.headers });
+    } finally {
+      await release();
+    }
+  };
+
+  const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
 
   const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
@@ -110,7 +154,7 @@ export function createMattermostClient(params: {
     return (await res.text()) as T;
   };
 
-  return { baseUrl, apiBaseUrl, token, request };
+  return { baseUrl, apiBaseUrl, token, request, fetchImpl };
 }
 
 export async function fetchMattermostMe(client: MattermostClient): Promise<MattermostUser> {
@@ -513,7 +557,7 @@ export async function uploadMattermostFile(
   form.append("files", blob, fileName);
   form.append("channel_id", params.channelId);
 
-  const res = await fetch(`${client.apiBaseUrl}/files`, {
+  const res = await client.fetchImpl(`${client.apiBaseUrl}/files`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${client.token}`,

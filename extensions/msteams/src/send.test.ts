@@ -58,6 +58,84 @@ vi.mock("./graph-chat.js", () => ({
   buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
 }));
 
+function mockContinueConversationFailure(error: string) {
+  const mockContinueConversation = vi.fn().mockRejectedValue(new Error(error));
+  mockState.resolveMSTeamsSendContext.mockResolvedValue({
+    adapter: { continueConversation: mockContinueConversation },
+    appId: "app-id",
+    conversationId: "19:conversation@thread.tacv2",
+    ref: {
+      user: { id: "user-1" },
+      agent: { id: "agent-1" },
+      conversation: { id: "19:conversation@thread.tacv2" },
+      channelId: "msteams",
+    },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    conversationType: "personal",
+    tokenProvider: {},
+  });
+  return mockContinueConversation;
+}
+
+function createSharePointSendContext(params: {
+  conversationId: string;
+  graphChatId: string | null;
+  siteId: string;
+}) {
+  return {
+    adapter: {
+      continueConversation: vi.fn(
+        async (
+          _id: string,
+          _ref: unknown,
+          fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
+        ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
+      ),
+    },
+    appId: "app-id",
+    conversationId: params.conversationId,
+    graphChatId: params.graphChatId,
+    ref: {},
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    conversationType: "groupChat" as const,
+    tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+    mediaMaxBytes: 8 * 1024 * 1024,
+    sharePointSiteId: params.siteId,
+  };
+}
+
+function mockSharePointPdfUpload(params: {
+  bufferSize: number;
+  fileName: string;
+  itemId: string;
+  uniqueId: string;
+}) {
+  mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+    buffer: Buffer.alloc(params.bufferSize, "pdf"),
+    contentType: "application/pdf",
+    fileName: params.fileName,
+    kind: "file",
+  });
+  mockState.requiresFileConsent.mockReturnValue(false);
+  mockState.uploadAndShareSharePoint.mockResolvedValue({
+    itemId: params.itemId,
+    webUrl: `https://sp.example.com/${params.fileName}`,
+    shareUrl: `https://sp.example.com/share/${params.fileName}`,
+    name: params.fileName,
+  });
+  mockState.getDriveItemProperties.mockResolvedValue({
+    eTag: `"${params.uniqueId},1"`,
+    webDavUrl: `https://sp.example.com/dav/${params.fileName}`,
+    name: params.fileName,
+  });
+  mockState.buildTeamsFileInfoCard.mockReturnValue({
+    contentType: "application/vnd.microsoft.teams.card.file.info",
+    contentUrl: `https://sp.example.com/dav/${params.fileName}`,
+    name: params.fileName,
+    content: { uniqueId: params.uniqueId, fileType: "pdf" },
+  });
+}
+
 describe("sendMessageMSTeams", () => {
   beforeEach(() => {
     mockState.loadOutboundMediaFromUrl.mockReset();
@@ -129,51 +207,18 @@ describe("sendMessageMSTeams", () => {
     const graphChatId = "19:graph-native-chat-id@thread.tacv2";
     const botFrameworkConversationId = "19:bot-framework-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {
-        continueConversation: vi.fn(
-          async (
-            _id: string,
-            _ref: unknown,
-            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
-          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
-        ),
-      },
-      appId: "app-id",
-      conversationId: botFrameworkConversationId,
-      graphChatId,
-      ref: {},
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "groupChat",
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024 * 1024,
-      sharePointSiteId: "site-123",
-    });
-
-    const pdfBuffer = Buffer.alloc(100, "pdf");
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: pdfBuffer,
-      contentType: "application/pdf",
+    mockState.resolveMSTeamsSendContext.mockResolvedValue(
+      createSharePointSendContext({
+        conversationId: botFrameworkConversationId,
+        graphChatId,
+        siteId: "site-123",
+      }),
+    );
+    mockSharePointPdfUpload({
+      bufferSize: 100,
       fileName: "doc.pdf",
-      kind: "file",
-    });
-    mockState.requiresFileConsent.mockReturnValue(false);
-    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-1",
-      webUrl: "https://sp.example.com/doc.pdf",
-      shareUrl: "https://sp.example.com/share/doc.pdf",
-      name: "doc.pdf",
-    });
-    mockState.getDriveItemProperties.mockResolvedValue({
-      eTag: '"{GUID-123},1"',
-      webDavUrl: "https://sp.example.com/dav/doc.pdf",
-      name: "doc.pdf",
-    });
-    mockState.buildTeamsFileInfoCard.mockReturnValue({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sp.example.com/dav/doc.pdf",
-      name: "doc.pdf",
-      content: { uniqueId: "GUID-123", fileType: "pdf" },
+      uniqueId: "{GUID-123}",
     });
 
     await sendMessageMSTeams({
@@ -195,51 +240,18 @@ describe("sendMessageMSTeams", () => {
   it("falls back to conversationId when graphChatId is not available", async () => {
     const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
 
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: {
-        continueConversation: vi.fn(
-          async (
-            _id: string,
-            _ref: unknown,
-            fn: (ctx: { sendActivity: () => { id: "msg-1" } }) => Promise<void>,
-          ) => fn({ sendActivity: () => ({ id: "msg-1" }) }),
-        ),
-      },
-      appId: "app-id",
-      conversationId: botFrameworkConversationId,
-      graphChatId: null, // resolution failed — must fall back
-      ref: {},
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "groupChat",
-      tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-      mediaMaxBytes: 8 * 1024 * 1024,
-      sharePointSiteId: "site-456",
-    });
-
-    const pdfBuffer = Buffer.alloc(50, "pdf");
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: pdfBuffer,
-      contentType: "application/pdf",
+    mockState.resolveMSTeamsSendContext.mockResolvedValue(
+      createSharePointSendContext({
+        conversationId: botFrameworkConversationId,
+        graphChatId: null,
+        siteId: "site-456",
+      }),
+    );
+    mockSharePointPdfUpload({
+      bufferSize: 50,
       fileName: "report.pdf",
-      kind: "file",
-    });
-    mockState.requiresFileConsent.mockReturnValue(false);
-    mockState.uploadAndShareSharePoint.mockResolvedValue({
       itemId: "item-2",
-      webUrl: "https://sp.example.com/report.pdf",
-      shareUrl: "https://sp.example.com/share/report.pdf",
-      name: "report.pdf",
-    });
-    mockState.getDriveItemProperties.mockResolvedValue({
-      eTag: '"{GUID-456},1"',
-      webDavUrl: "https://sp.example.com/dav/report.pdf",
-      name: "report.pdf",
-    });
-    mockState.buildTeamsFileInfoCard.mockReturnValue({
-      contentType: "application/vnd.microsoft.teams.card.file.info",
-      contentUrl: "https://sp.example.com/dav/report.pdf",
-      name: "report.pdf",
-      content: { uniqueId: "GUID-456", fileType: "pdf" },
+      uniqueId: "{GUID-456}",
     });
 
     await sendMessageMSTeams({
@@ -312,21 +324,7 @@ describe("editMessageMSTeams", () => {
   });
 
   it("throws a descriptive error when continueConversation fails", async () => {
-    const mockContinueConversation = vi.fn().mockRejectedValue(new Error("Service unavailable"));
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: { continueConversation: mockContinueConversation },
-      appId: "app-id",
-      conversationId: "19:conversation@thread.tacv2",
-      ref: {
-        user: { id: "user-1" },
-        agent: { id: "agent-1" },
-        conversation: { id: "19:conversation@thread.tacv2" },
-        channelId: "msteams",
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "personal",
-      tokenProvider: {},
-    });
+    mockContinueConversationFailure("Service unavailable");
 
     await expect(
       editMessageMSTeams({
@@ -387,21 +385,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("throws a descriptive error when continueConversation fails", async () => {
-    const mockContinueConversation = vi.fn().mockRejectedValue(new Error("Not found"));
-    mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      adapter: { continueConversation: mockContinueConversation },
-      appId: "app-id",
-      conversationId: "19:conversation@thread.tacv2",
-      ref: {
-        user: { id: "user-1" },
-        agent: { id: "agent-1" },
-        conversation: { id: "19:conversation@thread.tacv2" },
-        channelId: "msteams",
-      },
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      conversationType: "personal",
-      tokenProvider: {},
-    });
+    mockContinueConversationFailure("Not found");
 
     await expect(
       deleteMessageMSTeams({

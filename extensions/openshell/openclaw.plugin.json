@@ -6,25 +6,35 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["mirror", "remote"]
+      },
       "command": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "gateway": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "gatewayEndpoint": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "from": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "policy": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "providers": {
         "type": "array",
         "items": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1
         }
       },
       "gpu": {
@@ -34,10 +44,12 @@
         "type": "boolean"
       },
       "remoteWorkspaceDir": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "remoteAgentWorkspaceDir": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       },
       "timeoutSeconds": {
         "type": "number",
@@ -46,6 +58,10 @@
     }
   },
   "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace."
+    },
     "command": {
       "label": "OpenShell Command",
       "help": "Path or command name for the openshell CLI."

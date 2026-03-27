@@ -9,7 +9,8 @@ vi.mock("./media-understanding.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
 
 async function buildGroupVoiceContext(params: {
   messageId: number;
@@ -75,11 +76,8 @@ function expectAudioPlaceholderRendered(ctx: Awaited<ReturnType<typeof buildGrou
 }
 
 describe("buildTelegramMessageContext audio transcript body", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
   });
 
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {

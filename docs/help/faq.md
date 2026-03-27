@@ -546,8 +546,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes. You can authenticate with a **setup-token**
-    instead of an API key. This is the subscription path.
+    Yes. You can either use a **setup-token** or reuse a local **Claude CLI**
+    login on the gateway host.
 
     Claude Pro/Max subscriptions **do not include an API key**, so this is the
     technical path for subscription accounts. But this is your decision: Anthropic
@@ -572,7 +572,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes - via **setup-token**. OpenClaw no longer reuses Claude Code CLI OAuth tokens; use a setup-token or an Anthropic API key. Generate the token anywhere and paste it on the gateway host. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Yes. You can either:
+
+    - use a **setup-token**
+    - reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`
+
+    Setup-token is still supported. Claude CLI migration is simpler when the gateway host already runs Claude Code. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
     Important: this is technical compatibility, not a policy guarantee. Anthropic
     has blocked some subscription usage outside Claude Code in the past.
@@ -2153,9 +2158,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
     2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
        exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7`,
-       `minimax/MiniMax-M2.7-highspeed`, `minimax/MiniMax-M2.5`, or
-       `minimax/MiniMax-M2.5-highspeed`.
+    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
+       `minimax/MiniMax-M2.7-highspeed`.
     4. Run:
 
        ```bash

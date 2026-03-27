@@ -1,14 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  await import("../../../src/config/config.js");
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
-let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
-let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
-
-beforeEach(async () => {
-  vi.resetModules();
-  ({ buildTelegramMessageContextForTest } = await import("./bot-message-context.test-harness.js"));
-  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-    await import("../../../src/config/config.js"));
+beforeEach(() => {
   clearRuntimeConfigSnapshot();
 });
 

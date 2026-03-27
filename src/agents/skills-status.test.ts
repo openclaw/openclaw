@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import type { SkillEntry } from "./skills/types.js";
@@ -15,9 +16,9 @@ describe("buildWorkspaceSkillStatus", () => {
       skill: {
         name: "os-scoped",
         description: "test",
-        source: "test",
         filePath: "/tmp/os-scoped",
         baseDir: "/tmp",
+        sourceInfo: createSyntheticSourceInfo("/tmp/os-scoped", { source: "test" }),
         disableModelInvocation: false,
       },
       frontmatter: {},

@@ -1,5 +1,5 @@
 import { ChannelType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
@@ -26,8 +26,7 @@ let shouldIgnoreBoundThreadWebhookMessage: typeof import("./message-handler.pref
 let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   ({
     preflightDiscordMessage,
     resolvePreflightMentionRequirement,

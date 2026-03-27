@@ -10,7 +10,9 @@ import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  consumeCompactionSafeguardCancelReason,
   getCompactionSafeguardRuntime,
+  setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
@@ -145,7 +147,7 @@ async function runCompactionScenario(params: {
   apiKey: string | null;
 }) {
   const compactionHandler = createCompactionHandler();
-  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey);
+  const getApiKeyMock = vi.fn().mockResolvedValue(params.apiKey ?? undefined);
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
     getApiKeyMock,
@@ -537,6 +539,24 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("consumes cancel reasons without dropping other runtime fields", () => {
+    const sm = {};
+    setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.6 });
+    setCompactionSafeguardCancelReason(sm, "no API key");
+
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("no API key");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.6 });
+  });
+
+  it("clears cancel reason when set to undefined", () => {
+    const sm = {};
+    setCompactionSafeguardCancelReason(sm, "temporary reason");
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBe("temporary reason");
+    setCompactionSafeguardCancelReason(sm, undefined);
+    expect(consumeCompactionSafeguardCancelReason(sm)).toBeNull();
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -1623,7 +1643,8 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
-    // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
+    // The handler should have resolved request auth with runtime.model
+    // (via ctx.model ?? runtime?.model).
     expect(getApiKeyMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)
@@ -1648,7 +1669,7 @@ describe("compaction-safeguard extension model fallback", () => {
 
     expect(result).toEqual({ cancel: true });
 
-    // Verify early return: getApiKey should NOT have been called when both models are missing
+    // Verify early return: request auth should NOT have been resolved when both models are missing.
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 });

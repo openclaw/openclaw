@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
@@ -58,9 +59,11 @@ function buildEntry(name: string): SkillEntry {
     skill: {
       name,
       description: `${name} test skill`,
-      source: "openclaw-workspace",
       filePath: path.join(skillDir, "SKILL.md"),
       baseDir: skillDir,
+      sourceInfo: createSyntheticSourceInfo(path.join(skillDir, "SKILL.md"), {
+        source: "openclaw-workspace",
+      }),
       disableModelInvocation: false,
     },
     frontmatter: {},

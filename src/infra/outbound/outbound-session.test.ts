@@ -265,6 +265,30 @@ describe("resolveOutboundSessionRoute", () => {
           chatType: "direct",
         },
       },
+      {
+        name: "Slack user DM target",
+        cfg: perChannelPeerCfg,
+        channel: "slack",
+        target: "user:U12345ABC",
+        expected: {
+          sessionKey: "agent:main:slack:direct:u12345abc",
+          from: "slack:U12345ABC",
+          to: "user:U12345ABC",
+          chatType: "direct",
+        },
+      },
+      {
+        name: "Slack channel target without thread",
+        cfg: baseConfig,
+        channel: "slack",
+        target: "channel:C999XYZ",
+        expected: {
+          sessionKey: "agent:main:slack:channel:c999xyz",
+          from: "slack:channel:C999XYZ",
+          to: "channel:C999XYZ",
+          chatType: "channel",
+        },
+      },
     ];
 
     for (const testCase of cases) {
@@ -310,6 +334,30 @@ describe("resolveOutboundSessionRoute", () => {
       from: "discord:123",
       to: "user:123",
       chatType: "direct",
+    });
+  });
+
+  it("uses resolved Discord channel targets to route bare numeric ids as channels without thread suffixes", async () => {
+    const route = await resolveOutboundSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } } as OpenClawConfig,
+      channel: "discord",
+      agentId: "main",
+      target: "456",
+      threadId: "789",
+      resolvedTarget: {
+        to: "channel:456",
+        kind: "channel",
+        source: "directory",
+      },
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:discord:channel:456",
+      baseSessionKey: "agent:main:discord:channel:456",
+      from: "discord:channel:456",
+      to: "channel:456",
+      chatType: "channel",
+      threadId: "789",
     });
   });
 

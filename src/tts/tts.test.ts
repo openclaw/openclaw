@@ -1,8 +1,18 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildElevenLabsSpeechProvider } from "../../extensions/elevenlabs/speech-provider.ts";
+import {
+  buildElevenLabsSpeechProvider,
+  isValidVoiceId,
+} from "../../extensions/elevenlabs/speech-provider.ts";
 import { buildMicrosoftSpeechProvider } from "../../extensions/microsoft/speech-provider.ts";
 import { buildOpenAISpeechProvider } from "../../extensions/openai/speech-provider.ts";
+import {
+  isValidOpenAIModel,
+  isValidOpenAIVoice,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+  resolveOpenAITtsInstructions,
+} from "../../extensions/openai/tts.ts";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -10,6 +20,11 @@ import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
 let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+let getApiKeyForModelMock: typeof import("../agents/model-auth.js").getApiKeyForModel;
+let requireApiKeyMock: typeof import("../agents/model-auth.js").requireApiKey;
+let resolveModelAsyncMock: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
+let ensureCustomApiRegisteredMock: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
+let prepareModelForSimpleCompletionMock: typeof import("../agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -73,17 +88,10 @@ vi.mock("../agents/custom-api-registry.js", () => ({
 const { _test, resolveTtsConfig, maybeApplyTtsToPayload, getTtsProvider } = tts;
 
 const {
-  isValidVoiceId,
-  isValidOpenAIVoice,
-  isValidOpenAIModel,
-  OPENAI_TTS_MODELS,
-  OPENAI_TTS_VOICES,
   parseTtsDirectives,
-  resolveOpenAITtsInstructions,
   resolveModelOverridePolicy,
   summarizeText,
-  resolveOutputFormat,
-  resolveEdgeOutputFormat,
+  getResolvedSpeechProviderConfig,
 } = _test;
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -129,6 +137,13 @@ function createOpenAiTelephonyCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawC
 describe("tts", () => {
   beforeEach(async () => {
     ({ completeSimple } = await import("@mariozechner/pi-ai"));
+    ({ getApiKeyForModel: getApiKeyForModelMock, requireApiKey: requireApiKeyMock } =
+      await import("../agents/model-auth.js"));
+    ({ resolveModelAsync: resolveModelAsyncMock } =
+      await import("../agents/pi-embedded-runner/model.js"));
+    ({ ensureCustomApiRegistered: ensureCustomApiRegisteredMock } =
+      await import("../agents/custom-api-registry.js"));
+    prepareModelForSimpleCompletionMock = vi.fn(({ model }) => model);
     const registry = createEmptyPluginRegistry();
     registry.speechProviders = [
       { pluginId: "openai", provider: buildOpenAISpeechProvider(), source: "test" },
@@ -230,65 +245,6 @@ describe("tts", () => {
     });
   });
 
-  describe("resolveOutputFormat", () => {
-    it("selects opus for voice-bubble channels (telegram/feishu/whatsapp/matrix) and mp3 for others", () => {
-      const cases = [
-        {
-          channel: "telegram",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "feishu",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "whatsapp",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "matrix",
-          expected: {
-            openai: "opus",
-            elevenlabs: "opus_48000_64",
-            extension: ".opus",
-            voiceCompatible: true,
-          },
-        },
-        {
-          channel: "discord",
-          expected: {
-            openai: "mp3",
-            elevenlabs: "mp3_44100_128",
-            extension: ".mp3",
-            voiceCompatible: false,
-          },
-        },
-      ] as const;
-      for (const testCase of cases) {
-        const output = resolveOutputFormat(testCase.channel);
-        expect(output.openai, testCase.channel).toBe(testCase.expected.openai);
-        expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
-        expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
-        expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
-      }
-    });
-  });
-
   describe("resolveEdgeOutputFormat", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
@@ -317,7 +273,10 @@ describe("tts", () => {
       ] as const;
       for (const testCase of cases) {
         const config = resolveTtsConfig(testCase.cfg);
-        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+        const providerConfig = getResolvedSpeechProviderConfig(config, "microsoft") as {
+          outputFormat?: string;
+        };
+        expect(providerConfig.outputFormat, testCase.name).toBe(testCase.expected);
       }
     });
   });
@@ -329,13 +288,19 @@ describe("tts", () => {
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
       const result = parseTtsDirectives(input, policy);
+      const elevenlabsOverrides = result.overrides.providerOverrides?.elevenlabs as
+        | {
+            voiceId?: string;
+            voiceSettings?: { stability?: number; speed?: number };
+          }
+        | undefined;
 
       expect(result.cleanedText).not.toContain("[[tts:");
       expect(result.ttsText).toBe("(laughs) Read the song once more.");
       expect(result.overrides.provider).toBe("elevenlabs");
-      expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
-      expect(result.overrides.elevenlabs?.voiceSettings?.stability).toBe(0.4);
-      expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
+      expect(elevenlabsOverrides?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
+      expect(elevenlabsOverrides?.voiceSettings?.stability).toBe(0.4);
+      expect(elevenlabsOverrides?.voiceSettings?.speed).toBe(1.1);
     });
 
     it("accepts edge as a legacy microsoft provider override", () => {
@@ -350,9 +315,12 @@ describe("tts", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
       const result = parseTtsDirectives(input, policy);
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string }
+        | undefined;
 
       expect(result.overrides.provider).toBeUndefined();
-      expect(result.overrides.openai?.voice).toBe("alloy");
+      expect(openaiOverrides?.voice).toBe("alloy");
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -367,130 +335,99 @@ describe("tts", () => {
     it("accepts custom voices and models when openaiBaseUrl is a non-default endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-      const customBaseUrl = "http://localhost:8880/v1";
+      const result = parseTtsDirectives(input, policy, {
+        providerConfigs: {
+          openai: { baseUrl: "http://localhost:8880/v1" },
+        },
+      });
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string; model?: string }
+        | undefined;
 
-      const result = parseTtsDirectives(input, policy, customBaseUrl);
-
-      expect(result.overrides.openai?.voice).toBe("kokoro-chinese");
-      expect(result.overrides.openai?.model).toBe("kokoro-v1");
+      expect(openaiOverrides?.voice).toBe("kokoro-chinese");
+      expect(openaiOverrides?.model).toBe("kokoro-v1");
       expect(result.warnings).toHaveLength(0);
     });
 
     it("rejects unknown voices and models when openaiBaseUrl is the default OpenAI endpoint", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:voice=kokoro-chinese model=kokoro-v1]] world";
-      const defaultBaseUrl = "https://api.openai.com/v1";
+      const result = parseTtsDirectives(input, policy, {
+        providerConfigs: {
+          openai: { baseUrl: "https://api.openai.com/v1" },
+        },
+      });
+      const openaiOverrides = result.overrides.providerOverrides?.openai as
+        | { voice?: string }
+        | undefined;
 
-      const result = parseTtsDirectives(input, policy, defaultBaseUrl);
-
-      expect(result.overrides.openai?.voice).toBeUndefined();
+      expect(openaiOverrides?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
   });
 
   describe("summarizeText", () => {
-    let summarizeTextForTest: typeof summarizeText;
-    let resolveTtsConfigForTest: typeof resolveTtsConfig;
-    let completeSimpleForTest: typeof import("@mariozechner/pi-ai").completeSimple;
-    let getApiKeyForModelForTest: typeof import("../agents/model-auth.js").getApiKeyForModel;
-    let resolveModelAsyncForTest: typeof import("../agents/pi-embedded-runner/model.js").resolveModelAsync;
-    let ensureCustomApiRegisteredForTest: typeof import("../agents/custom-api-registry.js").ensureCustomApiRegistered;
-
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
 
-    beforeEach(async () => {
-      vi.resetModules();
-      vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-        const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
-        return {
-          ...original,
-          completeSimple: vi.fn(),
-        };
-      });
-      vi.doMock("@mariozechner/pi-ai/oauth", async () => {
-        const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-          "@mariozechner/pi-ai/oauth",
-        );
-        return {
-          ...actual,
-          getOAuthProviders: () => [],
-          getOAuthApiKey: vi.fn(async () => null),
-        };
-      });
-      vi.doMock("../agents/pi-embedded-runner/model.js", () => ({
-        resolveModel: vi.fn((provider: string, modelId: string) =>
-          createResolvedModel(provider, modelId),
-        ),
-        resolveModelAsync: vi.fn(async (provider: string, modelId: string) =>
-          createResolvedModel(provider, modelId),
-        ),
-      }));
-      vi.doMock("../agents/model-auth.js", () => ({
-        getApiKeyForModel: vi.fn(async () => ({
-          apiKey: "test-api-key",
-          source: "test",
-          mode: "api-key",
-        })),
-        requireApiKey: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
-      }));
-      vi.doMock("../agents/custom-api-registry.js", () => ({
-        ensureCustomApiRegistered: vi.fn(),
-      }));
-      ({ completeSimple: completeSimpleForTest } = await import("@mariozechner/pi-ai"));
-      ({ getApiKeyForModel: getApiKeyForModelForTest } = await import("../agents/model-auth.js"));
-      ({ resolveModelAsync: resolveModelAsyncForTest } =
-        await import("../agents/pi-embedded-runner/model.js"));
-      ({ ensureCustomApiRegistered: ensureCustomApiRegisteredForTest } =
-        await import("../agents/custom-api-registry.js"));
-      const ttsModule = await import("./tts.js");
-      summarizeTextForTest = ttsModule._test.summarizeText;
-      resolveTtsConfigForTest = ttsModule.resolveTtsConfig;
-      vi.mocked(completeSimpleForTest).mockResolvedValue(
-        mockAssistantMessage([{ type: "text", text: "Summary" }]),
-      );
-    });
-
     it("summarizes text and returns result with metrics", async () => {
       const mockSummary = "This is a summarized version of the text.";
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      vi.mocked(completeSimpleForTest).mockResolvedValue(
+      const baseConfig = resolveTtsConfig(baseCfg);
+      vi.mocked(completeSimple).mockResolvedValue(
         mockAssistantMessage([{ type: "text", text: mockSummary }]),
       );
 
       const longText = "A".repeat(2000);
-      const result = await summarizeTextForTest({
-        text: longText,
-        targetLength: 1500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      const result = await summarizeText(
+        {
+          text: longText,
+          targetLength: 1500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
       expect(result.summary).toBe(mockSummary);
       expect(result.inputLength).toBe(2000);
       expect(result.outputLength).toBe(mockSummary.length);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(completeSimpleForTest).toHaveBeenCalledTimes(1);
+      expect(completeSimple).toHaveBeenCalledTimes(1);
     });
 
     it("calls the summary model with the expected parameters", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      const baseConfig = resolveTtsConfig(baseCfg);
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
-      const callArgs = vi.mocked(completeSimpleForTest).mock.calls[0];
+      const callArgs = vi.mocked(completeSimple).mock.calls[0];
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
-      expect(getApiKeyForModelForTest).toHaveBeenCalledTimes(1);
+      expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
     });
 
     it("uses summaryModel override when configured", async () => {
@@ -498,26 +435,30 @@ describe("tts", () => {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
-      const config = resolveTtsConfigForTest(cfg);
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg,
-        config,
-        timeoutMs: 30_000,
-      });
-
-      expect(resolveModelAsyncForTest).toHaveBeenCalledWith(
-        "openai",
-        "gpt-4.1-mini",
-        undefined,
-        cfg,
+      const config = resolveTtsConfig(cfg);
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg,
+          config,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
       );
+
+      expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("registers the Ollama api before direct summarization", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
-      vi.mocked(resolveModelAsyncForTest).mockResolvedValue({
+    it("keeps the Ollama api for direct summarization", async () => {
+      const baseConfig = resolveTtsConfig(baseCfg);
+      vi.mocked(resolveModelAsyncMock).mockResolvedValue({
         ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
         model: {
           ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
@@ -525,19 +466,29 @@ describe("tts", () => {
         },
       } as never);
 
-      await summarizeTextForTest({
-        text: "Long text to summarize",
-        targetLength: 500,
-        cfg: baseCfg,
-        config: baseConfig,
-        timeoutMs: 30_000,
-      });
+      await summarizeText(
+        {
+          text: "Long text to summarize",
+          targetLength: 500,
+          cfg: baseCfg,
+          config: baseConfig,
+          timeoutMs: 30_000,
+        },
+        {
+          completeSimple,
+          getApiKeyForModel: getApiKeyForModelMock,
+          prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+          requireApiKey: requireApiKeyMock,
+          resolveModelAsync: resolveModelAsyncMock,
+        },
+      );
 
-      expect(ensureCustomApiRegisteredForTest).toHaveBeenCalledWith("ollama", expect.any(Function));
+      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
+      expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
     it("validates targetLength bounds", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      const baseConfig = resolveTtsConfig(baseCfg);
       const cases = [
         { targetLength: 99, shouldThrow: true },
         { targetLength: 100, shouldThrow: false },
@@ -545,13 +496,22 @@ describe("tts", () => {
         { targetLength: 10001, shouldThrow: true },
       ] as const;
       for (const testCase of cases) {
-        const call = summarizeTextForTest({
-          text: "text",
-          targetLength: testCase.targetLength,
-          cfg: baseCfg,
-          config: baseConfig,
-          timeoutMs: 30_000,
-        });
+        const call = summarizeText(
+          {
+            text: "text",
+            targetLength: testCase.targetLength,
+            cfg: baseCfg,
+            config: baseConfig,
+            timeoutMs: 30_000,
+          },
+          {
+            completeSimple,
+            getApiKeyForModel: getApiKeyForModelMock,
+            prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+            requireApiKey: requireApiKeyMock,
+            resolveModelAsync: resolveModelAsyncMock,
+          },
+        );
         if (testCase.shouldThrow) {
           await expect(call, String(testCase.targetLength)).rejects.toThrow(
             `Invalid targetLength: ${testCase.targetLength}`,
@@ -563,7 +523,7 @@ describe("tts", () => {
     });
 
     it("throws when summary output is missing or empty", async () => {
-      const baseConfig = resolveTtsConfigForTest(baseCfg);
+      const baseConfig = resolveTtsConfig(baseCfg);
       const cases = [
         { name: "no summary blocks", message: mockAssistantMessage([]) },
         {
@@ -572,15 +532,24 @@ describe("tts", () => {
         },
       ] as const;
       for (const testCase of cases) {
-        vi.mocked(completeSimpleForTest).mockResolvedValue(testCase.message);
+        vi.mocked(completeSimple).mockResolvedValue(testCase.message);
         await expect(
-          summarizeTextForTest({
-            text: "text",
-            targetLength: 500,
-            cfg: baseCfg,
-            config: baseConfig,
-            timeoutMs: 30_000,
-          }),
+          summarizeText(
+            {
+              text: "text",
+              targetLength: 500,
+              cfg: baseCfg,
+              config: baseConfig,
+              timeoutMs: 30_000,
+            },
+            {
+              completeSimple,
+              getApiKeyForModel: getApiKeyForModelMock,
+              prepareModelForSimpleCompletion: prepareModelForSimpleCompletionMock,
+              requireApiKey: requireApiKeyMock,
+              resolveModelAsync: resolveModelAsyncMock,
+            },
+          ),
           testCase.name,
         ).rejects.toThrow("No summary returned");
       }
@@ -704,7 +673,10 @@ describe("tts", () => {
       ] as const) {
         withEnv(testCase.env, () => {
           const config = resolveTtsConfig(testCase.cfg);
-          expect(config.openai.baseUrl, testCase.name).toBe(testCase.expected);
+          const openaiConfig = getResolvedSpeechProviderConfig(config, "openai") as {
+            baseUrl?: string;
+          };
+          expect(openaiConfig.baseUrl, testCase.name).toBe(testCase.expected);
         });
       }
     });

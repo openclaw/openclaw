@@ -10,6 +10,27 @@ import { readBooleanParam as readBooleanParamShared } from "../../plugin-sdk/boo
 
 export const readBooleanParam = readBooleanParamShared;
 
+const SANDBOX_MEDIA_PARAM_KEYS = ["media", "path", "filePath", "mediaUrl", "fileUrl"] as const;
+
+function readMediaParam(
+  args: Record<string, unknown>,
+  key: (typeof SANDBOX_MEDIA_PARAM_KEYS)[number],
+): string | undefined {
+  return readStringParam(args, key, { trim: false });
+}
+
+function readAttachmentMediaHint(args: Record<string, unknown>): string | undefined {
+  return readMediaParam(args, "media") ?? readMediaParam(args, "mediaUrl");
+}
+
+function readAttachmentFileHint(args: Record<string, unknown>): string | undefined {
+  return (
+    readMediaParam(args, "path") ??
+    readMediaParam(args, "filePath") ??
+    readMediaParam(args, "fileUrl")
+  );
+}
+
 function resolveAttachmentMaxBytes(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -190,9 +211,8 @@ export async function normalizeSandboxMediaParams(params: {
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
-  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
-  for (const key of mediaKeys) {
-    const raw = readStringParam(params.args, key, { trim: false });
+  for (const key of SANDBOX_MEDIA_PARAM_KEYS) {
+    const raw = readMediaParam(params.args, key);
     if (!raw) {
       continue;
     }
@@ -242,10 +262,8 @@ async function hydrateAttachmentActionPayload(params: {
   allowMessageCaptionFallback?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const mediaHint = readStringParam(params.args, "media", { trim: false });
-  const fileHint =
-    readStringParam(params.args, "path", { trim: false }) ??
-    readStringParam(params.args, "filePath", { trim: false });
+  const mediaHint = readAttachmentMediaHint(params.args);
+  const fileHint = readAttachmentFileHint(params.args);
   const contentTypeParam =
     readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
 
@@ -279,7 +297,13 @@ export async function hydrateAttachmentParamsForAction(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  if (params.action !== "sendAttachment" && params.action !== "setGroupIcon") {
+  const shouldHydrateBlueBubblesUploadFile =
+    params.action === "upload-file" && params.channel === "bluebubbles";
+  if (
+    params.action !== "sendAttachment" &&
+    params.action !== "setGroupIcon" &&
+    !shouldHydrateBlueBubblesUploadFile
+  ) {
     return;
   }
   await hydrateAttachmentActionPayload({
@@ -289,7 +313,8 @@ export async function hydrateAttachmentParamsForAction(params: {
     args: params.args,
     dryRun: params.dryRun,
     mediaPolicy: params.mediaPolicy,
-    allowMessageCaptionFallback: params.action === "sendAttachment",
+    allowMessageCaptionFallback:
+      params.action === "sendAttachment" || shouldHydrateBlueBubblesUploadFile,
   });
 }
 
