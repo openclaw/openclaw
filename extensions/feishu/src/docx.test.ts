@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
@@ -33,6 +34,10 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import { registerFeishuDocTools } from "./docx.js";
+
+type ToolResultWithDetails = {
+  details: Record<string, unknown>;
+};
 
 describe("feishu_doc image fetch hardening", () => {
   beforeEach(() => {
@@ -115,26 +120,26 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   function resolveFeishuDocTool(context: Record<string, unknown> = {}) {
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
+    const harness = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "app_id",
+          appSecret: "app_secret",
         },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const tool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((candidate) => (typeof candidate === "function" ? candidate(context) : candidate))
-      .find((candidate) => candidate.name === "feishu_doc");
+      },
+    });
+    registerFeishuDocTools(harness.api);
+    const tool = harness.resolveTool("feishu_doc", context);
     expect(tool).toBeDefined();
-    return tool as { execute: (callId: string, params: Record<string, unknown>) => Promise<any> };
+    return tool as ToolLike;
+  }
+
+  async function executeFeishuDocTool(
+    tool: ToolLike,
+    params: Record<string, unknown>,
+  ): Promise<ToolResultWithDetails> {
+    return (await tool.execute("tool-call", params)) as ToolResultWithDetails;
   }
 
   it("inserts blocks sequentially to preserve document order", async () => {
@@ -160,7 +165,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: "plain text body",
@@ -253,7 +258,7 @@ describe("feishu_doc image fetch hardening", () => {
       (_, i) => `line ${i} with enough content to trigger fallback chunking`,
     ).join("\n");
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: longMarkdown,
@@ -307,7 +312,7 @@ describe("feishu_doc image fetch hardening", () => {
       "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(8),
     ].join("\n");
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "append",
       doc_token: "doc_1",
       content: fencedMarkdown,
@@ -330,7 +335,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "write",
       doc_token: "doc_1",
       content: "![x](https://x.test/image.png)",
@@ -350,7 +355,7 @@ describe("feishu_doc image fetch hardening", () => {
       requesterSenderId: "ou_123",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -375,7 +380,7 @@ describe("feishu_doc image fetch hardening", () => {
       messageChannel: "feishu",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -391,7 +396,7 @@ describe("feishu_doc image fetch hardening", () => {
       requesterSenderId: "ou_123",
     });
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
       grant_to_requester: false,
@@ -409,7 +414,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "create",
       title: "Demo",
     });
@@ -432,7 +437,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/tmp/allowed/test-local.txt",
@@ -481,7 +486,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/tmp/allowed/test-local.txt",
@@ -499,7 +504,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_file",
       doc_token: "doc_1",
       file_path: "/etc/passwd",
@@ -525,7 +530,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await feishuDocTool.execute("tool-call", {
+    const result = await executeFeishuDocTool(feishuDocTool, {
       action: "upload_image",
       doc_token: "doc_1",
       file_path: "/home/admin/.openclaw/openclaw.json",

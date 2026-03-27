@@ -52,44 +52,9 @@ const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
 }));
 
-vi.mock("../../acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => managerMocks,
-}));
-
-vi.mock("../../acp/policy.js", () => ({
-  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
-    policyMocks.resolveAcpDispatchPolicyError(cfg),
-  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
-    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
-}));
-
-vi.mock("./route-reply.js", () => ({
-  routeReply: (params: unknown) => routeMocks.routeReply(params),
-}));
-
-vi.mock("../../infra/outbound/message-action-runner.js", () => ({
-  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
-}));
-
-vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
-}));
-
-vi.mock("../../acp/runtime/session-meta.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-}));
-
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    listBySession: (sessionKey: string) => bindingServiceMocks.listBySession(sessionKey),
-  }),
-}));
-
-const { tryDispatchAcpReply } = await import("./dispatch-acp.js");
 const sessionKey = "agent:codex-acp:session-1";
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
+let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -102,6 +67,7 @@ function createDispatcher(): {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => counts),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
   return { dispatcher, counts };
@@ -245,7 +211,38 @@ function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
 }
 
 describe("tryDispatchAcpReply", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("../../acp/control-plane/manager.js", () => ({
+      getAcpSessionManager: () => managerMocks,
+    }));
+    vi.doMock("../../acp/policy.js", () => ({
+      resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
+        policyMocks.resolveAcpDispatchPolicyError(cfg),
+      resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
+        policyMocks.resolveAcpAgentPolicyError(cfg, agent),
+    }));
+    vi.doMock("./route-reply.js", () => ({
+      routeReply: (params: unknown) => routeMocks.routeReply(params),
+    }));
+    vi.doMock("../../infra/outbound/message-action-runner.js", () => ({
+      runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+    }));
+    vi.doMock("../../tts/tts.js", () => ({
+      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+      resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
+    }));
+    vi.doMock("../../acp/runtime/session-meta.js", () => ({
+      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        sessionMetaMocks.readAcpSessionEntry(params),
+    }));
+    vi.doMock("../../infra/outbound/session-binding-service.js", () => ({
+      getSessionBindingService: () => ({
+        listBySession: (targetSessionKey: string) =>
+          bindingServiceMocks.listBySession(targetSessionKey),
+      }),
+    }));
+    ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.getObservabilitySnapshot.mockReset();
@@ -462,21 +459,148 @@ describe("tryDispatchAcpReply", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: expect.stringContaining("ACP_DISPATCH_DISABLED"),
+        isError: true,
+        text: expect.stringContaining("ACP dispatch is disabled by policy."),
       }),
     );
   });
 
-  it("delivers final fallback text even when routed block text already existed", async () => {
+  it("does not deliver final fallback text when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
     const { result } = await runRoutedAcpTextTurn("CODEX_OK");
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    expectSecondRoutedPayload({ text: "CODEX_OK" });
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not deliver final fallback text when direct block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("treats visible telegram ACP block delivery as a successful final response", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(true);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    mockVisibleTextTurn("CODEX_OK");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "CODEX_OK" }),
+    );
+  });
+
+  it("falls back to final text when a later telegram ACP block delivery fails", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "First chunk. " },
+      { text: "Second chunk." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+        },
+      },
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "First chunk. ", tag: "agent_message_chunk" });
+        await onEvent({ type: "text_delta", text: "Second chunk.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "First chunk. " }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Second chunk." }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "First chunk. \nSecond chunk." }),
+    );
+    expect(result?.queuedFinal).toBe(true);
   });
 
   it("does not add text fallback when final TTS already delivered audio", async () => {

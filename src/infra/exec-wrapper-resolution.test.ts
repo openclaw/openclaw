@@ -13,6 +13,10 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
 
+function supportsScriptPositionalCommandForTests(): boolean {
+  return process.platform === "darwin" || process.platform === "freebsd";
+}
+
 describe("basenameLower", () => {
   test.each([
     { token: " Bun.CMD ", expected: "bun.cmd" },
@@ -40,6 +44,7 @@ describe("normalizeExecutableToken", () => {
 describe("wrapper classification", () => {
   test.each([
     { token: "sudo", dispatch: true, shell: false },
+    { token: "script", dispatch: true, shell: false },
     { token: "time", dispatch: true, shell: false },
     { token: "timeout.exe", dispatch: true, shell: false },
     { token: "bash", dispatch: false, shell: true },
@@ -120,6 +125,16 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "unwrapped", wrapper: "nohup", argv: ["bash", "-lc", "echo hi"] },
     },
     {
+      argv: ["script", "-q", "/dev/null", "bash", "-lc", "echo hi"],
+      expected: supportsScriptPositionalCommandForTests()
+        ? { kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] }
+        : { kind: "blocked", wrapper: "script" },
+    },
+    {
+      argv: ["script", "-E", "always", "/dev/null", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "script" },
+    },
+    {
       argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "stdbuf", argv: ["bash", "-lc", "echo hi"] },
     },
@@ -130,6 +145,10 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
     {
       argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
       expected: { kind: "unwrapped", wrapper: "timeout", argv: ["bash", "-lc", "echo hi"] },
+    },
+    {
+      argv: ["script", "-q", "/dev/null"],
+      expected: { kind: "blocked", wrapper: "script" },
     },
     {
       argv: ["sudo", "bash", "-lc", "echo hi"],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bundledWebSearchPluginRegistrations } from "../bundled-web-search-registry.js";
+import { listBundledWebSearchProviderEntries } from "../bundled-web-search.entries.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId } from "./bundled-web-search-provider-ids.js";
@@ -7,7 +7,6 @@ import {
   listBundledWebSearchProviders,
   resolveBundledWebSearchPluginIds,
 } from "./bundled-web-search.js";
-import { webSearchProviderContractRegistry } from "./contracts/registry.js";
 
 describe("bundled web search metadata", () => {
   function toComparableEntry(params: {
@@ -85,14 +84,16 @@ describe("bundled web search metadata", () => {
 
   it("keeps bundled web search fast-path ids aligned with the registry", () => {
     expect([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]).toEqual(
-      bundledWebSearchPluginRegistrations
-        .map(({ plugin }) => plugin.id)
+      listBundledWebSearchProviders()
+        .map(({ pluginId }) => pluginId)
+        .filter((value, index, values) => values.indexOf(value) === index)
         .toSorted((left, right) => left.localeCompare(right)),
     );
   });
 
   it("keeps bundled web search provider-to-plugin ids aligned with bundled contracts", () => {
     expect(resolveBundledWebSearchPluginId("brave")).toBe("brave");
+    expect(resolveBundledWebSearchPluginId("duckduckgo")).toBe("duckduckgo");
     expect(resolveBundledWebSearchPluginId("exa")).toBe("exa");
     expect(resolveBundledWebSearchPluginId("firecrawl")).toBe("firecrawl");
     expect(resolveBundledWebSearchPluginId("gemini")).toBe("google");
@@ -102,8 +103,9 @@ describe("bundled web search metadata", () => {
     expect(resolveBundledWebSearchPluginId("grok")).toBe("xai");
   });
 
-  it("keeps fast-path bundled provider metadata aligned with bundled plugin contracts", async () => {
+  it("keeps bundled provider metadata aligned with bundled plugin contracts", async () => {
     const fastPathProviders = listBundledWebSearchProviders();
+    const bundledProviderEntries = listBundledWebSearchProviderEntries();
 
     expect(
       sortComparableEntries(
@@ -116,7 +118,7 @@ describe("bundled web search metadata", () => {
       ),
     ).toEqual(
       sortComparableEntries(
-        webSearchProviderContractRegistry.map(({ pluginId, provider }) =>
+        bundledProviderEntries.map(({ pluginId, ...provider }) =>
           toComparableEntry({
             pluginId,
             provider,
@@ -126,12 +128,11 @@ describe("bundled web search metadata", () => {
     );
 
     for (const fastPathProvider of fastPathProviders) {
-      const contractEntry = webSearchProviderContractRegistry.find(
-        (entry) =>
-          entry.pluginId === fastPathProvider.pluginId && entry.provider.id === fastPathProvider.id,
+      const bundledEntry = bundledProviderEntries.find(
+        (entry) => entry.pluginId === fastPathProvider.pluginId && entry.id === fastPathProvider.id,
       );
-      expect(contractEntry).toBeDefined();
-      const contractProvider = contractEntry!.provider;
+      expect(bundledEntry).toBeDefined();
+      const contractProvider = bundledEntry!;
 
       const fastSearchConfig: Record<string, unknown> = {};
       const contractSearchConfig: Record<string, unknown> = {};
