@@ -375,7 +375,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
+    const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
     if (!hookSystemEnabled || opts?.register === false) {
       return;
     }
