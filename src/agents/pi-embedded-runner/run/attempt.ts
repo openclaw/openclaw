@@ -213,6 +213,18 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function shouldTraceProviderAuth(provider: string): boolean {
+  return provider.trim().toLowerCase() === "xai";
+}
+
+function summarizeProviderAuthKey(apiKey: string | undefined): string {
+  const trimmed = apiKey?.trim() ?? "";
+  if (!trimmed) {
+    return "missing";
+  }
+  return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -850,6 +862,12 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
+      if (shouldTraceProviderAuth(params.provider)) {
+        const runtimeApiKey = await params.authStorage.getApiKey(params.provider).catch(() => "");
+        log.info(
+          `[xai-auth] pre-stream setup: modelApi=${params.model.api} baseUrl=${params.model.baseUrl ?? "default"} runtimeAuthKey=${summarizeProviderAuthKey(runtimeApiKey)} headersAuth=${params.model.headers?.Authorization ? "present" : "absent"} responsesAuthPath=apiKey-argument`,
+        );
+      }
       if (providerStreamFn) {
         activeSession.agent.streamFn = providerStreamFn;
       } else if (
