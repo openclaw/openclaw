@@ -166,7 +166,9 @@ function resolveEmbeddingErrorHint(error: string | undefined): string | undefine
 
 export function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(reason.toLowerCase());
+  // Use resolveEmbeddingErrorKind for consistent classification across warning and action
+  const kind = resolveEmbeddingErrorKind(reason);
+  const isQuotaError = kind === "quota";
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
     : "Memory search is unavailable due to an embedding/provider error.";
