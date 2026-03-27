@@ -192,6 +192,48 @@ describe("resolveGatewayInstallToken", () => {
             mode: "token",
             token: "generated-token",
           },
+          remote: {
+            token: "generated-token",
+          },
+        },
+      }),
+    );
+  });
+
+  it("preserves existing remote config when mirroring the generated token", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: {
+          remote: {
+            url: "ws://gateway.example.test",
+          },
+        },
+      },
+      issues: [],
+    });
+
+    await resolveGatewayInstallToken({
+      config: {
+        gateway: { auth: { mode: "token" } },
+      } as OpenClawConfig,
+      env: {} as NodeJS.ProcessEnv,
+      autoGenerateWhenMissing: true,
+      persistGeneratedToken: true,
+    });
+
+    expect(writeConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "generated-token",
+          },
+          remote: {
+            url: "ws://gateway.example.test",
+            token: "generated-token",
+          },
         },
       }),
     );
