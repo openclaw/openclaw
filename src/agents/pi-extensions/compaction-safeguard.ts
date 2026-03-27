@@ -616,7 +616,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     let apiKey: string | undefined;
     try {
-      apiKey = await ctx.modelRegistry.getApiKey(model);
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth.ok) {
+        log.warn(
+          `Compaction safeguard: request credentials unavailable; cancelling compaction. ${auth.error}`,
+        );
+        setCompactionSafeguardCancelReason(
+          ctx.sessionManager,
+          `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}: ${auth.error}`,
+        );
+        return { cancel: true };
+      }
+      apiKey = auth.apiKey;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       log.warn(
