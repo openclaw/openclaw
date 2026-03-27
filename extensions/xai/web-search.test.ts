@@ -137,6 +137,32 @@ describe("xai web search config resolution", () => {
     });
   });
 
+  it("reuses the legacy grok web search api key for provider auth fallback", () => {
+    const captured = capturePluginRegistration(xaiPlugin);
+    const provider = captured.providers[0];
+    expect(
+      provider?.resolveSyntheticAuth?.({
+        config: {
+          tools: {
+            web: {
+              search: {
+                grok: {
+                  apiKey: "xai-legacy-fallback", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+        provider: "xai",
+        providerConfig: undefined,
+      }),
+    ).toEqual({
+      apiKey: "xai-legacy-fallback",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    });
+  });
+
   it("uses default model when not specified", () => {
     expect(resolveXaiWebSearchModel({})).toBe("grok-4-1-fast");
     expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4-1-fast");
