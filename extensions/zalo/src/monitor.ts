@@ -93,10 +93,19 @@ type ZaloMessagePipelineParams = ZaloProcessingContext & {
   text?: string;
   mediaPath?: string;
   mediaType?: string;
+  authorization?: ZaloMessageAuthorizationResult;
 };
 type ZaloImageMessageParams = ZaloProcessingContext & {
   message: ZaloMessage;
   mediaMaxMb: number;
+};
+type ZaloMessageAuthorizationResult = {
+  chatId: string;
+  commandAuthorized: boolean | undefined;
+  isGroup: boolean;
+  rawBody: string;
+  senderId: string;
+  senderName: string | undefined;
 };
 
 function formatZaloError(error: unknown): string {
@@ -285,6 +294,15 @@ async function handleTextMessage(
 async function handleImageMessage(params: ZaloImageMessageParams): Promise<void> {
   const { message, mediaMaxMb, account, core, runtime } = params;
   const { photo_url, caption } = message;
+  const authorization = await authorizeZaloMessage({
+    ...params,
+    text: caption,
+    mediaPath: photo_url ? "__pending_media__" : undefined,
+    mediaType: undefined,
+  });
+  if (!authorization) {
+    return;
+  }
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
@@ -308,32 +326,24 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
 
   await processMessageWithPipeline({
     ...params,
+    authorization,
     text: caption,
     mediaPath,
     mediaType,
   });
 }
 
-async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Promise<void> {
-  const {
-    message,
-    token,
-    account,
-    config,
-    runtime,
-    core,
-    text,
-    mediaPath,
-    mediaType,
-    statusSink,
-    fetcher,
-  } = params;
+async function authorizeZaloMessage(
+  params: ZaloMessagePipelineParams,
+): Promise<ZaloMessageAuthorizationResult | undefined> {
+  const { message, account, config, runtime, core, text, mediaPath, token, statusSink, fetcher } =
+    params;
   const pairing = createChannelPairingController({
     core,
     channel: "zalo",
     accountId: account.accountId,
   });
-  const { from, chat, message_id, date } = message;
+  const { from, chat } = message;
 
   const isGroup = chat.chat_type === "GROUP";
   const chatId = chat.id;
@@ -435,6 +445,44 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     }
     return;
   }
+
+  return {
+    chatId,
+    commandAuthorized,
+    isGroup,
+    rawBody,
+    senderId,
+    senderName,
+  };
+}
+
+async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Promise<void> {
+  const {
+    message,
+    token,
+    account,
+    config,
+    runtime,
+    core,
+    text,
+    mediaPath,
+    mediaType,
+    statusSink,
+    fetcher,
+    authorization: authorizationOverride,
+  } = params;
+  const { message_id, date } = message;
+  const authorization =
+    authorizationOverride ??
+    (await authorizeZaloMessage({
+      ...params,
+      mediaPath,
+      mediaType,
+    }));
+  if (!authorization) {
+    return;
+  }
+  const { isGroup, chatId, senderId, senderName, rawBody, commandAuthorized } = authorization;
 
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
