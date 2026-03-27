@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../engine-host-api.js";
 import type { MemoryIndexManager, MemorySearchManager } from "./index.js";
 
 type EmbeddingTestMocksModule = typeof import("./embedding.test-mocks.js");

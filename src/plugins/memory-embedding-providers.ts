@@ -1,6 +1,6 @@
+import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/host/embedding-inputs.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import type { EmbeddingInput } from "./memory-host/embedding-inputs.js";
 
 export type MemoryEmbeddingBatchChunk = {
   text: string;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/src/exec-approvals.js";
+import { isDiscordExecApprovalClientEnabled } from "../../extensions/discord/api.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {

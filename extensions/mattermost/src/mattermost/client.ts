@@ -1,4 +1,7 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { z } from "openclaw/plugin-sdk/zod";
+
+export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export type MattermostClient = {
   baseUrl: string;
@@ -6,7 +9,7 @@ export type MattermostClient = {
   token: string;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
   /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
-  fetchImpl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  fetchImpl: MattermostFetch;
 };
 
 export type MattermostUser = {
@@ -25,17 +28,21 @@ export type MattermostChannel = {
   team_id?: string | null;
 };
 
-export type MattermostPost = {
-  id: string;
-  user_id?: string | null;
-  channel_id?: string | null;
-  message?: string | null;
-  file_ids?: string[] | null;
-  type?: string | null;
-  root_id?: string | null;
-  create_at?: number | null;
-  props?: Record<string, unknown> | null;
-};
+export const MattermostPostSchema = z
+  .object({
+    id: z.string(),
+    user_id: z.string().nullable().optional(),
+    channel_id: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+    file_ids: z.array(z.string()).nullable().optional(),
+    type: z.string().nullable().optional(),
+    root_id: z.string().nullable().optional(),
+    create_at: z.number().nullable().optional(),
+    props: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .passthrough();
+
+export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
 export type MattermostFileInfo = {
   id: string;
@@ -77,7 +84,7 @@ export async function readMattermostError(res: Response): Promise<string> {
 export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: MattermostFetch;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
 }): MattermostClient {
@@ -97,7 +104,7 @@ export function createMattermostClient(params: {
   // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
   const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
-  const guardedFetchImpl: typeof fetch = async (input, init) => {
+  const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
       typeof input === "string"
         ? input

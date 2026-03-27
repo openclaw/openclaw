@@ -8011,6 +8011,48 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
     },
   },
   {
+    dirName: "litellm",
+    idHint: "litellm",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    packageName: "@openclaw/litellm-provider",
+    packageVersion: "2026.3.26",
+    packageDescription: "OpenClaw LiteLLM provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "litellm",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      providers: ["litellm"],
+      providerAuthEnvVars: {
+        litellm: ["LITELLM_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "litellm",
+          method: "api-key",
+          choiceId: "litellm-api-key",
+          choiceLabel: "LiteLLM API key",
+          choiceHint: "Unified gateway for 100+ LLM providers",
+          groupId: "litellm",
+          groupLabel: "LiteLLM",
+          groupHint: "Unified LLM gateway (100+ providers)",
+          optionKey: "litellmApiKey",
+          cliFlag: "--litellm-api-key",
+          cliOption: "--litellm-api-key <key>",
+          cliDescription: "LiteLLM API key",
+        },
+      ],
+    },
+  },
+  {
     dirName: "llm-task",
     idHint: "llm-task",
     source: {
@@ -11309,6 +11351,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "OpenRouter API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["openrouter"],
+      },
     },
   },
   {

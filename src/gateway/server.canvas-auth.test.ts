@@ -6,6 +6,7 @@ import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CANVAS_CAPABILITY_PATH_PREFIX } from "./canvas-capability.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -158,6 +159,7 @@ async function withCanvasGatewayHarness(params: {
     wss,
     canvasHost,
     clients,
+    preauthConnectionBudget: createPreauthConnectionBudget(8),
     resolvedAuth: params.resolvedAuth,
     rateLimiter: params.rateLimiter,
   });

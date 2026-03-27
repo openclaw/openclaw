@@ -23,6 +23,7 @@ export function resolvePluginProviders(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
   cache?: boolean;
+  pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const bundledProviderCompatPluginIds =
@@ -59,6 +60,7 @@ export function resolvePluginProviders(params: {
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
+    pluginSdkResolution: params.pluginSdkResolution,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
     logger: createPluginLoaderLogger(log),

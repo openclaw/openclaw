@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+import { parseTelegramTarget } from "../../extensions/telegram/api.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const mockStore: Record<string, Record<string, unknown>> = {};

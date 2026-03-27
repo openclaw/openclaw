@@ -3,10 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-const getCodexOAuthApiKeyMock = vi.hoisted(() => vi.fn());
+const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
-  getOAuthApiKey: getCodexOAuthApiKeyMock,
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -239,8 +239,8 @@ describe("buildOpenAIProvider", () => {
       expires: Date.now() - 60_000,
     };
 
-    getCodexOAuthApiKeyMock.mockReset();
-    getCodexOAuthApiKeyMock.mockRejectedValueOnce(
+    refreshOpenAICodexTokenMock.mockReset();
+    refreshOpenAICodexTokenMock.mockRejectedValueOnce(
       new Error("Failed to extract accountId from token"),
     );
 

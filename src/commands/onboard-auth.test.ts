@@ -36,6 +36,7 @@ import {
 } from "../../extensions/xai/onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
+import { applyLitellmProviderConfig } from "../../extensions/litellm/onboard.js";
 import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -55,7 +56,6 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
 } from "../plugins/provider-model-definitions.js";
-import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
