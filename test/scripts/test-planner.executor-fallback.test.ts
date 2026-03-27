@@ -4,12 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../helpers/import-fresh.js";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.resetModules();
 });
 
 describe("test planner executor", () => {
   it("falls back to child exit when close never arrives", async () => {
+    vi.useRealTimers();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const fakeChild = Object.assign(new EventEmitter(), {
