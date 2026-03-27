@@ -36,6 +36,17 @@ export type MattermostWebSocketLike = {
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
 
+const MattermostPostSchema: z.ZodType<MattermostPost> = z.object({
+  id: z.string(),
+  user_id: z.string().nullable().optional(),
+  channel_id: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  file_ids: z.array(z.string()).nullable().optional(),
+  type: z.string().nullable().optional(),
+  root_id: z.string().nullable().optional(),
+  create_at: z.number().nullable().optional(),
+  props: z.record(z.string(), z.unknown()).nullable().optional(),
+});
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
