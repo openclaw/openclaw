@@ -45,6 +45,7 @@ let openaiProvider: ProviderPlugin;
 
 describe("provider catalog contract", { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS }, () => {
   beforeAll(async () => {
+    vi.resetModules();
     const openaiPlugin = await import("../../../extensions/openai/index.ts");
     openaiProviders = registerProviderPlugin({
       plugin: openaiPlugin.default,

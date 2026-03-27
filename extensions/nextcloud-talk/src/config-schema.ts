@@ -1,32 +1,16 @@
 import {
-  ReplyRuntimeConfigSchemaShape,
-  ToolPolicySchema,
-} from "openclaw/plugin-sdk/agent-config-primitives";
-import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyRuntimeConfigSchemaShape,
+  ToolPolicySchema,
   requireOpenAllowFrom,
-} from "openclaw/plugin-sdk/channel-config-primitives";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "openclaw/plugin-sdk/zod";
 import { buildSecretInputSchema } from "./secret-input.js";
-
-function requireNextcloudTalkOpenAllowFrom(params: {
-  policy?: string;
-  allowFrom?: string[];
-  ctx: z.RefinementCtx;
-}) {
-  requireOpenAllowFrom({
-    policy: params.policy,
-    allowFrom: params.allowFrom,
-    ctx: params.ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.nextcloud-talk.dmPolicy="open" requires channels.nextcloud-talk.allowFrom to include "*"',
-  });
-}
 
 export const NextcloudTalkRoomSchema = z
   .object({
@@ -67,10 +51,12 @@ export const NextcloudTalkAccountSchemaBase = z
 
 export const NextcloudTalkAccountSchema = NextcloudTalkAccountSchemaBase.superRefine(
   (value, ctx) => {
-    requireNextcloudTalkOpenAllowFrom({
+    requireChannelOpenAllowFrom({
+      channel: "nextcloud-talk",
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
       ctx,
+      requireOpenAllowFrom,
     });
   },
 );
@@ -79,9 +65,11 @@ export const NextcloudTalkConfigSchema = NextcloudTalkAccountSchemaBase.extend({
   accounts: z.record(z.string(), NextcloudTalkAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireNextcloudTalkOpenAllowFrom({
+  requireChannelOpenAllowFrom({
+    channel: "nextcloud-talk",
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
+    requireOpenAllowFrom,
   });
 });

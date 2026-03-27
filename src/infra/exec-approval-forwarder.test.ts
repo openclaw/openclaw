@@ -312,7 +312,7 @@ describe("exec approval forwarder", () => {
                 buttons: [
                   [
                     { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
-                    { text: "Allow Always", callback_data: "/approve req-1 allow-always" },
+                    { text: "Allow Always", callback_data: "/approve req-1 always" },
                   ],
                   [{ text: "Deny", callback_data: "/approve req-1 deny" }],
                 ],

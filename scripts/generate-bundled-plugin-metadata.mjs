@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectBundledPluginSources } from "./lib/bundled-plugin-source-utils.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mjs";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mjs";
@@ -27,7 +26,8 @@ const DEFAULT_BUNDLED_CHANNEL_ENTRY_IDS = [
 ];
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
-const RUNTIME_SIDECAR_PUBLIC_SURFACE_BASENAMES = new Set([
+const PUBLIC_SURFACE_SOURCE_EXTENSIONS = new Set([".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"]);
+const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "helper-api.js",
   "light-runtime-api.js",
   "runtime-api.js",
@@ -40,6 +40,53 @@ function rewriteEntryToBuiltPath(entry) {
   }
   const normalized = entry.replace(/^\.\//u, "");
   return normalized.replace(/\.[^.]+$/u, ".js");
+}
+
+function isTopLevelPublicSurfaceSource(name) {
+  if (!PUBLIC_SURFACE_SOURCE_EXTENSIONS.has(path.extname(name))) {
+    return false;
+  }
+  if (name.startsWith(".")) {
+    return false;
+  }
+  if (name.startsWith("test-")) {
+    return false;
+  }
+  if (name.includes(".test-")) {
+    return false;
+  }
+  if (name.endsWith(".d.ts")) {
+    return false;
+  }
+  return !/(\.test|\.spec)(\.[cm]?[jt]s)$/u.test(name);
+}
+
+function collectTopLevelPublicSurfaceArtifacts(params) {
+  const excluded = new Set(
+    [params.sourceEntry, params.setupEntry]
+      .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+      .map((entry) => path.basename(entry)),
+  );
+  const artifacts = fs
+    .readdirSync(params.pluginDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter(isTopLevelPublicSurfaceSource)
+    .filter((entry) => !excluded.has(entry))
+    .map(rewriteEntryToBuiltPath)
+    .filter((entry) => typeof entry === "string" && entry.length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
+  return artifacts.length > 0 ? artifacts : undefined;
+}
+
+function collectRuntimeSidecarArtifacts(publicSurfaceArtifacts) {
+  if (!publicSurfaceArtifacts) {
+    return undefined;
+  }
+  const runtimeSidecarArtifacts = publicSurfaceArtifacts.filter((artifact) =>
+    RUNTIME_SIDECAR_ARTIFACTS.has(artifact),
+  );
+  return runtimeSidecarArtifacts.length > 0 ? runtimeSidecarArtifacts : undefined;
 }
 
 function deriveIdHint({ filePath, manifestId, packageName, hasMultipleExtensions }) {
@@ -140,8 +187,10 @@ function normalizePluginManifest(raw) {
     id: raw.id.trim(),
     configSchema: raw.configSchema,
     ...(raw.enabledByDefault === true ? { enabledByDefault: true } : {}),
-    ...(normalizeStringList(raw.legacyPluginIds)
-      ? { legacyPluginIds: normalizeStringList(raw.legacyPluginIds) }
+    ...(typeof raw.kind === "string" ? { kind: raw.kind.trim() } : {}),
+    ...(normalizeStringList(raw.channels) ? { channels: normalizeStringList(raw.channels) } : {}),
+    ...(normalizeStringList(raw.providers)
+      ? { providers: normalizeStringList(raw.providers) }
       : {}),
     ...(normalizeStringList(raw.autoEnableWhenConfiguredProviders)
       ? {
@@ -150,13 +199,11 @@ function normalizePluginManifest(raw) {
           ),
         }
       : {}),
-    ...(typeof raw.kind === "string" ? { kind: raw.kind.trim() } : {}),
-    ...(normalizeStringList(raw.channels) ? { channels: normalizeStringList(raw.channels) } : {}),
-    ...(normalizeStringList(raw.providers)
-      ? { providers: normalizeStringList(raw.providers) }
-      : {}),
     ...(normalizeStringList(raw.cliBackends)
       ? { cliBackends: normalizeStringList(raw.cliBackends) }
+      : {}),
+    ...(normalizeStringList(raw.legacyPluginIds)
+      ? { legacyPluginIds: normalizeStringList(raw.legacyPluginIds) }
       : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
@@ -196,10 +243,6 @@ function resolvePackageChannelMeta(packageJson) {
 
 function resolveChannelConfigSchemaModulePath(rootDir) {
   const candidates = [
-    path.join(rootDir, "src", "config-surface.ts"),
-    path.join(rootDir, "src", "config-surface.js"),
-    path.join(rootDir, "src", "config-surface.mts"),
-    path.join(rootDir, "src", "config-surface.mjs"),
     path.join(rootDir, "src", "config-schema.ts"),
     path.join(rootDir, "src", "config-schema.js"),
     path.join(rootDir, "src", "config-schema.mts"),
@@ -262,16 +305,28 @@ async function collectBundledChannelConfigsForSource({ source, manifest }) {
     return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
   }
 
-  const surfaceJson = execFileSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/load-channel-config-surface.ts", modulePath],
-    {
+  const runSurfaceLoader = (command, args) =>
+    execFileSync(command, args, {
       // Run from the host repo so the generator always resolves its own loader/tooling,
       // even when inspecting a temporary or alternate repo root.
       cwd: FORMATTER_CWD,
       encoding: "utf8",
-    },
-  );
+    });
+
+  let surfaceJson;
+  try {
+    surfaceJson = runSurfaceLoader("bun", ["scripts/load-channel-config-surface.ts", modulePath]);
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
+      throw error;
+    }
+    surfaceJson = runSurfaceLoader(process.execPath, [
+      "--import",
+      "tsx",
+      "scripts/load-channel-config-surface.ts",
+      modulePath,
+    ]);
+  }
   const surface = JSON.parse(surfaceJson);
   if (!surface?.schema) {
     return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
@@ -332,25 +387,6 @@ function normalizeGeneratedImportPath(dirName, builtPath) {
   return `../../extensions/${dirName}/${String(builtPath).replace(/^\.\//u, "")}`;
 }
 
-function normalizeEntryPath(entry) {
-  return String(entry).replace(/^\.\//u, "");
-}
-
-function isPublicSurfaceArtifactSourceEntry(entry) {
-  const baseName = path.posix.basename(normalizeEntryPath(entry));
-  if (baseName.startsWith("test-")) {
-    return false;
-  }
-  if (baseName.includes(".test-")) {
-    return false;
-  }
-  return !baseName.endsWith(".test.ts") && !baseName.endsWith(".test.js");
-}
-
-function isRuntimeSidecarPublicSurfaceArtifact(artifact) {
-  return RUNTIME_SIDECAR_PUBLIC_SURFACE_BASENAMES.has(path.posix.basename(String(artifact)));
-}
-
 function resolveBundledChannelEntries(entries) {
   const orderById = new Map(DEFAULT_BUNDLED_CHANNEL_ENTRY_IDS.map((id, index) => [id, index]));
   return entries
@@ -369,9 +405,6 @@ function resolveBundledChannelEntries(entries) {
 
 export async function collectBundledPluginMetadata(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const buildEntriesById = new Map(
-    collectBundledPluginBuildEntries({ cwd: repoRoot }).map((entry) => [entry.id, entry]),
-  );
   const entries = [];
   for (const source of collectBundledPluginSources({ repoRoot, requirePackageJson: true })) {
     const manifest = normalizePluginManifest(source.manifest);
@@ -401,27 +434,12 @@ export async function collectBundledPluginMetadata(params = {}) {
             built: rewriteEntryToBuiltPath(packageManifest.setupEntry.trim()),
           }
         : undefined;
-    const publicSurfaceArtifacts = (() => {
-      const buildEntry = buildEntriesById.get(source.dirName);
-      if (!buildEntry) {
-        return undefined;
-      }
-      const excludedEntries = new Set(
-        [sourceEntry, setupEntry?.source]
-          .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-          .map(normalizeEntryPath),
-      );
-      const artifacts = buildEntry.sourceEntries
-        .map(normalizeEntryPath)
-        .filter((entry) => !excludedEntries.has(entry))
-        .filter(isPublicSurfaceArtifactSourceEntry)
-        .map(rewriteEntryToBuiltPath)
-        .filter((entry) => typeof entry === "string" && entry.length > 0)
-        .toSorted((left, right) => left.localeCompare(right));
-      return artifacts.length > 0 ? artifacts : undefined;
-    })();
-    const runtimeSidecarArtifacts =
-      publicSurfaceArtifacts?.filter(isRuntimeSidecarPublicSurfaceArtifact) ?? undefined;
+    const publicSurfaceArtifacts = collectTopLevelPublicSurfaceArtifacts({
+      pluginDir: source.pluginDir,
+      sourceEntry,
+      setupEntry: setupEntry?.source,
+    });
+    const runtimeSidecarArtifacts = collectRuntimeSidecarArtifacts(publicSurfaceArtifacts);
     const channelConfigs = await collectBundledChannelConfigsForSource({ source, manifest });
     if (channelConfigs) {
       manifest.channelConfigs = channelConfigs;
@@ -443,7 +461,7 @@ export async function collectBundledPluginMetadata(params = {}) {
         ? { setupSource: { source: setupEntry.source, built: setupEntry.built } }
         : {}),
       ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
-      ...(runtimeSidecarArtifacts?.length ? { runtimeSidecarArtifacts } : {}),
+      ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
       ...(typeof packageJson.name === "string" ? { packageName: packageJson.name.trim() } : {}),
       ...(typeof packageJson.version === "string"
         ? { packageVersion: packageJson.version.trim() }

@@ -1,10 +1,3 @@
-import { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/api.js";
-import { LITELLM_DEFAULT_MODEL_REF } from "../../extensions/litellm/api.js";
-import { OPENROUTER_DEFAULT_MODEL_REF } from "../../extensions/openrouter/api.js";
-import { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/api.js";
-import { VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../extensions/vercel-ai-gateway/api.js";
-import { XIAOMI_DEFAULT_MODEL_REF } from "../../extensions/xiaomi/api.js";
-import { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/api.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -17,6 +10,13 @@ import {
 import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
+const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
+const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+const HUGGINGFACE_DEFAULT_MODEL_REF = "huggingface/deepseek-ai/DeepSeek-R1";
+const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
+const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
+const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
 type ProviderApiKeySetter = (
   key: SecretInput,

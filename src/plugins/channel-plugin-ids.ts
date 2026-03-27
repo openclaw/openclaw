@@ -310,6 +310,17 @@ export function resolveGatewayStartupPluginIds(params: {
       if (plugin.channels.length > 0) {
         return false;
       }
+      if (
+        plugin.origin === "bundled" &&
+        (plugin.providers.some((providerId) =>
+          configuredActivationIds.has(normalizeProviderId(providerId)),
+        ) ||
+          plugin.cliBackends.some((backendId) =>
+            configuredActivationIds.has(normalizeProviderId(backendId)),
+          ))
+      ) {
+        return true;
+      }
       const enabled = resolveEffectiveEnableState({
         id: plugin.id,
         origin: plugin.origin,
@@ -321,16 +332,6 @@ export function resolveGatewayStartupPluginIds(params: {
         return false;
       }
       if (plugin.origin !== "bundled") {
-        return true;
-      }
-      if (
-        plugin.providers.some((providerId) =>
-          configuredActivationIds.has(normalizeProviderId(providerId)),
-        ) ||
-        plugin.cliBackends.some((backendId) =>
-          configuredActivationIds.has(normalizeProviderId(backendId)),
-        )
-      ) {
         return true;
       }
       return (

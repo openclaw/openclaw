@@ -3,6 +3,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledPackageErrors,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/public-artifacts.ts";
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {
@@ -41,12 +42,10 @@ describe("collectInstalledPackageErrors", () => {
       }),
     ).toEqual([
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/whatsapp/light-runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/whatsapp/runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/helper-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/runtime-api.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/matrix/thread-bindings-runtime.js",
-      "installed package is missing required bundled runtime sidecar: dist/extensions/msteams/runtime-api.js",
+      ...BUNDLED_RUNTIME_SIDECAR_PATHS.map(
+        (relativePath) =>
+          `installed package is missing required bundled runtime sidecar: ${relativePath}`,
+      ),
     ]);
   });
 });
