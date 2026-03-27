@@ -13,6 +13,7 @@ import {
 } from "../../../test/helpers/extensions/start-account-lifecycle.js";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { ircPlugin } from "./channel.js";
+import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -54,6 +55,26 @@ function buildAccount(): ResolvedIrcAccount {
     passwordSource: "none",
     config: {} as ResolvedIrcAccount["config"],
   };
+}
+
+function installIrcRuntime() {
+  setIrcRuntime({
+    logging: {
+      shouldLogVerbose: vi.fn(() => false),
+      getChildLogger: vi.fn(() => ({
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      })),
+    },
+    channel: {
+      activity: {
+        record: vi.fn(),
+        get: vi.fn(),
+      },
+    },
+  } as never);
 }
 
 describe("irc setup", () => {
@@ -329,10 +350,16 @@ describe("irc setup", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = vi.fn();
+    vi.resetModules();
+    vi.doMock("../../../src/generated/bundled-channel-entries.generated.ts", () => ({
+      GENERATED_BUNDLED_CHANNEL_ENTRIES: [],
+    }));
     hoisted.monitorIrcProvider.mockResolvedValue({ stop });
+    installIrcRuntime();
+    const { ircPlugin: runtimeMockedPlugin } = await import("./channel.js");
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: ircPlugin.gateway!.startAccount!,
+      startAccount: runtimeMockedPlugin.gateway!.startAccount!,
       account: buildAccount(),
     });
 

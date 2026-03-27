@@ -111,6 +111,10 @@ vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
 }));
 
+vi.mock("../../../../../src/generated/bundled-channel-entries.generated.ts", () => ({
+  GENERATED_BUNDLED_CHANNEL_ENTRIES: [],
+}));
+
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
@@ -460,7 +464,19 @@ describe("matrix plugin registration", () => {
       loadRuntimeApiExportTypesViaJiti({
         modulePath: runtimeApiPath,
         exportNames: [],
-        realPluginSdkSpecifiers: [],
+        realPluginSdkSpecifiers: [
+          "openclaw/plugin-sdk/account-helpers",
+          "openclaw/plugin-sdk/allow-from",
+          "openclaw/plugin-sdk/channel-config-helpers",
+          "openclaw/plugin-sdk/channel-policy",
+          "openclaw/plugin-sdk/core",
+          "openclaw/plugin-sdk/directory-runtime",
+          "openclaw/plugin-sdk/extension-shared",
+          "openclaw/plugin-sdk/irc",
+          "openclaw/plugin-sdk/signal",
+          "openclaw/plugin-sdk/status-helpers",
+          "openclaw/plugin-sdk/text-runtime",
+        ],
       }),
     ).toEqual({});
   }, 240_000);
