@@ -66,10 +66,12 @@ jobs:
         run: pnpm canvas:a2ui:bundle
 
       - name: Upload A2UI bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canvas-a2ui-bundle
           path: src/canvas-host/a2ui/
+          include-hidden-files: true
+          retention-days: 1
 
   bun-checks:
     name: ${{ matrix.check_name }}
