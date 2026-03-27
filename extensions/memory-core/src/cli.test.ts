@@ -39,8 +39,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOrigina
   };
 });
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+vi.mock("./memory/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./memory/index.js")>();
   return {
     ...actual,
     getMemorySearchManager,
