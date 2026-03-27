@@ -1,5 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { KIMI_MODEL_CATALOG } from "openclaw/plugin-sdk/provider-models";
 import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
@@ -75,6 +76,16 @@ export default definePluginEntry({
             },
           };
         },
+      },
+      augmentModelCatalog: () => {
+        return KIMI_MODEL_CATALOG.map((entry) => ({
+          provider: "kimi",
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        }));
       },
       capabilities: {
         openAiPayloadNormalizationMode: "moonshot-thinking",

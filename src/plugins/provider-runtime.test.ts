@@ -620,12 +620,6 @@ describe("provider-runtime", () => {
       ]),
     );
 
-    expect(result.some((e) => e.provider === "byteplus")).toBe(true);
-    expect(result.some((e) => e.provider === "byteplus-plan")).toBe(true);
-    expect(result.some((e) => e.provider === "volcengine")).toBe(true);
-    expect(result.some((e) => e.provider === "volcengine-plan")).toBe(true);
-    expect(result.some((e) => e.provider === "kimi")).toBe(true);
-
     expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["openai"],
