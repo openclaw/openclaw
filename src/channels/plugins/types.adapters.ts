@@ -5,6 +5,10 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
+import type {
+  PluginApprovalRequest,
+  PluginApprovalResolved,
+} from "../../infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -493,6 +497,17 @@ export type ChannelExecApprovalAdapter = {
     target: ChannelExecApprovalForwardTarget;
     payload: ReplyPayload;
   }) => Promise<void> | void;
+  buildPluginPendingPayload?: (params: {
+    cfg: OpenClawConfig;
+    request: PluginApprovalRequest;
+    target: ChannelExecApprovalForwardTarget;
+    nowMs: number;
+  }) => ReplyPayload | null;
+  buildPluginResolvedPayload?: (params: {
+    cfg: OpenClawConfig;
+    resolved: PluginApprovalResolved;
+    target: ChannelExecApprovalForwardTarget;
+  }) => ReplyPayload | null;
 };
 
 export type ChannelAllowlistAdapter = {
