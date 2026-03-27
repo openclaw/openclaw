@@ -663,6 +663,7 @@ async function processImages(
   markdown: string,
   insertedBlocks: FeishuDocxBlockChild[],
   maxBytes: number,
+  logger?: Logger,
 ): Promise<number> {
   const imageUrls = extractImageUrls(markdown);
   if (imageUrls.length === 0) {
@@ -694,7 +695,7 @@ async function processImages(
 
       processed++;
     } catch (err) {
-      console.error(`Failed to process image ${url}:`, err);
+      logger?.info?.(`feishu_doc: failed to process image ${url}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -957,7 +958,7 @@ async function writeDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
       : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes, logger);
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
@@ -987,7 +988,7 @@ async function appendDoc(
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(client, docToken, orderedBlocks, rootIds, logger)
       : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds);
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes, logger);
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
@@ -1061,7 +1062,7 @@ async function insertDoc(
           index: insertIndex,
         });
 
-  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes, logger);
   logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
 
   return {
