@@ -479,7 +479,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
@@ -510,7 +513,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
@@ -541,7 +547,10 @@ describe("discord component interactions", () => {
 
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
-    expect(reply).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 

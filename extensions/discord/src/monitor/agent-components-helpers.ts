@@ -286,6 +286,15 @@ export async function ensureGuildComponentMemberAllowed(params: {
     return true;
   }
 
+  async function replyUnauthorized() {
+    try {
+      await interaction.reply({
+        content: unauthorizedReply,
+        ...replyOpts,
+      });
+    } catch {}
+  }
+
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId,
@@ -298,6 +307,7 @@ export async function ensureGuildComponentMemberAllowed(params: {
   });
 
   if (channelConfig?.enabled === false) {
+    await replyUnauthorized();
     return false;
   }
   const channelAllowlistConfigured =
@@ -311,9 +321,11 @@ export async function ensureGuildComponentMemberAllowed(params: {
       channelAllowed,
     })
   ) {
+    await replyUnauthorized();
     return false;
   }
   if (channelConfig?.allowed === false) {
+    await replyUnauthorized();
     return false;
   }
 
@@ -333,12 +345,7 @@ export async function ensureGuildComponentMemberAllowed(params: {
   }
 
   logVerbose(`agent ${componentLabel}: blocked user ${user.id} (not in users/roles allowlist)`);
-  try {
-    await interaction.reply({
-      content: unauthorizedReply,
-      ...replyOpts,
-    });
-  } catch {}
+  await replyUnauthorized();
   return false;
 }
 
