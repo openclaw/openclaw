@@ -116,7 +116,7 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
 export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
   const timeoutMs = options.connectTimeoutMs != null ? options.connectTimeoutMs : 15000;
   const messageChunkMaxChars =
-    options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 350;
+    options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 16384;
 
   if (!options.host.trim()) {
     throw new Error("IRC host is required");

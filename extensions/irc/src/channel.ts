@@ -335,7 +335,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       deliveryMode: "direct",
       chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
       chunkerMode: "markdown",
-      textChunkLimit: 350,
+      textChunkLimit: 16384,
     },
     attachedResults: {
       channel: "irc",

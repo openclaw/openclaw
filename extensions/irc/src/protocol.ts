@@ -140,7 +140,7 @@ export function sanitizeIrcTarget(raw: string): string {
   return decoded;
 }
 
-export function splitIrcText(text: string, maxChars = 350): string[] {
+export function splitIrcText(text: string, maxChars = 16384): string[] {
   const cleaned = sanitizeIrcOutboundText(text);
   if (!cleaned) {
     return [];
